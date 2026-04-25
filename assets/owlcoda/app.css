@@ -1,0 +1,91 @@
+/* OwlOps — operator console (DARK base)
+   Palette sourced verbatim from OwlTheme.swift (dark appearance).
+   This is the authoritative token layer; app.light.css overrides only
+   the adaptive surfaces/ink/hair tokens for light appearance. */
+
+:root {
+  /* ── Brand accents (fixed across appearances, Swift-exact) ── */
+  --accent:        rgb(92,184,196);
+  --success:       rgb(88,198,162);
+  --warn:          rgb(198,168,74);
+  --err:           rgb(200,75,75);
+  --info:          rgb(124,198,206);
+  --purple:        rgb(156,144,212);
+  --pink:          rgb(194,132,178);
+  --permission:    rgb(124,138,206);
+  --shimmer:       rgb(138,208,214);
+  --subtle:        rgb(94,106,132);
+  --border-active: rgb(126,196,206);
+
+  /* ── Surfaces (dark) ── */
+  --bg-app:        rgb(18,22,36);
+  --bg-sidebar:    rgb(11,14,22);
+  --bg-chrome:     rgb(15,18,28);
+  --bg-card:       rgb(26,34,52);
+  --bg-card-2:     rgb(30,40,60);
+  --bg-raise:      rgb(36,46,70);
+  --bg-input:      rgb(14,18,30);
+  --bg-inspector:  rgb(36,46,70);
+
+  /* ── Ink (dark) ── */
+  --ink-hi:        rgb(232,234,240);
+  --ink:           rgb(214,216,224);
+  --ink-dim:       rgb(144,152,176);
+  --ink-mute:      rgb(108,116,142);
+  --ink-subtle:    rgb(94,106,132);
+
+  /* ── Hairlines (dark) ── */
+  --hair:          rgba(108,146,162,0.42);
+  --hair-strong:   rgba(108,146,162,0.68);
+  --hair-faint:    rgb(52,66,90);
+  --hair-accent:   rgba(126,196,206,0.55);
+
+  /* ── Selection (dark) ── */
+  --selection-bg:  rgba(60,84,112,0.50);
+
+  /* ── Soft tints ── */
+  --accent-soft:   rgba(92,184,196,0.14);
+  --success-soft:  rgba(88,198,162,0.14);
+  --warn-soft:     rgba(198,168,74,0.14);
+  --err-soft:      rgba(200,75,75,0.14);
+  --info-soft:     rgba(124,198,206,0.14);
+  --purple-soft:   rgba(156,144,212,0.14);
+
+  /* ── Spacing ── */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+
+  /* ── Radii ── */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+
+  --edge-bar: 4px;
+
+  /* ── Type ── */
+  --sans: -apple-system-rounded, "SF Pro Rounded", "SF Pro Text", -apple-system, BlinkMacSystemFont, ui-rounded, system-ui, sans-serif;
+  --mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+
+  --shadow-window: 0 20px 60px -20px rgba(0,0,0,0.55), 0 8px 24px -12px rgba(0,0,0,0.45), 0 0 0 1px rgba(108,146,162,0.18);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: linear-gradient(180deg, rgb(8,10,18), rgb(6,8,14));
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  font-feature-settings: "tnum", "ss01";
+}
+.mono { font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: -0.005em; }
+.mono.dim { color: var(--ink-mute); }

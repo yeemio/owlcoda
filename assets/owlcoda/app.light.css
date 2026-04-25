@@ -1,0 +1,51 @@
+/* OwlOps — LIGHT appearance overrides
+   Imports the dark base then overrides only the system-adaptive tokens
+   that OwlTheme.swift declares via `adaptive(dark:, light:)`.
+   Palette brand tokens (accent, success, warn, err, info, purple, etc.)
+   are FIXED across appearances per Swift source and are NOT overridden. */
+
+@import url("app.css");
+
+:root {
+  /* ── Surfaces (light) ── */
+  --bg-app:       rgb(244,246,250);
+  --bg-sidebar:   rgb(226,230,238);
+  --bg-chrome:    rgb(236,240,246);
+  --bg-card:      rgb(255,255,255);
+  --bg-card-2:    rgb(248,250,253);
+  --bg-raise:     rgb(252,253,255);
+  --bg-input:     rgb(255,255,255);
+  --bg-inspector: rgb(252,253,255);
+
+  /* ── Ink (light) ── */
+  --ink-hi:       rgb(18,22,38);
+  --ink:          rgb(30,34,52);
+  --ink-dim:      rgb(94,106,132);
+  --ink-mute:     rgb(128,140,162);
+  --ink-subtle:   rgb(94,106,132);
+
+  /* ── Hairlines (light) ── */
+  --hair:         rgb(178,200,212);
+  --hair-strong:  rgb(158,182,196);
+  --hair-faint:   rgb(206,216,224);
+  --hair-accent:  rgba(126,196,206,0.7);
+
+  /* ── Selection (light) ── */
+  --selection-bg: rgba(92,184,196,0.12);
+
+  --shadow-window: 0 20px 60px -20px rgba(30,34,52,0.18), 0 8px 24px -12px rgba(30,34,52,0.12), 0 0 0 1px rgba(178,200,212,0.8);
+}
+
+body {
+  background: linear-gradient(180deg, rgb(232,236,244), rgb(220,226,236));
+}
+
+/* Text-legibility tweaks on light surfaces — hue preserved, luminance darkened */
+.authority.embedded { color: rgb(38,138,108); }
+.authority.live     { color: rgb(48,140,156); }
+.authority.proof    { color: rgb(96,84,172); }
+
+.pill.ok   { color: rgb(38,138,108); }
+.pill.info { color: rgb(48,140,156); }
+.pill.warn { color: rgb(146,120,42); }
+.pill.err  { color: rgb(168,52,52); }

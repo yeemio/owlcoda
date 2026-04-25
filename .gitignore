@@ -1,0 +1,19 @@
+dist/
+node_modules/
+*.pid
+*.tsbuildinfo
+.DS_Store
+
+# User-specific config (may contain API keys)
+config.json
+
+# Filesystem-convention skip dirs
+.owlcc/
+.claude/
+
+# Vendored upstream (users must provide their own)
+upstream/
+
+# Test / experimentation leftovers
+tmp/
+fibonacci.ts

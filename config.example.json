@@ -1,0 +1,27 @@
+{
+  "port": 8019,
+  "host": "127.0.0.1",
+  "routerUrl": "http://127.0.0.1:11434/v1",
+  "routerTimeoutMs": 600000,
+  "responseModelStyle": "platform",
+  "trainingCollection": false,
+  "models": [
+    {
+      "id": "qwen2.5-coder:7b",
+      "label": "Qwen2.5 Coder 7B (Ollama)",
+      "backendModel": "qwen2.5-coder:7b",
+      "aliases": ["default", "fast"],
+      "tier": "balanced",
+      "default": true
+    },
+    {
+      "id": "qwen2.5-coder:32b",
+      "label": "Qwen2.5 Coder 32B (Ollama)",
+      "backendModel": "qwen2.5-coder:32b",
+      "aliases": ["heavy"],
+      "tier": "heavy",
+      "default": false
+    }
+  ],
+  "logLevel": "info"
+}
