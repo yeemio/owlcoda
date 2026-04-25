@@ -299,6 +299,13 @@ export interface WelcomeOptions {
   logoFrame?: LogoFrame
 }
 
+function isWindowsTerminalLike(env: NodeJS.ProcessEnv = process.env, platform = process.platform): boolean {
+  return platform === 'win32'
+    || env['OS'] === 'Windows_NT'
+    || env['WT_SESSION'] !== undefined
+    || env['TERM_PROGRAM'] === 'Windows_Terminal'
+}
+
 /**
  * Render the compact welcome block.
  */
@@ -310,7 +317,7 @@ export function renderWelcome(opts: WelcomeOptions): string {
   // hair-faint rule, 2-column hotkeys grid. We only do this when there
   // are no recent sessions — returning users see the compact welcome
   // they're already used to.
-  if (opts.isFirstRun && columns >= FIRST_RUN_HERO_MIN_WIDTH) {
+  if (opts.isFirstRun && columns >= FIRST_RUN_HERO_MIN_WIDTH && !isWindowsTerminalLike()) {
     return renderOnboardingHero(opts)
   }
 

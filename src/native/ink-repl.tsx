@@ -67,6 +67,7 @@ import {
   formatResumeCommand,
   isRetryEligibleContinuationFailure,
   preflightCheck,
+  resolveOnboardingShortcut,
   scrubPseudoToolCall,
   shouldDrainQueuedInputAfterTurn,
   shouldQueueSubmitBehindRunningTask,
@@ -1839,6 +1840,23 @@ function NativeReplApp({
       appendTranscript(`  ${dim('→ ' + trimmed)}`)
       questionPrompt.resolve(trimmed)
       setQuestionPrompt(null)
+      return
+    }
+
+    const onboardingShortcut = resolveOnboardingShortcut(trimmed)
+    if (onboardingShortcut) {
+      setInputValue('')
+      if (onboardingShortcut.kind === 'hint') {
+        setFooterNotice(dim(onboardingShortcut.message))
+        return
+      }
+      if (onboardingShortcut.kind === 'draft') {
+        setInputValue(onboardingShortcut.value)
+        setCursorOffset(onboardingShortcut.value.length)
+        setFooterNotice(dim('Attach a file from your repo. Keep typing to search.'))
+        return
+      }
+      await handleSlashSubmit(onboardingShortcut.command)
       return
     }
 

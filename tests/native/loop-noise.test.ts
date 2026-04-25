@@ -63,6 +63,18 @@ describe('loop-noise routing', () => {
     expect(routed.nextState).toEqual({ ...baseState, repairCount: 1 })
   })
 
+  it('suppresses task contract notices into footer state', () => {
+    const routed = routeConversationNotice(
+      'Task contract: no explicit write scope inferred yet, so file writes remain limited to the workspace boundary.',
+      baseState,
+    )
+
+    expect(routed.transcriptEntry).toBeNull()
+    expect(routed.footerNotice).toContain('Task contract:')
+    expect(routed.workflowPhase).toBeUndefined()
+    expect(routed.nextState).toEqual(baseState)
+  })
+
   it('surfaces targeted-check transitions in transcript and footer', () => {
     const routed = routeConversationNotice(
       'Targeted check: Still missing one focused point: inspect conversation.ts truncation handling. scanned 8 sources across 2 exploratory batches, 2 requests, 18s, and 8 relevant signals',

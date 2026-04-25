@@ -77,6 +77,24 @@ describe('renderWelcome', () => {
     expect(stripAnsi(result)).toContain('owlcoda')
   })
 
+  it('uses the compact first-run welcome in Windows Terminal', () => {
+    const originalOs = process.env['OS']
+    process.env['OS'] = 'Windows_NT'
+    try {
+      const result = stripAnsi(renderWelcome({ ...baseOpts, columns: 180, isFirstRun: true }))
+      expect(result).toContain('owlcoda v0.5.0')
+      expect(result).toContain('terminal coding agent')
+      expect(result).not.toContain('01  Ask anything')
+      expect(result).not.toContain('02  See every command')
+    } finally {
+      if (originalOs === undefined) {
+        delete process.env['OS']
+      } else {
+        process.env['OS'] = originalOs
+      }
+    }
+  })
+
   it('keeps custom tips out of the pure welcome mark', () => {
     const result = renderWelcome({
       ...baseOpts,

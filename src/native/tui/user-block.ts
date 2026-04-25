@@ -40,6 +40,13 @@ const ACCENT_BAR = '\u258E' // ▎
 const ACCENT_WIDTH = 1
 const LEFT_PAD_WIDTH = 2    // two spaces after the bar
 
+function isWindowsTerminalLike(env: NodeJS.ProcessEnv = process.env, platform = process.platform): boolean {
+  return platform === 'win32'
+    || env['OS'] === 'Windows_NT'
+    || env['WT_SESSION'] !== undefined
+    || env['TERM_PROGRAM'] === 'Windows_Terminal'
+}
+
 /**
  * Heuristic: does a logical line read as a section label?
  *
@@ -141,6 +148,7 @@ function renderUserAttachmentRow(text: string, contentWidth: number): string | n
 export function renderUserBlock(text: string): string {
   const tokens = authoringTokensFor(getThemeName())
   const cols = Math.max(10, process.stdout.columns || 80)
+  const lowNoise = isWindowsTerminalLike()
   // Render at `cols - 2`, not `cols`. ScrollableTranscript in
   // ink-repl.tsx derives its per-item display width as
   // `transcriptCols = cols - 2` (two columns reserved for outer chrome)
@@ -166,8 +174,9 @@ export function renderUserBlock(text: string): string {
     const chipPlain = attachmentChips.replace(/\x1b\[[0-9;]*m/g, '')
     const padCount = Math.max(0, contentWidth - stringWidth(chipPlain))
     const pad = padCount > 0 ? ' '.repeat(padCount) : ''
-    rows.push(
-      `${tokens.bg}${tokens.accent}${ACCENT_BAR}${FG_RESET}  ${attachmentChips}${pad}${tokens.bgReset}${FULL_RESET}`,
+    rows.push(lowNoise
+      ? `${tokens.accent}${ACCENT_BAR}${FG_RESET}  ${attachmentChips}${FULL_RESET}`
+      : `${tokens.bg}${tokens.accent}${ACCENT_BAR}${FG_RESET}  ${attachmentChips}${pad}${tokens.bgReset}${FULL_RESET}`,
     )
   }
   for (const logicalLine of text.split('\n')) {
@@ -196,8 +205,9 @@ export function renderUserBlock(text: string): string {
       // ("结论：", "下一步：", …) extra weight without disturbing
       // layout or leaking bold into the neighboring transcript row.
       const body = heading ? `${BOLD_ON}${segment}${BOLD_OFF}` : segment
-      rows.push(
-        `${tokens.bg}${tokens.accent}${ACCENT_BAR}${FG_RESET}  ${body}${pad}${tokens.bgReset}${FULL_RESET}`,
+      rows.push(lowNoise
+        ? `${tokens.accent}${ACCENT_BAR}${FG_RESET}  ${body}${FULL_RESET}`
+        : `${tokens.bg}${tokens.accent}${ACCENT_BAR}${FG_RESET}  ${body}${pad}${tokens.bgReset}${FULL_RESET}`,
       )
     }
   }

@@ -52,6 +52,7 @@ export {
   shouldScheduleRuntimeAutoRetry,
   parseSgrWheelDelta,
   preflightCheck,
+  resolveOnboardingShortcut,
   buildScrollIndicatorBar,
   stripBufferedMouseArtifacts,
   stripSgrMouseArtifacts,

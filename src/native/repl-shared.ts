@@ -15,6 +15,31 @@ export type FailedContinuationSubmitAction =
   | 'dedupe_retry_failed_continuation'
   | 'guide_after_repeated_failed_continuation'
 
+export type OnboardingShortcutAction =
+  | { kind: 'hint'; message: string }
+  | { kind: 'slash'; command: string }
+  | { kind: 'draft'; value: string }
+
+export function resolveOnboardingShortcut(text: string): OnboardingShortcutAction | null {
+  const raw = text.trim()
+  if (!/^0[1-5]$/.test(raw)) return null
+  const normalized = raw.slice(1)
+  switch (normalized) {
+    case '1':
+      return { kind: 'hint', message: 'Ask anything: type a request, or use /help for commands.' }
+    case '2':
+      return { kind: 'slash', command: '/help' }
+    case '3':
+      return { kind: 'draft', value: '@' }
+    case '4':
+      return { kind: 'slash', command: '/model' }
+    case '5':
+      return { kind: 'slash', command: '/settings' }
+    default:
+      return null
+  }
+}
+
 const CONTINUATION_RETRY_PHRASES = new Set([
   '继续',
   '续跑',

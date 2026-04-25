@@ -36,6 +36,7 @@ import {
   buildScrollIndicatorBar,
   parseSgrWheelDelta,
   reconcileTranscriptScrollOffset,
+  resolveOnboardingShortcut,
   selectVisibleTranscriptItems,
   selectVisibleTranscriptWindow,
   getTranscriptInteractionCapability,
@@ -574,6 +575,21 @@ describe('Slash Commands', () => {
     await handleSlashCommand('/compress --trim 5', conv, usage)
     const output = logSpy.mock.calls.map(c => c[0]).join('\n')
     expect(output).toMatch(/compress|failed/i)
+  })
+})
+
+describe('onboarding numeric shortcuts', () => {
+  it('maps first-screen numbers to local actions instead of model prompts', () => {
+    expect(resolveOnboardingShortcut('01')).toEqual({
+      kind: 'hint',
+      message: 'Ask anything: type a request, or use /help for commands.',
+    })
+    expect(resolveOnboardingShortcut('02')).toEqual({ kind: 'slash', command: '/help' })
+    expect(resolveOnboardingShortcut('03')).toEqual({ kind: 'draft', value: '@' })
+    expect(resolveOnboardingShortcut('04')).toEqual({ kind: 'slash', command: '/model' })
+    expect(resolveOnboardingShortcut('05')).toEqual({ kind: 'slash', command: '/settings' })
+    expect(resolveOnboardingShortcut('2')).toBeNull()
+    expect(resolveOnboardingShortcut('hello')).toBeNull()
   })
 })
 

@@ -113,6 +113,24 @@ describe('renderUserBlock', () => {
     expect(out).toMatch(/\x1b\[49m\x1b\[0m/)
   })
 
+  it('uses a low-noise user block without full-width background on Windows Terminal', () => {
+    const originalOs = process.env['OS']
+    process.env['OS'] = 'Windows_NT'
+    try {
+      const out = withCols(160, () => renderUserBlock('hello'))
+      expect(out).toContain('▎')
+      expect(out).toContain('hello')
+      expect(out).not.toMatch(/\x1b\[48;(?:5;\d+|2;\d+;\d+;\d+)m/)
+      expect(stringWidth(stripAnsi(out))).toBeLessThan(40)
+    } finally {
+      if (originalOs === undefined) {
+        delete process.env['OS']
+      } else {
+        process.env['OS'] = originalOs
+      }
+    }
+  })
+
   it('bolds heading-like lines (end with : or ： and short) — adds \\x1b[1m around the label', () => {
     const out = renderUserBlock('新分发表：\n- item one\n- item two')
     // The heading line got bold; list items did not.

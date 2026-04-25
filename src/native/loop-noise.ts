@@ -87,6 +87,14 @@ export function routeConversationNotice(
     }
   }
 
+  if (/^Task contract:/i.test(message)) {
+    return {
+      footerNotice: dim(message),
+      transcriptEntry: null,
+      nextState: state,
+    }
+  }
+
   if (/^Targeted check:/i.test(message)) {
     return {
       footerNotice: dim(message),
