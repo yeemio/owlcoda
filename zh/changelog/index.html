@@ -1,0 +1,178 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"> <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="OwlCoda 公开版本的发布说明。"><link rel="icon" href="/favicon.svg"><link rel="canonical" href="https://owlcoda.com/zh/changelog/"><meta property="og:title" content="更新日志 — OwlCoda"><meta property="og:description" content="OwlCoda 公开版本的发布说明。"><meta property="og:image" content="https://owlcoda.com/og-image.png"><meta property="og:url" content="https://owlcoda.com/zh/changelog/"><meta property="og:type" content="website"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="更新日志 — OwlCoda"><meta name="twitter:description" content="OwlCoda 公开版本的发布说明。"><meta name="twitter:image" content="https://owlcoda.com/og-image.png"><title>更新日志 — OwlCoda</title><script>
+(function () {
+  try {
+    var saved = localStorage.getItem('owlcoda-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var theme = saved || (prefersDark ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', theme);
+  } catch (e) {
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+})();
+</script><link rel="stylesheet" href="/_astro/changelog.DV55LuaJ.css">
+<style>.srcline[data-astro-cid-ps3rs7yp]{color:var(--ink-mute);font-size:var(--fs-xs);margin-bottom:var(--space-4)}
+</style></head> <body> <nav class="site-nav" data-astro-cid-dmqpwcec> <div class="container nav-row" data-astro-cid-dmqpwcec> <a href="/zh/" class="brand" data-astro-cid-dmqpwcec> <img src="/owlcoda-logo.svg" alt="" width="22" height="22" data-astro-cid-dmqpwcec> <span data-astro-cid-dmqpwcec>OwlCoda</span> </a> <div class="nav-links" data-astro-cid-dmqpwcec> <a href="/zh/docs/install" data-astro-cid-dmqpwcec>文档</a> <a href="/zh/changelog" data-astro-cid-dmqpwcec>更新日志</a> </div> <div class="nav-right" data-astro-cid-dmqpwcec> <div class="lang-switch" aria-label="Language switch" data-astro-cid-r2b4e7hz> <span class="current" data-astro-cid-r2b4e7hz>中</span> <span class="sep" data-astro-cid-r2b4e7hz>·</span> <a href="/changelog/" class="other" data-astro-cid-r2b4e7hz>EN</a> </div>  <style>astro-island,astro-slot,astro-static-slot{display:contents}</style><script>(()=>{var e=async t=>{await(await t())()};(self.Astro||(self.Astro={})).load=e;window.dispatchEvent(new Event("astro:load"));})();;(()=>{var A=Object.defineProperty;var g=(i,o,a)=>o in i?A(i,o,{enumerable:!0,configurable:!0,writable:!0,value:a}):i[o]=a;var d=(i,o,a)=>g(i,typeof o!="symbol"?o+"":o,a);{let i={0:t=>m(t),1:t=>a(t),2:t=>new RegExp(t),3:t=>new Date(t),4:t=>new Map(a(t)),5:t=>new Set(a(t)),6:t=>BigInt(t),7:t=>new URL(t),8:t=>new Uint8Array(t),9:t=>new Uint16Array(t),10:t=>new Uint32Array(t),11:t=>1/0*t},o=t=>{let[l,e]=t;return l in i?i[l](e):void 0},a=t=>t.map(o),m=t=>typeof t!="object"||t===null?t:Object.fromEntries(Object.entries(t).map(([l,e])=>[l,o(e)]));class y extends HTMLElement{constructor(){super(...arguments);d(this,"Component");d(this,"hydrator");d(this,"hydrate",async()=>{var b;if(!this.hydrator||!this.isConnected)return;let e=(b=this.parentElement)==null?void 0:b.closest("astro-island[ssr]");if(e){e.addEventListener("astro:hydrate",this.hydrate,{once:!0});return}let c=this.querySelectorAll("astro-slot"),n={},h=this.querySelectorAll("template[data-astro-template]");for(let r of h){let s=r.closest(this.tagName);s!=null&&s.isSameNode(this)&&(n[r.getAttribute("data-astro-template")||"default"]=r.innerHTML,r.remove())}for(let r of c){let s=r.closest(this.tagName);s!=null&&s.isSameNode(this)&&(n[r.getAttribute("name")||"default"]=r.innerHTML)}let p;try{p=this.hasAttribute("props")?m(JSON.parse(this.getAttribute("props"))):{}}catch(r){let s=this.getAttribute("component-url")||"<unknown>",v=this.getAttribute("component-export");throw v&&(s+=` (export ${v})`),console.error(`[hydrate] Error parsing props for component ${s}`,this.getAttribute("props"),r),r}let u;await this.hydrator(this)(this.Component,p,n,{client:this.getAttribute("client")}),this.removeAttribute("ssr"),this.dispatchEvent(new CustomEvent("astro:hydrate"))});d(this,"unmount",()=>{this.isConnected||this.dispatchEvent(new CustomEvent("astro:unmount"))})}disconnectedCallback(){document.removeEventListener("astro:after-swap",this.unmount),document.addEventListener("astro:after-swap",this.unmount,{once:!0})}connectedCallback(){if(!this.hasAttribute("await-children")||document.readyState==="interactive"||document.readyState==="complete")this.childrenConnectedCallback();else{let e=()=>{document.removeEventListener("DOMContentLoaded",e),c.disconnect(),this.childrenConnectedCallback()},c=new MutationObserver(()=>{var n;((n=this.lastChild)==null?void 0:n.nodeType)===Node.COMMENT_NODE&&this.lastChild.nodeValue==="astro:end"&&(this.lastChild.remove(),e())});c.observe(this,{childList:!0}),document.addEventListener("DOMContentLoaded",e)}}async childrenConnectedCallback(){let e=this.getAttribute("before-hydration-url");e&&await import(e),this.start()}async start(){let e=JSON.parse(this.getAttribute("opts")),c=this.getAttribute("client");if(Astro[c]===void 0){window.addEventListener(`astro:${c}`,()=>this.start(),{once:!0});return}try{await Astro[c](async()=>{let n=this.getAttribute("renderer-url"),[h,{default:p}]=await Promise.all([import(this.getAttribute("component-url")),n?import(n):()=>()=>{}]),u=this.getAttribute("component-export")||"default";if(!u.includes("."))this.Component=h[u];else{this.Component=h;for(let f of u.split("."))this.Component=this.Component[f]}return this.hydrator=p,this.hydrate},e,this)}catch(n){console.error(`[astro-island] Error hydrating ${this.getAttribute("component-url")}`,n)}}attributeChangedCallback(){this.hydrate()}}d(y,"observedAttributes",["props"]),customElements.get("astro-island")||customElements.define("astro-island",y)}})();</script><astro-island uid="Zf5uNW" prefix="r0" component-url="/_astro/ThemeToggle.DFB0nHaa.js" component-export="default" renderer-url="/_astro/client.BuOr9PT5.js" props="{&quot;data-astro-cid-dmqpwcec&quot;:[0,true]}" ssr="" client="load" opts="{&quot;name&quot;:&quot;ThemeToggle&quot;,&quot;value&quot;:true}" await-children=""><button aria-label="Toggle theme" class="theme-toggle" style="visibility:hidden">·</button><!--astro:end--></astro-island> <a href="https://github.com/yeemio/owlcoda" class="github-link" target="_blank" rel="noopener" data-astro-cid-dmqpwcec> <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"> <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55v-2.13c-3.2.7-3.87-1.36-3.87-1.36-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.76 2.69 1.25 3.34.95.1-.74.4-1.25.72-1.54-2.55-.29-5.24-1.27-5.24-5.66 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.18 1.17a11 11 0 0 1 5.79 0c2.21-1.48 3.18-1.17 3.18-1.17.62 1.58.23 2.75.11 3.04.74.8 1.18 1.82 1.18 3.07 0 4.4-2.69 5.36-5.25 5.65.41.36.78 1.05.78 2.12v3.14c0 .31.21.67.8.55C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"></path> </svg> <span data-astro-cid-dmqpwcec>GitHub</span> </a> </div> </div> </nav>  <main>  <article class="container content doc" data-astro-cid-ps3rs7yp> <p class="srcline" data-astro-cid-ps3rs7yp>真相之源：<a href="https://github.com/yeemio/owlcoda/blob/main/CHANGELOG.md" target="_blank" rel="noopener" data-astro-cid-ps3rs7yp>GitHub 上的 CHANGELOG.md</a></p> <div data-astro-cid-ps3rs7yp><h1>Changelog</h1>
+
+<p>All notable changes to OwlCoda are documented here.</p>
+
+<p>Runtime version truth comes from [<code>package.json</code>](package.json) and is</p>
+<p>exposed at runtime through [<code>src/version.ts</code>](src/version.ts) and</p>
+<p><code>owlcoda --version</code>.</p>
+
+<h2>[0.1.2] — 2026-04-25</h2>
+
+<p>User-facing README rewrite + second-pass legal-positioning polish.</p>
+
+<h3>Changed</h3>
+<ul>
+<li><code>README.md</code> / <code>README.zh.md</code> rewritten to put OwlCoda first:</li>
+<p>  installation, supported backend matrix (local: Ollama / LM Studio /</p>
+<p>  vLLM; cloud: Kimi / Moonshot / MiniMax / OpenRouter / Bailian /</p>
+<p>  OpenAI / user-configured Messages-shaped providers / custom), and concrete config snippets per</p>
+<p>  provider. The previous README read as an Ollama tutorial; the new</p>
+<p>  one reads as the OwlCoda manual it should be.</p>
+<li><code>admin/src/pages/StartPage.tsx</code> — the local-runtime protocol</li>
+<p>  picker option labeled <code>Anthropic messages</code> is now `Messages-shaped</p>
+<p>  API`; the help text references "Anthropic-compatible providers</p>
+<p>  and similar gateways" rather than naming a single vendor.</p>
+<li><code>tests/provider-probe.test.ts</code> — third-party model name fixtures</li>
+<p>  replaced with neutral <code>messages-vendor-*</code> names.</p>
+<li>`skills/collaboration/{using-git-worktrees, phase-prompting,</li>
+<p>  receiving-code-review}/SKILL.md<code> — generic </code>AGENTS.md` /</p>
+<p>  <code>instruction</code> phrasing replaces the host-app-specific filename</p>
+<p>  that the original methodology pack used.</p>
+</ul>
+<h3>Added</h3>
+<ul>
+<li><code>skills/README.md</code> — explicit positioning of the in-tree pack as</li>
+<p>  an OwlCoda curated methodology pack, with a non-list of</p>
+<p>  third-party SaaS skills that intentionally do not ship here.</p>
+</ul>
+<h3>Removed</h3>
+<ul>
+<li><code>skills/meta/</code> — the maintenance / governance scripts under</li>
+<p>  <code>gardening-skills-wiki</code>, <code>pulling-updates-from-skills-repository</code>,</p>
+<p>  <code>sharing-skills</code>, <code>testing-skills-with-subagents</code>, and</p>
+<p>  <code>writing-skills</code> were tooling for an upstream skill-pack</p>
+<p>  ecosystem, not user-facing capability. Several of them carried</p>
+<p>  hardcoded host paths that pointed at an external maintainer's</p>
+<p>  local checkout.</p>
+</ul>
+<h2>[0.1.1] — 2026-04-25</h2>
+
+<p>Legal-positioning and provenance polish. No runtime behavior change.</p>
+
+<h3>Removed</h3>
+<ul>
+<li><code>skills/collaboration/remembering-conversations/</code> — depended on a</li>
+<p>  third-party AI agent SDK at runtime and on a host-app hook</p>
+<p>  directory for deployment, neither of which fit OwlCoda's</p>
+<p>  independent posture. Users who want conversation-recall workflows</p>
+<p>  should install a third-party skill pack rather than ship one</p>
+<p>  in-tree.</p>
+<li><code>skills/debugging/systematic-debugging/CREATION-LOG.md</code> — extraction</li>
+<p>  log referencing a third-party developer's home directory; not</p>
+<p>  user-facing content.</p>
+</ul>
+<h3>Changed</h3>
+<ul>
+<li><code>NOTICE.md</code> adds a "Protocol Interoperability vs Affiliation"</li>
+<p>  section that explicitly disclaims any partnership / endorsement /</p>
+<p>  derivative-work claim with respect to third parties whose wire</p>
+<p>  formats OwlCoda implements (Messages-shaped API, OpenAI Chat</p>
+<p>  Completions). The <code>@anthropic-ai/sdk</code> <code>devDependency</code> is</p>
+<p>  documented as an interoperability test artifact, not a runtime</p>
+<p>  dependency.</p>
+<li><code>README.md</code> / <code>README.zh.md</code> architecture diagram says</li>
+<p>  "Messages-shaped API" instead of naming a single upstream vendor,</p>
+<p>  matching the protocol-not-affiliation posture.</p>
+<li><code>skills/collaboration/using-git-worktrees/SKILL.md</code>,</li>
+<p>  <code>skills/debugging/root-cause-tracing/SKILL.md</code>, and</p>
+<p>  <code>scripts/smoke-presentation.mjs</code> had hardcoded third-party</p>
+<p>  developer paths and model names replaced with neutral</p>
+<p>  <code>/Users/example/...</code> and generic model identifiers.</p>
+</ul>
+<h2>[0.1.0] — 2026-04-25</h2>
+
+<p>Initial public release. OwlCoda enters the public source tree as a</p>
+<p>**Developer Preview** — feature-complete enough for daily use, but</p>
+<p>the API surface, slash-command set, and config schema may still</p>
+<p>evolve before 1.0.</p>
+
+<h3>Native REPL</h3>
+<ul>
+<li>Default interactive path: native REPL with 42+ built-in tools</li>
+<p>  (Bash, Read, Write, Glob, Grep, MCP-served tools, more) and 69+</p>
+<p>  slash commands.</p>
+<li>Selection-first transcript surface: terminal-native drag-select</li>
+<p>  and copy stay available on the primary screen.</p>
+<li>Multi-client live REPL with a shared daemon, per-client session</li>
+<p>  affinity, and live <code>clients list</code> / <code>clients detach</code> control plane.</p>
+<li>Session persistence under <code>~/.owlcoda/sessions/</code>, including</li>
+<p>  <code>--resume id|last</code>, <code>/sessions</code>, <code>/tag</code>, <code>/branch</code>, <code>/history</code>.</p>
+<li>Headless mode: <code>owlcoda -p "..."</code> and <code>owlcoda run --prompt "..."</code></li>
+<p>  return end-to-end LLM responses with full tool support.</p>
+</ul>
+<h3>Protocol &amp; routing</h3>
+<ul>
+<li>Anthropic Messages API ↔ OpenAI Chat Completions translation,</li>
+<p>  including streaming + non-streaming + tool-use protocol.</p>
+<li>Multi-backend auto-discovery (Ollama 11434, LM Studio 1234, vLLM</li>
+<p>  8000) and intent-aware routing across local + cloud catalogs.</p>
+<li>Production middleware: retry, rate-limit, fallback, circuit</li>
+<p>  breaker, response cache (LRU 100 / 5 min TTL), per-model timeout</p>
+<p>  override, hot config reload.</p>
+</ul>
+<h3>Skills (L2)</h3>
+<ul>
+<li>TF-IDF–matched skill injection from <code>~/.owlcoda/skills/</code> and</li>
+<p>  the curated skill pack into the system prompt at request time.</p>
+<li><code>owlcoda skills</code> CLI: `info / list / show / synth / delete /</li>
+<p>  search / match / stats / cleanup / export / import`.</p>
+<li>Auto-synthesis pipeline that extracts reusable skills from</li>
+<p>  complex completed sessions.</p>
+</ul>
+<h3>Training data pipeline (L3, opt-in / off by default)</h3>
+<ul>
+<li>Quality-scored session collection (5 weighted dimensions),</li>
+<p>  PII sanitization before disk write, JSONL / ShareGPT / insights</p>
+<p>  export formats. Disabled unless explicitly opted-in via</p>
+<p>  <code>trainingCollection: true</code> in <code>config.json</code> or</p>
+<p>  <code>OWLCODA_TRAINING_COLLECTION=1</code>.</p>
+</ul>
+<h3>Browser admin</h3>
+<ul>
+<li><code>owlcoda ui</code> / <code>owlcoda admin</code> prints a one-shot admin URL.</li>
+<li><code>--open-browser</code> to launch directly; <code>--route</code> and <code>--select</code></li>
+<p>  for focused handoffs to specific admin views.</p>
+<li>Provider failure diagnostics unified across main agent,</li>
+<p>  subagent, <code>/v1/messages</code>, <code>/v1/chat/completions</code>, admin</p>
+<p>  <code>test connection</code>, and <code>/warmup</code>.</p>
+</ul>
+<h3>Diagnostics &amp; observability</h3>
+<ul>
+<li><code>owlcoda doctor</code> — environment, runtime, and model health.</li>
+<li>`owlcoda config / validate / models / health / status / inspect /</li>
+<p>  audit / cache / logs / benchmark / export`.</p>
+<li>HTTP API: <code>/v1/perf</code>, <code>/v1/latency</code>, <code>/v1/cost</code>, <code>/v1/recommend</code>,</li>
+<p>  <code>/v1/usage</code>, <code>/v1/audit</code>, <code>/v1/cache</code>, <code>/v1/skills</code>,</p>
+<p>  <code>/v1/insights/:sessionId</code>, <code>/v1/training/*</code>, <code>/v1/captures</code>,</p>
+<p>  <code>/v1/search</code>, <code>/openapi.json</code>, <code>/metrics</code>.</p>
+</ul>
+<h3>Privacy posture</h3>
+<ul>
+<li>Sessions stay local under <code>~/.owlcoda/</code>. Training data</li>
+<p>  collection is opt-in. Nothing is uploaded to any external</p>
+<p>  service by OwlCoda itself.</p>
+</ul>
+<h3>Known limitations</h3>
+<ul>
+<li>Mouse-wheel transcript scrollback is not yet routed through the</li>
+<p>  in-tree Ink fork. Use <code>PgUp</code> / <code>PgDn</code> / <code>Ctrl+↓</code> or <code>/history</code></p>
+<p>  for in-app scrollback.</p>
+<li>LSP tools require the user to install the corresponding</li>
+<p>  language server (<code>typescript-language-server</code>, <code>pyright</code>,</p>
+<p>  <code>rust-analyzer</code>, <code>gopls</code>, etc.) and wire it via a plugin.</p>
+<li>OAuth-style remote MCP servers are not yet supported; stdio MCP</li>
+<p>  servers are fully functional.</p>
+</ul></div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-left" data-astro-cid-sz7xmlte> <a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Apache-2.0</a> <span class="sep" data-astro-cid-sz7xmlte>·</span> <a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a> </div> <div class="col-mid" data-astro-cid-sz7xmlte> <span data-astro-cid-sz7xmlte>独立产品</span> <span class="sep" data-astro-cid-sz7xmlte>·</span> <span data-astro-cid-sz7xmlte>无追踪、无遥测</span> </div> <div class="col-right" data-astro-cid-sz7xmlte> <a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a> <span class="sep" data-astro-cid-sz7xmlte>·</span> <a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a> <span class="sep" data-astro-cid-sz7xmlte>·</span> <span class="version" data-astro-cid-sz7xmlte>v0.1.2</span> </div> </div> </footer>  </body></html>

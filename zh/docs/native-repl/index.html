@@ -1,0 +1,153 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"> <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="description" content="Slash 命令、工具、会话、技能、训练管线 —— OwlCoda 内你做的每件事。"><link rel="icon" href="/favicon.svg"><link rel="canonical" href="https://owlcoda.com/zh/docs/native-repl/"><meta property="og:title" content="Native REPL — OwlCoda 文档"><meta property="og:description" content="Slash 命令、工具、会话、技能、训练管线 —— OwlCoda 内你做的每件事。"><meta property="og:image" content="https://owlcoda.com/og-image.png"><meta property="og:url" content="https://owlcoda.com/zh/docs/native-repl/"><meta property="og:type" content="website"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="Native REPL — OwlCoda 文档"><meta name="twitter:description" content="Slash 命令、工具、会话、技能、训练管线 —— OwlCoda 内你做的每件事。"><meta name="twitter:image" content="https://owlcoda.com/og-image.png"><title>Native REPL — OwlCoda 文档</title><script>
+(function () {
+  try {
+    var saved = localStorage.getItem('owlcoda-theme');
+    var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var theme = saved || (prefersDark ? 'dark' : 'light');
+    document.documentElement.setAttribute('data-theme', theme);
+  } catch (e) {
+    document.documentElement.setAttribute('data-theme', 'light');
+  }
+})();
+</script><link rel="stylesheet" href="/_astro/changelog.DV55LuaJ.css"></head> <body> <nav class="site-nav" data-astro-cid-dmqpwcec> <div class="container nav-row" data-astro-cid-dmqpwcec> <a href="/zh/" class="brand" data-astro-cid-dmqpwcec> <img src="/owlcoda-logo.svg" alt="" width="22" height="22" data-astro-cid-dmqpwcec> <span data-astro-cid-dmqpwcec>OwlCoda</span> </a> <div class="nav-links" data-astro-cid-dmqpwcec> <a href="/zh/docs/install" data-astro-cid-dmqpwcec>文档</a> <a href="/zh/changelog" data-astro-cid-dmqpwcec>更新日志</a> </div> <div class="nav-right" data-astro-cid-dmqpwcec> <div class="lang-switch" aria-label="Language switch" data-astro-cid-r2b4e7hz> <span class="current" data-astro-cid-r2b4e7hz>中</span> <span class="sep" data-astro-cid-r2b4e7hz>·</span> <a href="/docs/native-repl/" class="other" data-astro-cid-r2b4e7hz>EN</a> </div>  <style>astro-island,astro-slot,astro-static-slot{display:contents}</style><script>(()=>{var e=async t=>{await(await t())()};(self.Astro||(self.Astro={})).load=e;window.dispatchEvent(new Event("astro:load"));})();;(()=>{var A=Object.defineProperty;var g=(i,o,a)=>o in i?A(i,o,{enumerable:!0,configurable:!0,writable:!0,value:a}):i[o]=a;var d=(i,o,a)=>g(i,typeof o!="symbol"?o+"":o,a);{let i={0:t=>m(t),1:t=>a(t),2:t=>new RegExp(t),3:t=>new Date(t),4:t=>new Map(a(t)),5:t=>new Set(a(t)),6:t=>BigInt(t),7:t=>new URL(t),8:t=>new Uint8Array(t),9:t=>new Uint16Array(t),10:t=>new Uint32Array(t),11:t=>1/0*t},o=t=>{let[l,e]=t;return l in i?i[l](e):void 0},a=t=>t.map(o),m=t=>typeof t!="object"||t===null?t:Object.fromEntries(Object.entries(t).map(([l,e])=>[l,o(e)]));class y extends HTMLElement{constructor(){super(...arguments);d(this,"Component");d(this,"hydrator");d(this,"hydrate",async()=>{var b;if(!this.hydrator||!this.isConnected)return;let e=(b=this.parentElement)==null?void 0:b.closest("astro-island[ssr]");if(e){e.addEventListener("astro:hydrate",this.hydrate,{once:!0});return}let c=this.querySelectorAll("astro-slot"),n={},h=this.querySelectorAll("template[data-astro-template]");for(let r of h){let s=r.closest(this.tagName);s!=null&&s.isSameNode(this)&&(n[r.getAttribute("data-astro-template")||"default"]=r.innerHTML,r.remove())}for(let r of c){let s=r.closest(this.tagName);s!=null&&s.isSameNode(this)&&(n[r.getAttribute("name")||"default"]=r.innerHTML)}let p;try{p=this.hasAttribute("props")?m(JSON.parse(this.getAttribute("props"))):{}}catch(r){let s=this.getAttribute("component-url")||"<unknown>",v=this.getAttribute("component-export");throw v&&(s+=` (export ${v})`),console.error(`[hydrate] Error parsing props for component ${s}`,this.getAttribute("props"),r),r}let u;await this.hydrator(this)(this.Component,p,n,{client:this.getAttribute("client")}),this.removeAttribute("ssr"),this.dispatchEvent(new CustomEvent("astro:hydrate"))});d(this,"unmount",()=>{this.isConnected||this.dispatchEvent(new CustomEvent("astro:unmount"))})}disconnectedCallback(){document.removeEventListener("astro:after-swap",this.unmount),document.addEventListener("astro:after-swap",this.unmount,{once:!0})}connectedCallback(){if(!this.hasAttribute("await-children")||document.readyState==="interactive"||document.readyState==="complete")this.childrenConnectedCallback();else{let e=()=>{document.removeEventListener("DOMContentLoaded",e),c.disconnect(),this.childrenConnectedCallback()},c=new MutationObserver(()=>{var n;((n=this.lastChild)==null?void 0:n.nodeType)===Node.COMMENT_NODE&&this.lastChild.nodeValue==="astro:end"&&(this.lastChild.remove(),e())});c.observe(this,{childList:!0}),document.addEventListener("DOMContentLoaded",e)}}async childrenConnectedCallback(){let e=this.getAttribute("before-hydration-url");e&&await import(e),this.start()}async start(){let e=JSON.parse(this.getAttribute("opts")),c=this.getAttribute("client");if(Astro[c]===void 0){window.addEventListener(`astro:${c}`,()=>this.start(),{once:!0});return}try{await Astro[c](async()=>{let n=this.getAttribute("renderer-url"),[h,{default:p}]=await Promise.all([import(this.getAttribute("component-url")),n?import(n):()=>()=>{}]),u=this.getAttribute("component-export")||"default";if(!u.includes("."))this.Component=h[u];else{this.Component=h;for(let f of u.split("."))this.Component=this.Component[f]}return this.hydrator=p,this.hydrate},e,this)}catch(n){console.error(`[astro-island] Error hydrating ${this.getAttribute("component-url")}`,n)}}attributeChangedCallback(){this.hydrate()}}d(y,"observedAttributes",["props"]),customElements.get("astro-island")||customElements.define("astro-island",y)}})();</script><astro-island uid="Zf5uNW" prefix="r0" component-url="/_astro/ThemeToggle.DFB0nHaa.js" component-export="default" renderer-url="/_astro/client.BuOr9PT5.js" props="{&quot;data-astro-cid-dmqpwcec&quot;:[0,true]}" ssr="" client="load" opts="{&quot;name&quot;:&quot;ThemeToggle&quot;,&quot;value&quot;:true}" await-children=""><button aria-label="Toggle theme" class="theme-toggle" style="visibility:hidden">·</button><!--astro:end--></astro-island> <a href="https://github.com/yeemio/owlcoda" class="github-link" target="_blank" rel="noopener" data-astro-cid-dmqpwcec> <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"> <path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.55v-2.13c-3.2.7-3.87-1.36-3.87-1.36-.52-1.32-1.27-1.67-1.27-1.67-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.76 2.69 1.25 3.34.95.1-.74.4-1.25.72-1.54-2.55-.29-5.24-1.27-5.24-5.66 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.18 1.17a11 11 0 0 1 5.79 0c2.21-1.48 3.18-1.17 3.18-1.17.62 1.58.23 2.75.11 3.04.74.8 1.18 1.82 1.18 3.07 0 4.4-2.69 5.36-5.25 5.65.41.36.78 1.05.78 2.12v3.14c0 .31.21.67.8.55C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"></path> </svg> <span data-astro-cid-dmqpwcec>GitHub</span> </a> </div> </div> </nav>  <main>  <article class="container content doc"> <h1>Native REPL</h1> <p class="lede">Slash 命令、工具、会话、技能、训练管线 —— OwlCoda 内你做的每件事。</p> <p>跑 <code>owlcoda</code> 进入 native REPL。它看起来像终端，因为它本来就是终端。</p>
+<h2 id="常用-slash-命令">常用 slash 命令</h2>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>命令</th><th>作用</th></tr></thead><tbody><tr><td><code>/help</code></td><td>列出全部 slash 命令，按职能分组</td></tr><tr><td><code>/model</code></td><td>打开模型 picker；切换当前 model</td></tr><tr><td><code>/cost</code></td><td>当前会话 token + 成本明细</td></tr><tr><td><code>/budget</code></td><td>已用 vs 估算上下文窗口</td></tr><tr><td><code>/perf</code></td><td>各 model 延迟 + tokens/sec + 成功率</td></tr><tr><td><code>/doctor</code></td><td>最近错误、运行时长、trace 状态</td></tr><tr><td><code>/config</code></td><td>当前 model / proxy / router / flag / 会话信息</td></tr><tr><td><code>/trace</code></td><td>切换 JSON 请求 / 响应 tracing</td></tr><tr><td><code>/tokens</code></td><td>累计 input / output / total token</td></tr><tr><td><code>/sessions</code></td><td>列最近会话；恢复任意一次</td></tr><tr><td><code>/tag &#x3C;name></code></td><td>给当前会话打标签</td></tr><tr><td><code>/branch</code></td><td>在当前消息处 fork 当前会话</td></tr><tr><td><code>/history</code></td><td>应用内回滚（PgUp / PgDn / Ctrl+↓ 也行）</td></tr><tr><td><code>/skills</code></td><td>当前请求被注入的 skill + 匹配分</td></tr><tr><td><code>/dashboard</code></td><td>紧凑状态总览</td></tr></tbody></table>
+<h2 id="常用工具">常用工具</h2>
+<p>每个工具由模型在需要时调用 —— 你不会直接调。</p>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<table><thead><tr><th>工具</th><th>作用</th></tr></thead><tbody><tr><td><code>Bash</code></td><td>跑 shell 命令（破坏性操作有 prompt）</td></tr><tr><td><code>Read</code></td><td>按绝对路径读文件</td></tr><tr><td><code>Write</code></td><td>写或覆盖文件</td></tr><tr><td><code>Edit</code></td><td>精准 string-replace 编辑</td></tr><tr><td><code>Glob</code></td><td>按 pattern 找文件，按 mtime 排序</td></tr><tr><td><code>Grep</code></td><td>ripgrep 内容搜索</td></tr><tr><td><code>Agent</code></td><td>派 subagent 处理复杂 / 并行任务</td></tr><tr><td><code>Schedule…</code></td><td>cron 风格定时触发器</td></tr></tbody></table>
+<p>还有 30+ 个 —— REPL 内 <code>/tools</code> 看全部。</p>
+<h2 id="会话">会话</h2>
+<p>每次对话自动落到 <code>~/.owlcoda/sessions/&#x3C;id>.json</code>。恢复：</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">owlcoda</span><span style="color:#79B8FF"> --resume</span><span style="color:#9ECBFF"> last</span><span style="color:#6A737D">           # 上次会话</span></span>
+<span class="line"><span style="color:#B392F0">owlcoda</span><span style="color:#79B8FF"> --resume</span><span style="color:#F97583"> &#x3C;</span><span style="color:#9ECBFF">i</span><span style="color:#E1E4E8">d</span><span style="color:#F97583">></span><span style="color:#6A737D">           # 指定 id（从 owlcoda sessions 拿）</span></span>
+<span class="line"></span></code></pre>
+<p>可给会话打标签（<code>/tag launch-blocker</code>）、按标签搜（<code>owlcoda sessions --tag launch-blocker</code>）、从任意消息处分支（<code>/branch</code>）。</p>
+<h2 id="技能-l2">技能 (L2)</h2>
+<p>OwlCoda 把用户输入与精选方法论 pack + 用户安装的 <code>~/.owlcoda/skills/</code> 做匹配，命中的 skill 在请求时注入 system prompt。可调：</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="json"><code><span class="line"><span style="color:#E1E4E8">{</span></span>
+<span class="line"><span style="color:#79B8FF">  "skillInjection"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">true</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">  "skillTopK"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">2</span><span style="color:#E1E4E8">,</span></span>
+<span class="line"><span style="color:#79B8FF">  "skillThreshold"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">0.1</span></span>
+<span class="line"><span style="color:#E1E4E8">}</span></span>
+<span class="line"></span></code></pre>
+<p>跑 <code>owlcoda skills info</code> 看当前加载了什么。</p>
+<h2 id="训练管线-l3opt-in--默认关闭">训练管线 (L3，opt-in / 默认关闭)</h2>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="json"><code><span class="line"><span style="color:#E1E4E8">{ </span><span style="color:#79B8FF">"trainingCollection"</span><span style="color:#E1E4E8">: </span><span style="color:#79B8FF">false</span><span style="color:#E1E4E8"> }</span></span>
+<span class="line"></span></code></pre>
+<p>或运行时覆盖：</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#E1E4E8">OWLCODA_TRAINING_COLLECTION</span><span style="color:#F97583">=</span><span style="color:#9ECBFF">1</span><span style="color:#B392F0"> owlcoda</span></span>
+<span class="line"></span></code></pre>
+<p>开启时，会话按 5 维度加权打分、PII 脱敏、追加到 <code>~/.owlcoda/training/collected.jsonl</code>。导出：</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="bash"><code><span class="line"><span style="color:#B392F0">owlcoda</span><span style="color:#9ECBFF"> training</span><span style="color:#9ECBFF"> export</span><span style="color:#9ECBFF"> jsonl</span><span style="color:#79B8FF"> --min-quality</span><span style="color:#79B8FF"> 70</span></span>
+<span class="line"><span style="color:#B392F0">owlcoda</span><span style="color:#9ECBFF"> training</span><span style="color:#9ECBFF"> export</span><span style="color:#9ECBFF"> sharegpt</span><span style="color:#79B8FF"> --tool-calls-only</span></span>
+<span class="line"></span></code></pre> </article>  </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-left" data-astro-cid-sz7xmlte> <a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Apache-2.0</a> <span class="sep" data-astro-cid-sz7xmlte>·</span> <a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a> </div> <div class="col-mid" data-astro-cid-sz7xmlte> <span data-astro-cid-sz7xmlte>独立产品</span> <span class="sep" data-astro-cid-sz7xmlte>·</span> <span data-astro-cid-sz7xmlte>无追踪、无遥测</span> </div> <div class="col-right" data-astro-cid-sz7xmlte> <a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a> <span class="sep" data-astro-cid-sz7xmlte>·</span> <a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a> <span class="sep" data-astro-cid-sz7xmlte>·</span> <span class="version" data-astro-cid-sz7xmlte>v0.1.2</span> </div> </div> </footer>  </body></html>

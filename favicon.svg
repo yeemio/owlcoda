@@ -1,0 +1,52 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="paper" x1="96" y1="64" x2="432" y2="448" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FAF8F2"/>
+      <stop offset="1" stop-color="#ECE7DA"/>
+    </linearGradient>
+    <linearGradient id="fold" x1="362" y1="58" x2="454" y2="152" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F4F0E7"/>
+      <stop offset="1" stop-color="#D8D1C2"/>
+    </linearGradient>
+    <linearGradient id="owl" x1="152" y1="162" x2="356" y2="360" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5FAE67"/>
+      <stop offset="1" stop-color="#2D6F44"/>
+    </linearGradient>
+    <linearGradient id="iris" x1="208" y1="214" x2="304" y2="310" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#DEF2D8"/>
+      <stop offset="1" stop-color="#B7D6AF"/>
+    </linearGradient>
+    <filter id="shadow" x="82" y="52" width="348" height="408" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#173122" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="120" fill="#0F1711"/>
+
+  <g filter="url(#shadow)">
+    <path d="M128 64C128 46.327 142.327 32 160 32H328L384 88V384C384 401.673 369.673 416 352 416H160C142.327 416 128 401.673 128 384V64Z" fill="url(#paper)"/>
+    <path d="M328 32L384 88H348C336.954 88 328 79.046 328 68V32Z" fill="url(#fold)"/>
+    <path d="M348 88L384 124V88H348Z" fill="#C9C1B2" fill-opacity="0.55"/>
+  </g>
+
+  <g>
+    <path d="M256 145C206.846 145 167 184.846 167 234C167 283.154 206.846 323 256 323C305.154 323 345 283.154 345 234C345 184.846 305.154 145 256 145Z" fill="url(#owl)"/>
+    <path d="M205.5 176C187.551 176 173 190.551 173 208.5V235.5C173 253.449 187.551 268 205.5 268H233.5C251.449 268 266 253.449 266 235.5V208.5C266 190.551 251.449 176 233.5 176H205.5Z" fill="#FAF8F2"/>
+    <path d="M278.5 176C260.551 176 246 190.551 246 208.5V235.5C246 253.449 260.551 268 278.5 268H306.5C324.449 268 339 253.449 339 235.5V208.5C339 190.551 324.449 176 306.5 176H278.5Z" fill="#FAF8F2"/>
+    <circle cx="219.5" cy="222" r="28" fill="url(#iris)"/>
+    <circle cx="292.5" cy="222" r="28" fill="url(#iris)"/>
+    <circle cx="219.5" cy="222" r="14" fill="#205134"/>
+    <circle cx="292.5" cy="222" r="14" fill="#205134"/>
+    <circle cx="224.5" cy="216" r="4.5" fill="#F6FFF2"/>
+    <circle cx="297.5" cy="216" r="4.5" fill="#F6FFF2"/>
+    <path d="M244 244L256 262L268 244H244Z" fill="#D9A63B"/>
+    <path d="M205 163L232 145L248 172" stroke="#2D6F44" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M307 163L280 145L264 172" stroke="#2D6F44" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M198 286C213.383 301.383 233.751 310 256 310C278.249 310 298.617 301.383 314 286" stroke="#1E4B30" stroke-width="12" stroke-linecap="round"/>
+  </g>
+
+  <g opacity="0.9">
+    <rect x="178" y="344" width="156" height="8" rx="4" fill="#6AAE78"/>
+    <rect x="196" y="362" width="120" height="8" rx="4" fill="#A9C9A4"/>
+  </g>
+</svg>
