@@ -68,7 +68,12 @@ npm link             # exposes `owlcoda` globally
 ```
 
 Prerequisites: Node.js ≥ 18 (Node 20+ recommended), macOS / Linux /
-Windows-WSL.
+Windows / Windows-WSL.
+
+Windows note: default Git checkouts often use `core.symlinks=false`.
+OwlCoda keeps build-critical Ink shim entrypoints as real TypeScript
+bridge files rather than symlinks, so `npm install && npm run build`
+works without enabling Developer Mode or changing Git symlink settings.
 
 If `npm link` fails because your global npm prefix is not writable:
 
@@ -291,7 +296,7 @@ React app), `skills/` (curated methodology skill pack),
 ```bash
 npm run dev      # run src/cli.ts directly via tsx (no rebuild)
 npm test         # vitest suite (~3450 tests, ~30s)
-npm run build    # tsc → dist/, also chmod +x dist/cli.js
+npm run build    # tsc → dist/, then cross-platform postbuild copy/setup
 npm run smoke    # full smoke test against a real backend
 ```
 

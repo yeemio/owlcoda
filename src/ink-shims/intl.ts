@@ -1,1 +1,1 @@
-utils-intl.ts
+export * from './utils-intl.js'

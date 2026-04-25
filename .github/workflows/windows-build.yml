@@ -1,0 +1,33 @@
+name: Windows build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.1
+          cache: npm
+
+      - name: Verify symlink mode
+        shell: bash
+        run: git config --get core.symlinks || true
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build

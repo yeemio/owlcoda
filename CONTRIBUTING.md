@@ -17,6 +17,11 @@ npm run build
 npm test
 ```
 
+On Windows, the default Git setting is often `core.symlinks=false`.
+Do not add build-critical symlink-only TypeScript entrypoints: use real
+bridge files with ESM re-exports so `npm install && npm run build`
+continues to work in PowerShell, cmd, Git Bash, and WSL.
+
 You'll want a local OpenAI-compatible backend running for end-to-end
 work. `ollama serve` with `qwen2.5-coder:7b` pulled is the cheapest path;
 LM Studio and vLLM both work too. See the README for quickstart commands.
