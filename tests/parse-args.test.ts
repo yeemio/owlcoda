@@ -185,4 +185,10 @@ describe('parseArgs', () => {
     expect(result.select).toBe('kimi-code')
     expect(result.view).toBe('issues')
   })
+
+  it('parses --route start for admin onboarding', () => {
+    const result = parse('ui', '--route', 'start')
+    expect(result.command).toBe('ui')
+    expect(result.route).toBe('start')
+  })
 })

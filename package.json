@@ -41,7 +41,7 @@
     "owlcoda": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc && node scripts/postbuild.mjs",
+    "build": "tsc && npm --prefix admin ci && npm --prefix admin run build && node scripts/postbuild.mjs",
     "dev": "node --import tsx src/cli.ts",
     "smoke": "bash scripts/smoke-test.sh",
     "test": "vitest run",

@@ -24,7 +24,7 @@ export interface VerifyOneShotTokenOptions {
   maxAgeMs?: number
 }
 
-export type AdminHandoffRoute = 'models' | 'aliases' | 'orphans' | 'catalog'
+export type AdminHandoffRoute = 'start' | 'models' | 'aliases' | 'orphans' | 'catalog'
 
 export interface AdminHandoffContext {
   route?: AdminHandoffRoute

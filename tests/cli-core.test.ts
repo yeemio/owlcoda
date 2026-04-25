@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { parseArgs, printHelp, VERSION, loadEffectiveConfig, doUi } from '../src/cli-core.js'
+import { parseArgs, printHelp, VERSION, loadEffectiveConfig, doLaunch, doUi } from '../src/cli-core.js'
 
 describe('parseArgs', () => {
   const parse = (args: string[]) => parseArgs(['node', 'owlcoda', ...args])
@@ -118,6 +118,12 @@ describe('parseArgs', () => {
     expect(result.view).toBe('issues')
   })
 
+  it('parses --route start', () => {
+    const result = parse(['ui', '--route', 'start'])
+    expect(result.command).toBe('ui')
+    expect(result.route).toBe('start')
+  })
+
   // ─── Combined ───
 
   it('combines command with options', () => {
@@ -186,6 +192,116 @@ describe('printHelp', () => {
     expect(output).toContain('--route')
     expect(output).toContain('--select')
     spy.mockRestore()
+  })
+})
+
+describe('doLaunch', () => {
+  const originalCwd = process.cwd()
+  let workdir: string
+  let configPath: string
+
+  beforeEach(() => {
+    workdir = mkdtempSync('/tmp/owlcoda-launch-')
+    process.chdir(workdir)
+    configPath = join(workdir, 'config.json')
+  })
+
+  afterEach(() => {
+    process.chdir(originalCwd)
+    rmSync(workdir, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  function writeConfig(extra: Record<string, unknown> = {}) {
+    writeFileSync(configPath, JSON.stringify({
+      port: 18119,
+      host: '127.0.0.1',
+      routerUrl: 'http://127.0.0.1:18009',
+      models: [
+        {
+          id: 'local-model',
+          backendModel: 'local-backend',
+          aliases: ['local'],
+          default: true,
+        },
+      ],
+      ...extra,
+    }))
+  }
+
+  function launchDeps(overrides: Record<string, unknown> = {}) {
+    return {
+      runPreflight: vi.fn(async () => ({
+        router: { name: 'Local runtime', url: 'http://127.0.0.1:18009', status: 'missing', detail: 'missing' },
+        backends: [],
+        overall: 'blocked',
+        canProceed: false,
+        summary: 'blocked',
+      })),
+      ensureProxyRunning: vi.fn(async () => ({ pid: 42, reused: false })),
+      readRuntimeMeta: vi.fn(() => ({
+        pid: 42,
+        host: '127.0.0.1',
+        port: 18119,
+        routerUrl: 'http://127.0.0.1:18009',
+        runtimeToken: 'runtime-token',
+        version: '0.1.2',
+        startedAt: '2026-04-25T00:00:00.000Z',
+      })),
+      getBaseUrl: vi.fn(() => 'http://127.0.0.1:18119'),
+      doUi: vi.fn(async () => ({
+        url: 'http://127.0.0.1:18119/admin/?token=t#/start',
+        bundleAvailable: true,
+        openedBrowser: false,
+        context: { route: 'start' },
+      })),
+      createLiveReplClientId: vi.fn(() => 'client-1'),
+      upsertLiveReplClient: vi.fn(),
+      removeLiveReplClientIfOwned: vi.fn(),
+      startNativeRepl: vi.fn(async () => {}),
+      ...overrides,
+    } as any
+  }
+
+  it('hands off to admin start when local preflight blocks first-run launch', async () => {
+    writeConfig()
+    const stderrSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const deps = launchDeps()
+
+    await doLaunch(configPath, undefined, undefined, undefined, undefined, deps)
+
+    expect(deps.runPreflight).toHaveBeenCalledTimes(1)
+    expect(deps.doUi).toHaveBeenCalledWith(configPath, undefined, undefined, { route: 'start', openBrowser: true })
+    expect(deps.ensureProxyRunning).not.toHaveBeenCalled()
+    expect(deps.startNativeRepl).not.toHaveBeenCalled()
+    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('Starting OwlCoda Admin'))
+  })
+
+  it('skips local preflight for direct endpoint model launch', async () => {
+    writeConfig({
+      models: [
+        {
+          id: 'cloud-model',
+          backendModel: 'provider/model',
+          aliases: ['cloud'],
+          default: true,
+          endpoint: 'https://example.test/v1/chat/completions',
+          apiKey: 'test-key',
+        },
+      ],
+    })
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const deps = launchDeps()
+
+    await doLaunch(configPath, undefined, undefined, undefined, undefined, deps)
+
+    expect(deps.runPreflight).not.toHaveBeenCalled()
+    expect(deps.ensureProxyRunning).toHaveBeenCalledTimes(1)
+    expect(deps.startNativeRepl).toHaveBeenCalledWith(expect.objectContaining({
+      apiBaseUrl: 'http://127.0.0.1:18119',
+      model: 'cloud-model',
+    }))
+    expect(deps.doUi).not.toHaveBeenCalled()
   })
 })
 

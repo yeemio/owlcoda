@@ -168,7 +168,7 @@ export function parseArgs(argv: string[]): {
   dryRun?: boolean
   printUrl?: boolean
   openBrowser?: boolean
-  route?: 'models' | 'aliases' | 'orphans' | 'catalog'
+  route?: 'start' | 'models' | 'aliases' | 'orphans' | 'catalog'
   select?: string
   view?: string
   passthroughArgs: string[]
@@ -189,7 +189,7 @@ export function parseArgs(argv: string[]): {
   let dryRun = false
   let printUrl = false
   let openBrowser = false
-  let route: 'models' | 'aliases' | 'orphans' | 'catalog' | undefined
+  let route: 'start' | 'models' | 'aliases' | 'orphans' | 'catalog' | undefined
   let select: string | undefined
   let view: string | undefined
   const passthroughArgs: string[] = []
@@ -271,7 +271,7 @@ export function parseArgs(argv: string[]): {
         break
       case '--route': {
         const value = args[++i] as typeof route
-        if (value === 'models' || value === 'aliases' || value === 'orphans' || value === 'catalog') {
+        if (value === 'start' || value === 'models' || value === 'aliases' || value === 'orphans' || value === 'catalog') {
           route = value
         }
         break
@@ -458,7 +458,7 @@ Options:
   --dry-run               Validate environment without launching
   --print-url             Print the browser admin URL without opening a browser
   --open-browser         Launch the browser admin URL in your default browser
-  --route <name>          Admin browser route: models | aliases | orphans | catalog
+  --route <name>          Admin browser route: start | models | aliases | orphans | catalog
   --select <modelId>      Preselect a model in the browser admin
   --view <name>           Optional browser admin subview/filter hint
   --force                 Force overwrite or force-detach clients for lifecycle control
@@ -811,6 +811,39 @@ const defaultUiLaunchDeps: UiLaunchDeps = {
   now: () => Date.now(),
 }
 
+type StartNativeRepl = (options: Parameters<typeof import('./native/repl.js').startRepl>[0]) => Promise<void>
+
+export interface LaunchDeps {
+  runPreflight: typeof runPreflight
+  ensureProxyRunning: typeof ensureProxyRunning
+  readRuntimeMeta: typeof readRuntimeMeta
+  getBaseUrl: typeof getBaseUrl
+  doUi: typeof doUi
+  createLiveReplClientId: typeof createLiveReplClientId
+  upsertLiveReplClient: typeof upsertLiveReplClient
+  removeLiveReplClientIfOwned: typeof removeLiveReplClientIfOwned
+  startNativeRepl: StartNativeRepl
+}
+
+const defaultLaunchDeps: LaunchDeps = {
+  runPreflight,
+  ensureProxyRunning,
+  readRuntimeMeta,
+  getBaseUrl,
+  doUi,
+  createLiveReplClientId,
+  upsertLiveReplClient,
+  removeLiveReplClientIfOwned,
+  startNativeRepl: async (options) => {
+    const { startRepl } = await import('./native/repl.js')
+    await startRepl(options)
+  },
+}
+
+function resolveSelectedConfiguredModel(config: OwlCodaConfig, selectedModel: string) {
+  return config.models?.find(m => m.id === selectedModel || m.aliases?.includes(selectedModel))
+}
+
 export async function doUi(
   configPath?: string,
   port?: number,
@@ -870,9 +903,10 @@ export async function doLaunch(
   routerUrl?: string,
   resumeSession?: string,
   model?: string,
+  deps: LaunchDeps = defaultLaunchDeps,
 ): Promise<void> {
   const config = loadEffectiveConfig(configPath, port, routerUrl)
-  const baseUrl = getBaseUrl(config)
+  const baseUrl = deps.getBaseUrl(config)
   const quietStartup = Boolean(process.stderr.isTTY) && !isLaunchStartupVerbose()
 
   // Startup banner
@@ -892,27 +926,33 @@ export async function doLaunch(
   }
 
   const apiKey = 'owlcoda-local-key-' + String(config.port)
+  const selectedModel = model ?? defaultModel?.id ?? 'default'
+  const selectedModelConf = resolveSelectedConfiguredModel(config, selectedModel)
+  const isDirectEndpointModel = selectedModelConf?.endpoint != null
 
-  // 1. Run local platform preflight
-  const preflight = await runPreflight(config)
-  if (!quietStartup) {
-    console.error('')
-    console.error(formatPreflightForCli(preflight))
-    console.error('')
-  }
-
-  if (!preflight.canProceed) {
-    if (quietStartup) {
+  // 1. Run local platform preflight only when the selected model depends on
+  // the local runtime. Direct endpoint models route without local runtime.
+  if (!isDirectEndpointModel) {
+    const preflight = await deps.runPreflight(config)
+    if (!quietStartup) {
+      console.error('')
       console.error(formatPreflightForCli(preflight))
       console.error('')
     }
-    console.error('Cannot start OwlCoda — local platform services are not available.')
-    console.error('Please start the required services and try again.')
-    process.exit(1)
+
+    if (!preflight.canProceed) {
+      if (quietStartup) {
+        console.error(formatPreflightForCli(preflight))
+        console.error('')
+      }
+      console.error('Local runtime is not ready yet. Starting OwlCoda Admin so you can configure a model.')
+      await deps.doUi(configPath, port, routerUrl, { route: 'start', openBrowser: true })
+      return
+    }
   }
 
   // 2. Ensure proxy is running with matching config
-  const { pid, reused } = await ensureProxyRunning(config, configPath, port, routerUrl, { quiet: quietStartup })
+  const { pid, reused } = await deps.ensureProxyRunning(config, configPath, port, routerUrl, { quiet: quietStartup })
   if (!quietStartup) {
     if (reused && pid > 0) {
       console.error(`OwlCoda proxy: reusing PID ${pid} on ${baseUrl}`)
@@ -928,15 +968,15 @@ export async function doLaunch(
     console.error('OwlCoda proxy: ready')
   }
 
-  const runtimeMeta = readRuntimeMeta()
+  const runtimeMeta = deps.readRuntimeMeta()
   if (!runtimeMeta || runtimeMeta.port !== config.port || runtimeMeta.routerUrl !== config.routerUrl) {
     console.error('Failed to resolve live REPL lease metadata for the active daemon.')
     process.exit(1)
   }
 
   const effectiveResumeSession = resolveResumeSessionTarget(resumeSession, runtimeMeta, 'launch')
-  const clientId = createLiveReplClientId()
-  upsertLiveReplClient({
+  const clientId = deps.createLiveReplClientId()
+  deps.upsertLiveReplClient({
     clientId,
     clientPid: process.pid,
     daemonPid: runtimeMeta.pid,
@@ -949,10 +989,8 @@ export async function doLaunch(
   })
 
   // 4. Launch frontend — native is the only interactive path
-  const { startRepl: startNativeRepl } = await import('./native/repl.js')
-  const selectedModel = model ?? defaultModel?.id ?? 'default'
   try {
-    await startNativeRepl({
+    await deps.startNativeRepl({
       apiBaseUrl: baseUrl,
       apiKey,
       model: selectedModel,
@@ -967,7 +1005,7 @@ export async function doLaunch(
       },
     })
   } finally {
-    removeLiveReplClientIfOwned(clientId, process.pid)
+    deps.removeLiveReplClientIfOwned(clientId, process.pid)
   }
 }
 
