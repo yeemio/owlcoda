@@ -254,6 +254,27 @@ describe('ModelConfigMutator', () => {
     expect(updated).not.toHaveProperty('defaultModel')
   })
 
+  it('creates config file and parent directory on first admin model save', async () => {
+    const path = join(workdir, 'fresh-home', 'config.json')
+    const mutator = new ModelConfigMutator({ configPath: path })
+
+    await mutator.createEndpointModel({
+      id: 'minimax-m27',
+      label: 'MiniMax M2.7',
+      backendModel: 'minimax-m2.7-highspeed',
+      endpoint: 'https://api.minimax.io/anthropic',
+      apiKey: 'sk-test',
+    })
+
+    const updated = readJson(path)
+    const models = updated.models as Array<Record<string, unknown>>
+    expect(models).toHaveLength(1)
+    expect(models[0]?.id).toBe('minimax-m27')
+    expect(models[0]?.apiKey).toBe('sk-test')
+    expect(updated.modelMap).toHaveProperty('minimax-m27', 'minimax-m2.7-highspeed')
+    expect(updated.reverseMapInResponse).toBe(true)
+  })
+
   it('rejects endpoint model create when both apiKey and apiKeyEnv are provided', async () => {
     const path = withConfig({
       models: [],

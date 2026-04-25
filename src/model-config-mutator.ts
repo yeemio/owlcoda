@@ -3,7 +3,8 @@
  * Keeps all mutations on one path for model credentials/default/model binding.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import type { ConfiguredModel, LocalRuntimeProtocol } from './config.js'
 import { normalizeModel } from './config.js'
 import { getOwlcodaConfigPath } from './paths.js'
@@ -266,6 +267,9 @@ export class ModelConfigMutator {
   }
 
   private readConfigFile(): Record<string, unknown> {
+    if (!existsSync(this.configPath)) {
+      return createEmptyConfig()
+    }
     const content = readFileSync(this.configPath, 'utf-8')
     const parsed = JSON.parse(content) as Record<string, unknown>
     if (!parsed || typeof parsed !== 'object') {
@@ -278,7 +282,16 @@ export class ModelConfigMutator {
   }
 
   private writeConfigFile(raw: Record<string, unknown>): void {
+    mkdirSync(dirname(this.configPath), { recursive: true })
     writeFileSync(this.configPath, JSON.stringify(raw, null, 2) + '\n', 'utf-8')
+  }
+}
+
+function createEmptyConfig(): Record<string, unknown> {
+  return {
+    models: [],
+    modelMap: {},
+    reverseMapInResponse: true,
   }
 }
 
