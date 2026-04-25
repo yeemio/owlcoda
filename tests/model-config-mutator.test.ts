@@ -322,6 +322,29 @@ describe('ModelConfigMutator', () => {
     expect(model.role).toBe('planner')
   })
 
+  it('rejects non-positive numeric model fields', async () => {
+    const path = withConfig({
+      models: [{
+        id: 'cloud-model',
+        label: 'Cloud Model',
+        backendModel: 'cloud-model',
+        aliases: ['cm'],
+        tier: 'cloud',
+        endpoint: 'https://api.example.com/v1',
+      }],
+      modelMap: {},
+      reverseMapInResponse: true,
+    }, workdir)
+
+    const mutator = new ModelConfigMutator({ configPath: path })
+    await expect(mutator.updateModelFields('cloud-model', { timeoutMs: -2 })).rejects.toThrow(/timeoutMs must be a positive number/)
+    await expect(mutator.createEndpointModel({
+      id: 'bad-timeout',
+      endpoint: 'https://api.example.com/v1',
+      timeoutMs: 0,
+    })).rejects.toThrow(/timeoutMs must be a positive number/)
+  })
+
   it('rejects forbidden patch fields', async () => {
     const path = withConfig({
       models: [{

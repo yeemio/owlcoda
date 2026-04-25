@@ -302,7 +302,7 @@ function buildRequest(request: ProbeRequest): { url: string, init: RequestInit }
   const headers = new Headers(request.model.headers ?? {})
   // Probes should be fast, but 5s is too aggressive for some cloud providers
   // (for example MiniMax anthropic-compatible endpoints often land just under 10s).
-  const timeoutMs = request.model.timeoutMs ?? 15_000
+  const timeoutMs = resolveProbeTimeoutMs(request.model.timeoutMs)
   const apiKey = request.model.apiKey
 
   if (usesAnthropicMessagesProbe(request)) {
@@ -351,6 +351,12 @@ function buildRequest(request: ProbeRequest): { url: string, init: RequestInit }
       signal: AbortSignal.timeout(timeoutMs),
     },
   }
+}
+
+function resolveProbeTimeoutMs(timeoutMs: number | undefined): number {
+  return typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : 15_000
 }
 
 function defaultTestPathForRequest(request: ProbeRequest): string {

@@ -193,6 +193,20 @@ describe('ProviderProbe', () => {
     })
   })
 
+  it('falls back to the default probe timeout when saved timeoutMs is invalid', async () => {
+    fetchMock.mockResolvedValue(new Response('{}', { status: 200 }))
+    const probe = createProbe()
+
+    await probe.test(makeModel({
+      endpoint: 'https://api.minimaxi.com/anthropic',
+      apiKey: 'sk-minimax',
+      timeoutMs: -2,
+    }))
+
+    const init = fetchMock.mock.calls[0]![1]
+    expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
   it('supports custom dry-run test paths', async () => {
     fetchMock.mockResolvedValue(new Response('{}', { status: 200 }))
     const probe = createProbe()

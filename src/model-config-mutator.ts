@@ -344,6 +344,8 @@ function validatePatchFields(patch: UpdateModelFieldsPatch): void {
       throw new Error(`Field "${key}" is not allowed`)
     }
   }
+  validateOptionalPositiveNumber('contextWindow', patch.contextWindow)
+  validateOptionalPositiveNumber('timeoutMs', patch.timeoutMs)
 }
 
 function validateRuntimePatch(patch: UpdateRuntimeSettingsPatch): void {
@@ -364,6 +366,15 @@ function validateRuntimePatch(patch: UpdateRuntimeSettingsPatch): void {
 function validateCreatePatch(patch: CreateEndpointModelPatch): void {
   if (patch.apiKey && patch.apiKeyEnv) {
     throw new Error('Provide either apiKey or apiKeyEnv, not both')
+  }
+  validateOptionalPositiveNumber('contextWindow', patch.contextWindow)
+  validateOptionalPositiveNumber('timeoutMs', patch.timeoutMs)
+}
+
+function validateOptionalPositiveNumber(field: string, value: number | undefined): void {
+  if (value === undefined) return
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${field} must be a positive number`)
   }
 }
 
