@@ -29,7 +29,7 @@ interface RuntimeFormState {
 const PROTOCOL_OPTIONS: Array<{ value: LocalRuntimeProtocol, label: string, help: string }> = [
   { value: 'auto', label: 'Auto detect', help: 'Prefer this for owlmlx, Ollama gateways, and routers that expose runtime truth.' },
   { value: 'openai_chat', label: 'OpenAI chat', help: 'Use when the local router only speaks OpenAI-compatible chat/completions.' },
-  { value: 'anthropic_messages', label: 'Anthropic messages', help: 'Use when the router exposes Anthropic-compatible /v1/messages semantics.' },
+  { value: 'anthropic_messages', label: 'Messages-shaped API', help: 'Use when the router exposes /v1/messages semantics (Anthropic-compatible providers and similar gateways use this wire shape).' },
 ]
 
 const SUBSCRIPTION_TRACKS = [

@@ -6,17 +6,53 @@ Runtime version truth comes from [`package.json`](package.json) and is
 exposed at runtime through [`src/version.ts`](src/version.ts) and
 `owlcoda --version`.
 
+## [0.1.2] — 2026-04-25
+
+User-facing README rewrite + second-pass legal-positioning polish.
+
+### Changed
+- `README.md` / `README.zh.md` rewritten to put OwlCoda first:
+  installation, supported backend matrix (local: Ollama / LM Studio /
+  vLLM; cloud: Kimi / Moonshot / MiniMax / OpenRouter / Bailian /
+  Anthropic / OpenAI / custom), and concrete config snippets per
+  provider. The previous README read as an Ollama tutorial; the new
+  one reads as the OwlCoda manual it should be.
+- `admin/src/pages/StartPage.tsx` — the local-runtime protocol
+  picker option labeled `Anthropic messages` is now `Messages-shaped
+  API`; the help text references "Anthropic-compatible providers
+  and similar gateways" rather than naming a single vendor.
+- `tests/provider-probe.test.ts` — third-party model name fixtures
+  replaced with neutral `messages-vendor-*` names.
+- `skills/collaboration/{using-git-worktrees, phase-prompting,
+  receiving-code-review}/SKILL.md` — generic `AGENTS.md` /
+  `instruction` phrasing replaces the host-app-specific filename
+  that the original methodology pack used.
+
+### Added
+- `skills/README.md` — explicit positioning of the in-tree pack as
+  an OwlCoda curated methodology pack, with a non-list of
+  third-party SaaS skills that intentionally do not ship here.
+
+### Removed
+- `skills/meta/` — the maintenance / governance scripts under
+  `gardening-skills-wiki`, `pulling-updates-from-skills-repository`,
+  `sharing-skills`, `testing-skills-with-subagents`, and
+  `writing-skills` were tooling for an upstream skill-pack
+  ecosystem, not user-facing capability. Several of them carried
+  hardcoded host paths that pointed at an external maintainer's
+  local checkout.
+
 ## [0.1.1] — 2026-04-25
 
 Legal-positioning and provenance polish. No runtime behavior change.
 
 ### Removed
-- `skills/collaboration/remembering-conversations/` — the entire
-  module had a runtime dependency on `@anthropic-ai/claude-agent-sdk`
-  and a deployment story tied to `~/.claude/hooks/`, neither of which
-  fit OwlCoda's independent posture. Users who want
-  conversation-recall workflows should install a third-party skill
-  pack rather than ship one in-tree.
+- `skills/collaboration/remembering-conversations/` — depended on a
+  third-party AI agent SDK at runtime and on a host-app hook
+  directory for deployment, neither of which fit OwlCoda's
+  independent posture. Users who want conversation-recall workflows
+  should install a third-party skill pack rather than ship one
+  in-tree.
 - `skills/debugging/systematic-debugging/CREATION-LOG.md` — extraction
   log referencing a third-party developer's home directory; not
   user-facing content.

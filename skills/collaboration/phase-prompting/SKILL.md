@@ -57,7 +57,7 @@ When you produce a complete execution-ready prompt, do not leave it only in chat
 
 Always do this before drafting:
 
-1. Read the project's source-of-truth docs (CLAUDE.md, README, architecture docs)
+1. Read the project's source-of-truth docs (AGENTS.md, README, architecture docs)
 2. Read the actual implementation files relevant to the task
 3. Check git log for recent changes in the area
 4. If delivery summaries exist, verify claims against code

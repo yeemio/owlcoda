@@ -42,7 +42,7 @@ describe('ProviderProbe', () => {
 
     const result = await probe.test(makeModel({
       endpoint: 'https://api.anthropic.com',
-      apiKey: 'sk-ant',
+      apiKey: 'sk-test',
     }))
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -53,7 +53,7 @@ describe('ProviderProbe', () => {
       }),
     )
     const headers = fetchMock.mock.calls[0]![1].headers as Headers
-    expect(headers.get('x-api-key')).toBe('sk-ant')
+    expect(headers.get('x-api-key')).toBe('sk-test')
     expect(headers.get('anthropic-version')).toBe('2023-06-01')
     expect(result.ok).toBe(true)
     expect(result.status).toBe(200)
@@ -226,10 +226,10 @@ describe('ProviderProbe', () => {
 
     const failed = await probe.test({
       provider: 'anthropic',
-      id: 'claude-sonnet',
-      backendModel: 'claude-3-7-sonnet',
+      id: 'messages-vendor-model',
+      backendModel: 'messages-vendor-3-7',
       endpoint: 'https://api.anthropic.com',
-      apiKey: 'sk-ant',
+      apiKey: 'sk-test',
     })
 
     expect(failed.ok).toBe(false)

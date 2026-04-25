@@ -2,66 +2,196 @@
 
 [English](README.md) · [中文](README.zh.md)
 
-> **Your models. Your tools. Your data. Runs locally — no login, no cloud.**
+> **Your models. Your tools. Your data. A coding workbench you wire to
+> the model fleet of your choice.**
 
-OwlCoda is an independent, local-first AI coding workbench. A native
-terminal REPL with 42+ built-in tools, 69+ slash commands, session
-persistence, learned skills, and production-grade middleware — all on
-your own machine. Works with Ollama, LM Studio, vLLM, and any
-OpenAI-compatible local runtime, plus optional cloud providers you
+OwlCoda is an independent, local-first AI coding workbench. It runs as
+a native terminal REPL with 42+ built-in tools and 69+ slash commands,
+and it accepts requests in the Messages-shaped API while routing them
+to any OpenAI-compatible local runtime or to a cloud provider you
 configure yourself.
 
 > **Privacy by default.** Sessions stay in `~/.owlcoda/`. Training-data
 > collection is **opt-in** (off by default) and PII-sanitized before
-> anything ever touches disk. Nothing is uploaded to OwlCoda servers
-> because there are no OwlCoda servers.
+> anything ever touches disk. There is no OwlCoda server, no telemetry
+> endpoint, no upload.
 
 This is a **Developer Preview**. The CLI surface, slash-command set,
 and config schema may still evolve before 1.0.
 
 ---
 
-## Quickstart (30 seconds, with Ollama)
+## Supported backends
 
-If you have nothing installed yet:
+OwlCoda does not ship its own model — you point it at one. Out of the
+box it speaks to:
+
+### Local runtimes (auto-detected by `owlcoda init`)
+
+| Runtime | Default endpoint |
+|---|---|
+| [Ollama](https://ollama.com) | `http://127.0.0.1:11434/v1` |
+| [LM Studio](https://lmstudio.ai) | `http://127.0.0.1:1234/v1` |
+| [vLLM](https://github.com/vllm-project/vllm) | `http://127.0.0.1:8000/v1` |
+| Any custom OpenAI-compatible router | user-supplied |
+
+### Cloud providers (user-configured, BYO API key)
+
+| Provider | Wire format | Endpoint |
+|---|---|---|
+| Kimi (Moonshot) | OpenAI-compatible | `https://api.moonshot.ai/v1` |
+| Kimi Coding | provider-native | `https://api.kimi.com/coding` |
+| MiniMax | Messages-shaped | `https://api.minimax.io/anthropic` |
+| OpenRouter | OpenAI-compatible | `https://openrouter.ai/api/v1` |
+| Alibaba Bailian / DashScope | OpenAI-compatible | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| Anthropic | Messages-shaped | `https://api.anthropic.com` |
+| OpenAI | OpenAI-compatible | `https://api.openai.com/v1` |
+| Anything else | OpenAI-compatible / Messages-shaped | user-supplied |
+
+Provider templates live in
+[`src/provider-probe.ts`](src/provider-probe.ts); add or override
+endpoints in `config.json`.
+
+---
+
+## Install OwlCoda
+
+OwlCoda is currently distributed as source. npm / Homebrew / standalone
+binary are planned for 1.0.
 
 ```bash
-# 1. A local model backend (Ollama is the cheapest path).
-brew install ollama && ollama serve &
-ollama pull qwen2.5-coder:7b
-
-# 2. OwlCoda itself (source install — npm / Homebrew / standalone
-#    binary planned for 1.0).
 git clone https://github.com/yeemio/owlcoda.git
 cd owlcoda
 npm install
 npm run build
-npm link            # makes `owlcoda` available globally
-
-# 3. Point OwlCoda at the local backend and start.
-owlcoda init --router http://127.0.0.1:11434/v1
-owlcoda
+npm link             # exposes `owlcoda` globally
 ```
 
-LM Studio users: replace `--router` with `http://127.0.0.1:1234/v1`.
-vLLM users: `http://127.0.0.1:8000/v1`. Any OpenAI-compatible
-endpoint works.
+Prerequisites: Node.js ≥ 18 (Node 20+ recommended), macOS / Linux /
+Windows-WSL.
 
 If `npm link` fails because your global npm prefix is not writable:
 
 - `sudo npm link`, **or**
-- `npm config set prefix ~/.local && export PATH=~/.local/bin:$PATH`
+- `npm config set prefix ~/.local && export PATH=~/.local/bin:$PATH`,
   then re-run `npm link`, **or**
-- skip the link entirely and run `node /path/to/owlcoda/dist/cli.js`.
+- skip the link and run `node /path/to/owlcoda/dist/cli.js …`.
 
 ---
 
-## Prerequisites
+## Configure your first backend
 
-- Node.js ≥ 18 (Node 20+ recommended).
-- A local OpenAI-compatible inference backend (Ollama / LM Studio /
-  vLLM / any custom router) — required for local-only operation.
-- macOS, Linux, or Windows (WSL recommended on Windows).
+`owlcoda init` writes a starter `config.json`. It auto-detects whichever
+local runtime is already listening on the standard ports above; if none
+respond, it writes a placeholder you can edit.
+
+You can also pass a router URL explicitly. A few examples below cover
+the common cases.
+
+### Local: Ollama
+
+```bash
+owlcoda init --router http://127.0.0.1:11434/v1
+owlcoda
+```
+
+### Local: LM Studio
+
+```bash
+owlcoda init --router http://127.0.0.1:1234/v1
+owlcoda
+```
+
+### Cloud: Kimi (Moonshot)
+
+```bash
+export KIMI_API_KEY=sk-...
+owlcoda init --router https://api.moonshot.ai/v1
+```
+
+Then edit `config.json` to attach the key:
+
+```json
+{
+  "routerUrl": "https://api.moonshot.ai/v1",
+  "models": [
+    {
+      "id": "kimi-k2",
+      "label": "Kimi K2",
+      "backendModel": "moonshot-v1-128k",
+      "endpoint": "https://api.moonshot.ai/v1",
+      "apiKeyEnv": "KIMI_API_KEY",
+      "aliases": ["default", "kimi"],
+      "default": true
+    }
+  ]
+}
+```
+
+### Cloud: MiniMax (Messages-shaped)
+
+```json
+{
+  "routerUrl": "https://api.minimax.io/anthropic",
+  "models": [
+    {
+      "id": "minimax-m27",
+      "label": "MiniMax M2.7",
+      "backendModel": "minimax-m2.7-highspeed",
+      "endpoint": "https://api.minimax.io/anthropic",
+      "apiKeyEnv": "MINIMAX_API_KEY",
+      "localRuntimeProtocol": "anthropic_messages",
+      "aliases": ["default", "minimax"],
+      "default": true
+    }
+  ]
+}
+```
+
+### Cloud: OpenRouter (multi-model gateway)
+
+```json
+{
+  "routerUrl": "https://openrouter.ai/api/v1",
+  "models": [
+    {
+      "id": "openrouter-default",
+      "label": "OpenRouter selection",
+      "backendModel": "qwen/qwen3-coder",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "apiKeyEnv": "OPENROUTER_API_KEY",
+      "aliases": ["default"],
+      "default": true
+    }
+  ]
+}
+```
+
+### Mixed local + cloud (multiple models in one config)
+
+You can list as many models as you want, mix local and cloud, and pick
+between them at runtime with `--model <alias>` or `/model` inside the
+REPL:
+
+```json
+{
+  "routerUrl": "http://127.0.0.1:11434/v1",
+  "models": [
+    { "id": "qwen-local", "backendModel": "qwen2.5-coder:7b",
+      "aliases": ["default", "fast"], "default": true },
+    { "id": "kimi-cloud", "backendModel": "moonshot-v1-128k",
+      "endpoint": "https://api.moonshot.ai/v1",
+      "apiKeyEnv": "KIMI_API_KEY",
+      "aliases": ["heavy", "kimi"] }
+  ]
+}
+```
+
+`owlcoda --model heavy` → Kimi. Default → local Qwen.
+
+See [`config.example.json`](config.example.json) for the full schema
+and [`src/capabilities.ts`](src/capabilities.ts) for the runtime-
+verified capability matrix.
 
 ---
 
@@ -71,12 +201,12 @@ If `npm link` fails because your global npm prefix is not writable:
 owlcoda                          # native interactive REPL (default)
 owlcoda -p "list all .ts files"  # headless one-shot
 owlcoda --resume last            # resume the most recent session
-owlcoda --model fast             # pick a model by alias / partial id
+owlcoda --model <alias>          # pick a model
 
-owlcoda init                     # create config.json (auto-detects backend)
-owlcoda doctor                   # environment health check
+owlcoda init                     # create config.json
+owlcoda doctor                   # environment + backend health check
 owlcoda config                   # show active config + resolved models
-owlcoda models                   # show configured models + runtime visibility
+owlcoda models                   # list configured models + reachability
 
 owlcoda start | stop | status    # background daemon lifecycle
 owlcoda clients                  # list / detach live REPL clients
@@ -91,68 +221,47 @@ owlcoda audit | cache | logs | inspect | benchmark | health | validate
 
 ---
 
-## Configuration
-
-`owlcoda init` writes `config.json` with a sensible default. To edit
-manually, copy the example:
-
-```bash
-cp config.example.json config.json
-```
-
-Minimum schema:
-
-```json
-{
-  "port": 8019,
-  "host": "127.0.0.1",
-  "routerUrl": "http://127.0.0.1:11434/v1",
-  "responseModelStyle": "platform",
-  "models": [
-    {
-      "id": "qwen2.5-coder:7b",
-      "label": "Qwen2.5 Coder 7B",
-      "backendModel": "qwen2.5-coder:7b",
-      "aliases": ["default", "fast"],
-      "tier": "fast",
-      "default": true
-    }
-  ],
-  "trainingCollection": false
-}
-```
+## Configuration reference
 
 Environment variable overrides:
 
 | Variable | Effect | Default |
 |---|---|---|
-| `OWLCODA_PORT` | Listen port | `8019` |
-| `OWLCODA_ROUTER_URL` | Router URL | `http://127.0.0.1:8009` |
+| `OWLCODA_PORT` | OwlCoda HTTP port | `8019` |
+| `OWLCODA_ROUTER_URL` | Backend router URL | from `config.json` |
 | `OWLCODA_HOME` | Data dir | `~/.owlcoda` |
 | `OWLCODA_LOG_LEVEL` | Log level | `info` |
 | `OWLCODA_TRAINING_COLLECTION` | `0` / `1` (overrides config) | unset |
 
-See [`src/capabilities.ts`](src/capabilities.ts) for the
-runtime-verified capability matrix (the one that actually reflects
-what works) and [`config.example.json`](config.example.json) for the
-full config schema.
+Per-model fields commonly used in `config.json`:
+
+| Field | Purpose |
+|---|---|
+| `id` | Stable model id used in the API |
+| `label` | Human-readable name shown in UI |
+| `backendModel` | Model id the backend itself expects |
+| `endpoint` | Per-model override of `routerUrl` |
+| `apiKey` / `apiKeyEnv` | Cloud credential (literal or env var name) |
+| `localRuntimeProtocol` | `auto` / `openai_chat` / `anthropic_messages` |
+| `aliases` | Alternate names accepted by `--model` |
+| `tier` | `fast` / `balanced` / `heavy` (UI grouping) |
+| `default` | One model per config should be the default |
 
 ---
 
 ## Native REPL highlights
 
 - **42+ tools** — Bash, Read, Write, Edit, Glob, Grep, MCP-served
-  tools, agent-spawning, scheduling, plugins, and more.
+  tools, agent dispatch, scheduling, plugins, …
 - **69+ slash commands** — `/model`, `/cost`, `/budget`, `/perf`,
   `/doctor`, `/config`, `/trace`, `/tokens`, `/sessions`, `/skills`,
-  `/dashboard`, `/why-native`, ... — `owlcoda --help` and `/help`
-  list them all.
-- **Selection-first transcript** — drag-select and copy work the
-  way they do in any other terminal app.
-- **Session persistence** — every conversation is saved under
+  `/dashboard`, … run `/help` inside the REPL for the full list.
+- **Selection-first transcript** — drag-select and copy work like a
+  normal terminal app.
+- **Session persistence** — every conversation lands under
   `~/.owlcoda/sessions/`; resume any of them with `--resume <id>`.
-- **Learned skills (L2)** — repeated workflows get extracted into
-  reusable skills and re-injected on later matching tasks.
+- **Learned skills (L2)** — repeated workflows get extracted and
+  re-injected on later matching tasks.
 - **Training data pipeline (L3, opt-in)** — score and export
   high-quality sessions as JSONL / ShareGPT for local fine-tuning.
 
@@ -167,7 +276,8 @@ owlcoda CLI (src/cli.ts → src/cli-core.ts)
       → OwlCoda HTTP server (src/server.ts)
         → translate (Messages-shaped API ↔ OpenAI Chat Completions)
           → your local runtime (Ollama / LM Studio / vLLM / custom)
-              + optional cloud providers you configure yourself
+              + the cloud providers you configured (Kimi / MiniMax /
+                OpenRouter / Anthropic / OpenAI / Bailian / …)
 ```
 
 Top-level directories: `src/` (runtime), `admin/` (browser admin
@@ -193,14 +303,12 @@ and how to send a PR.
 ## Privacy posture
 
 - All session data, learned skills, and (if enabled) training data
-  live under `~/.owlcoda/` on your machine. Nothing is uploaded.
+  live under `~/.owlcoda/` on your machine.
 - The training pipeline runs PII sanitization in
   [`src/data/sanitize.ts`](src/data/sanitize.ts) before any record
   is appended to `~/.owlcoda/training/collected.jsonl`.
 - OwlCoda has no telemetry endpoint and makes no outbound requests
-  it has not been explicitly configured to make. The `routerUrl` in
-  your config is the only network destination unless you configure
-  additional providers.
+  except to the backends listed in your `config.json`.
 
 ---
 
