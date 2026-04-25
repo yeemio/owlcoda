@@ -1,8 +1,8 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { handleAdminStatic } from '../src/admin-static.js'
+import { join, win32 } from 'node:path'
+import { handleAdminStatic, isPathInsideDirectory } from '../src/admin-static.js'
 
 function makeReqRes(url: string, method: 'GET' | 'HEAD' | 'POST' = 'GET'): {
   req: any
@@ -64,6 +64,15 @@ describe('handleAdminStatic', () => {
     expect(captured.status).toBe(200)
     expect(captured.headers?.['Content-Type']).toMatch(/javascript/)
     expect(captured.headers?.['Cache-Control']).toContain('immutable')
+  })
+
+  it('allows Windows asset paths inside dist/admin', () => {
+    const winDist = 'C:\\ai\\owlcoda\\dist\\admin'
+    const winAsset = 'C:\\ai\\owlcoda\\dist\\admin\\assets\\index.js'
+    const outside = 'C:\\ai\\owlcoda\\dist\\admin-evil\\assets\\index.js'
+
+    expect(isPathInsideDirectory(winAsset, winDist, win32)).toBe(true)
+    expect(isPathInsideDirectory(outside, winDist, win32)).toBe(false)
   })
 
   it('ignores /admin/api/* (returns false so admin-api handler takes it)', () => {

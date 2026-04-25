@@ -11,7 +11,7 @@
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs'
-import { dirname, join, normalize, resolve } from 'node:path'
+import { dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
@@ -73,7 +73,7 @@ export function handleAdminStatic(
   const target = normalize(join(distDir, rel))
 
   // Path traversal guard
-  if (!target.startsWith(distDir + '/') && target !== distDir) {
+  if (!isPathInsideDirectory(target, distDir)) {
     return false
   }
 
@@ -88,6 +88,20 @@ export function handleAdminStatic(
 
 function isStaticAssetPath(pathOnly: string): boolean {
   return pathOnly.startsWith('/admin/assets/') || /^\/admin\/[^/]+\.[A-Za-z0-9]+$/.test(pathOnly)
+}
+
+export interface PathContainmentOps {
+  relative(from: string, to: string): string
+  isAbsolute(path: string): boolean
+}
+
+export function isPathInsideDirectory(
+  targetPath: string,
+  directory: string,
+  pathOps: PathContainmentOps = { relative, isAbsolute },
+): boolean {
+  const rel = pathOps.relative(directory, targetPath)
+  return rel === '' || (!!rel && !rel.startsWith('..') && !pathOps.isAbsolute(rel))
 }
 
 function sendFile(req: IncomingMessage, res: ServerResponse, filePath: string, isHtml: boolean): boolean {
