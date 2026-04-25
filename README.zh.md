@@ -160,7 +160,7 @@ owlcoda CLI (src/cli.ts → src/cli-core.ts)
   → native REPL (src/native/)
     → 42+ 工具 + 69+ slash 命令
       → OwlCoda HTTP server (src/server.ts)
-        → 协议翻译 (Anthropic Messages ↔ OpenAI Chat Completions)
+        → 协议翻译 (Messages-shaped API ↔ OpenAI Chat Completions)
           → 你的本地 runtime (Ollama / LM Studio / vLLM / 自建)
               + 你自己配置的可选云端 provider
 ```

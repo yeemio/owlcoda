@@ -27,6 +27,39 @@ OwlCoda does not claim to be any third-party coding assistant, does not ship a
 third-party branded UI, and does not rely on an external vendor CLI as its
 primary product surface.
 
+### Protocol Interoperability vs Affiliation
+
+OwlCoda implements two widely-deployed wire formats so that users can
+plug their existing local runtime into it without rewriting the
+runtime:
+
+1. The Messages-shaped API (originated by Anthropic and now implemented
+   by many independent open-source servers) — incoming `/v1/messages`
+   requests are accepted in this shape and translated as needed.
+2. The OpenAI Chat Completions wire format — outgoing requests to
+   user-configured backends use this shape because most local
+   inference runtimes (Ollama, LM Studio, vLLM, etc.) expose it.
+
+Implementing these wire formats is a technical interoperability
+choice, not a brand affiliation. Where the codebase contains the
+literal strings `Anthropic`, `Anthropic-compatible`,
+`anthropic-version`, `/v1/messages`, or imports the public
+`@anthropic-ai/sdk` package, those references are protocol-level,
+exist solely to maintain over-the-wire compatibility, and do not
+constitute or imply:
+
+- endorsement by, or sponsorship from, Anthropic, OpenAI, or any
+  other third party;
+- any affiliation, partnership, or contractual relationship with
+  those parties; or
+- a claim that OwlCoda is a substitute for, or a derivative of,
+  any third-party product.
+
+The `@anthropic-ai/sdk` package is listed as a `devDependency` only
+and is used by `tests/sdk-verify.ts` as an interoperability sanity
+check against OwlCoda's own server implementation. It is not loaded
+by the OwlCoda runtime.
+
 ## Third-Party Source Attributions
 
 OwlCoda incorporates source code derived from the following third-party

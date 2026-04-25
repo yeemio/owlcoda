@@ -6,6 +6,38 @@ Runtime version truth comes from [`package.json`](package.json) and is
 exposed at runtime through [`src/version.ts`](src/version.ts) and
 `owlcoda --version`.
 
+## [0.1.1] — 2026-04-25
+
+Legal-positioning and provenance polish. No runtime behavior change.
+
+### Removed
+- `skills/collaboration/remembering-conversations/` — the entire
+  module had a runtime dependency on `@anthropic-ai/claude-agent-sdk`
+  and a deployment story tied to `~/.claude/hooks/`, neither of which
+  fit OwlCoda's independent posture. Users who want
+  conversation-recall workflows should install a third-party skill
+  pack rather than ship one in-tree.
+- `skills/debugging/systematic-debugging/CREATION-LOG.md` — extraction
+  log referencing a third-party developer's home directory; not
+  user-facing content.
+
+### Changed
+- `NOTICE.md` adds a "Protocol Interoperability vs Affiliation"
+  section that explicitly disclaims any partnership / endorsement /
+  derivative-work claim with respect to third parties whose wire
+  formats OwlCoda implements (Messages-shaped API, OpenAI Chat
+  Completions). The `@anthropic-ai/sdk` `devDependency` is
+  documented as an interoperability test artifact, not a runtime
+  dependency.
+- `README.md` / `README.zh.md` architecture diagram says
+  "Messages-shaped API" instead of naming a single upstream vendor,
+  matching the protocol-not-affiliation posture.
+- `skills/collaboration/using-git-worktrees/SKILL.md`,
+  `skills/debugging/root-cause-tracing/SKILL.md`, and
+  `scripts/smoke-presentation.mjs` had hardcoded third-party
+  developer paths and model names replaced with neutral
+  `/Users/example/...` and generic model identifiers.
+
 ## [0.1.0] — 2026-04-25
 
 Initial public release. OwlCoda enters the public source tree as a

@@ -165,7 +165,7 @@ owlcoda CLI (src/cli.ts → src/cli-core.ts)
   → native REPL (src/native/)
     → 42+ tools + 69+ slash commands
       → OwlCoda HTTP server (src/server.ts)
-        → translate (Anthropic Messages ↔ OpenAI Chat Completions)
+        → translate (Messages-shaped API ↔ OpenAI Chat Completions)
           → your local runtime (Ollama / LM Studio / vLLM / custom)
               + optional cloud providers you configure yourself
 ```

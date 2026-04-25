@@ -43,7 +43,7 @@ console.log(formatToolResult('glob', Array.from({ length: 28 }, (_, i) => `src/p
 
 SECTION('4. Platform event axis (◆)')
 console.log(formatPlatformEvent('mcp', 'MCP: 2 servers connected · 14 tools · fs, git'))
-console.log(formatPlatformEvent('model', 'Model → claude-opus-4-7'))
+console.log(formatPlatformEvent('model', 'Model → qwen3-32b'))
 console.log(formatPlatformEvent('session', 'Resumed session · 12 turns restored'))
 console.log(formatPlatformEvent('skill', 'Skill activated · brainstorming'))
 console.log(formatPlatformEvent('router', 'Router → local (fallback from cloud)'))
