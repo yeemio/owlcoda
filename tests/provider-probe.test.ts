@@ -176,6 +176,23 @@ describe('ProviderProbe', () => {
     expect(result.status).toBe(200)
   })
 
+  it('publishes a MiniMax preset matching the working OwlCoda configuration', () => {
+    const minimax = getProviderTemplates().find(template => template.id === 'minimax-anthropic')
+
+    expect(minimax).toMatchObject({
+      provider: 'anthropic',
+      endpoint: 'https://api.minimaxi.com/anthropic',
+      defaultModelId: 'minimax-m27',
+      defaultModelLabel: 'MiniMax M2.7-highspeed',
+      defaultBackendModel: 'MiniMax-M2.7-highspeed',
+      defaultAliases: ['minimax', 'm27'],
+      defaultContextWindow: 204800,
+      testPath: '/v1/messages',
+      testMode: 'messages',
+      family: 'single-model',
+    })
+  })
+
   it('supports custom dry-run test paths', async () => {
     fetchMock.mockResolvedValue(new Response('{}', { status: 200 }))
     const probe = createProbe()

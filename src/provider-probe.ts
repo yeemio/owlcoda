@@ -57,6 +57,11 @@ export interface ProviderTemplate {
   provider: ProviderKind
   label: string
   endpoint: string
+  defaultModelId?: string
+  defaultModelLabel?: string
+  defaultBackendModel?: string
+  defaultAliases?: string[]
+  defaultContextWindow?: number
   testPath?: string
   testMode: ProviderProbeMode
   family: 'single-model' | 'multi-model'
@@ -143,12 +148,17 @@ const PROVIDER_TEMPLATES: ProviderTemplate[] = [
     id: 'minimax-anthropic',
     provider: 'anthropic',
     label: 'MiniMax (Anthropic-compatible)',
-    endpoint: 'https://api.minimax.io/anthropic',
+    endpoint: 'https://api.minimaxi.com/anthropic',
+    defaultModelId: 'minimax-m27',
+    defaultModelLabel: 'MiniMax M2.7-highspeed',
+    defaultBackendModel: 'MiniMax-M2.7-highspeed',
+    defaultAliases: ['minimax', 'm27'],
+    defaultContextWindow: 204800,
     testPath: '/v1/messages',
     testMode: 'messages',
-    family: 'multi-model',
-    description: 'MiniMax recommends the Anthropic-compatible surface for current M2.x models.',
-    backendModelHint: 'Use the exact MiniMax Anthropic-compatible model id you intend to route.',
+    family: 'single-model',
+    description: 'MiniMax M2.7 highspeed via the Anthropic-compatible messages endpoint.',
+    backendModelHint: 'Use MiniMax-M2.7-highspeed unless your MiniMax console shows a different exact model id.',
     featured: true,
     docs: 'https://platform.minimax.io/docs/api-reference/text-anthropic-api',
   },

@@ -145,6 +145,11 @@ export interface ProviderTemplate {
   provider: string
   label: string
   endpoint?: string
+  defaultModelId?: string
+  defaultModelLabel?: string
+  defaultBackendModel?: string
+  defaultAliases?: string[]
+  defaultContextWindow?: number
   headers?: Record<string, string>
   testPath?: string
   testMode?: ProviderProbeMode

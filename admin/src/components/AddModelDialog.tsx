@@ -80,11 +80,7 @@ export function AddModelDialog({
           ?? r.providers.find(provider => provider.id === form.providerId)
           ?? r.providers[0]
         if (preferred) {
-          setForm(f => ({
-            ...f,
-            providerId: preferred.id,
-            endpoint: preferred.endpoint ?? f.endpoint,
-          }))
+          setForm(f => applyTemplateToForm(f, preferred, undefined))
         }
       })
       .catch((e: Error) => setProvidersError(e.message))
@@ -103,13 +99,7 @@ export function AddModelDialog({
 
   function onProviderChange(nextId: string) {
     const template = providers.find(p => p.id === nextId)
-    setForm(f => ({
-      ...f,
-      providerId: nextId,
-      endpoint: shouldReplaceTemplateValue(f.endpoint, currentTemplate?.endpoint)
-        ? template?.endpoint ?? f.endpoint
-        : f.endpoint,
-    }))
+    setForm(f => applyTemplateToForm(f, template, currentTemplate))
   }
 
   function buildPatch(): { ok: true; patch: CreateEndpointModelPatch } | { ok: false; reason: string } {
@@ -385,6 +375,34 @@ export type { CreateEndpointModelPatch }
 function shouldReplaceTemplateValue(currentValue: string, previousTemplateValue: string | undefined): boolean {
   const trimmed = currentValue.trim()
   return trimmed === '' || (previousTemplateValue ? trimmed === previousTemplateValue : false)
+}
+
+function shouldFillEmptyValue(currentValue: string): boolean {
+  return currentValue.trim() === ''
+}
+
+function shouldFillEmptyList(currentValue: string[]): boolean {
+  return currentValue.length === 0
+}
+
+function applyTemplateToForm(
+  form: FormState,
+  template: ProviderTemplate | undefined,
+  previousTemplate: ProviderTemplate | null | undefined,
+): FormState {
+  if (!template) return form
+  return {
+    ...form,
+    providerId: template.id,
+    endpoint: shouldReplaceTemplateValue(form.endpoint, previousTemplate?.endpoint)
+      ? template.endpoint ?? form.endpoint
+      : form.endpoint,
+    id: shouldFillEmptyValue(form.id) ? template.defaultModelId ?? form.id : form.id,
+    label: shouldFillEmptyValue(form.label) ? template.defaultModelLabel ?? form.label : form.label,
+    backendModel: shouldFillEmptyValue(form.backendModel) ? template.defaultBackendModel ?? form.backendModel : form.backendModel,
+    aliases: shouldFillEmptyList(form.aliases) ? template.defaultAliases ?? form.aliases : form.aliases,
+    contextWindow: form.contextWindow ?? template.defaultContextWindow,
+  }
 }
 
 function parseBackendModelList(raw: string): string[] {

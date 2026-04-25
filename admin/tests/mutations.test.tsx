@@ -426,6 +426,65 @@ describe('Phase γ mutations', () => {
     })
   })
 
+  it('Add model: MiniMax preset fills the known working endpoint and model id', async () => {
+    fx.register('GET', '/admin/api/providers', () => ({
+      status: 200,
+      body: {
+        schemaVersion: ADMIN_API_SCHEMA_VERSION,
+        providers: [
+          { id: 'openai-compat', provider: 'openai-compat', label: 'OpenAI Compatible', endpoint: 'https://api.openai.com/v1', family: 'multi-model' },
+          {
+            id: 'minimax-anthropic',
+            provider: 'anthropic',
+            label: 'MiniMax (Anthropic-compatible)',
+            endpoint: 'https://api.minimaxi.com/anthropic',
+            family: 'single-model',
+            testPath: '/v1/messages',
+            testMode: 'messages',
+            defaultModelId: 'minimax-m27',
+            defaultModelLabel: 'MiniMax M2.7-highspeed',
+            defaultBackendModel: 'MiniMax-M2.7-highspeed',
+            defaultAliases: ['minimax', 'm27'],
+            defaultContextWindow: 204800,
+          },
+        ],
+      },
+    }))
+    fx.register('POST', '/admin/api/models', () => ({
+      status: 201,
+      body: {
+        schemaVersion: ADMIN_API_SCHEMA_VERSION,
+        ok: true,
+        results: [{ id: 'minimax-m27', ok: true }],
+        snapshot: mkSnapshot([
+          mkStatus({ id: 'minimax-m27', providerKind: 'cloud', availability: { kind: 'ok' } }),
+        ]),
+      },
+    }))
+
+    renderPage()
+    fireEvent.click(screen.getByTestId('add-model-open'))
+    await waitFor(() => expect(screen.getByTestId('field-provider')).toBeInTheDocument())
+
+    fireEvent.change(screen.getByTestId('field-provider'), { target: { value: 'minimax-anthropic' } })
+    fireEvent.change(screen.getByTestId('field-apiKey'), { target: { value: 'sk-minimax-live' } })
+    fireEvent.click(screen.getByTestId('add-submit'))
+
+    await waitFor(() => {
+      const sent = fx.journal.find(r => r.method === 'POST' && r.path === '/admin/api/models')
+      expect(sent).toBeDefined()
+      expect((sent!.body as { model: Record<string, unknown> }).model).toMatchObject({
+        id: 'minimax-m27',
+        label: 'MiniMax M2.7-highspeed',
+        backendModel: 'MiniMax-M2.7-highspeed',
+        endpoint: 'https://api.minimaxi.com/anthropic',
+        aliases: ['minimax', 'm27'],
+        contextWindow: 204800,
+        apiKey: 'sk-minimax-live',
+      })
+    })
+  })
+
   it('Add model: provider family batch create posts /bulk/create with shared credentials', async () => {
     fx.register('GET', '/admin/api/providers', () => ({
       status: 200,
