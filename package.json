@@ -29,6 +29,7 @@
     "dist/",
     "assets/branding/",
     "config.example.json",
+    "scripts/postbuild.mjs",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
@@ -40,7 +41,7 @@
     "owlcoda": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc && chmod +x dist/cli.js && mkdir -p dist/ink && cp src/ink/ATTRIBUTION.md dist/ink/ATTRIBUTION.md",
+    "build": "tsc && node scripts/postbuild.mjs",
     "dev": "node --import tsx src/cli.ts",
     "smoke": "bash scripts/smoke-test.sh",
     "test": "vitest run",
