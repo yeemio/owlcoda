@@ -6,9 +6,9 @@ Runtime version truth comes from [`package.json`](package.json) and is
 exposed at runtime through [`src/version.ts`](src/version.ts) and
 `owlcoda --version`.
 
-## [0.13.21] — 2026-04-26
+## [0.1.4] — 2026-04-26
 
-Public security and cmux stress-path hardening release.
+Public router security and cmux stress-path hardening release, sourced from private `0.13.21`.
 
 ### Security
 - Deny unsafe headless tools by default unless explicitly auto-approved, and expose approval decisions in headless output.

@@ -1,6 +1,6 @@
 # Status matrix: legacy runtime tools (issue #4)
 
-Round: 0.13.21 public security release, 2026-04-26.
+Round: 0.1.4 public security release, sourced from private 0.13.21, 2026-04-26.
 Result: **legacy / not reachable from production. Bridged for safety.**
 
 ## Surface → tool implementation matrix
