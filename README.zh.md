@@ -37,7 +37,7 @@ OwlCoda 不自带模型——你把它指到一个上面去。开箱即支持以
 |---|---|---|
 | Kimi (Moonshot) | OpenAI 兼容 | `https://api.moonshot.ai/v1` |
 | Kimi Coding | provider 原生 | `https://api.kimi.com/coding` |
-| MiniMax | Messages 形态 | `https://api.minimax.io/anthropic` |
+| MiniMax | Messages 形态 | `https://api.minimaxi.com/anthropic` |
 | OpenRouter | OpenAI 兼容 | `https://openrouter.ai/api/v1` |
 | 阿里百炼 / DashScope | OpenAI 兼容 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | Anthropic | Messages 形态 | `https://api.anthropic.com` |
@@ -127,16 +127,17 @@ owlcoda init --router https://api.moonshot.ai/v1
 
 ```json
 {
-  "routerUrl": "https://api.minimax.io/anthropic",
+  "routerUrl": "https://api.minimaxi.com/anthropic",
   "models": [
     {
       "id": "minimax-m27",
-      "label": "MiniMax M2.7",
-      "backendModel": "minimax-m2.7-highspeed",
-      "endpoint": "https://api.minimax.io/anthropic",
+      "label": "MiniMax M2.7-highspeed",
+      "backendModel": "MiniMax-M2.7-highspeed",
+      "endpoint": "https://api.minimaxi.com/anthropic",
       "apiKeyEnv": "MINIMAX_API_KEY",
       "localRuntimeProtocol": "anthropic_messages",
       "aliases": ["default", "minimax"],
+      "contextWindow": 204800,
       "default": true
     }
   ]

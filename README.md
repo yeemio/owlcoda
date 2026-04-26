@@ -41,7 +41,7 @@ box it speaks to:
 |---|---|---|
 | Kimi (Moonshot) | OpenAI-compatible | `https://api.moonshot.ai/v1` |
 | Kimi Coding | provider-native | `https://api.kimi.com/coding` |
-| MiniMax | Messages-shaped | `https://api.minimax.io/anthropic` |
+| MiniMax | Messages-shaped | `https://api.minimaxi.com/anthropic` |
 | OpenRouter | OpenAI-compatible | `https://openrouter.ai/api/v1` |
 | Alibaba Bailian / DashScope | OpenAI-compatible | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | Anthropic | Messages-shaped | `https://api.anthropic.com` |
@@ -137,16 +137,17 @@ Then edit `config.json` to attach the key:
 
 ```json
 {
-  "routerUrl": "https://api.minimax.io/anthropic",
+  "routerUrl": "https://api.minimaxi.com/anthropic",
   "models": [
     {
       "id": "minimax-m27",
-      "label": "MiniMax M2.7",
-      "backendModel": "minimax-m2.7-highspeed",
-      "endpoint": "https://api.minimax.io/anthropic",
+      "label": "MiniMax M2.7-highspeed",
+      "backendModel": "MiniMax-M2.7-highspeed",
+      "endpoint": "https://api.minimaxi.com/anthropic",
       "apiKeyEnv": "MINIMAX_API_KEY",
       "localRuntimeProtocol": "anthropic_messages",
       "aliases": ["default", "minimax"],
+      "contextWindow": 204800,
       "default": true
     }
   ]
