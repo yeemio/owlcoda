@@ -40,8 +40,8 @@ OwlCoda 不自带模型——你把它指到一个上面去。开箱即支持以
 | MiniMax | Messages 形态 | `https://api.minimaxi.com/anthropic` |
 | OpenRouter | OpenAI 兼容 | `https://openrouter.ai/api/v1` |
 | 阿里百炼 / DashScope | OpenAI 兼容 | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| Anthropic | Messages 形态 | `https://api.anthropic.com` |
 | OpenAI | OpenAI 兼容 | `https://api.openai.com/v1` |
+| 用户自配 Messages 形态 provider | Messages 形态 | 用户自填 |
 | 其他 | OpenAI 兼容 / Messages 形态 | 用户自填 |
 
 Provider 模板源码在
@@ -272,7 +272,7 @@ owlcoda CLI (src/cli.ts → src/cli-core.ts)
         → 协议翻译 (Messages-shaped API ↔ OpenAI Chat Completions)
           → 你的本地 runtime (Ollama / LM Studio / vLLM / 自建)
               + 你配置的云端 provider (Kimi / MiniMax /
-                OpenRouter / Anthropic / OpenAI / Bailian / …)
+                OpenRouter / OpenAI / Bailian / 用户自填 / …)
 ```
 
 顶层目录：`src/`（运行时）、`admin/`（browser admin React app）、

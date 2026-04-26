@@ -168,15 +168,15 @@ describe('renderModelRowLabel', () => {
 
   it('no role or phrase inline — those go in description/preview', () => {
     const s = status({
-      id: 'claude-3',
-      label: 'Claude 3',
+      id: 'messages-vendor-3',
+      label: 'Messages Vendor 3',
       role: 'balanced',
       availability: { kind: 'missing_key' },
     })
     const row = stripAnsi(renderModelRowLabel(s, 'wide', 160))
     expect(row).not.toContain('balanced')
     expect(row).not.toContain('missing API key')
-    expect(row).toContain('Claude 3')
+    expect(row).toContain('Messages Vendor 3')
   })
 })
 
@@ -281,7 +281,7 @@ describe('renderIssuesDump', () => {
 describe('runModelsWorkbench handoff behavior', () => {
   it('opens browser handoff for selected model rows', async () => {
     const s = snapshot([
-      status({ id: 'claude', label: 'Claude', isDefault: true }),
+      status({ id: 'messages-vendor', label: 'Messages Vendor', isDefault: true }),
       status({ id: 'kimi', label: 'Kimi', availability: { kind: 'missing_key', envName: 'KIMI_API_KEY' } }),
     ])
     const onBrowserHandoff = vi.fn()
@@ -303,7 +303,7 @@ describe('runModelsWorkbench handoff behavior', () => {
   })
 
   it('opens browser handoff for overview selection', async () => {
-    const s = snapshot([status({ id: 'claude', label: 'Claude', isDefault: true })])
+    const s = snapshot([status({ id: 'messages-vendor', label: 'Messages Vendor', isDefault: true })])
     const onBrowserHandoff = vi.fn()
 
     await runModelsWorkbench({

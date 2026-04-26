@@ -6,6 +6,25 @@ Runtime version truth comes from [`package.json`](package.json) and is
 exposed at runtime through [`src/version.ts`](src/version.ts) and
 `owlcoda --version`.
 
+## [0.1.3] — 2026-04-26
+
+Public trust-surface cleanup for the published router repo.
+
+### Changed
+- `README.md` / `README.zh.md` and model-workbench tests use
+  neutral "user-configured Messages-shaped provider" wording instead
+  of naming one upstream vendor as a built-in public backend.
+- `skills/collaboration/writing-plans/SKILL.md` now refers to a
+  generic executor instead of a host-app-specific assistant name.
+- `scripts/postbuild.mjs` removes generated `dist/**/*.map` files
+  after build so the published package stays focused on runtime
+  artifacts.
+
+### Added
+- `NOTICE.md` documents methodology-pack attribution for adapted
+  public skills and names the upstream ecosystems whose patterns
+  influenced the curated OwlCoda skill pack.
+
 ## [0.1.2] — 2026-04-25
 
 User-facing README rewrite + second-pass legal-positioning polish.
@@ -14,7 +33,7 @@ User-facing README rewrite + second-pass legal-positioning polish.
 - `README.md` / `README.zh.md` rewritten to put OwlCoda first:
   installation, supported backend matrix (local: Ollama / LM Studio /
   vLLM; cloud: Kimi / Moonshot / MiniMax / OpenRouter / Bailian /
-  Anthropic / OpenAI / custom), and concrete config snippets per
+  OpenAI / user-configured Messages-shaped providers / custom), and concrete config snippets per
   provider. The previous README read as an Ollama tutorial; the new
   one reads as the OwlCoda manual it should be.
 - `admin/src/pages/StartPage.tsx` — the local-runtime protocol

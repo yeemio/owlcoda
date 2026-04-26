@@ -116,11 +116,11 @@ describe('formatProviderDiagnostic', () => {
   it('ProviderRequestError.message is pre-formatted — safe to surface directly', () => {
     const err = new ProviderRequestError(diag({
       provider: 'anthropic',
-      model: 'claude-4',
-      message: 'claude-4 request failed: upstream 529',
+      model: 'messages-vendor-4',
+      message: 'messages-vendor-4 request failed: upstream 529',
       requestId: 'req-1',
     }))
-    expect(err.message).toBe('claude-4 request failed: upstream 529 (request req-1)')
+    expect(err.message).toBe('messages-vendor-4 request failed: upstream 529 (request req-1)')
     expect(err.diagnostic.requestId).toBe('req-1')
   })
 })

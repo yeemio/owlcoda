@@ -101,6 +101,80 @@ OTHER DEALINGS IN THE SOFTWARE.
 A copy of this attribution also lives at `src/ink/ATTRIBUTION.md` so it
 travels with the fork in any redistribution.
 
+### Skills Methodology Attribution
+
+The `skills/` tree in this repository is a **curated methodology pack**.
+While the prose in each `SKILL.md` was rewritten to fit OwlCoda's tone
+and toolset, several skills are conceptually derived from — or adapted
+from agent patterns in — the upstream projects listed below. Their
+contributions are acknowledged here in the spirit of, and where
+applicable in compliance with, their respective licenses.
+
+#### Microsoft Amplifier (https://github.com/microsoft/amplifier)
+
+`skills/research/tracing-knowledge-lineages/` is adapted from the
+`knowledge-archaeologist` agent in Microsoft's Amplifier project
+(commit `2adb63f858e7d760e188197c8e8d4c1ef721e2a6`, 2025-10-10). A
+per-skill attribution lives at `skills/research/ABOUT.md`. Amplifier
+is distributed under the MIT License; copyright is retained by
+Microsoft Corporation and the Amplifier contributors.
+
+```
+MIT License
+
+Copyright (c) Microsoft Corporation.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+#### Upstream skill-pack ecosystem (obra/superpowers-skills and related)
+
+Several names and structural conventions in this pack
+(`brainstorming`, `writing-plans`, `executing-plans`,
+`subagent-driven-development`, `using-git-worktrees`,
+`verification-before-completion`, `systematic-debugging`,
+`test-driven-development`, `receiving-code-review`,
+`requesting-code-review`, and the meta-pattern of pairing each skill
+with a `SKILL.md` front-matter file) trace back to a public
+"superpowers"-style skill-pack ecosystem in which the
+`obra/superpowers-skills` repository is a notable upstream. Where
+specific `SKILL.md` bodies in this tree were adapted from that
+ecosystem, the original maintainers' authorship is acknowledged here.
+Distribution under the upstream license terms applies to any text that
+remains substantially derivative; OwlCoda contributors are responsible
+for keeping this list accurate as the pack evolves.
+
+If you are an upstream author and believe a specific skill in this
+tree warrants more granular per-file attribution (or removal), please
+open an issue at https://github.com/yeemio/owlcoda/issues and we will
+correct it promptly.
+
+#### General methodology / prompt-engineering practice
+
+A subset of skills (e.g. systematic debugging, code review checklists,
+TDD discipline) reflect widely-published software-engineering
+practice — not any single proprietary source — and are included as
+generic methodology rather than as derivatives of any one author's
+work. Where specific phrasing was retained from a particular external
+prompt or document, that source is attributed in the relevant
+`SKILL.md` or sibling `ABOUT.md` file.
+
 ### Direct Runtime Dependencies
 
 OwlCoda's published tarball ships only `dist/`; runtime dependencies are

@@ -44,8 +44,8 @@ box it speaks to:
 | MiniMax | Messages-shaped | `https://api.minimaxi.com/anthropic` |
 | OpenRouter | OpenAI-compatible | `https://openrouter.ai/api/v1` |
 | Alibaba Bailian / DashScope | OpenAI-compatible | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| Anthropic | Messages-shaped | `https://api.anthropic.com` |
 | OpenAI | OpenAI-compatible | `https://api.openai.com/v1` |
+| User-configured Messages-shaped provider | Messages-shaped | user-supplied |
 | Anything else | OpenAI-compatible / Messages-shaped | user-supplied |
 
 Provider templates live in
@@ -283,7 +283,7 @@ owlcoda CLI (src/cli.ts → src/cli-core.ts)
         → translate (Messages-shaped API ↔ OpenAI Chat Completions)
           → your local runtime (Ollama / LM Studio / vLLM / custom)
               + the cloud providers you configured (Kimi / MiniMax /
-                OpenRouter / Anthropic / OpenAI / Bailian / …)
+                OpenRouter / OpenAI / Bailian / user-supplied / …)
 ```
 
 Top-level directories: `src/` (runtime), `admin/` (browser admin
