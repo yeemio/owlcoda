@@ -5,9 +5,10 @@
  */
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { NativeToolDef, ToolResult, WriteInput } from './types.js'
+import { checkWritePathAllowed } from './fs-policy.js'
 
 export function createWriteTool(): NativeToolDef<WriteInput> {
   return {
@@ -15,7 +16,17 @@ export function createWriteTool(): NativeToolDef<WriteInput> {
     description: 'Write content to a file atomically (temp + rename).',
 
     async execute(input: WriteInput): Promise<ToolResult> {
-      const filePath = resolve(input.path)
+      // Defense-in-depth: validate the target path BEFORE any mutation,
+      // independent of any upstream task-scope/approval gate. Issue #3.
+      const policy = checkWritePathAllowed(input.path)
+      if (!policy.allowed) {
+        return {
+          output: `Error: ${policy.reason}`,
+          isError: true,
+          metadata: { fsPolicyDenied: true, attemptedPath: policy.attemptedPath },
+        }
+      }
+      const filePath = policy.resolvedPath
       const createDirs = input.createDirs ?? true
 
       // Capture pre-existing content so the transcript can render a change

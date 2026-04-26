@@ -31,6 +31,8 @@ export interface AgentInput {
   prompt: string
   /** Agent type: "general-purpose" or "Explore" */
   subagent_type?: string
+  /** Optional iteration budget for long-running sub-agent work. */
+  max_iterations?: number
 }
 
 /** Read-only tools for Explore agent */
@@ -65,6 +67,27 @@ const runningAgents = new Map<string, { description: string; startTime: number }
 
 export function getRunningAgents(): Map<string, { description: string; startTime: number }> {
   return runningAgents
+}
+
+const DEFAULT_GENERAL_AGENT_MAX_ITERATIONS = 200
+const DEFAULT_EXPLORE_AGENT_MAX_ITERATIONS = 80
+
+function parsePositiveIterationBudget(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null
+  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value), 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return null
+  return Math.floor(parsed)
+}
+
+function resolveAgentMaxIterations(input: AgentInput, isExplore: boolean): number {
+  const requested = parsePositiveIterationBudget(input.max_iterations)
+  if (requested !== null) return requested
+
+  const specificEnv = process.env[isExplore ? 'OWLCODA_EXPLORE_AGENT_MAX_ITERATIONS' : 'OWLCODA_AGENT_MAX_ITERATIONS']
+  const envBudget = parsePositiveIterationBudget(specificEnv)
+  if (envBudget !== null) return envBudget
+
+  return isExplore ? DEFAULT_EXPLORE_AGENT_MAX_ITERATIONS : DEFAULT_GENERAL_AGENT_MAX_ITERATIONS
 }
 
 export interface AgentToolDeps {
@@ -146,7 +169,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
       const loopOpts: ConversationLoopOptions = {
         apiBaseUrl: deps.apiBaseUrl,
         apiKey: deps.apiKey,
-        maxIterations: isExplore ? 15 : 25,
+        maxIterations: resolveAgentMaxIterations(input, isExplore),
         callbacks: wrappedCallbacks,
         contextWindow: deps.contextWindow,
       }
@@ -180,9 +203,29 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
         // count. A black-box "(Agent completed with no text output)" is a
         // trust killer for long runs, so this fallback is always non-empty
         // when the loop returned without throwing.
-        const output = result.finalText.trim().length > 0
-          ? result.finalText
-          : summarizeSilentAgent(subConv, result.iterations, result.stopReason, parseFloat(elapsed))
+        const silent = result.finalText.trim().length === 0
+        const output = silent
+          ? summarizeSilentAgent(subConv, result.iterations, result.stopReason, parseFloat(elapsed))
+          : result.finalText
+
+        if (silent && result.stopReason === 'max_iterations') {
+          return {
+            output,
+            isError: true,
+            metadata: {
+              agentId,
+              agentType,
+              iterations: result.iterations,
+              stopReason: result.stopReason,
+              usage: result.usage,
+              elapsedSeconds: parseFloat(elapsed),
+              silent: true,
+              agentIncomplete: true,
+              terminalToolFailure: true,
+              terminalFailureReason: 'Sub-agent hit max_iterations before producing a final message.',
+            },
+          }
+        }
 
         return {
           output,
@@ -194,7 +237,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
             stopReason: result.stopReason,
             usage: result.usage,
             elapsedSeconds: parseFloat(elapsed),
-            silent: result.finalText.trim().length === 0,
+            silent,
           },
         }
       } catch (err: unknown) {
@@ -263,6 +306,10 @@ export function summarizeSilentAgent(
     `stop_reason=${stopReason ?? 'none'}, ${elapsedSeconds.toFixed(1)}s.)`,
   )
 
+  if (stopReason === 'max_iterations') {
+    parts.push('Agent incomplete: the sub-agent exhausted its iteration budget before producing a final answer. Do not treat this as completed work; resume with a narrower prompt or increase max_iterations.')
+  }
+
   if (toolCounts.size > 0) {
     const toolSummary = [...toolCounts.entries()]
       .sort((a, b) => b[1] - a[1])
@@ -281,6 +328,8 @@ export function summarizeSilentAgent(
     parts.push('The agent produced no assistant text during this run.')
   }
 
-  parts.push('If the result is genuinely silent-but-useful (e.g. files were written), check side effects directly.')
+  if (stopReason !== 'max_iterations') {
+    parts.push('If the result is genuinely silent-but-useful (e.g. files were written), check side effects directly.')
+  }
   return parts.join('\n\n')
 }

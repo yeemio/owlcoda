@@ -18,6 +18,11 @@ import { buildSystemPrompt } from './system-prompt.js'
 import { formatToolStart, formatToolEnd, formatError, ansi } from './display.js'
 import { StreamingMarkdownRenderer } from './markdown.js'
 import { saveSession, loadSession, listSessions } from './session.js'
+import {
+  buildHeadlessApprovalCallback,
+  describeApprovalPolicy,
+  type HeadlessApprovalRecord,
+} from './headless-approval.js'
 
 const DEFAULT_SYSTEM_PROMPT = buildSystemPrompt()
 const DEFAULT_RUNTIME_RESUME_RETRIES = 8
@@ -48,6 +53,10 @@ export interface HeadlessResult {
   sessionId?: string
   resumed?: boolean
   runtimeRetries?: number
+  /** Approval policy that was applied to this run. */
+  approvalPolicy?: string
+  /** Tools that the policy denied (with reason); useful for callers/tests. */
+  approvalDenials?: Array<{ toolName: string; reason: string; bashRiskLevel?: string; bashRiskReasons?: string[] }>
 }
 
 /** Run a single-shot native conversation. */
@@ -90,9 +99,39 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
 
   let streamedAny = false
   const toolCallLog: Array<{ tool: string; input: Record<string, unknown>; output: string }> = []
+  const approvalDecisions: HeadlessApprovalRecord[] = []
+  const autoApprove = opts.autoApprove === true
+  const approvalPolicy = describeApprovalPolicy(autoApprove)
+
+  // Headless installs its own onToolApproval callback unconditionally so the
+  // conversation loop's per-tool approval gate fires. Without this, headless
+  // mode would silently auto-execute every tool — see issue #1. The callback
+  // denies unsafe tools (write/edit/NotebookEdit/bash) unless autoApprove
+  // was explicitly requested via CLI/config; safe tools (read/glob/grep/…)
+  // remain low-friction.
+  const onToolApproval = buildHeadlessApprovalCallback({
+    autoApprove,
+    onDecision(record) {
+      approvalDecisions.push(record)
+      // Always surface denials on stderr — even in --json mode, since the
+      // structured output is only printed after the loop completes and
+      // operators reading logs deserve real-time visibility.
+      if (!record.decision.allowed) {
+        let detail = ''
+        if ('bashRisk' in record.decision && record.decision.bashRisk) {
+          const risk = record.decision.bashRisk
+          detail = ` [risk=${risk.level}${risk.reasons[0] ? `: ${risk.reasons[0]}` : ''}]`
+        }
+        const msg = `Tool ${record.toolName} denied by headless approval policy (${approvalPolicy})${detail}. ` +
+          `Re-run with --auto-approve to permit unsafe tools, or use the interactive REPL.`
+        process.stderr.write(formatError(msg) + '\n')
+      }
+    },
+  })
 
   const callbacks: ConversationCallbacks = opts.json
     ? {
+        onToolApproval,
         onToolStart(name, input) {
           toolCallLog.push({ tool: name, input, output: '' })
         },
@@ -105,6 +144,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     : (() => {
         const md = new StreamingMarkdownRenderer()
         return {
+          onToolApproval,
           onText(text: string) {
             const rendered = md.push(text)
             if (rendered) {
@@ -178,6 +218,8 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
             tool_calls: toolCallLog,
             iterations: totalIterations,
             runtime_retries: runtimeRetries,
+            approval_policy: approvalPolicy,
+            approval_denials: serializeDenials(approvalDecisions),
           })
           process.stdout.write(output + '\n')
         } else {
@@ -192,7 +234,16 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
           }
         }
 
-        return { text: finalText, exitCode: 0, iterations: totalIterations, sessionId, resumed, runtimeRetries }
+        return {
+          text: finalText,
+          exitCode: 0,
+          iterations: totalIterations,
+          sessionId,
+          resumed,
+          runtimeRetries,
+          approvalPolicy,
+          approvalDenials: serializeDenials(approvalDecisions),
+        }
       }
 
       const sessionId = resolvedSessionId ?? conversation.id
@@ -220,12 +271,23 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
             runtime_retries: runtimeRetries,
             runtime_failure: runtimeFailure,
             error: message,
+            approval_policy: approvalPolicy,
+            approval_denials: serializeDenials(approvalDecisions),
           })
           process.stdout.write(output + '\n')
         } else {
           process.stderr.write(formatError(message) + '\n')
         }
-        return { text: '', exitCode: 1, iterations: totalIterations, sessionId, resumed, runtimeRetries }
+        return {
+          text: '',
+          exitCode: 1,
+          iterations: totalIterations,
+          sessionId,
+          resumed,
+          runtimeRetries,
+          approvalPolicy,
+          approvalDenials: serializeDenials(approvalDecisions),
+        }
       }
 
       runtimeRetries++
@@ -255,14 +317,43 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
         exit_code: 1,
         tool_calls: toolCallLog,
         error: msg,
+        approval_policy: approvalPolicy,
+        approval_denials: serializeDenials(approvalDecisions),
       })
       process.stdout.write(output + '\n')
     } else {
       process.stderr.write(formatError(msg) + '\n')
     }
 
-    return { text: '', exitCode: 1, iterations: 0, sessionId, resumed }
+    return {
+      text: '',
+      exitCode: 1,
+      iterations: 0,
+      sessionId,
+      resumed,
+      approvalPolicy,
+      approvalDenials: serializeDenials(approvalDecisions),
+    }
   }
+}
+
+function serializeDenials(records: HeadlessApprovalRecord[]): Array<{ toolName: string; reason: string; bashRiskLevel?: string; bashRiskReasons?: string[] }> {
+  return records
+    .filter(r => !r.decision.allowed)
+    .map(r => {
+      const out: { toolName: string; reason: string; bashRiskLevel?: string; bashRiskReasons?: string[] } = {
+        toolName: r.toolName,
+        reason: r.decision.reason,
+      }
+      // Bash denials carry the structured classifier output so an operator
+      // reading the JSON log can see WHY the bash command was rejected
+      // (e.g. "git push --force") without having to re-classify.
+      if ('bashRisk' in r.decision && r.decision.bashRisk) {
+        out.bashRiskLevel = r.decision.bashRisk.level
+        out.bashRiskReasons = r.decision.bashRisk.reasons
+      }
+      return out
+    })
 }
 
 function resolveRuntimeResumeRetries(): number {

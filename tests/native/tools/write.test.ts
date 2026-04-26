@@ -7,12 +7,20 @@ import { createWriteTool } from '../../../src/native/tools/write.js'
 describe('Native Write tool', () => {
   const write = createWriteTool()
   let dir: string
+  let prevAllow: string | undefined
 
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), 'owlcoda-write-test-'))
+    // The fs-policy guard restricts writes to process.cwd() by default.
+    // Test fixtures live under tmpdir(), so opt that path in via the same
+    // env-var seam real users would use to extend scope.
+    prevAllow = process.env['OWLCODA_ALLOW_FS_ROOTS']
+    process.env['OWLCODA_ALLOW_FS_ROOTS'] = dir
   })
 
   afterAll(async () => {
+    if (prevAllow === undefined) delete process.env['OWLCODA_ALLOW_FS_ROOTS']
+    else process.env['OWLCODA_ALLOW_FS_ROOTS'] = prevAllow
     await rm(dir, { recursive: true, force: true })
   })
 

@@ -246,4 +246,112 @@ describe('runHeadless', () => {
     const conversation = loopCall[0]
     expect(conversation.maxTokens).toBe(8192)
   })
+
+  // ─── Issue #1: headless approval gate ────────────────────────────────────
+
+  it('installs onToolApproval in non-json mode (so unsafe tools cannot bypass approval)', async () => {
+    await runHeadless({
+      apiBaseUrl: 'http://localhost:8019',
+      apiKey: 'test-key',
+      model: 'test-model',
+      prompt: 'Hello',
+    })
+    const loopCall = vi.mocked(runConversationLoop).mock.calls[0]!
+    const opts = loopCall[2]
+    expect(opts.callbacks?.onToolApproval).toBeTypeOf('function')
+  })
+
+  it('installs onToolApproval in json mode (regression for issue #1 — was missing)', async () => {
+    await runHeadless({
+      apiBaseUrl: 'http://localhost:8019',
+      apiKey: 'test-key',
+      model: 'test-model',
+      prompt: 'Hello',
+      json: true,
+    })
+    const loopCall = vi.mocked(runConversationLoop).mock.calls[0]!
+    const opts = loopCall[2]
+    expect(opts.callbacks?.onToolApproval).toBeTypeOf('function')
+  })
+
+  it('installed approval callback denies unsafe tools without autoApprove', async () => {
+    await runHeadless({
+      apiBaseUrl: 'http://localhost:8019',
+      apiKey: 'test-key',
+      model: 'test-model',
+      prompt: 'Hello',
+    })
+    const cb = vi.mocked(runConversationLoop).mock.calls[0]![2].callbacks!.onToolApproval!
+    expect(await cb('write', { path: '/tmp/x' })).toBe(false)
+    expect(await cb('edit', { path: '/tmp/x' })).toBe(false)
+    expect(await cb('NotebookEdit', { notebook_path: '/tmp/x.ipynb' })).toBe(false)
+    expect(await cb('bash', { command: 'rm -rf /' })).toBe(false)
+    // Read-only tools must remain low-friction.
+    expect(await cb('read', { path: '/tmp/x' })).toBe(true)
+    expect(await cb('grep', { pattern: 'foo' })).toBe(true)
+  })
+
+  it('installed approval callback allows unsafe tools when autoApprove=true', async () => {
+    await runHeadless({
+      apiBaseUrl: 'http://localhost:8019',
+      apiKey: 'test-key',
+      model: 'test-model',
+      prompt: 'Hello',
+      autoApprove: true,
+    })
+    const cb = vi.mocked(runConversationLoop).mock.calls[0]![2].callbacks!.onToolApproval!
+    expect(await cb('write', { path: '/tmp/x' })).toBe(true)
+    expect(await cb('bash', { command: 'echo hi' })).toBe(true)
+  })
+
+  it('result and JSON output expose the approval policy', async () => {
+    const result = await runHeadless({
+      apiBaseUrl: 'http://localhost:8019',
+      apiKey: 'test-key',
+      model: 'test-model',
+      prompt: 'Hello',
+      json: true,
+    })
+    expect(result.approvalPolicy).toBe('deny-unsafe-without-approval')
+    expect(stdoutWrite).toHaveBeenCalledWith(
+      expect.stringContaining('"approval_policy":"deny-unsafe-without-approval"'),
+    )
+
+    const result2 = await runHeadless({
+      apiBaseUrl: 'http://localhost:8019',
+      apiKey: 'test-key',
+      model: 'test-model',
+      prompt: 'Hello',
+      json: true,
+      autoApprove: true,
+    })
+    expect(result2.approvalPolicy).toBe('auto-approve-all')
+  })
+
+  it('records denials and surfaces them in the result', async () => {
+    await runHeadless({
+      apiBaseUrl: 'http://localhost:8019',
+      apiKey: 'test-key',
+      model: 'test-model',
+      prompt: 'Hello',
+    })
+    const cb = vi.mocked(runConversationLoop).mock.calls[0]![2].callbacks!.onToolApproval!
+    await cb('write', { path: '/tmp/x' })
+    await cb('read', { path: '/tmp/x' })
+    await cb('bash', { command: 'pwd' })          // safe-readonly — allowed under P1 classifier
+    await cb('bash', { command: 'rm -rf /tmp/y' }) // dangerous — denied
+    // We can't easily re-read the headless result here (it's closed over the
+    // call we already returned from), but the stderr-write side effect for
+    // each denial is observable.
+    const stderrCalls = stderrWrite.mock.calls.map(c => String(c[0]))
+    const denialMessages = stderrCalls.filter(s => s.includes('denied by headless approval policy'))
+    expect(denialMessages.length).toBeGreaterThanOrEqual(2)
+    expect(denialMessages.some(m => m.includes('write'))).toBe(true)
+    expect(denialMessages.some(m => m.includes('bash'))).toBe(true)
+    // P1 issue #2: the structured bash-risk detail is covered by
+    // tests/native/headless-approval.test.ts and serializeDenials in
+    // the JSON output. Stderr-side rendering of risk=<level> is a UX
+    // nicety subject to banner-box wrapping; not asserted here to avoid
+    // brittleness.
+  })
 })

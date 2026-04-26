@@ -25,9 +25,18 @@ function makeNotebook(dir: string, cells: unknown[] = [], nbformat = 4, nbformat
 describe('NotebookEdit tool', () => {
   const tool = createNotebookEditTool()
   let tmpDir: string
+  let prevAllow: string | undefined
 
-  beforeEach(() => { tmpDir = makeTmpDir() })
-  afterEach(() => { if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true }) })
+  beforeEach(() => {
+    tmpDir = makeTmpDir()
+    prevAllow = process.env['OWLCODA_ALLOW_FS_ROOTS']
+    process.env['OWLCODA_ALLOW_FS_ROOTS'] = tmpDir
+  })
+  afterEach(() => {
+    if (prevAllow === undefined) delete process.env['OWLCODA_ALLOW_FS_ROOTS']
+    else process.env['OWLCODA_ALLOW_FS_ROOTS'] = prevAllow
+    if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true })
+  })
 
   it('has correct name and description', () => {
     expect(tool.name).toBe('NotebookEdit')
@@ -105,8 +114,11 @@ describe('NotebookEdit tool', () => {
   })
 
   it('rejects non-.ipynb file', async () => {
+    // Keep the path inside the allowed workspace root so the extension
+    // check (rather than the fs-policy guard) is what trips. The guard
+    // is a lower-precedence concern here — separately covered.
     const result = await tool.execute({
-      notebook_path: '/tmp/test.py',
+      notebook_path: join(tmpDir, 'test.py'),
       new_source: 'x = 1',
     })
     expect(result.isError).toBe(true)

@@ -5,8 +5,8 @@
  */
 
 import { readFile, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
 import type { EditInput, NativeToolDef, ToolResult } from './types.js'
+import { checkWritePathAllowed } from './fs-policy.js'
 
 export function createEditTool(): NativeToolDef<EditInput> {
   return {
@@ -15,7 +15,17 @@ export function createEditTool(): NativeToolDef<EditInput> {
       'Replace exactly one occurrence of oldStr with newStr in a file.',
 
     async execute(input: EditInput): Promise<ToolResult> {
-      const filePath = resolve(input.path)
+      // Defense-in-depth: validate the target path BEFORE any mutation.
+      // Issue #3.
+      const policy = checkWritePathAllowed(input.path)
+      if (!policy.allowed) {
+        return {
+          output: `Error: ${policy.reason}`,
+          isError: true,
+          metadata: { fsPolicyDenied: true, attemptedPath: policy.attemptedPath },
+        }
+      }
+      const filePath = policy.resolvedPath
 
       try {
         const content = await readFile(filePath, 'utf-8')

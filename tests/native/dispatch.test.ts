@@ -9,12 +9,20 @@ import { ensureTaskExecutionState } from '../../src/native/task-state.js'
 
 describe('Native Tool Dispatcher', () => {
   let tempDir = ''
+  let prevAllow: string | undefined
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'owlcoda-dispatch-test-'))
+    // The fs-policy guard restricts writes to process.cwd(); these tests
+    // exercise the dispatcher against a tmpdir scratch path, so opt that
+    // path in via the same env-var seam users would use.
+    prevAllow = process.env['OWLCODA_ALLOW_FS_ROOTS']
+    process.env['OWLCODA_ALLOW_FS_ROOTS'] = tempDir
   })
 
   afterEach(async () => {
+    if (prevAllow === undefined) delete process.env['OWLCODA_ALLOW_FS_ROOTS']
+    else process.env['OWLCODA_ALLOW_FS_ROOTS'] = prevAllow
     if (tempDir) {
       await rm(tempDir, { recursive: true, force: true })
       tempDir = ''

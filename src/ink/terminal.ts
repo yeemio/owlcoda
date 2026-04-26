@@ -164,12 +164,47 @@ export function isSynchronizedOutputSupported(): boolean {
   return false
 }
 
+// Mediated terminals reinterpret ANSI through their own buffer (cmux,
+// zellij, GNU screen, mosh, etc.) and routinely break the cell-diff
+// optimizations that count on a 1:1 mapping between emitted bytes and
+// physical row state. Real cmux 0.13.20 evidence: row-tail / row-head
+// smear under high-churn long runs even though the inner TERM was
+// `xterm-256color`. We engage low-churn mode (no BSU/ESU, plain key
+// path, more conservative redraw) for any signal we can detect; users
+// in cmux without env propagation can set OWLCODA_LOW_CHURN_TERMINAL=1
+// themselves — that override is the canonical escape hatch.
+//
+// Explicit env signals we recognize:
+//   - OWLCODA_LOW_CHURN_TERMINAL=1/0   user override (also covers cmux 0.13.x
+//                                       which doesn't propagate CMUX_*)
+//   - CMUX_BUNDLE_ID / CMUX_PORT /     cmux 0.14+ when env is forwarded
+//     CMUX_WORKSPACE_ID
+//   - ZELLIJ / ZELLIJ_PANE /           zellij multiplexer panes
+//     ZELLIJ_SESSION_NAME
+//   - STY                              GNU screen sets `${pid}.${socket}`
+//
+// Deliberately NOT auto-detected:
+//   - TERM=screen* / xterm-*          too broad — modern terminals advertise
+//                                       these even when they handle ANSI
+//                                       cleanly.
+//   - tmux is special-cased in        we keep tmux's existing handling in
+//     isSynchronizedOutputSupported    `isSynchronizedOutputSupported` so the
+//                                       tmux path doesn't change behavior.
 export function usesLowChurnTerminalMode(): boolean {
   const explicit = process.env.OWLCODA_LOW_CHURN_TERMINAL?.trim().toLowerCase()
   if (explicit === '1' || explicit === 'true' || explicit === 'yes') return true
   if (explicit === '0' || explicit === 'false' || explicit === 'no') return false
 
-  return Boolean(process.env.CMUX_BUNDLE_ID || process.env.CMUX_PORT || process.env.CMUX_WORKSPACE_ID)
+  if (process.env.CMUX_BUNDLE_ID || process.env.CMUX_PORT || process.env.CMUX_WORKSPACE_ID) {
+    return true
+  }
+  if (process.env.ZELLIJ || process.env.ZELLIJ_PANE || process.env.ZELLIJ_SESSION_NAME) {
+    return true
+  }
+  if (process.env.STY) {
+    return true
+  }
+  return false
 }
 
 // -- XTVERSION-detected terminal name (populated async at startup) --

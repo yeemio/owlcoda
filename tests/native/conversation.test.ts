@@ -467,7 +467,13 @@ describe('runConversationLoop', () => {
     expect(result.finalText).toBe('')
   }, 10000)
 
-  it('classifies empty end_turn responses as retryable runtime failures', async () => {
+  it('classifies empty end_turn responses as empty_provider_response failures with HTTP-200 wording', async () => {
+    // Real cmux 0.13.20 evidence: kimi-code returned HTTP 200 with empty
+    // content blocks and stop_reason=end_turn. The runtime now classifies
+    // this distinct from generic transport failures so the auto-retry
+    // path can suppress it (otherwise it loops 8× and burns provider
+    // quota for no useful content). retryable stays true so /retry and
+    // "继续" continue working as user-driven retries.
     const conv = createConversation({ system: 'test', model: 'kimi-code' })
     addUserMessage(conv, 'Continue the long task')
 
@@ -493,12 +499,13 @@ describe('runConversationLoop', () => {
     expect(result.finalText).toBe('')
     expect(result.stopReason).toBe('stalled')
     expect(result.runtimeFailure).toMatchObject({
-      kind: 'provider_error',
+      kind: 'empty_provider_response',
       phase: 'continuation',
       retryable: true,
     })
-    expect(result.runtimeFailure?.message).toContain('provider returned no content')
-    expect(onError).toHaveBeenCalledWith(expect.stringContaining('provider returned no content'))
+    expect(result.runtimeFailure?.message).toContain('HTTP 200 but no content')
+    expect(result.runtimeFailure?.message).not.toMatch(/rate.?limit/i)
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('HTTP 200 but no content'))
     expect(shouldShowNoResponseFallback({
       finalText: result.finalText,
       stopReason: result.stopReason,

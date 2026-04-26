@@ -124,9 +124,25 @@ export function shouldScheduleRuntimeAutoRetry(options: {
   retryLimit: number
   hasQueuedInput: boolean
 }): boolean {
+  // Auto-retry is for transport-class failures: the request started,
+  // tokens may have flowed, then the link or upstream broke. The kind
+  // exclusions below are stalls, not transport interruptions, so they
+  // should NOT silently re-fire up to retryLimit times — that pattern
+  // produced the 8× "Runtime auto-continue: …" smear seen in real cmux
+  // runs against kimi-code.
+  //
+  //   - `pre_first_token_stream_close`: stream opened then died before
+  //     any token; almost always a model/provider stall, not a network
+  //     blip. The retry routinely hits the same stall again.
+  //   - `empty_provider_response`: HTTP 200 with no content (typically
+  //     stop_reason=end_turn). The model literally said "I'm done" with
+  //     nothing useful, so re-asking the same prompt usually produces
+  //     the same empty reply. /retry stays available for user-driven
+  //     re-attempts; only auto-continue is suppressed here.
   return options.runtimeFailure !== null
     && options.runtimeFailure.retryable === true
     && options.runtimeFailure.kind !== 'pre_first_token_stream_close'
+    && options.runtimeFailure.kind !== 'empty_provider_response'
     && !options.taskAborted
     && options.clearEpochUnchanged
     && options.currentRetryCount < options.retryLimit

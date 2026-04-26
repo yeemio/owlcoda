@@ -2,6 +2,24 @@
  * OwlCoda Source-First REPL — interactive chat frontend with tool execution.
  * Zero runtime dependencies. Uses built-in readline + http.
  * Talks to the OwlCoda proxy using Anthropic Messages API format.
+ *
+ * ─── Lifecycle status (issue #4, 2026-04-26) ────────────────────────────
+ *
+ *   STATUS: legacy / not reachable from production.
+ *
+ *   This file is the only consumer of `src/runtime/tools.ts`. Neither
+ *   this module nor that one is imported by `cli.ts` / `cli-core.ts` /
+ *   `server.ts` / any `src/native/*` — production goes through
+ *   `src/native/repl.ts` and `src/native/headless.ts` instead.
+ *
+ *   The file is preserved for archival and as a reference implementation
+ *   of the pre-native source-first REPL contract; it ships in `dist/`
+ *   but is not wired to a CLI command. An import-boundary test
+ *   (`tests/runtime-tools-boundary.test.ts`) guards against accidental
+ *   re-introduction into a production path without going through the
+ *   centralized policies (bash-risk classifier + fs-policy).
+ *
+ *   Do NOT add features here. New REPL work belongs in `src/native/repl.ts`.
  */
 
 import * as readline from 'node:readline'

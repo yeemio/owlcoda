@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ToolDispatcher } from '../../src/native/dispatch.js'
 import { addUserMessage, createConversation, runConversationLoop } from '../../src/native/conversation.js'
 import { buildToolDef } from '../../src/native/protocol/request.js'
+import { shouldScheduleRuntimeAutoRetry } from '../../src/native/repl-shared.js'
 
 function toolUseResponse(
   toolName: string,
@@ -870,5 +871,101 @@ describe('native conversation tool loop guard', () => {
     expect(result.stopReason).toBe('end_turn')
     expect(result.finalText).toContain('expand the task contract')
     expect(result.conversation.options?.taskState?.run.status).toBe('waiting_user')
+  })
+
+  it('stops parent continuation after a terminal Agent failure', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Delegate the long audit and do not improvise if the agent fails.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'Agent',
+      description: 'test agent',
+      async execute() {
+        return {
+          output: 'Agent incomplete: stop_reason=max_iterations',
+          isError: true,
+          metadata: {
+            terminalToolFailure: true,
+            terminalFailureReason: 'Sub-agent hit max_iterations before producing a final message.',
+          },
+        }
+      },
+    })
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(toolUseResponse('Agent', 'tool-agent-1', {
+      description: 'Long audit',
+      prompt: 'Audit deeply',
+    }))
+
+    const errors: string[] = []
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 4,
+      callbacks: {
+        onError(error) {
+          errors.push(error)
+        },
+      },
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(result.stopReason).toBe('terminal_tool_failure')
+    expect(result.finalText).toBe('')
+    expect(errors).toContain('Sub-agent hit max_iterations before producing a final message.')
+    expect(result.conversation.options?.taskState?.run.status).toBe('drifted')
+    expect(result.conversation.options?.taskState?.run.lastGuardReason).toContain('max_iterations')
+  })
+
+  it('keeps runtimeFailure null on terminal tool failure so the REPL does not auto-continue', async () => {
+    // The cmux 0.13.20 evidence showed the parent loop continuing past a
+    // sub-agent max_iterations failure and letting the model produce
+    // false claims ("`owlcoda` code has no iteration limit"). The
+    // terminal-tool-failure contract is: the parent stops cleanly, no
+    // runtimeFailure is synthesised, and the REPL's auto-retry gate
+    // refuses to fire because runtimeFailure is null. Together those
+    // guarantees keep the model from improvising over a known incomplete
+    // sub-agent run.
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Delegate the long audit; do not improvise on terminal failure.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'Agent',
+      description: 'test agent',
+      async execute() {
+        return {
+          output: 'Agent incomplete: stop_reason=max_iterations',
+          isError: true,
+          metadata: {
+            terminalToolFailure: true,
+            terminalFailureReason: 'Sub-agent hit max_iterations before producing a final message.',
+          },
+        }
+      },
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(toolUseResponse('Agent', 'tool-agent-2', {
+      description: 'Long audit',
+      prompt: 'Audit deeply',
+    }))
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 4,
+    })
+
+    expect(result.stopReason).toBe('terminal_tool_failure')
+    expect(result.runtimeFailure).toBeNull()
+    expect(shouldScheduleRuntimeAutoRetry({
+      runtimeFailure: result.runtimeFailure,
+      taskAborted: false,
+      clearEpochUnchanged: true,
+      currentRetryCount: 0,
+      retryLimit: 8,
+      hasQueuedInput: false,
+    })).toBe(false)
   })
 })

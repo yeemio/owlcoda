@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile, realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createEditTool } from '../../../src/native/tools/edit.js'
@@ -7,12 +7,17 @@ import { createEditTool } from '../../../src/native/tools/edit.js'
 describe('Native Edit tool', () => {
   const edit = createEditTool()
   let dir: string
+  let prevAllow: string | undefined
 
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), 'owlcoda-edit-test-'))
+    prevAllow = process.env['OWLCODA_ALLOW_FS_ROOTS']
+    process.env['OWLCODA_ALLOW_FS_ROOTS'] = dir
   })
 
   afterAll(async () => {
+    if (prevAllow === undefined) delete process.env['OWLCODA_ALLOW_FS_ROOTS']
+    else process.env['OWLCODA_ALLOW_FS_ROOTS'] = prevAllow
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -105,7 +110,9 @@ describe('Native Edit tool', () => {
     expect(result.isError).toBe(false)
     const meta = result.metadata!
     expect(meta.changeKind).toBe('update')
-    expect(meta.path).toBe(path)
+    // After fs-policy normalization, meta.path is the realpath of the
+    // input. On macOS that adds a /private prefix when tmpdir is involved.
+    expect(meta.path).toBe(await realpath(path))
     expect(typeof meta.oldContext).toBe('string')
     expect(typeof meta.newContext).toBe('string')
     // Change is on the 4th line (index 3); with 3 context lines above,

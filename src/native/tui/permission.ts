@@ -12,6 +12,7 @@ import { sgr, themeColor, themed, dim, visibleWidth } from './colors.js'
 import { renderBox, BORDER_STYLES } from './box.js'
 import { padRight, truncate } from './text.js'
 import { userFacingToolName } from './message.js'
+import { classifyBashCommand } from '../bash-risk.js'
 
 export interface PermissionChoice {
   key: string    // keyboard shortcut (e.g. 'y', 'n', 'a')
@@ -155,29 +156,25 @@ export function renderTopBorderDialog(opts: TopBorderDialogOptions): string {
  */
 /**
  * Detect potentially destructive bash commands.
- * Returns a warning string if the command looks dangerous, null otherwise.
- * Clean-room implementation — pattern matching on common destructive operations.
+ *
+ * Delegates to `classifyBashCommand` (single source of truth — issue #2)
+ * and returns a short warning string when the level is `dangerous`,
+ * preserving the previous "null = no warning" contract this module's
+ * callers depend on.
+ *
+ * `needs_approval` and `unknown` deliberately do NOT produce a warning
+ * banner here: the permission card itself is already asking for consent,
+ * so duplicating "this writes a file" copy on every `git commit` would
+ * be noise. `dangerous` is reserved for things the operator should pause
+ * over even when consenting (rm -rf, force-push, sudo, …).
+ *
+ * For headless callers and any new code that needs structured detail,
+ * import `classifyBashCommand` directly from `../bash-risk.js`.
  */
 export function detectDestructiveCommand(command: string): string | null {
-  const lower = command.toLowerCase().trim()
-  const patterns: Array<[RegExp, string]> = [
-    [/\brm\s+(-[a-z]*f[a-z]*\s+|.*--force).*(\*|\/|\~)/i, 'Recursive force delete with wildcard or root path'],
-    [/\brm\s+-[a-z]*r[a-z]*f[a-z]*\b/i, 'Recursive force delete'],
-    [/\brm\s+-[a-z]*f[a-z]*r[a-z]*\b/i, 'Recursive force delete'],
-    [/\bdd\s+.*of=\//i, 'Direct disk write'],
-    [/\bmkfs\b/i, 'Filesystem format'],
-    [/\bfdisk\b/i, 'Disk partition'],
-    [/>\s*\/dev\/[a-z]/i, 'Write to device file'],
-    [/\bchmod\s+-[a-z]*R.*\s+\//i, 'Recursive permissions change on root'],
-    [/\bchown\s+-[a-z]*R.*\s+\//i, 'Recursive ownership change on root'],
-    [/:(){ :\|:& };:/i, 'Fork bomb'],
-    [/\bsudo\s+rm\b/i, 'Privileged delete'],
-    [/>\s*\/etc\//i, 'Overwrite system config'],
-  ]
-  for (const [pattern, desc] of patterns) {
-    if (pattern.test(lower)) return desc
-  }
-  return null
+  const verdict = classifyBashCommand(command)
+  if (verdict.level !== 'dangerous') return null
+  return verdict.reasons[0] ?? 'Potentially destructive command'
 }
 
 export function renderBashPermission(command: string, cwd?: string, selectedIndex = 1): string {

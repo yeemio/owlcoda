@@ -12,8 +12,9 @@
  */
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { extname, isAbsolute, resolve } from 'node:path'
+import { extname } from 'node:path'
 import type { NotebookEditInput, NativeToolDef, ToolResult } from './types.js'
+import { checkWritePathAllowed } from './fs-policy.js'
 
 interface NotebookCell {
   cell_type: 'code' | 'markdown' | 'raw'
@@ -50,10 +51,17 @@ export function createNotebookEditTool(): NativeToolDef<NotebookEditInput> {
     async execute(input: NotebookEditInput): Promise<ToolResult> {
       const { notebook_path, new_source, cell_id, cell_type, edit_mode = 'replace' } = input
 
-      // Resolve path
-      const fullPath = isAbsolute(notebook_path)
-        ? notebook_path
-        : resolve(process.cwd(), notebook_path)
+      // Defense-in-depth: validate the target path BEFORE any read or
+      // mutation. Issue #3.
+      const policy = checkWritePathAllowed(notebook_path)
+      if (!policy.allowed) {
+        return {
+          output: `Error: ${policy.reason}`,
+          isError: true,
+          metadata: { fsPolicyDenied: true, attemptedPath: policy.attemptedPath },
+        }
+      }
+      const fullPath = policy.resolvedPath
 
       // Validate extension
       if (extname(fullPath) !== '.ipynb') {

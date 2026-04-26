@@ -4,12 +4,35 @@
  * Supports: Bash, Read, Write, Glob.
  * Safety: Bash requires confirmation for dangerous patterns, file write requires confirmation,
  * all operations have timeouts and output truncation.
+ *
+ * ─── Lifecycle status (issue #4, 2026-04-26) ────────────────────────────
+ *
+ *   STATUS: legacy / not reachable from production.
+ *
+ *   Production CLI binary route is `cli.ts → cli-core.ts → native/repl.ts`
+ *   and `native/headless.ts`. Neither imports anything from this file.
+ *   The only consumer of `executeToolUse` / `TOOL_DEFINITIONS` is
+ *   `src/frontend/repl.ts`, which is itself not imported by any
+ *   production entry point. See the import-boundary regression test in
+ *   `tests/runtime-tools-boundary.test.ts` — that test will fail loudly
+ *   if a future change wakes this path back up without going through the
+ *   centralized policies.
+ *
+ *   The bash dangerous-pattern check below has been bridged to the
+ *   centralized `classifyBashCommand()` in `src/native/bash-risk.ts`
+ *   (issue #2). Even if a future caller revives this file, `bash` will
+ *   inherit the same risk taxonomy as the native dispatcher.
+ *
+ *   New work should NOT add features here. Either implement in
+ *   `src/native/tools/*` (production path) or document a follow-up that
+ *   either retires this file or re-bridges it to the native dispatcher.
  */
 
 import { spawn } from 'node:child_process'
 import { readFile, writeFile, mkdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { dirname, resolve, isAbsolute, normalize } from 'node:path'
+import { classifyBashCommand } from '../native/bash-risk.js'
 
 // ─── Types ───
 
@@ -64,24 +87,22 @@ export function isWithinWorkspace(pathToCheck: string, cwd: string): boolean {
 
 // ─── Safety patterns ───
 
-const DANGEROUS_BASH_PATTERNS = [
-  /\brm\s+-[rR]f?\b/,
-  /\brm\s+-f?[rR]\b/,
-  /\bgit\s+reset\s+--hard\b/,
-  /\bgit\s+clean\s+-[fd]+\b/,
-  /\bgit\s+push\s+.*--force\b/,
-  /\bsudo\b/,
-  /\bmkfs\b/,
-  /\bdd\s+if=/,
-  />\s*\/dev\/sd[a-z]/,
-  /\bchmod\s+-R\s+777\b/,
-  /\bkill\s+-9\b/,
-  /\bkillall\b/,
-  /\bpkill\b/,
-]
-
+/**
+ * Legacy bridge — historical `DANGEROUS_BASH_PATTERNS` regex list is now
+ * delegated to the centralized `classifyBashCommand()` so this file and
+ * the native path can never disagree about what counts as dangerous
+ * (issue #2).
+ *
+ * Behavioral note: the original list flagged a few `needs_approval`-class
+ * commands as "dangerous" (notably `git reset --hard`, `git clean -fd`,
+ * `git push --force`, kill family). The classifier still treats these
+ * as `dangerous`, so the bridge preserves the intent. Other historical
+ * "needs approval" cases that the legacy regex didn't cover (e.g.
+ * `mv`, `rm` without -rf) now correctly trip the prompt as well, which
+ * makes the legacy runtime *stricter*, never more permissive.
+ */
 function isDangerousBash(command: string): boolean {
-  return DANGEROUS_BASH_PATTERNS.some(p => p.test(command))
+  return classifyBashCommand(command).level === 'dangerous'
 }
 
 function truncateOutput(output: string, maxChars: number): string {

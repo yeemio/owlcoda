@@ -851,10 +851,13 @@ describe('failed continuation submit handling', () => {
   })
 
   it('treats retryable empty-response provider failures as continuation-retry eligible', () => {
+    // Distinct kind from generic provider_error so the auto-retry path can
+    // suppress it specifically (see shouldScheduleRuntimeAutoRetry below);
+    // user-driven "继续" still routes to retry_failed_continuation here.
     const emptyResponseFailure = {
-      kind: 'provider_error' as const,
+      kind: 'empty_provider_response' as const,
       phase: 'request' as const,
-      message: 'No response from kimi-code: provider returned no content (stop_reason: end_turn)',
+      message: 'No response from kimi-code: provider returned HTTP 200 but no content (stop_reason: end_turn)',
       retryable: true,
     }
 
@@ -973,6 +976,48 @@ describe('failed continuation submit handling', () => {
       retryLimit: 8,
       hasQueuedInput: true,
     })).toBe(false)
+  })
+
+  it('does not schedule runtime auto-retry for empty provider responses (HTTP 200, end_turn, no content)', () => {
+    // Real cmux 0.13.20 evidence: 144 kimi-code requests, all HTTP 200, no
+    // 429/503, but several with outputTokens<=1 and stop_reason=end_turn.
+    // Old policy classified that as `provider_error` + retryable=true and
+    // auto-fired the request 8 times in a row, producing the visible
+    // "Runtime auto-continue stopped after 8 attempts…" exhaustion line
+    // and the smear of repeated retry rows. The new kind lets the
+    // auto-continue gate suppress the loop without breaking user-driven
+    // /retry or "继续" (those still see retryable=true).
+    const emptyResponseFailure = {
+      kind: 'empty_provider_response' as const,
+      phase: 'request' as const,
+      message: 'No response from kimi-code: provider returned HTTP 200 but no content (stop_reason: end_turn)',
+      retryable: true,
+    }
+
+    expect(shouldScheduleRuntimeAutoRetry({
+      runtimeFailure: emptyResponseFailure,
+      taskAborted: false,
+      clearEpochUnchanged: true,
+      currentRetryCount: 0,
+      retryLimit: 8,
+      hasQueuedInput: false,
+    })).toBe(false)
+
+    // Genuine retryable transport-class failures still auto-retry.
+    const httpRetryable = {
+      kind: 'http_error' as const,
+      phase: 'continuation' as const,
+      message: 'kimi-code request failed: 502 from provider',
+      retryable: true,
+    }
+    expect(shouldScheduleRuntimeAutoRetry({
+      runtimeFailure: httpRetryable,
+      taskAborted: false,
+      clearEpochUnchanged: true,
+      currentRetryCount: 0,
+      retryLimit: 8,
+      hasQueuedInput: false,
+    })).toBe(true)
   })
 
   it('drains queued user input after retryable failures instead of silently dropping it', () => {

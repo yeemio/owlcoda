@@ -283,6 +283,7 @@ export type ConversationRuntimeFailureKind =
   | 'abort'
   | 'http_error'
   | 'provider_error'
+  | 'empty_provider_response'
 
 export type ConversationRuntimeFailurePhase = 'request' | 'continuation' | 'tool_continuation'
 
@@ -703,6 +704,11 @@ export async function runConversationLoop(
     if (shouldNudgeToolOnlyTurn) {
       opts.callbacks?.onNotice?.('Nudge: requesting text summary after 3 consecutive tool-only turns')
     }
+    if (toolResults.terminalError) {
+      markTaskGuardBlocked(taskState, toolResults.terminalError)
+      lastStopReason = 'terminal_tool_failure'
+      break
+    }
     const toolProgress = updateConvergenceFromToolBatch(convergence, effectiveResponse.toolUseBlocks, toolResults.results)
     if (toolResults.results.some((result) => !result.result.isError)) {
       markTaskProgress(taskState, convergence.lastGap ?? convergence.dominantHypothesis)
@@ -804,17 +810,38 @@ export function shouldShowNoResponseFallback(options: {
     && options.stopReason !== 'tool_loop'
     && options.stopReason !== 'tool_use'
     && options.stopReason !== 'hard_stop'
+    && options.stopReason !== 'terminal_tool_failure'
 }
 
+// Empty assistant response with no tool_use / no error is the model's own
+// "I'm done" signal (typically stop_reason=end_turn) but with zero useful
+// output — Kimi-for-coding has been observed to emit hundreds of these
+// HTTP-200-but-empty replies in a row when the conversation drifts. The
+// upstream signal is NOT a transport problem: the connection completed,
+// the body parsed, the model just produced nothing. Auto-retrying that
+// 8 times in a row (the previous behavior under retryable=true +
+// kind=provider_error) burns provider quota and produces the smear of
+// repeated "Runtime auto-continue: …" rows the user reported.
+//
+// We keep retryable=true so the user's `/retry` slash command and the
+// continuation-phrase shortcut ("继续") still work — those are
+// user-driven re-attempts, not loop noise. The auto-continue path
+// excludes this kind specifically (see shouldScheduleRuntimeAutoRetry).
+//
+// Wording: explicitly call out HTTP 200 + empty content so the user
+// doesn't read the message as "rate limit" or "network error" and
+// chase the wrong layer. The audit log evidence for this failure is
+// always 200, not 429/503, so the surface text matches what /audit
+// would show.
 function createEmptyResponseRuntimeFailure(
   conversation: Pick<Conversation, 'model' | 'turns'>,
   iterations: number,
   stopReason: string | null | undefined,
 ): ConversationRuntimeFailure {
   return {
-    kind: 'provider_error',
+    kind: 'empty_provider_response',
     phase: deriveRuntimeFailurePhase(conversation, iterations),
-    message: `No response from ${conversation.model}: provider returned no content (stop_reason: ${stopReason ?? 'none'}). Continuing is safe because the transcript is intact; use /model if it keeps happening.`,
+    message: `No response from ${conversation.model}: provider returned HTTP 200 but no content (stop_reason: ${stopReason ?? 'none'}). Use /retry to resend, or /model to switch — auto-continue is suppressed for empty replies because they usually indicate a model stall, not a transport issue.`,
     retryable: true,
   }
 }
@@ -2434,7 +2461,7 @@ async function executeTools(
   callbacks?: ConversationCallbacks,
   signal?: AbortSignal,
   taskState?: ActiveTaskState,
-): Promise<{ results: ToolExecutionResult[]; loopError?: string }> {
+): Promise<{ results: ToolExecutionResult[]; loopError?: string; terminalError?: string }> {
   const results: ToolExecutionResult[] = []
 
   for (const block of blocks) {
@@ -2547,6 +2574,13 @@ async function executeTools(
       result.result.metadata,
     )
     results.push(result)
+    if (result.result.metadata?.['terminalToolFailure'] === true) {
+      const reason = typeof result.result.metadata['terminalFailureReason'] === 'string'
+        ? result.result.metadata['terminalFailureReason']
+        : `${block.name} reported a terminal failure.`
+      callbacks?.onError?.(reason)
+      return { results, terminalError: reason }
+    }
   }
 
   return { results }

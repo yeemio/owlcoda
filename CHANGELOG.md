@@ -6,6 +6,20 @@ Runtime version truth comes from [`package.json`](package.json) and is
 exposed at runtime through [`src/version.ts`](src/version.ts) and
 `owlcoda --version`.
 
+## [0.13.21] — 2026-04-26
+
+Public security and cmux stress-path hardening release.
+
+### Security
+- Deny unsafe headless tools by default unless explicitly auto-approved, and expose approval decisions in headless output.
+- Add write/edit/NotebookEdit filesystem guardrails that reject path escapes, sensitive locations, and symlink escapes before mutation.
+- Centralize bash risk classification and route headless, TUI permission warnings, and legacy runtime bash checks through the same policy.
+
+### Reliability
+- Stop parent continuation after terminal sub-agent failures so incomplete agent runs do not invite model improvisation.
+- Make sub-agent iteration budgets explicit: Explore defaults to 80 iterations, general-purpose agents default to 200, and explicit overrides remain honored.
+- Add low-churn terminal detection for cmux-style mediated terminals and document the escape hatch.
+
 ## [0.1.3] — 2026-04-26
 
 Public trust-surface cleanup for the published router repo.
