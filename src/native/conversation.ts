@@ -2182,11 +2182,16 @@ function shouldAutoContinueOpenTask(
 
   const normalized = normalizeWhitespace(text)
   if (!normalized) return false
-  if (looksLikeCompletedTaskText(normalized)) return false
+  if (looksLikeCompleteTaskReport(taskState, normalized)) return false
   if (looksLikeUserInputOrBlocker(normalized)) return false
-  if (taskLikelyRequiresWrites(taskState) && taskState.contract.touchedPaths.length === 0) {
+  if (
+    taskLikelyRequiresWrites(taskState)
+    && taskState.contract.scopeMode === 'explicit_paths'
+    && taskState.contract.touchedPaths.length === 0
+  ) {
     return true
   }
+  if (looksLikeCompletedTaskText(normalized)) return false
   return looksLikeInterimProgressText(normalized)
 }
 
@@ -2198,9 +2203,66 @@ function taskLikelyRequiresWrites(taskState: ActiveTaskState): boolean {
 function isDurableTaskCompletion(taskState: ActiveTaskState, text: string): boolean {
   const normalized = normalizeWhitespace(text)
   if (!normalized) return false
+  if (looksLikeCompleteTaskReport(taskState, normalized)) return true
   if (!taskLikelyRequiresWrites(taskState)) return true
   if (taskState.contract.touchedPaths.length > 0) return true
   return TASK_NO_CHANGE_NEEDED_RE.test(normalized)
+}
+
+function looksLikeCompleteTaskReport(taskState: ActiveTaskState, text: string): boolean {
+  if (hasStrongInterimMarker(text)) return false
+  if (!hasCompletionIntent(text)) return false
+
+  let evidence = 0
+  if (/\b(?:elapsed|duration|wall[- ]?clock|time spent|runtime)\b[^.!?\n]{0,80}\b\d+(?:\.\d+)?\s*(?:seconds?|secs?|minutes?|mins?|m|s)\b/i.test(text)
+    || /\b\d+(?:\.\d+)?\s*(?:seconds?|secs?|minutes?|mins?)\b[^.!?\n]{0,80}\b(?:elapsed|duration|wall[- ]?clock|runtime)\b/i.test(text)
+    || /(?:耗时|用时|持续|时长)[^。！？\n]{0,80}\d+(?:\.\d+)?\s*(?:秒|分钟|分)/i.test(text)) {
+    evidence += 1
+  }
+  if (/\b(?:checkpoint|checkpoints)\b[^.!?\n]{0,80}\b\d+\s*\/\s*\d+\b/i.test(text)
+    || /\b\d+\s*(?:checkpoint|checkpoints)\b/i.test(text)
+    || /\b(?:checkpoint list|checkpoints completed)\b/i.test(text)
+    || /(?:检查点|checkpoint)[^。！？\n]{0,80}\d+/i.test(text)) {
+    evidence += 1
+  }
+  if (/\b(?:tests?|test files?|vitest|npm test)\b[^.!?\n]{0,120}\b(?:passed|pass|green|0 failed|\d+\s*\/\s*\d+)\b/i.test(text)
+    || /\b\d+\s*\/\s*\d+\b[^.!?\n]{0,80}\b(?:passed|pass|tests?)\b/i.test(text)
+    || /(?:测试|用例)[^。！？\n]{0,120}(?:通过|passed|0 failed)/i.test(text)) {
+    evidence += 1
+  }
+  if (/\b(?:cleanup|cleaned|removed|temp(?:orary)? directory|tmp)\b[^.!?\n]{0,100}\b(?:done|complete|completed|clean|removed|absent|verified)\b/i.test(text)
+    || /(?:清理|临时目录|tmp)[^。！？\n]{0,100}(?:完成|已清|不存在|删除|验证)/i.test(text)) {
+    evidence += 1
+  }
+  if (/\b(?:fallback(?:Used)?|fallback status|fallback)\b[^.!?\n]{0,80}\b(?:false|no|none|not used|unused|未使用|没有)\b/i.test(text)) {
+    evidence += 1
+  }
+  if (/\b(?:files? changed|repo modifications?|repository modifications?|no files? changed|not modify repository files)\b/i.test(text)
+    || /(?:文件改动|仓库改动|未修改|没有修改|无修改)/i.test(text)) {
+    evidence += 1
+  }
+  if (/\b(?:blockers?|remaining risks?|remaining risk|residual risk|open risk|risk)\b/i.test(text)
+    || /(?:阻塞|剩余风险|风险)/i.test(text)) {
+    evidence += 1
+  }
+  if (taskState.contract.touchedPaths.length > 0) {
+    evidence += 1
+  }
+  if (TASK_NO_CHANGE_NEEDED_RE.test(text)) {
+    evidence += 1
+  }
+
+  return evidence >= 3
+}
+
+function hasCompletionIntent(text: string): boolean {
+  return /\b(?:task (?:is )?(?:done|complete|completed)|completed|complete|finished|final report|all requirements (?:have been )?satisfied|nothing remaining|no remaining work|all set)\b/i.test(text)
+    || /(?:任务(?:已)?完成|已完成|完成报告|最终报告|全部完成|无剩余任务|没有剩余任务)/i.test(text)
+}
+
+function hasStrongInterimMarker(text: string): boolean {
+  return /\b(?:next i will|next we will|i(?:'|’)ll (?!now provide (?:the )?final (?:answer|report))|i will (?!now provide (?:the )?final (?:answer|report))|we will (?!now provide (?:the )?final (?:answer|report))|will now (?!provide (?:the )?final (?:answer|report))|going to|plan to|still need(?:s|ed)? to|need to (?:finish|implement|patch|fix|run)|not yet (?:done|complete|completed|finished|implemented|fixed|run|tested)|todo|to do|current status|in progress)\b/i.test(text)
+    || /(?:下一步|接下来(?:我|我们)?(?:会|将)|还需要|仍需|尚未|计划|待办|进行中)/i.test(text)
 }
 
 function looksLikeCompletedTaskText(text: string): boolean {

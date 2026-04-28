@@ -9,6 +9,7 @@ import { availabilityFixHints, availabilityPhrase, availabilityTone } from '../l
 import { StatusIcon } from './StatusIcon'
 import { EditFieldsForm } from './EditFieldsForm'
 import { KeyForm } from './KeyForm'
+import { Pill } from './Pill'
 import { TestConnectionPanel } from './TestConnectionPanel'
 import { ConfirmDelete } from './ConfirmDelete'
 
@@ -63,9 +64,9 @@ export function ModelDrawer(props: Props) {
 
       <div className="section">
         <h4>Status</h4>
-        <div className={`tone-${availabilityTone(status.availability)}`} data-testid="drawer-phrase">
+        <Pill kind={availabilityTone(status.availability)} testId="drawer-phrase">
           {availabilityPhrase(status.availability)}
-        </div>
+        </Pill>
       </div>
 
       <div className="section">

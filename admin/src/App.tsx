@@ -4,6 +4,7 @@ import { AliasConflictsPage } from './pages/AliasConflictsPage'
 import { OrphansPage } from './pages/OrphansPage'
 import { CatalogPage } from './pages/CatalogPage'
 import { StartPage } from './pages/StartPage'
+import { RunsPage } from './pages/RunsPage'
 import { useSnapshot } from './hooks/useSnapshot'
 import { bootstrapAuth } from './auth/session'
 import { readHandoff, type HandoffRoute } from './lib/handoff'
@@ -75,6 +76,7 @@ export function App() {
           <NavLink href="#/aliases" active={route === 'aliases'}>Aliases</NavLink>
           <NavLink href="#/orphans" active={route === 'orphans'}>Orphans</NavLink>
           <NavLink href="#/catalog" active={route === 'catalog'}>Catalog</NavLink>
+          <NavLink href="#/runs" active={route === 'runs'}>Runs</NavLink>
         </nav>
         <span className="spacer" />
         {showHandoffChip && (
@@ -84,7 +86,7 @@ export function App() {
             title={handoffChipTitle(handoff.route, handoff.select ?? handoff.focus)}
           >
             <span className="dot" aria-hidden>•</span>
-            opened from OwlCoda
+            {handoff.route === 'runs' ? 'opened from stress harness' : 'opened from OwlCoda'}
             <button
               type="button"
               className="handoff-chip-dismiss"
@@ -94,8 +96,18 @@ export function App() {
             >✕</button>
           </span>
         )}
+        {!handoff.arrivedFromHandoff && snapshot && (
+          <span
+            className="handoff-chip"
+            data-testid="freshness-chip"
+            title={`Snapshot loaded ${new Date(snapshot.refreshedAt).toLocaleTimeString()} — refresh from each page to update.`}
+          >
+            <span className="dot" aria-hidden>•</span>
+            snapshot · {formatSnapshotTime(snapshot.refreshedAt)}
+          </span>
+        )}
         <span className="meta">
-          Phase ε{auth.status === 'pending' && ' · bootstrapping…'}
+          {auth.status === 'pending' ? 'bootstrapping…' : `v${ADMIN_DISPLAY_VERSION}`}
         </span>
       </header>
 
@@ -157,6 +169,9 @@ export function App() {
           initialSelect={handoff.route === 'catalog' ? handoff.select : undefined}
         />
       )}
+      {snapshot && route === 'runs' && (
+        <RunsPage />
+      )}
       {snapshot && (route === 'models' || route === 'issues') && (
         <ModelsPage
           snapshot={snapshot}
@@ -194,6 +209,26 @@ function handoffChipTitle(route: HandoffRoute, target: string | undefined): stri
     : route === 'aliases' ? 'Alias conflicts'
     : route === 'orphans' ? 'Orphans'
       : route === 'catalog' ? 'Catalog'
-        : 'Models'
-  return target ? `Opened from OwlCoda → ${label} · ${target}` : `Opened from OwlCoda → ${label}`
+        : route === 'runs' ? 'Runs'
+          : 'Models'
+  const source = route === 'runs' ? 'stress harness' : 'OwlCoda'
+  return target ? `Opened from ${source} → ${label} · ${target}` : `Opened from ${source} → ${label}`
+}
+
+/**
+ * Display version surfaced in the admin header chrome. Hardcoded to keep the
+ * admin bundle decoupled from package.json reads at runtime; bump in lockstep
+ * with package.json on each release. (Verified at build time by tests.)
+ */
+const ADMIN_DISPLAY_VERSION = '0.1.5'
+
+/**
+ * Render snapshot timestamp as relative-ish text. Under a minute we say
+ * "just now"; otherwise we surface the wall-clock time the snapshot loaded
+ * so users can verify whether they're looking at fresh data.
+ */
+function formatSnapshotTime(refreshedAtMs: number): string {
+  const ageMs = Date.now() - refreshedAtMs
+  if (ageMs < 60_000) return 'just now'
+  return new Date(refreshedAtMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 }

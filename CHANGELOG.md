@@ -6,9 +6,24 @@ Runtime version truth comes from [`package.json`](package.json) and is
 exposed at runtime through [`src/version.ts`](src/version.ts) and
 `owlcoda --version`.
 
+## [0.1.5] — 2026-04-28
+
+Public router release for admin readiness polish and native completion-guard hardening, sourced from private commit `a9b9479`.
+
+### Admin
+- Add the Runs view and first-run readiness polish used by the public admin workflow.
+- Surface snapshot freshness and the public router version in the admin header.
+
+### Runtime
+- Treat sustained-work final reports with elapsed time, checkpoints, tests, cleanup, fallback, repo-change status, and remaining-risk evidence as durable task completion.
+- Keep write-intended tasks conservative when explicit path scope has not produced file changes yet.
+
+### Release Routing
+- Preserve the public package line at `0.1.5`; private-only website source, brand source assets, and execution prompts remain excluded from `main`.
+
 ## [0.1.4] — 2026-04-26
 
-Public router security and cmux stress-path hardening release, sourced from private `0.13.21`.
+Public router security and cmux stress-path hardening release, sourced from the private source line.
 
 ### Security
 - Deny unsafe headless tools by default unless explicitly auto-approved, and expose approval decisions in headless output.

@@ -5,7 +5,7 @@
  *
  *     /admin/?token=<one-shot>#/<route>?<params>
  *
- * where `<route>` is one of: start | models | aliases | orphans | catalog
+ * where `<route>` is one of: start | models | aliases | orphans | catalog | runs
  * and `<params>` supports:
  *   - select=<modelId | alias>
  *   - view=<issues | all | overview | …>   route-specific hint
@@ -19,7 +19,7 @@
  * This module is pure parsing. It does NOT mutate history or call network.
  */
 
-export type HandoffRoute = 'start' | 'models' | 'issues' | 'aliases' | 'orphans' | 'catalog'
+export type HandoffRoute = 'start' | 'models' | 'issues' | 'aliases' | 'orphans' | 'catalog' | 'runs'
 
 export interface HandoffContext {
   route: HandoffRoute
@@ -61,6 +61,7 @@ export function pathToRoute(path: string): HandoffRoute {
   if (path === 'aliases' || path.startsWith('aliases/')) return 'aliases'
   if (path === 'orphans' || path.startsWith('orphans/')) return 'orphans'
   if (path === 'catalog' || path.startsWith('catalog/')) return 'catalog'
+  if (path === 'runs' || path.startsWith('runs/')) return 'runs'
   // Back-compat in-app links.
   if (path.startsWith('issues/aliases')) return 'aliases'
   if (path.startsWith('issues/orphans')) return 'orphans'
@@ -111,6 +112,7 @@ function routeToPath(route: HandoffRoute): string {
     case 'aliases': return '/aliases'
     case 'orphans': return '/orphans'
     case 'catalog': return '/catalog'
+    case 'runs': return '/runs'
     case 'issues': return '/issues'
     case 'models': return '/models'
   }

@@ -284,6 +284,92 @@ describe('runConversationLoop', () => {
     expect(result.finalText).toBe('Done.')
   })
 
+  it('does not continue after a complete sustained-work final report', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, [
+      'Run a sustained OwlCoda official-route reliability task for at least 10 minutes.',
+      'Final answer must include elapsed time, checkpoint list, tests run, cleanup status, and fallback status.',
+    ].join(' '))
+    const requestBodies: Array<Record<string, unknown>> = []
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return new Response(JSON.stringify({
+        type: 'message',
+        role: 'assistant',
+        model: 'test-model',
+        content: [{ type: 'text', text: [
+          '## Sustained Reliability Task Complete',
+          '',
+          'Elapsed time: 10.6 minutes (637 seconds) - meets the 10-minute requirement.',
+          'Checkpoint list: 7/7 completed across package/scripts, model routing, provider probe, translation, fallback safety, tests, and cleanup.',
+          'Tests run: 5 focused test files, 70/70 passed, 0 failed.',
+          'Cleanup status: temporary directory /tmp/owlcoda-kimi-official-10min removed and verified absent.',
+          'Fallback status: fallbackUsed=false; no fallback takeover was used.',
+          'Repository modifications: no repo files were modified.',
+          'Remaining risk: sustained runtime parity has not yet been proven with a live backend.',
+        ].join('\n') }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 20, output_tokens: 80 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test-key',
+      maxIterations: 4,
+    })
+
+    expect(requestBodies).toHaveLength(1)
+    expect(result.finalText).toContain('Sustained Reliability Task Complete')
+    expect(result.conversation.options?.taskState?.run.status).toBe('completed')
+    expect(result.conversation.options?.taskState?.run.lastGuardReason).toBeNull()
+  })
+
+  it('accepts final-answer handoff phrasing plus remaining-risk caveats as complete', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, [
+      'Run a sustained official-route rerun for at least 10 minutes.',
+      'Final answer must include elapsed time, checkpoint list/count, tests run, cleanup status, fallback status, repository modification status, and remaining risk.',
+    ].join(' '))
+    const requestBodies: Array<Record<string, unknown>> = []
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return new Response(JSON.stringify({
+        type: 'message',
+        role: 'assistant',
+        model: 'test-model',
+        content: [{ type: 'text', text: [
+          'The task is complete. I will now provide the final answer as required.',
+          '',
+          '## Final Answer - OwlCoda Official-Route Completion-Guard Rerun',
+          '',
+          '**Elapsed time:** 753 seconds (12 minutes 33 seconds) - exceeded the 600-second minimum.',
+          '**Checkpoint list/count:** 7 checkpoints completed.',
+          '**Tests run:** 73 passed, 0 failed.',
+          '**Cleanup status:** Complete. /tmp/owlcoda-kimi-official-10min-rerun was removed.',
+          '**Fallback status:** fallbackUsed=false; no fallback takeover was visible.',
+          '**Repository modification status:** No modifications made during this rerun.',
+          '**Remaining risk:** product signoff has not yet been updated in docs.',
+        ].join('\n') }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 20, output_tokens: 80 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test-key',
+      maxIterations: 4,
+    })
+
+    expect(requestBodies).toHaveLength(1)
+    expect(result.finalText).toContain('Final Answer')
+    expect(result.conversation.options?.taskState?.run.status).toBe('completed')
+    expect(result.conversation.options?.taskState?.run.lastGuardReason).toBeNull()
+  })
+
   it('continues a write-intended task after a partial progress summary with no writes yet', async () => {
     const conv = createConversation({ system: 'test', model: 'test-model' })
     addUserMessage(conv, '请把结果写到 `docs/contract.md` 和 `docs/runbook.md`。')

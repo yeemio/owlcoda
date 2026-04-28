@@ -9,6 +9,8 @@ import type {
   ModelTruthSnapshot,
 } from '../api/types'
 import { BatchResultList } from '../components/BatchResultList'
+import { PageHeader } from '../components/PageHeader'
+import { Pill } from '../components/Pill'
 import { useBatchMutation } from '../hooks/useBatchMutation'
 
 interface Props {
@@ -159,9 +161,17 @@ export function OrphansPage({ snapshot, onSnapshotUpdate, initialSelect }: Props
     if (res?.snapshot) onSnapshotUpdate(res.snapshot)
   }
 
+  const selectedCount = orphans.filter(s => plans[s.id]?.selected).length
+
   if (orphans.length === 0) {
     return (
       <section className="panel full" data-testid="orphans-empty">
+        <PageHeader
+          eyebrow="Coding models"
+          title="Orphans"
+          sub="Models the runtime sees that the catalog doesn't bind. Nothing to adopt right now."
+          right={<Pill kind="ok">0 discovered</Pill>}
+        />
         <div className="empty">
           <span className="tone-ok">●</span> No orphan models. Everything discovered locally is already in your config.
         </div>
@@ -172,18 +182,28 @@ export function OrphansPage({ snapshot, onSnapshotUpdate, initialSelect }: Props
 
   return (
     <section className="panel full" data-testid="orphans-page">
-      <header className="page-header">
-        <h2>Orphan local models</h2>
-        <div className="tone-muted" style={{ fontSize: 12 }}>
-          Discovered on a backend but not bound. Either create a new <code>config.json</code> entry for the orphan,
-          or attach it to an existing model by redirecting that model's <code>backendModel</code>.
-        </div>
-      </header>
+      <PageHeader
+        eyebrow="Coding models"
+        title="Orphans"
+        sub="Discovered on a backend but not bound. Either create a new config entry for the orphan, or attach it to an existing local model by redirecting that model's backendModel."
+        right={<Pill kind="info" testId="orphans-discovered-count">{orphans.length} discovered</Pill>}
+      />
 
-      <div className="toolbar">
-        <button type="button" onClick={() => toggleAll(true)} data-testid="orphans-select-all">Select all</button>
-        <button type="button" onClick={() => toggleAll(false)} data-testid="orphans-select-none">Select none</button>
-        <span className="count" data-testid="orphans-count">{orphans.length} orphan{orphans.length === 1 ? '' : 's'}</span>
+      <div className="batch-bar">
+        <label className="orphan-select-all">
+          <input
+            type="checkbox"
+            checked={selectedCount === orphans.length}
+            onChange={e => toggleAll(e.target.checked)}
+            data-testid="orphans-select-all"
+          />
+          select all
+        </label>
+        <button type="button" onClick={() => toggleAll(false)} data-testid="orphans-select-none">Clear</button>
+        <span className="tone-muted" data-testid="orphans-count">
+          {selectedCount} of {orphans.length} selected
+        </span>
+        <div className="spacer" />
       </div>
 
       <ul className="orphan-list">
@@ -205,18 +225,27 @@ export function OrphansPage({ snapshot, onSnapshotUpdate, initialSelect }: Props
                   onChange={() => toggle(s.id)}
                   data-testid={`orphan-check-${s.id}`}
                 />
-                <strong>{s.label}</strong>
-                <span className="tone-muted"> {s.id}</span>
+                <span>
+                  <strong>{s.label}</strong>
+                  <span className="tone-muted" style={{ marginLeft: 8 }}>{s.id}</span>
+                </span>
               </label>
-              <dl className="kv" style={{ fontSize: 12 }}>
-                {disc?.backend && <><dt>backend</dt><dd data-testid={`orphan-backend-${s.id}`}>{disc.backend} @ {disc.baseUrl}</dd></>}
-                {disc?.parameterSize && <><dt>size</dt><dd>{disc.parameterSize}</dd></>}
-                {disc?.quantization && <><dt>quant</dt><dd>{disc.quantization}</dd></>}
-                {disc?.contextWindow && <><dt>ctx</dt><dd>{disc.contextWindow}</dd></>}
-              </dl>
+              <div className="orphan-meta">
+                <span className="chip">{s.providerKind}</span>
+                {disc?.backend && (
+                  <span className="chip" data-testid={`orphan-backend-${s.id}`}>
+                    {disc.backend} @ {disc.baseUrl}
+                  </span>
+                )}
+                {disc?.parameterSize && <span className="chip">{disc.parameterSize}</span>}
+                {disc?.quantization && <span className="chip">{disc.quantization}</span>}
+                {disc?.contextWindow && (
+                  <span className="chip">{disc.contextWindow.toLocaleString()} ctx</span>
+                )}
+              </div>
 
               <div className="orphan-mode" role="tablist">
-                <label>
+                <label className="orphan-mode-primary">
                   <input
                     type="radio"
                     name={`orphan-mode-${s.id}`}
@@ -225,9 +254,9 @@ export function OrphansPage({ snapshot, onSnapshotUpdate, initialSelect }: Props
                     disabled={!p.selected}
                     data-testid={`orphan-mode-create-${s.id}`}
                   />
-                  Create new config entry
+                  <span><strong>Adopt as new config entry</strong></span>
                 </label>
-                <label>
+                <label className="orphan-mode-advanced">
                   <input
                     type="radio"
                     name={`orphan-mode-${s.id}`}
@@ -236,7 +265,7 @@ export function OrphansPage({ snapshot, onSnapshotUpdate, initialSelect }: Props
                     disabled={!p.selected}
                     data-testid={`orphan-mode-existing-${s.id}`}
                   />
-                  Bind to existing model
+                  <span>Bind to an existing local model instead <span className="tone-subtle">(advanced — repoint a saved model's backendModel)</span></span>
                 </label>
               </div>
 

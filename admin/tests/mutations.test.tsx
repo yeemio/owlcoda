@@ -464,9 +464,10 @@ describe('Phase γ mutations', () => {
 
     renderPage()
     fireEvent.click(screen.getByTestId('add-model-open'))
-    await waitFor(() => expect(screen.getByTestId('field-provider')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('MiniMax (Anthropic-compatible)')).toBeInTheDocument())
 
     fireEvent.change(screen.getByTestId('field-provider'), { target: { value: 'minimax-anthropic' } })
+    await waitFor(() => expect(screen.getByTestId('provider-template-minimax-anthropic')).toBeInTheDocument())
     fireEvent.change(screen.getByTestId('field-apiKey'), { target: { value: 'sk-minimax-live' } })
     fireEvent.click(screen.getByTestId('add-submit'))
 

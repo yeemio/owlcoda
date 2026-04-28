@@ -31,6 +31,7 @@ describe('pathToRoute', () => {
     expect(pathToRoute('aliases')).toBe('aliases')
     expect(pathToRoute('orphans')).toBe('orphans')
     expect(pathToRoute('catalog')).toBe('catalog')
+    expect(pathToRoute('runs')).toBe('runs')
   })
 
   it('accepts back-compat /issues/* forms', () => {
@@ -85,6 +86,7 @@ describe('buildHash', () => {
     expect(buildHash({ route: 'start' })).toBe('#/start')
     expect(buildHash({ route: 'models' })).toBe('#/models')
     expect(buildHash({ route: 'aliases', select: 'kimi' })).toBe('#/aliases?select=kimi')
+    expect(buildHash({ route: 'runs' })).toBe('#/runs')
     expect(buildHash({ route: 'models', filter: 'issues' })).toBe('#/models?view=issues')
     expect(buildHash({ route: 'models', view: 'add', provider: 'openrouter' })).toBe('#/models?provider=openrouter&view=add')
   })
