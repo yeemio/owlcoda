@@ -20,6 +20,25 @@
 <p>exposed at runtime through [<code>src/version.ts</code>](src/version.ts) and</p>
 <p><code>owlcoda --version</code>.</p>
 
+<h2>[0.1.6] — 2026-04-29</h2>
+
+<p>Public router release for Windows cloud-first MiniMax onboarding, sourced from private commit <code>143474c</code>.</p>
+
+<h3>Admin</h3>
+<ul>
+<li>Add provider catalog density for first-run model setup, including MiniMax global and China presets.</li>
+<li>Add router presets on the Start page so Windows users can pick a local runtime shape without memorizing default ports.</li>
+</ul>
+<h3>Runtime</h3>
+<ul>
+<li>Split MiniMax global <code>api.minimax.io</code> and China <code>api.minimaxi.com</code> Anthropic-compatible endpoints.</li>
+<li>Demote the legacy <code>your-default-model</code> placeholder so a newly saved cloud provider becomes the usable default.</li>
+<li>Harden provider probes across <code>/models</code>, <code>/chat/completions</code>, and Messages-shaped endpoints.</li>
+</ul>
+<h3>Release Routing</h3>
+<ul>
+<li>Preserve the public package line at <code>0.1.6</code>; the private execution prompt for this fix remains excluded from <code>main</code>.</li>
+</ul>
 <h2>[0.1.5] — 2026-04-28</h2>
 
 <p>Public router release for admin readiness polish and native completion-guard hardening, sourced from private commit <code>a9b9479</code>.</p>
@@ -231,4 +250,4 @@
 <p>  <code>rust-analyzer</code>, <code>gopls</code>, etc.) and wire it via a plugin.</p>
 <li>OAuth-style remote MCP servers are not yet supported; stdio MCP</li>
 <p>  servers are fully functional.</p>
-</ul></div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>本地优先 AI 编码工作台</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/zh/docs/install" data-astro-cid-sz7xmlte>文档</a></li> <li data-astro-cid-sz7xmlte><a href="/zh/changelog" data-astro-cid-sz7xmlte>更新日志</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.1.5</li> <li class="pill" data-astro-cid-sz7xmlte>Apache-2.0</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>无 telemetry</li> </ul> </div> </footer>  </body></html>
+</ul></div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>本地优先 AI 编码工作台</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/zh/docs/install" data-astro-cid-sz7xmlte>文档</a></li> <li data-astro-cid-sz7xmlte><a href="/zh/changelog" data-astro-cid-sz7xmlte>更新日志</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.1.6</li> <li class="pill" data-astro-cid-sz7xmlte>Apache-2.0</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>无 telemetry</li> </ul> </div> </footer>  </body></html>
