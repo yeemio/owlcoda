@@ -20,6 +20,73 @@
 <p>exposed at runtime through [<code>src/version.ts</code>](src/version.ts) and</p>
 <p><code>owlcoda --version</code>.</p>
 
+<h2>[0.1.9] — 2026-05-05</h2>
+
+<p>Public router release for terminal rendering stability, streaming transcript</p>
+<p>growth, markdown boundary handling, and Admin explicit default-model behavior,</p>
+<p>sourced from private commits <code>e4a5a54</code>, <code>60709f9</code>, <code>f0ca2b7</code>, <code>e4e0abf</code>,</p>
+<p><code>bb589ac</code>, and <code>ab309b2</code>.</p>
+
+<h3>Runtime / TUI</h3>
+<ul>
+<li>Prefer safe repaint for native output and unify main-screen repaint ownership</li>
+<p>  so static transcript commits own scrollback while full repaint stays</p>
+<p>  viewport-bounded.</p>
+<li>Preserve readable copied terminal output by writing literal spaces during</li>
+<p>  safe repaint inter-cell advances instead of cursor-forward escape sequences.</p>
+<li>Commit streamed assistant chunks directly into the scrollable transcript so</li>
+<p>  long answers grow live instead of appearing only in a clipped preview window.</p>
+</ul>
+<h3>Markdown</h3>
+<ul>
+<li>Protect streaming markdown header and table boundaries so partial table</li>
+<p>  separators and pipe-bearing headers do not render as stray artifacts.</p>
+</ul>
+<h3>Admin / Models</h3>
+<ul>
+<li>Verify explicit Admin default-model choices are honored at launch and in</li>
+<p>  config display.</p>
+</ul>
+<h3>Release Routing</h3>
+<ul>
+<li>Preserve the public package line at <code>0.1.9</code>; no private-only website,</li>
+<p>  internal, or execution-prompt paths are included in this release.</p>
+</ul>
+<h2>[0.1.8] — 2026-04-30</h2>
+
+<p>Public router hotfix for Xiaomi MiMo token-plan onboarding, sourced from</p>
+<p>private commit <code>4399013</code>.</p>
+
+<h3>Admin</h3>
+<ul>
+<li>Add Xiaomi MiMo token-plan provider presets for the Anthropic-compatible</li>
+<p>  <code>https://token-plan-sgp.xiaomimimo.com/anthropic</code> route and the</p>
+<p>  OpenAI-compatible <code>https://token-plan-sgp.xiaomimimo.com/v1</code> route.</p>
+</ul>
+<h3>Runtime</h3>
+<ul>
+<li>Default the MiMo preset to the provider-supported lowercase backend model id</li>
+<p>  <code>mimo-v2.5-pro</code>, normalize older display-style <code>MiMo-V2.5-Pro</code> configs at</p>
+<p>  runtime, and route OpenAI-compatible <code>/v1</code> base URLs to <code>/chat/completions</code>.</p>
+</ul>
+<h3>Release Routing</h3>
+<ul>
+<li>Preserve the public package line at <code>0.1.8</code>; no private-only website,</li>
+<p>  internal, or execution-prompt paths are included in this release.</p>
+</ul>
+<h2>[0.1.7] — 2026-04-30</h2>
+
+<p>Public router hotfix for Ubuntu first-run Node compatibility, sourced from private commit <code>7df4243</code>.</p>
+
+<h3>Runtime</h3>
+<ul>
+<li>Raise the public runtime floor to Node.js 20.19+ to match the current Ink, Vite, <code>string-width</code>, <code>undici</code>, and related dependency graph.</li>
+<li>Add an early CLI preflight so Node 18 exits with a clear upgrade message instead of falling through to <code>Invalid regular expression flags</code> during REPL dependency import.</li>
+</ul>
+<h3>Release Routing</h3>
+<ul>
+<li>Preserve the public package line at <code>0.1.7</code>; no private-only website, internal, or execution-prompt paths are included in this release.</li>
+</ul>
 <h2>[0.1.6] — 2026-04-29</h2>
 
 <p>Public router release for Windows cloud-first MiniMax onboarding, sourced from private commit <code>143474c</code>.</p>
@@ -250,4 +317,4 @@
 <p>  <code>rust-analyzer</code>, <code>gopls</code>, etc.) and wire it via a plugin.</p>
 <li>OAuth-style remote MCP servers are not yet supported; stdio MCP</li>
 <p>  servers are fully functional.</p>
-</ul></div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>本地优先 AI 编码工作台</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/zh/docs/install" data-astro-cid-sz7xmlte>文档</a></li> <li data-astro-cid-sz7xmlte><a href="/zh/changelog" data-astro-cid-sz7xmlte>更新日志</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.1.6</li> <li class="pill" data-astro-cid-sz7xmlte>Apache-2.0</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>无 telemetry</li> </ul> </div> </footer>  </body></html>
+</ul></div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>本地优先 AI 编码工作台</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/zh/docs/install" data-astro-cid-sz7xmlte>文档</a></li> <li data-astro-cid-sz7xmlte><a href="/zh/changelog" data-astro-cid-sz7xmlte>更新日志</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.1.9</li> <li class="pill" data-astro-cid-sz7xmlte>Apache-2.0</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>无 telemetry</li> </ul> </div> </footer>  </body></html>
