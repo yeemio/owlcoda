@@ -20,6 +20,224 @@
 <p>exposed at runtime through [<code>src/version.ts</code>](src/version.ts) and</p>
 <p><code>owlcoda --version</code>.</p>
 
+<h2>[0.1.19] — 2026-05-10</h2>
+
+<p>Public router release for renderer robustness and bounded LLM-summary</p>
+<p>auto-compact, sourced from private 0.13.98 / commits <code>b31964b</code>, <code>f45f14c</code>,</p>
+<p><code>773e181</code>, and <code>789631e</code>.</p>
+
+<h3>Renderer Robustness</h3>
+<ul>
+<li>Add fixture coverage for CJK spaceless numbered lists, underscore</li>
+<p>  identifiers in prose, ASCII pipe-frame diagrams, and HR/prose glue.</p>
+<li>Disable accidental underscore italics in prose and split glued horizontal</li>
+<p>  rules without disturbing code or table boundaries.</p>
+<li>Keep streaming timeout errors normalized through the renderer path.</li>
+</ul>
+<h3>Bounded Compaction</h3>
+<ul>
+<li>Add bounded LLM-summary auto-compact helpers and tests so long headless runs</li>
+<p>  can compact within an explicit context budget.</p>
+<li>Wire headless context-window and compaction-model settings through the</li>
+<p>  conversation loop.</p>
+</ul>
+<h3>Release Routing</h3>
+<ul>
+<li>Preserve the public package line at <code>0.1.19</code>; private-only website,</li>
+<p>  internal, QA, handoff, design-decision, and scratch paths are not included in</p>
+<p>  this release.</p>
+</ul>
+<h2>[0.1.18] — 2026-05-09</h2>
+
+<p>Public router release for stream lifecycle timeout handling, sourced from</p>
+<p>private 0.13.97 / commits <code>735494c</code> and <code>4740fd9</code>.</p>
+
+<h3>Stream Lifecycle</h3>
+<ul>
+<li>Split request-start, pre-first-token, and mid-stream timeout handling so</li>
+<p>  diagnostics point to the actual failing phase.</p>
+<li>Ensure active streams are killed on lifecycle timeout instead of leaving the</li>
+<p>  runtime in a stuck in-flight state.</p>
+<li>Update provider-error and messages integration coverage for the new timeout</li>
+<p>  taxonomy.</p>
+</ul>
+<h3>Configuration</h3>
+<ul>
+<li>Add config validation and defaults for stream lifecycle timeout controls.</li>
+</ul>
+<h3>Release Routing</h3>
+<ul>
+<li>Preserve the public package line at <code>0.1.18</code>; private-only website,</li>
+<p>  internal, QA, handoff, design-decision, and scratch paths are not included in</p>
+<p>  this release.</p>
+</ul>
+<h2>[0.1.17] — 2026-05-09</h2>
+
+<p>Public router release for markdown rendering unification and stale-build</p>
+<p>visibility, sourced from private 0.13.88-0.13.96 / commits <code>22f29b1</code>,</p>
+<p><code>4ba7917</code>, <code>a43bb2e</code>, <code>d709dd4</code>, <code>be38428</code>, <code>42b335c</code>, <code>405cfff</code>,</p>
+<p><code>f56c056</code>, <code>eb3a8dc</code>, <code>800a0fa</code>, <code>b0b6e6e</code>, <code>4c06453</code>, <code>80dc335</code>,</p>
+<p><code>9e36f87</code>, <code>e47794e</code>, <code>90ace85</code>, and <code>c48464b</code>.</p>
+
+<h3>Markdown Renderer</h3>
+<ul>
+<li>Route streaming and non-streaming markdown through a shared normalizer and</li>
+<p>  token renderer.</p>
+<li>Add a fixture suite for glued headings, fences, tables, ordered lists, CJK</li>
+<p>  prose, inline code, and mixed bullet/numbered-list cases.</p>
+<li>Fix blank-token handling in streaming markdown and keep failure-recovery</li>
+<p>  matching exact.</p>
+</ul>
+<h3>Build Visibility</h3>
+<ul>
+<li>Add build metadata after <code>npm run build</code> so <code>--version</code> and runtime banners</li>
+<p>  can surface the actual git build tag and dirty state.</p>
+<li>Warn when a daemon version differs from the current CLI binary instead of</li>
+<p>  hiding stale-dist mismatches.</p>
+</ul>
+<h3>Release Routing</h3>
+<ul>
+<li>Preserve the public package line at <code>0.1.17</code>; private-only website,</li>
+<p>  internal, QA, handoff, design-decision, and scratch paths are not included in</p>
+<p>  this release.</p>
+</ul>
+<h2>[0.1.16] — 2026-05-09</h2>
+
+<p>Public router release for O(1) transcript-window computation and task-contract</p>
+<p>classification, sourced from private 0.13.85-0.13.87 / commits <code>dbf8e25</code>,</p>
+<p><code>0949bb8</code>, <code>672a1c8</code>, <code>ec01019</code>, and <code>544d419</code>.</p>
+
+<h3>Transcript Runtime</h3>
+<ul>
+<li>Cache transcript offsets so visible-window selection no longer recounts the</li>
+<p>  whole transcript on each spinner tick.</p>
+<li>Cap non-virtual visible items and separate the scroll indicator leaf from</li>
+<p>  transcript row rendering.</p>
+<li>Add regression coverage that keeps stable transcript rows from recomputing</li>
+<p>  during spinner-only updates.</p>
+</ul>
+<h3>Task Contract</h3>
+<ul>
+<li>Replace broad write-intent regexes with a classifier-oriented task contract</li>
+<p>  so analysis/meta-prompt/negation cases do not trip write-required behavior.</p>
+<li>Add focused tests for write-required, analysis-only, and negated-intent</li>
+<p>  prompts.</p>
+</ul>
+<h3>Release Routing</h3>
+<ul>
+<li>Preserve the public package line at <code>0.1.16</code>; private-only website,</li>
+<p>  internal, QA, handoff, design-decision, and scratch paths are not included in</p>
+<p>  this release.</p>
+</ul>
+<h2>[0.1.15] — 2026-05-08</h2>
+
+<p>Public router release for retry and failure-recovery behavior, sourced from</p>
+<p>private 0.13.78-0.13.84 / commits <code>3c0fbbc</code>, <code>2c4feab</code>, <code>b2abba9</code>,</p>
+<p><code>59122e5</code>, <code>c477053</code>, <code>54526b3</code>, <code>feb805d</code>, <code>bde27d5</code>, <code>c14fb88</code>,</p>
+<p><code>dc9cca2</code>, <code>111c083</code>, <code>275b1bb</code>, <code>d800fc8</code>, <code>cd437e2</code>, <code>76230e7</code>,</p>
+<p><code>29ff918</code>, <code>ef03da6</code>, <code>1c303ff</code>, and <code>c2a485c</code>.</p>
+
+<h3>Failure Recovery</h3>
+<ul>
+<li>Add structured <code>/retry</code> side effects so forced resubmits go through the</li>
+<p>  regular submit path and clear stale runtime-failure state first.</p>
+<li>Preserve queued input after non-drainable failures instead of silently</li>
+<p>  dropping user text, with an explicit transcript warning and <code>/clear</code> reset.</p>
+<li>Close orphaned <code>tool_use</code> turns on loop-guard hard exits so the conversation</li>
+<p>  protocol remains valid after a blocked run.</p>
+</ul>
+<h3>Runtime Guidance</h3>
+<ul>
+<li>Add classifier-driven failed-continuation handling and expensive-failure</li>
+<p>  guidance for requests that should be batched or narrowed instead of retried</p>
+<p>  indefinitely.</p>
+<li>Reduce automatic runtime retry defaults so stuck upstreams surface a clear</li>
+<p>  recovery path faster.</p>
+</ul>
+<h3>Release Routing</h3>
+<ul>
+<li>Preserve the public package line at <code>0.1.15</code>; private-only website,</li>
+<p>  internal, QA, handoff, design-decision, and scratch paths are not included in</p>
+<p>  this release.</p>
+</ul>
+<h2>[0.1.14] — 2026-05-08</h2>
+
+<p>Public router release for paste handling and transcript rendering</p>
+<p>performance, sourced from private 0.13.72-0.13.77 / commits <code>20cb22a</code>,</p>
+<p><code>b269195</code>, <code>0cb6548</code>, <code>43af282</code>, and <code>84d149a</code>.</p>
+
+<h3>Terminal Performance</h3>
+<ul>
+<li>Collapse large paste bursts before they inflate the visible composer and</li>
+<p>  transcript.</p>
+<li>Lower the wrap-bypass threshold and cache transcript render work so long</li>
+<p>  pasted payloads do not churn the terminal on every spinner tick.</p>
+<li>Memoize transcript rows and virtualize the transcript window so long runs</li>
+<p>  keep current output responsive.</p>
+</ul>
+<h3>Paste / Width Handling</h3>
+<ul>
+<li>Add stale placeholder pruning for paste stores after input edits.</li>
+<li>Preserve accurate cursor movement for wide characters and terminal-width</li>
+<p>  calculations.</p>
+</ul>
+<h3>Release Routing</h3>
+<ul>
+<li>Preserve the public package line at <code>0.1.14</code>; private-only website,</li>
+<p>  internal, QA, handoff, design-decision, and scratch paths are not included in</p>
+<p>  this release.</p>
+</ul>
+<h2>[0.1.13] — 2026-05-08</h2>
+
+<p>Public router release for loop-guard and execution-economics hardening,</p>
+<p>sourced from private 0.13.66-0.13.71 / commits <code>1f9cbac</code>, <code>4398e5d</code>,</p>
+<p><code>5362db4</code>, <code>91db803</code>, <code>f96c103</code>, and <code>447f8b0</code>.</p>
+
+<h3>Runtime Guardrails</h3>
+<ul>
+<li>Detect narration loops where the model promises to write or patch but never</li>
+<p>  takes the corresponding action.</p>
+<li>Add a task-no-progress hard ceiling that uses lifetime iteration state rather</li>
+<p>  than only a short rolling window.</p>
+<li>Add repeated-read nudges so agents reuse prior evidence instead of re-reading</li>
+<p>  the same files indefinitely.</p>
+</ul>
+<h3>Execution Economics</h3>
+<ul>
+<li>Add the first production gate for execution-economics tracking.</li>
+<li>Add evidence-ledger nudges for repeated Glob and Grep calls.</li>
+<li>Add failure-ladder prompt guidance so long runs move toward concrete evidence</li>
+<p>  and user-facing blockers instead of cost-burn loops.</p>
+</ul>
+<h3>Release Routing</h3>
+<ul>
+<li>Preserve the public package line at <code>0.1.13</code>; private-only website,</li>
+<p>  internal, QA, handoff, design-decision, and scratch paths are not included in</p>
+<p>  this release.</p>
+</ul>
+<h2>[0.1.12] — 2026-05-07</h2>
+
+<p>Public router release for runtime budget and loop-safety hardening, sourced</p>
+<p>from private 0.13.62-0.13.65 / commits <code>f44a1bf</code>, <code>8154165</code>, <code>c3e10a5</code>,</p>
+<p>and <code>03118ca</code>.</p>
+
+<h3>Agent Runtime</h3>
+<ul>
+<li>Add heap-pressure compact handling and a dispatcher short-circuit for</li>
+<p>  repeated schema-failure loops.</p>
+<li>Treat repeated same-kind failures as a cost-burn signal before retry chains</li>
+<p>  grow unbounded.</p>
+<li>Handle <code>stop_reason=max_tokens</code> with runtime continuation guidance instead</li>
+<p>  of leaving truncated replies as dead ends.</p>
+<li>Raise the default max output budget to 32,768 tokens, with an environment</li>
+<p>  override for operators.</p>
+</ul>
+<h3>Release Routing</h3>
+<ul>
+<li>Preserve the public package line at <code>0.1.12</code>; private-only website,</li>
+<p>  internal, QA, handoff, design-decision, and scratch paths are not included in</p>
+<p>  this release.</p>
+</ul>
 <h2>[0.1.11] — 2026-05-07</h2>
 
 <p>Public router release for sub-agent watchdogs, engineering prompt discipline,</p>
@@ -392,4 +610,4 @@
 <p>  <code>rust-analyzer</code>, <code>gopls</code>, etc.) and wire it via a plugin.</p>
 <li>OAuth-style remote MCP servers are not yet supported; stdio MCP</li>
 <p>  servers are fully functional.</p>
-</ul></div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>A local-first AI coding workbench</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/docs/install" data-astro-cid-sz7xmlte>Docs</a></li> <li data-astro-cid-sz7xmlte><a href="/changelog" data-astro-cid-sz7xmlte>Changelog</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.1.11</li> <li class="pill" data-astro-cid-sz7xmlte>Apache-2.0</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>No telemetry</li> </ul> </div> </footer>  </body></html>
+</ul></div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>A local-first AI coding workbench</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/docs/install" data-astro-cid-sz7xmlte>Docs</a></li> <li data-astro-cid-sz7xmlte><a href="/changelog" data-astro-cid-sz7xmlte>Changelog</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.1.19</li> <li class="pill" data-astro-cid-sz7xmlte>Apache-2.0</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>No telemetry</li> </ul> </div> </footer>  </body></html>
