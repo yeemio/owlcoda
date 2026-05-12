@@ -10,6 +10,20 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.15] - 2026-05-12
+
+Provider onboarding and transcript rendering cleanup.
+
+- Cloud-provider setup now focuses on the supported brand presets: Kimi,
+  DeepSeek, GLM, MiniMax, GPT, Claude, Gemini, Grok, plus explicit
+  OpenAI-compatible and Anthropic-compatible custom channels.
+- Admin saves provider/protocol hints and template headers with created cloud
+  models, so a route that passes dry-run testing keeps the same semantics when
+  used from the CLI.
+- Transcript output now styles status summaries and report-style key/value
+  rows consistently, and bash tool output strips cursor/OSC/progress redraw
+  control sequences while preserving SGR colors.
+
 ## [0.14.14] - 2026-05-12
 
 Admin version-truth hotfix.
