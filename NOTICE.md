@@ -16,11 +16,10 @@ npm install -g owlcoda
 ```
 
 This GitHub repository is a public router for documentation, changelog, issues,
-security contact, and trust-surface links. It is not the current source release.
+security contact, and trust-surface links. It is not the product source tree.
 
 ## Third-Party Notices
 
 The installed npm package may include third-party runtime components and their
 required notices. Users should refer to the NOTICE/LICENSE files bundled in the
 npm package for package-specific third-party attribution.
-

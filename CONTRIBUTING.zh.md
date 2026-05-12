@@ -1,6 +1,6 @@
 # 贡献说明
 
-OwlCoda 当前处于 npm-only 公开试运行阶段。
+OwlCoda 当前公开支持的发行渠道是 npm package。
 
 这个公仓接受：
 
@@ -10,7 +10,7 @@ OwlCoda 当前处于 npm-only 公开试运行阶段。
 - 文档修正
 - 通过 SECURITY.md 私有渠道提交的安全报告
 
-试运行阶段不接受产品实现 Pull Request，因为产品源码真源不在这个仓库。
+这个公开路由不接收产品实现类 Pull Request。
 
 ## 提 Issue 前
 
@@ -27,6 +27,4 @@ OwlCoda 当前处于 npm-only 公开试运行阶段。
 
 ## Pull Request
 
-很小的文档 typo 修正可以接受。产品实现类 PR 会被关闭，或在 triage 后转成
-私有真源里的工作项。
-
+很小的文档 typo 修正可以接受。产品实现类 PR 会在 triage 后关闭。

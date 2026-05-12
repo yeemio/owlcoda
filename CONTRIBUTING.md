@@ -1,6 +1,6 @@
 # Contributing
 
-OwlCoda is currently in an npm-only public trial.
+OwlCoda's supported public distribution channel is the npm package.
 
 This public repository accepts:
 
@@ -10,8 +10,7 @@ This public repository accepts:
 - documentation corrections
 - security reports through the private channel in SECURITY.md
 
-It does not accept implementation pull requests during the trial phase because
-the product source of truth is not this repository.
+It does not accept product implementation pull requests in this public router.
 
 ## Before Filing An Issue
 
@@ -30,5 +29,4 @@ transcripts into public issues.
 ## Pull Requests
 
 Small documentation typo fixes may be accepted. Product implementation PRs will
-be closed or converted into private source-of-truth work after triage.
-
+be closed after triage.

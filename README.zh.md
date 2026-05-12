@@ -25,19 +25,7 @@ owlcoda
 - 安全联系入口
 - 官网和信任表面链接
 
-它**不是**当前产品源码树。试运行阶段，公开发行渠道是 npm 包。
-
-## 源码发布 Gate
-
-OwlCoda 今天已经可以通过 npm 使用。完整源码发布会等项目具备足够真实
-社区规模后再重新评估，让开源变成保护，而不是单向暴露。当前参考门槛是
-大约 **1000+ 真实用户**，或等价的外部采用和支持能力。
-
-技术 gate 也仍然保留：更大的 Owl stack 需要先证明本地学习闭环，也就是
-从本地训练数据积累，到学习/适配，到 runtime truth 回注册，再到 OwlCoda
-重新消费这份 truth。
-
-这不是“永远闭源”的口径，而是当前试运行发布姿态。
+它**不是**当前产品源码树。公开支持的发行渠道是 npm 包。
 
 ## 安装
 
@@ -78,7 +66,6 @@ owlcoda --version
 ## 反馈
 
 公开 bug 和需求请走 [GitHub Issues](https://github.com/yeemio/owlcoda/issues)。
-试运行阶段不接受 Pull Request，因为实现源码真源不在这个仓库。
+这个公开路由接受很小的文档修正；产品实现类 Pull Request 不在这里接收。
 
 安全问题不要提交公开 issue。请看 [SECURITY.md](SECURITY.md)。
-

@@ -30,5 +30,3 @@ Trial npm distribution update.
   their own local runtime or cloud provider in Admin.
 - The public repository is now a router for install docs, issues, changelog,
   security contact, and website links rather than the product source tree.
-- Full source publication will be revisited after real community scale and the
-  local learning-loop gate are proven.
