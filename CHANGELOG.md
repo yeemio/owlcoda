@@ -38,4 +38,3 @@ Trial npm distribution update.
 Earlier `0.1.x` public-source-router releases are intentionally not reproduced
 in this changelog. The current public surface is the npm package and this
 docs/issues router.
-
