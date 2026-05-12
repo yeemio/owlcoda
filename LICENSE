@@ -1,0 +1,18 @@
+Copyright (c) yeemio.
+
+All rights reserved unless a file states otherwise.
+
+This repository is the public router for OwlCoda documentation, changelog,
+issues, security contact, and website links. It does not publish or license the
+current OwlCoda product source code.
+
+You may view, link to, and quote short excerpts from these public materials for
+normal product discussion, review, and support. Reuse, redistribution, or
+derivative works beyond that require prior written permission unless a specific
+file grants broader rights.
+
+This notice applies to the current public-router tree going forward. Historical
+commits, historical tags, npm package artifacts, and third-party components may
+carry their own license terms. See NOTICE.md and the installed npm package for
+third-party notices that apply to distributed runtime artifacts.
+

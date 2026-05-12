@@ -1,0 +1,44 @@
+name: Bug report
+description: Report an OwlCoda issue.
+title: "[bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Do not paste API keys, private config, or confidential transcripts.
+  - type: input
+    id: version
+    attributes:
+      label: OwlCoda version
+      description: Output of `owlcoda --version`.
+      placeholder: "owlcoda 0.14.14"
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / terminal
+      placeholder: "Windows PowerShell, Ubuntu Terminal, macOS Terminal..."
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Share the smallest public reproduction you can.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
