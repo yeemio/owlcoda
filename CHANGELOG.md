@@ -32,9 +32,3 @@ Trial npm distribution update.
   security contact, and website links rather than the product source tree.
 - Full source publication will be revisited after real community scale and the
   local learning-loop gate are proven.
-
-## Earlier Public Source-Router Releases
-
-Earlier `0.1.x` public-source-router releases are intentionally not reproduced
-in this changelog. The current public surface is the npm package and this
-docs/issues router.
