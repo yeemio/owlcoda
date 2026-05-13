@@ -10,6 +10,19 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.17] - 2026-05-13
+
+Progress-signal v2 for native runs.
+
+- Bash and PowerShell artifact writes now count as run progress when they
+  produce in-scope workspace outputs.
+- Scratch artifacts outside the workspace refresh progress without being
+  treated as final deliverables.
+- Explicit write scopes now cover shell-produced workspace artifacts before
+  dispatch, so shell writes follow the same guard as write/edit tools.
+- Repeated failing bash commands now use exact command signatures and are
+  deduplicated at the call level without weakening the broader loop guard.
+
 ## [0.14.16] - 2026-05-13
 
 Endpoint-first Admin onboarding and skill-package support.
