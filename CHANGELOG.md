@@ -10,6 +10,24 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.16] - 2026-05-13
+
+Endpoint-first Admin onboarding and skill-package support.
+
+- Admin now presents cloud providers, custom endpoints, and local runtime
+  presets in the first-run model setup flow, including endpoint health status
+  and localhost discovery for supported local runtimes.
+- `owlcoda init --endpoint` is the canonical CLI setup flag for local
+  OpenAI-compatible endpoints. The older `--router` and `-r` flags remain
+  accepted as legacy aliases.
+- The product UI no longer exposes the old Runs tab; legacy `#/runs` Admin
+  routes fall back to Start.
+- Claude-style `SKILL.md` packages are recognized without `metadata.json`,
+  imported with their `references/`, `scripts/`, and `assets/` directories,
+  and preserved as raw Markdown when run.
+- The npm package now includes curated skills so fresh installs can discover
+  and use them immediately.
+
 ## [0.14.15] - 2026-05-12
 
 Provider onboarding and transcript rendering cleanup.

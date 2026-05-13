@@ -5,11 +5,11 @@
 > **Your models. Your tools. On your machine.**
 
 OwlCoda is a local-first AI coding workbench: a native terminal agent,
-a browser Admin, and a model router you control. It connects to your own
-local runtime or cloud API key. There is no OwlCoda account, no hosted
-control plane, and no telemetry pipeline.
+a browser Admin, and model routing you control. It connects to your own
+local runtime endpoint or cloud API key. There is no OwlCoda account, no
+hosted control plane, and no telemetry pipeline.
 
-**Current public package:** `owlcoda@0.14.15`
+**Current public package:** `owlcoda@0.14.16`
 
 ```bash
 npm install -g owlcoda
@@ -49,6 +49,13 @@ run, open Admin and configure your own local runtime or cloud provider:
 
 ```bash
 owlcoda admin
+```
+
+For a local OpenAI-compatible runtime, you can also initialize the endpoint
+directly:
+
+```bash
+owlcoda init --endpoint http://127.0.0.1:11434/v1
 ```
 
 See [docs/install.md](docs/install.md) for platform notes.

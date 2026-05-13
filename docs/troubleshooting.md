@@ -21,6 +21,12 @@ configure your own local runtime or cloud provider:
 owlcoda admin
 ```
 
+For a local OpenAI-compatible runtime, initialize the endpoint directly:
+
+```bash
+owlcoda init --endpoint http://127.0.0.1:11434/v1
+```
+
 ## `npm install -g owlcoda` fails with `EACCES`
 
 Use a user-local npm prefix:
@@ -35,4 +41,3 @@ npm install -g owlcoda
 
 Do not open a public issue for security vulnerabilities. See
 [SECURITY.md](../SECURITY.md).
-

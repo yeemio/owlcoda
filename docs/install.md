@@ -27,8 +27,16 @@ Start Admin and configure your own provider:
 owlcoda admin
 ```
 
-You can use a local runtime such as Ollama, LM Studio, or vLLM, or a cloud API
-provider that speaks an OpenAI-compatible or supported Messages-style API.
+You can use a local runtime such as Ollama, LM Studio, vLLM, or owlmlx, or a
+cloud API provider that speaks an OpenAI-compatible or supported
+Messages-style API.
+
+For a local OpenAI-compatible runtime, `--endpoint` is the canonical CLI setup
+flag:
+
+```bash
+owlcoda init --endpoint http://127.0.0.1:11434/v1
+```
 
 ## Upgrade
 
@@ -66,4 +74,3 @@ owlcoda
 
 Windows does not need Developer Mode or Git symlink settings for the npm
 package install path.
-

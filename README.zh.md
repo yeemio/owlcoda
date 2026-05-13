@@ -5,10 +5,11 @@
 > **你的模型。你的工具。在你自己的机器上。**
 
 OwlCoda 是一个本地优先的 AI 编码工作台：native 终端 agent、浏览器
-Admin，以及由你掌控的模型路由。它连接你自己的本地 runtime 或云端
-API key。没有 OwlCoda 账号，没有托管控制面，也没有 telemetry 管线。
+Admin，以及由你掌控的模型路由。它连接你自己的本地 runtime endpoint
+或云端 API key。没有 OwlCoda 账号，没有托管控制面，也没有 telemetry
+管线。
 
-**当前公开 npm 包：** `owlcoda@0.14.15`
+**当前公开 npm 包：** `owlcoda@0.14.16`
 
 ```bash
 npm install -g owlcoda
@@ -47,6 +48,12 @@ fresh install 不会默认带维护者模型配置。首次运行时，打开 Ad
 
 ```bash
 owlcoda admin
+```
+
+如果你已经有本地 OpenAI-compatible runtime，也可以直接初始化 endpoint：
+
+```bash
+owlcoda init --endpoint http://127.0.0.1:11434/v1
 ```
 
 平台说明见 [docs/install.md](docs/install.md)。
