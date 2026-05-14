@@ -10,6 +10,19 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.18] - 2026-05-14
+
+Long-task progress guard hardening.
+
+- User-declared external deliverable paths can now be tracked as task outputs
+  when prompts explicitly say to output, save, or write to that path.
+- External reference paths remain separate from authorized write targets, so a
+  cited input file cannot become a writable bash artifact path.
+- Low-confidence no-progress situations now fail open with telemetry instead
+  of hard-stopping uncertain tasks.
+- Gate telemetry records structured production-gate, no-progress, tool-loop,
+  and write-scope-block decisions for later tuning.
+
 ## [0.14.17] - 2026-05-13
 
 Progress-signal v2 for native runs.
