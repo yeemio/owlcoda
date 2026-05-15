@@ -10,6 +10,17 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.22] - 2026-05-15
+
+Runtime maturity and artifact verification release.
+
+- Add benchmark, workspace, route-preview, and verification tools for more
+  observable artifact-oriented tasks.
+- Wire HTML deck verification packs through task verification so generated
+  deliverables can carry structured checks.
+- Tighten Admin model setup, provider probing, runtime truth, and fresh-install
+  version surfaces for npm users.
+
 ## [0.14.21] - 2026-05-15
 
 Long-running stream and handoff contract precision.
