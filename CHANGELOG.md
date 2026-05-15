@@ -10,6 +10,17 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.20] - 2026-05-15
+
+Long-task gate precision.
+
+- Suggested artifact filenames are no longer treated as authorized write
+  scopes unless the prompt also declares a concrete output location.
+- Production nudges avoid naming reference or input files as task write
+  targets.
+- Durable artifact tasks without a structured task plan now get a TaskCreate
+  nudge before broad reading turns into a no-progress hard stop.
+
 ## [0.14.19] - 2026-05-15
 
 Task Execution Mode integration.
