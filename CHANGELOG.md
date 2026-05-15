@@ -10,6 +10,18 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.23] - 2026-05-15
+
+Progress ledger hotfix.
+
+- Count successful structured execution tools as task progress so durable tasks
+  are not stopped while real work is happening.
+- Detect more shell-created artifact evidence, including env-expanded paths,
+  brace-created directories, `mkdir`, `npm --prefix`, and `tee $VAR/file`
+  writes.
+- Keep durable touched paths limited to explicit artifact outputs while still
+  refreshing the progress window for execution activity.
+
 ## [0.14.22] - 2026-05-15
 
 Runtime maturity and artifact verification release.
