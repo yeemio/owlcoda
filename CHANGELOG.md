@@ -10,6 +10,16 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.21] - 2026-05-15
+
+Long-running stream and handoff contract precision.
+
+- Active streaming responses are no longer killed by the local request
+  wall-clock timeout once the response body has started.
+- First-token and idle watchdogs continue to detect genuinely stalled streams.
+- Handoff deliverable filename lists and wrapped Markdown links no longer
+  become cwd write targets by themselves.
+
 ## [0.14.20] - 2026-05-15
 
 Long-task gate precision.
