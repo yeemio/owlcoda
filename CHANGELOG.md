@@ -10,6 +10,17 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.19] - 2026-05-15
+
+Task Execution Mode integration.
+
+- Structured task plans can now guide longer native tasks through explicit
+  creation, step nudges, and deterministic verification checks.
+- Read-only review and chat-shaped work stay out of artifact progress gates,
+  reducing false `task_no_progress` stops.
+- Declared task outputs are checked against the artifact contract so progress,
+  verification, and final deliverables stay aligned.
+
 ## [0.14.18] - 2026-05-14
 
 Long-task progress guard hardening.
