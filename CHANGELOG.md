@@ -10,6 +10,17 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.24] - 2026-05-17
+
+Release validation and benchmark-methodology hardening.
+
+- Add evaluation methodology packets for benchmark runs so release reviewers
+  can compare latency, throughput, and routing behavior with clearer evidence.
+- Stabilize the full-suite slow lane and release-smoke path used before npm
+  publication.
+- Tighten task-execution validation around command risk, tool maturity,
+  release gates, and artifact verification follow-through.
+
 ## [0.14.23] - 2026-05-15
 
 Progress ledger hotfix.
