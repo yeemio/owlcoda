@@ -10,6 +10,16 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.26] - 2026-05-17
+
+Headless and benchmark automation hardening.
+
+- Add an isolated SWE-bench Lite batch runner for local benchmark evaluation.
+- Prevent unattended headless JSON runs from blocking on interactive questions.
+- Flush large JSON run results more reliably before process exit.
+- Allow focused workspace-local test commands for high-confidence code-change
+  tasks under `--auto-approve` while preserving workspace boundaries.
+
 ## [0.14.25] - 2026-05-17
 
 Headless runtime approval fix.
