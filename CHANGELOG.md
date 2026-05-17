@@ -10,6 +10,20 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.28] - 2026-05-18
+
+SWE-bench unattended runner throughput and approval hardening.
+
+- Reuse shared repository mirrors and allow configurable benchmark concurrency
+  so repeated SWE-bench runs spend less time re-cloning repositories.
+- Record per-instance duration and post-patch timeout fields so slow runs are
+  measured directly.
+- Permit bounded workspace-local Python probes and test commands under
+  unattended headless approval while still rejecting installs, network access,
+  deletion, and shell writes.
+- Preserve non-empty benchmark patches after a stable post-patch timeout
+  instead of waiting indefinitely for final model narration.
+
 ## [0.14.27] - 2026-05-17
 
 SWE-bench unattended scoring hardening.
