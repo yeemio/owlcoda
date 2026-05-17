@@ -10,6 +10,18 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.27] - 2026-05-17
+
+SWE-bench unattended scoring hardening.
+
+- Treat task-guard stops as non-successful headless exits so empty benchmark
+  patches are not recorded as successful predictions.
+- Declare the active benchmark checkout as the bounded edit workspace for
+  unattended SWE-bench runs.
+- Allow workspace-local Django `tests/runtests.py`, pytest, unittest, and
+  read-only diff checks under bounded auto-approval while still rejecting
+  installs, network commands, shell writes, and out-of-workspace execution.
+
 ## [0.14.26] - 2026-05-17
 
 Headless and benchmark automation hardening.
