@@ -10,6 +10,16 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.25] - 2026-05-17
+
+Headless runtime approval fix.
+
+- Allow high-confidence workspace-scoped code-change tasks to use structured
+  edit/write tools under `--auto-approve`.
+- Keep structured mutations inside the active workspace boundary before they
+  can run unattended.
+- Preserve explicit-path approval behavior for artifact-scoped tasks.
+
 ## [0.14.24] - 2026-05-17
 
 Release validation and benchmark-methodology hardening.
