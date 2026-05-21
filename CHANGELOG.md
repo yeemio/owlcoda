@@ -10,6 +10,15 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.29] - 2026-05-21
+
+Benchmark runner hygiene patch.
+
+- Separate benchmark generation failures from evaluation prediction artifacts.
+- Keep failed generation attempts out of prediction output files.
+- Reduce local daemon port collisions during unattended benchmark batches.
+- Steer unattended benchmark prompts toward bounded, early code edits.
+
 ## [0.14.28] - 2026-05-18
 
 SWE-bench unattended runner throughput and approval hardening.
