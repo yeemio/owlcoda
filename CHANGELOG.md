@@ -10,6 +10,15 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.30] - 2026-05-21
+
+SWE-bench prediction hygiene hotfix.
+
+- Keep empty benchmark patches in runner records and summaries without writing
+  them into evaluation prediction files.
+- Fail empty task-progress patches in sanity gates before downstream harness
+  input is produced.
+
 ## [0.14.29] - 2026-05-21
 
 Benchmark runner hygiene patch.
