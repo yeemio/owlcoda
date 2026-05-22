@@ -10,6 +10,18 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.31] - 2026-05-23
+
+SWE-bench task-progress recovery hotfix.
+
+- Retry one bounded recovery pass when unattended benchmark generation stops
+  with task-progress exhaustion and a zero-byte patch.
+- Preserve inspected file context across macOS `/private/tmp` benchmark
+  workspaces so the recovery pass can edit instead of repeating read-only
+  exploration.
+- Report task-progress recovery and timeout-empty-stdout outcomes separately in
+  benchmark summaries.
+
 ## [0.14.30] - 2026-05-21
 
 SWE-bench prediction hygiene hotfix.
