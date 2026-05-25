@@ -10,6 +10,17 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.32] - 2026-05-25
+
+Gate V2 action-permission preview.
+
+- Add an opt-in `OWLCODA_GATE_V2=1` gate path that records tool proposals,
+  permission decisions, execution starts, settlements, and post-grant evidence.
+- Classify tool risk more explicitly across read-only, internal-state, mutating,
+  destructive, and external-effect tool calls.
+- Keep the default gate behavior unchanged while the new path is tested behind
+  the environment flag.
+
 ## [0.14.31] - 2026-05-23
 
 SWE-bench task-progress recovery hotfix.
