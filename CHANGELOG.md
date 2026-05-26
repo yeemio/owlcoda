@@ -10,6 +10,19 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.33] - 2026-05-26
+
+Headless runtime policy and diagnostics hardening.
+
+- Preserve raw non-JSON headless stdout without duplicating final text or adding
+  terminal UI chrome in piped runs.
+- Add explicit `--allow-tool` and `--deny-tool` filters for unattended runs;
+  these narrow the approval policy without bypassing bash risk checks.
+- Add headless approval-policy context and structured hard-stop diagnostics so
+  unattended failures are easier to inspect.
+- Mark Kimi Code as sustained-work capable in model recommendation and display
+  surfaces.
+
 ## [0.14.32] - 2026-05-25
 
 Gate V2 action-permission preview.
