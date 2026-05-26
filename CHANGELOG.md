@@ -10,6 +10,16 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.34] - 2026-05-26
+
+Streaming transport-interruption hotfix.
+
+- Report streaming response body socket closures after partial output as
+  retryable `stream_interrupted` diagnostics with `partialOutputSeen: true`.
+- Keep usable partial streaming output from being reclassified as a
+  non-retryable unknown fetch failure when the provider transport closes
+  mid-stream.
+
 ## [0.14.33] - 2026-05-26
 
 Headless runtime policy and diagnostics hardening.
