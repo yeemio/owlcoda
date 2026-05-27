@@ -9,7 +9,7 @@ a browser Admin, and model routing you control. It connects to your own
 local runtime endpoint or cloud API key. There is no OwlCoda account, no
 hosted control plane, and no telemetry pipeline.
 
-**Current public package:** `owlcoda@0.14.34`
+**Current public package:** `owlcoda@0.14.35`
 
 ```bash
 npm install -g owlcoda

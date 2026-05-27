@@ -10,6 +10,19 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.35] - 2026-05-27
+
+Write-target provenance gate flagged release.
+
+- Add opt-in write-target provenance checks for native writes when
+  `OWLCODA_GATE_PROVENANCE=1`; default behavior remains unchanged.
+- Add release smoke coverage and telemetry helpers for reviewing provenance
+  admit/block events during shadow dogfood.
+- Document the flagged provenance workflow and settings rule shape for users
+  testing the preview.
+- Suppress task nudges while OwlCoda is awaiting an explicit user decision
+  during permission review.
+
 ## [0.14.34] - 2026-05-26
 
 Streaming transport-interruption hotfix.
