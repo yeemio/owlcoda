@@ -10,6 +10,14 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.36] - 2026-05-27
+
+Post-0.14.35 UX/noise patch.
+
+- Route model-internal nudges to footer-only display so runtime guidance no
+  longer pollutes transcript or the main user-visible message stream.
+- No behavioral gate expansion is included in this patch.
+
 ## [0.14.35] - 2026-05-27
 
 Write-target provenance gate flagged release.
