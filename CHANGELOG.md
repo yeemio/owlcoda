@@ -10,6 +10,22 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.40] - 2026-05-28
+
+Daemon version-drift guard, sub-agent runtime-failure isolation completion,
+and compact validation-error rendering patch.
+
+- Startup now blocks when an upgraded CLI is talking to an older resident
+  daemon, preventing stale-daemon behavior from looking like a random runtime
+  bug.
+- If startup reports daemon version drift after upgrade, run
+  `owlcoda stop --force && owlcoda`; the emergency bypass is
+  `OWLCODA_ALLOW_VERSION_DRIFT=1`.
+- The sub-agent runtime-failure path now preserves the isolation contract
+  instead of escalating isolated sub-agent failures into the parent loop as
+  terminal failures.
+- Fast-validation tool errors now render as compact one-line diagnostics.
+
 ## [0.14.39] - 2026-05-28
 
 Sub-agent failure contract hardening and observability patch.
