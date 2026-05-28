@@ -10,6 +10,18 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.38] - 2026-05-28
+
+Sub-agent isolation and provider retry patch.
+
+- Isolated sub-agent failures no longer terminate the parent loop, and
+  isolated-failure metadata is normalized across catch paths.
+- HTTP 400 provider errors with rate-limit-shaped details retry through the
+  normal recovery path.
+- Sub-agent execution is throttled in-process by default to reduce bursty
+  provider pressure; this does not claim multi-process quota enforcement.
+- Successful DeliveryAudit output stays footer-only.
+
 ## [0.14.37] - 2026-05-28
 
 Sub-agent failure isolation hotfix.
