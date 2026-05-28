@@ -10,6 +10,14 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.37] - 2026-05-28
+
+Sub-agent failure isolation hotfix.
+
+- Fix isolated sub-agent failures so they no longer terminate the parent
+  conversation loop as `terminal_tool_failure`.
+- True terminal tool failures keep their existing terminal path unchanged.
+
 ## [0.14.36] - 2026-05-27
 
 Post-0.14.35 UX/noise patch.
