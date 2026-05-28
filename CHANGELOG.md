@@ -10,6 +10,20 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.42] - 2026-05-28
+
+Chat-completions routing, WebFetch fallback recovery, StructuredOutput
+validation, and TUI rendering patch.
+
+- `/v1/chat/completions` now preserves per-model routing so cloud and local
+  model choices resolve through the intended backend.
+- WebFetch can recover eligible 404 responses by using a site `llms.txt`
+  fallback when available.
+- StructuredOutput validates schema payloads before execution so malformed
+  schemas fail with a compact validation error.
+- Tool-start summaries render without raw JSON, and wrapped tool output keeps
+  its indentation.
+
 ## [0.14.41] - 2026-05-28
 
 Agent watchdog timeout handling, DuckDuckGo Lite parsing, and sub-agent
