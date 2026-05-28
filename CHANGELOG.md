@@ -10,6 +10,18 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.41] - 2026-05-28
+
+Agent watchdog timeout handling, DuckDuckGo Lite parsing, and sub-agent
+telemetry path-sample patch.
+
+- Cooperative sub-agent watchdog exits now use the timeout classification path
+  instead of falling through to a generic or no-deliverable result.
+- WebSearch now parses the current DuckDuckGo Lite result markup, including
+  single-quoted class attributes and redirect result URLs.
+- `agent_invocation` telemetry now includes touched-path and expected-artifact
+  path samples for file-collision investigation.
+
 ## [0.14.40] - 2026-05-28
 
 Daemon version-drift guard, sub-agent runtime-failure isolation completion,
