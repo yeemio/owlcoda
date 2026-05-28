@@ -10,6 +10,19 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.39] - 2026-05-28
+
+Sub-agent failure contract hardening and observability patch.
+
+- Loop guards no longer count isolated sub-agent failures as repeated parent
+  failures of the same class.
+- Isolated sub-agent failure output is structured for the parent model, with
+  routing guidance it can read and act on.
+- Add `agent_invocation` JSONL telemetry for sub-agent runs, including
+  inferred-completion classification.
+- This patch does not claim cross-process quota enforcement or a new
+  orchestrator layer.
+
 ## [0.14.38] - 2026-05-28
 
 Sub-agent isolation and provider retry patch.
