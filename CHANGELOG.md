@@ -10,6 +10,16 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.45] - 2026-05-29
+
+Conversation-prefix prompt caching and CI gate speedup.
+
+- Anthropic-compatible requests now mark the latest cacheable conversation
+  block with an ephemeral cache breakpoint, improving prompt-cache reuse across
+  multi-turn sessions.
+- The main self-hosted CI gate no longer restores an oversized npm cache before
+  install, keeping release verification inside the normal time budget.
+
 ## [0.14.44] - 2026-05-29
 
 Opt-in adaptive sub-agent concurrency.
