@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OwlCoda 架构看板 · 全景仪表盘</title>
+<style>
+  :root{
+    --bg:#0c0f16; --panel:#141925; --panel2:#1b2233; --line:#28324a;
+    --ink:#e8edf6; --dim:#93a0b8; --faint:#5e6b85;
+    --owl:#e8a04f;            /* 猫头鹰暖橙 */
+    --owl2:#f4c87a;
+    --good:#3fb98f; --warn:#e8b14f; --bad:#e8675f; --info:#5aa9e6;
+    --shadow:0 10px 40px rgba(0,0,0,.45);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:
+     radial-gradient(1200px 600px at 80% -10%, rgba(232,160,79,.10), transparent 60%),
+     radial-gradient(900px 500px at -10% 110%, rgba(90,169,230,.08), transparent 60%),
+     var(--bg);
+     color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
+     -webkit-font-smoothing:antialiased;line-height:1.5}
+  .wrap{max-width:1180px;margin:0 auto;padding:28px 22px 60px}
+  .sub{color:var(--dim);font-size:13px}
+  .faint{color:var(--faint)}
+  h1{font-size:26px;margin:0 0 4px;letter-spacing:.3px}
+  h2{font-size:15px;letter-spacing:.5px;color:var(--owl2);margin:0 0 14px;text-transform:uppercase;font-weight:700}
+  .card{background:linear-gradient(180deg,var(--panel),#11151f);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow)}
+  .grid{display:grid;gap:16px}
+  /* ── hero ── */
+  .hero{grid-template-columns:1.5fr 1fr;align-items:stretch;margin-bottom:16px}
+  .hero .left{display:flex;flex-direction:column;justify-content:center}
+  .badge{display:inline-block;font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;border:1px solid}
+  .b-prev{color:var(--owl);border-color:rgba(232,160,79,.4);background:rgba(232,160,79,.08)}
+  .tagline{font-size:15px;color:var(--dim);margin-top:10px;max-width:46ch}
+  .gauge-wrap{display:flex;align-items:center;gap:18px;justify-content:center}
+  .gauge{position:relative;width:170px;height:170px;flex:none}
+  .gauge .score{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .gauge .score b{font-size:40px;line-height:1}
+  .gauge .score span{font-size:12px;color:var(--dim);margin-top:2px}
+  .trend{flex:1}
+  .trend .lbl{font-size:12px;color:var(--dim);margin-bottom:6px}
+  .kpis{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+  .kpi{flex:1;min-width:90px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+  .kpi b{display:block;font-size:22px}
+  .kpi small{color:var(--dim);font-size:11px}
+  /* ── lanes ── */
+  .lanes{grid-template-columns:repeat(3,1fr)}
+  .lane{position:relative;overflow:hidden}
+  .lane .num{font-size:13px;color:var(--faint);font-weight:700}
+  .lane h3{margin:2px 0 8px;font-size:17px}
+  .lane p{margin:0;color:var(--dim);font-size:13px;min-height:54px}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;margin-top:12px;padding:4px 10px;border-radius:999px}
+  .p-go{color:var(--good);background:rgba(63,185,143,.12)}
+  .p-doing{color:var(--warn);background:rgba(232,177,79,.12)}
+  .dot{width:8px;height:8px;border-radius:50%}
+  .d-go{background:var(--good)} .d-doing{background:var(--warn)} .d-bad{background:var(--bad)}
+  /* ── health bars ── */
+  .bars{display:flex;flex-direction:column;gap:13px}
+  .bar .row{display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px}
+  .bar .row .v{color:var(--dim);font-variant-numeric:tabular-nums}
+  .track{height:9px;background:#0c1019;border:1px solid var(--line);border-radius:999px;overflow:hidden}
+  .fill{height:100%;border-radius:999px}
+  .two{grid-template-columns:1.1fr .9fr}
+  /* ── adr columns ── */
+  .adr{grid-template-columns:repeat(3,1fr)}
+  .adr .col h4{margin:0 0 10px;font-size:13px;display:flex;align-items:center;gap:8px;color:var(--dim)}
+  .item{background:var(--panel2);border:1px solid var(--line);border-left-width:3px;border-radius:10px;padding:9px 11px;margin-bottom:8px;font-size:13px}
+  .item b{display:block;font-size:13px;margin-bottom:1px}
+  .item small{color:var(--dim);font-size:11.5px}
+  .lg{border-left-color:var(--good)} .ly{border-left-color:var(--warn)} .lr{border-left-color:var(--bad)}
+  /* ── swe ── */
+  .swe{grid-template-columns:auto 1fr;gap:22px;align-items:center}
+  .scorebig{text-align:center;flex:none}
+  .scorebig b{font-size:48px;color:var(--owl2);line-height:1}
+  .scorebig small{display:block;color:var(--dim);font-size:12px}
+  .swe ul{margin:0;padding-left:18px;color:var(--dim);font-size:13px}
+  .swe ul li{margin:4px 0}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin-top:6px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  footer{margin-top:26px;color:var(--faint);font-size:12px;text-align:center;line-height:1.8}
+  .secthead{display:flex;align-items:baseline;justify-content:space-between;margin:30px 2px 14px}
+  .secthead .sub{font-size:12px}
+  @media(max-width:860px){
+    .hero,.lanes,.two,.adr,.swe{grid-template-columns:1fr}
+    .gauge-wrap{flex-direction:column}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- HERO -->
+  <div class="grid hero">
+    <div class="card left">
+      <div>
+        <span class="badge b-prev">● 开发者预览 (Developer Preview)</span>
+      </div>
+      <h1 style="margin-top:14px">🦉 OwlCoda</h1>
+      <div class="tagline">装在你自己电脑里的 AI 编程助手。像 Claude Code，但<b style="color:var(--ink)">模型、工具、数据全在本地</b>——不登录、不上云。</div>
+      <div class="kpis">
+        <div class="kpi"><b>18</b><small>13 天内发版次数</small></div>
+        <div class="kpi"><b style="color:var(--owl2)">0.14.43</b><small>当前 npm 版本</small></div>
+        <div class="kpi"><b>19</b><small>架构决策 (ADR)</small></div>
+        <div class="kpi"><b style="color:var(--good)">+0.5</b><small>13 天健康度增长</small></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="gauge-wrap">
+        <div class="gauge">
+          <svg width="170" height="170" viewBox="0 0 170 170">
+            <circle cx="85" cy="85" r="72" fill="none" stroke="#0c1019" stroke-width="14"/>
+            <circle cx="85" cy="85" r="72" fill="none" stroke="url(#g)" stroke-width="14"
+              stroke-linecap="round" stroke-dasharray="452.4"
+              stroke-dashoffset="144.8" transform="rotate(-90 85 85)"/>
+            <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#e8a04f"/><stop offset="1" stop-color="#3fb98f"/>
+            </linearGradient></defs>
+          </svg>
+          <div class="score"><b>3.4</b><span>满分 5 · 等级 B</span></div>
+        </div>
+        <div class="trend">
+          <div class="lbl">健康度走势（4 次评估）</div>
+          <svg width="100%" height="92" viewBox="0 0 100 100" preserveAspectRatio="none">
+            <polyline points="10,62 37,46 63,46 90,21" fill="none" stroke="var(--owl)" stroke-width="2.5" vector-effect="non-scaling-stroke"/>
+            <circle cx="10" cy="62" r="3" fill="var(--faint)"/>
+            <circle cx="37" cy="46" r="3" fill="var(--dim)"/>
+            <circle cx="63" cy="46" r="3" fill="var(--dim)"/>
+            <circle cx="90" cy="21" r="3.5" fill="var(--owl2)"/>
+          </svg>
+          <div class="legend" style="margin-top:2px">
+            <span class="faint">2.9 起步</span>
+            <span style="color:var(--owl2);margin-left:auto">→ 3.4 现在</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 三条主线 -->
+  <div class="secthead"><h2 style="margin:0">现在三条主线在跑</h2><span class="sub">这两周精力花在哪</span></div>
+  <div class="grid lanes">
+    <div class="card lane">
+      <div class="num">① 考试</div>
+      <h3>跑行业标准考卷</h3>
+      <p>SWE-bench：让 AI 真去改开源项目的 bug，官方判卷。证明"能改代码"不是吹的。</p>
+      <span class="pill p-doing"><span class="dot d-doing"></span>进行中 · 考了 62 分</span>
+    </div>
+    <div class="card lane">
+      <div class="num">② 防打架</div>
+      <h3>多个 AI 别互相杀</h3>
+      <p>出过事故：5 个 AI 并行干活，1 个卡住把另外 4 个连坐杀掉。现在各干各的，互相隔离。</p>
+      <span class="pill p-go"><span class="dot d-go"></span>已修复</span>
+    </div>
+    <div class="card lane">
+      <div class="num">③ 补真功能</div>
+      <h3>把"空壳工具"做实</h3>
+      <p>有些工具只是摆设。代码跳转 (LSP) 以前是假的、现在真能用了。还剩 5 个空壳要清。</p>
+      <span class="pill p-go"><span class="dot d-go"></span>大部分已修</span>
+    </div>
+  </div>
+
+  <!-- 体检 + SWE -->
+  <div class="secthead"><h2 style="margin:0">体检表 & 考试成绩</h2><span class="sub">六个维度打分 · 行业考卷结果</span></div>
+  <div class="grid two">
+    <div class="card">
+      <h2>OwlCoda 六项体检</h2>
+      <div class="bars">
+        <div class="bar"><div class="row"><span>🔒 信任（数据安全）</span><span class="v">3.7 · 最强</span></div><div class="track"><div class="fill" style="width:74%;background:var(--good)"></div></div></div>
+        <div class="bar"><div class="row"><span>🎯 产品定位</span><span class="v">3.5</span></div><div class="track"><div class="fill" style="width:70%;background:var(--good)"></div></div></div>
+        <div class="bar"><div class="row"><span>⚙️ 跑得对不对</span><span class="v">3.5</span></div><div class="track"><div class="fill" style="width:70%;background:var(--warn)"></div></div></div>
+        <div class="bar"><div class="row"><span>🔌 生态（模型/工具）</span><span class="v">3.0</span></div><div class="track"><div class="fill" style="width:60%;background:var(--warn)"></div></div></div>
+        <div class="bar"><div class="row"><span>🛠️ 好不好维护</span><span class="v">2.3 · 短板</span></div><div class="track"><div class="fill" style="width:46%;background:var(--bad)"></div></div></div>
+        <div class="bar"><div class="row"><span>💰 花钱（省不省 token）</span><span class="v">2.0 · 最弱</span></div><div class="track"><div class="fill" style="width:40%;background:var(--bad)"></div></div></div>
+      </div>
+      <div class="legend">
+        <span><span class="dot d-go"></span>好 (3.5+)</span>
+        <span><span class="dot d-doing"></span>中 (3.0)</span>
+        <span><span class="dot d-bad"></span>待补 (&lt;2.5)</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>SWE-bench 考试</h2>
+      <div class="grid swe">
+        <div class="scorebig"><b>62%</b><small>非空答卷得分<br>(77 / 124 题)</small></div>
+        <ul>
+          <li>300 题里有效作答 124 题</li>
+          <li>其余多为网络/额度故障，<b style="color:var(--ink)">不算分</b></li>
+          <li>顶尖闭源模型 ~90%，<b style="color:var(--ink)">差距明确</b></li>
+          <li>意义：已进考场，有了可对比的基线</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADR -->
+  <div class="secthead"><h2 style="margin:0">我在盯的大决策</h2><span class="sub">19 项 · 挑重点说人话</span></div>
+  <div class="grid adr">
+    <div class="card col">
+      <h4><span class="dot d-go"></span>已完成</h4>
+      <div class="item lg"><b>自动修复</b><small>活没过检查就自动重做</small></div>
+      <div class="item lg"><b>发版必检查</b><small>发布前强制自检，不准跳过</small></div>
+      <div class="item lg"><b>AI 隔离干活</b><small>并行不打架，故障不连坐</small></div>
+      <div class="item lg"><b>LSP 接真功能</b><small>代码跳转从空壳变真</small></div>
+    </div>
+    <div class="card col">
+      <h4><span class="dot d-doing"></span>试用中 / 待转正</h4>
+      <div class="item ly"><b>权限闸门</b><small>删库等危险操作默认拦住</small></div>
+      <div class="item ly"><b>写入溯源</b><small>AI 只能写它该写的文件</small></div>
+      <div class="item ly"><b>自适应并发</b><small>AI 群干活自动调速，0.14.44 待发</small></div>
+    </div>
+    <div class="card col">
+      <h4><span class="dot d-bad"></span>下一步重点</h4>
+      <div class="item lr"><b>自动化体检 ⭐</b><small>12 项检查进 CI（升 Beta 的关键）</small></div>
+      <div class="item lr"><b>省钱缓存 ⭐</b><small>接 prompt 缓存，少烧 token</small></div>
+      <div class="item lr"><b>跨进程协调</b><small>多窗口共用一个额度池</small></div>
+    </div>
+  </div>
+
+  <footer>
+    数据来源：<code>docs/architect/KANBAN.md</code>（R8 · 2026-05-29）与 <code>docs/ARCHITECT-PLAN-2026-05-16.md</code><br>
+    口径：健康度=6 维加权均分 · SWE-bench=清洗污染后的非空答卷得分 · 仅供架构跟踪，非对外宣传数字<br>
+    一句话：方向稳、安全是王牌；下一道坎是「自动化测试」+「省钱缓存」，过了就从 预览 升 Beta。
+  </footer>
+
+</div>
+</body>
+</html>
