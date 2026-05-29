@@ -99,10 +99,10 @@
       <h1 style="margin-top:14px">🦉 OwlCoda</h1>
       <div class="tagline">装在你自己电脑里的 AI 编程助手。像 Claude Code，但<b style="color:var(--ink)">模型、工具、数据全在本地</b>——不登录、不上云。</div>
       <div class="kpis">
-        <div class="kpi"><b>18</b><small>13 天内发版次数</small></div>
-        <div class="kpi"><b style="color:var(--owl2)">0.14.43</b><small>当前 npm 版本</small></div>
+        <div class="kpi"><b>20</b><small>13 天内发版次数</small></div>
+        <div class="kpi"><b style="color:var(--owl2)">0.14.45</b><small>当前 npm 版本</small></div>
         <div class="kpi"><b>19</b><small>架构决策 (ADR)</small></div>
-        <div class="kpi"><b style="color:var(--good)">+0.5</b><small>13 天健康度增长</small></div>
+        <div class="kpi"><b style="color:var(--good)">+0.6</b><small>13 天健康度增长</small></div>
       </div>
     </div>
 
@@ -113,21 +113,22 @@
             <circle cx="85" cy="85" r="72" fill="none" stroke="#0c1019" stroke-width="14"/>
             <circle cx="85" cy="85" r="72" fill="none" stroke="url(#g)" stroke-width="14"
               stroke-linecap="round" stroke-dasharray="452.4"
-              stroke-dashoffset="144.8" transform="rotate(-90 85 85)"/>
+              stroke-dashoffset="135.7" transform="rotate(-90 85 85)"/>
             <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
               <stop offset="0" stop-color="#e8a04f"/><stop offset="1" stop-color="#3fb98f"/>
             </linearGradient></defs>
           </svg>
-          <div class="score"><b>3.4</b><span>满分 5 · 等级 B</span></div>
+          <div class="score"><b>3.5</b><span>满分 5 · 等级 B</span></div>
         </div>
         <div class="trend">
           <div class="lbl">健康度走势（4 次评估）</div>
           <svg width="100%" height="92" viewBox="0 0 100 100" preserveAspectRatio="none">
-            <polyline points="10,62 37,46 63,46 90,21" fill="none" stroke="var(--owl)" stroke-width="2.5" vector-effect="non-scaling-stroke"/>
+            <polyline points="10,62 30,46 50,46 70,21 90,13" fill="none" stroke="var(--owl)" stroke-width="2.5" vector-effect="non-scaling-stroke"/>
             <circle cx="10" cy="62" r="3" fill="var(--faint)"/>
-            <circle cx="37" cy="46" r="3" fill="var(--dim)"/>
-            <circle cx="63" cy="46" r="3" fill="var(--dim)"/>
-            <circle cx="90" cy="21" r="3.5" fill="var(--owl2)"/>
+            <circle cx="30" cy="46" r="3" fill="var(--dim)"/>
+            <circle cx="50" cy="46" r="3" fill="var(--dim)"/>
+            <circle cx="70" cy="21" r="3" fill="var(--dim)"/>
+            <circle cx="90" cy="13" r="3.5" fill="var(--owl2)"/>
           </svg>
           <div class="legend" style="margin-top:2px">
             <span class="faint">2.9 起步</span>
@@ -171,13 +172,14 @@
         <div class="bar"><div class="row"><span>🎯 产品定位</span><span class="v">3.5</span></div><div class="track"><div class="fill" style="width:70%;background:var(--good)"></div></div></div>
         <div class="bar"><div class="row"><span>⚙️ 跑得对不对</span><span class="v">3.5</span></div><div class="track"><div class="fill" style="width:70%;background:var(--warn)"></div></div></div>
         <div class="bar"><div class="row"><span>🔌 生态（模型/工具）</span><span class="v">3.0</span></div><div class="track"><div class="fill" style="width:60%;background:var(--warn)"></div></div></div>
-        <div class="bar"><div class="row"><span>🛠️ 好不好维护</span><span class="v">2.3 · 短板</span></div><div class="track"><div class="fill" style="width:46%;background:var(--bad)"></div></div></div>
-        <div class="bar"><div class="row"><span>💰 花钱（省不省 token）</span><span class="v">2.0 · 最弱</span></div><div class="track"><div class="fill" style="width:40%;background:var(--bad)"></div></div></div>
+        <div class="bar"><div class="row"><span>🛠️ 好不好维护 <small style="color:var(--good)">↑CI闸</small></span><span class="v">2.3 → 3.2</span></div><div class="track"><div class="fill" style="width:64%;background:var(--warn)"></div></div></div>
+        <div class="bar"><div class="row"><span>💰 花钱（省不省 token）<small style="color:var(--good)">↑缓存</small></span><span class="v">2.0 → 3.0</span></div><div class="track"><div class="fill" style="width:60%;background:var(--warn)"></div></div></div>
       </div>
       <div class="legend">
         <span><span class="dot d-go"></span>好 (3.5+)</span>
         <span><span class="dot d-doing"></span>中 (3.0)</span>
         <span><span class="dot d-bad"></span>待补 (&lt;2.5)</span>
+        <span style="color:var(--good)">本轮两红区都脱红 ↑</span>
       </div>
     </div>
 
@@ -204,25 +206,38 @@
       <div class="item lg"><b>发版必检查</b><small>发布前强制自检，不准跳过</small></div>
       <div class="item lg"><b>AI 隔离干活</b><small>并行不打架，故障不连坐</small></div>
       <div class="item lg"><b>LSP 接真功能</b><small>代码跳转从空壳变真</small></div>
+      <div class="item lg"><b>自动化体检 ✨新</b><small>CI 自托管常驻，发版前全套体检</small></div>
+      <div class="item lg"><b>省钱缓存 ✨新</b><small>对话前缀缓存，重复内容不重发</small></div>
+      <div class="item lg"><b>自适应并发 ✨新</b><small>AI 群干活自动调速，已发 0.14.44</small></div>
     </div>
     <div class="card col">
       <h4><span class="dot d-doing"></span>试用中 / 待转正</h4>
       <div class="item ly"><b>权限闸门</b><small>删库等危险操作默认拦住</small></div>
       <div class="item ly"><b>写入溯源</b><small>AI 只能写它该写的文件</small></div>
-      <div class="item ly"><b>自适应并发</b><small>AI 群干活自动调速，0.14.44 待发</small></div>
+      <div class="item ly"><b>清剩余空壳工具</b><small>5 个摆设工具待删/改</small></div>
     </div>
     <div class="card col">
       <h4><span class="dot d-bad"></span>下一步重点</h4>
-      <div class="item lr"><b>自动化体检 ⭐</b><small>12 项检查进 CI（升 Beta 的关键）</small></div>
-      <div class="item lr"><b>省钱缓存 ⭐</b><small>接 prompt 缓存，少烧 token</small></div>
-      <div class="item lr"><b>跨进程协调</b><small>多窗口共用一个额度池</small></div>
+      <div class="item lr"><b>跨进程协调 ⭐</b><small>多窗口共用一个额度池（本轮起点）</small></div>
+      <div class="item lr"><b>体检项补全</b><small>12 项还差 4 项（缓存命中率等）</small></div>
+      <div class="item lr"><b>SWE 干净跑满 300</b><small>排除网络故障，拿可比基线</small></div>
     </div>
   </div>
 
+  <div class="card" style="margin-top:16px;border-color:rgba(232,177,79,.35)">
+    <h2 style="color:var(--owl2)">⚠ 一条容易误读的设计行为（不是 bug）</h2>
+    <p style="margin:0;color:var(--dim);font-size:13.5px">
+      <b style="color:var(--ink)">省钱缓存只在 Anthropic 协议后端生效</b>（云端 Anthropic，或本地配 <code>anthropic_messages</code> 的 runtime）。
+      如果你的模型走的是 <b style="color:var(--ink)">OpenAI 协议</b>（翻译路径），缓存标记会在翻译时被剥掉，<code>/cost</code> 里的 <b>Cache read 恒为 0</b> ——
+      这是设计行为，<b style="color:var(--ink)">不是回归</b>。验证省钱效果前先确认后端协议。<br>
+      <span class="faint">看法：第 1 轮是 Cache write（写缓存），第 2 轮起 Cache read 才开始爬；相邻两轮要在 5 分钟内（缓存到期前）。</span>
+    </p>
+  </div>
+
   <footer>
-    数据来源：<code>docs/architect/KANBAN.md</code>（R8 · 2026-05-29）与 <code>docs/ARCHITECT-PLAN-2026-05-16.md</code><br>
+    数据来源：<code>docs/architect/KANBAN.md</code>（R9 · 2026-05-29 · npm 0.14.45 · build b41887f）与 <code>docs/ARCHITECT-PLAN-2026-05-16.md</code><br>
     口径：健康度=6 维加权均分 · SWE-bench=清洗污染后的非空答卷得分 · 仅供架构跟踪，非对外宣传数字<br>
-    一句话：方向稳、安全是王牌；下一道坎是「自动化测试」+「省钱缓存」，过了就从 预览 升 Beta。
+    本轮（R9）：两红区都动过 → 维护 2.3→3.2（CI 体检闸）、花钱 2.0→3.0（对话前缀缓存）。下一块：跨进程额度协调。
   </footer>
 
 </div>
