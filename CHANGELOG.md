@@ -10,6 +10,17 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.44] - 2026-05-29
+
+Opt-in adaptive sub-agent concurrency.
+
+- Sub-agent fan-out can now adapt its concurrency to backend throttling. When
+  enabled with `OWLCODA_AGENT_ADAPTIVE_CONCURRENCY=1`, the configured
+  `OWLCODA_AGENT_MAX_CONCURRENCY` becomes a ceiling while OwlCoda slow-starts
+  the active limit and backs off on rate-limit pushback.
+- Default behavior is unchanged when the flag is unset. Cross-process daemon
+  coordination remains out of scope for this patch.
+
 ## [0.14.43] - 2026-05-29
 
 Language Server Protocol tool activation and context-window display patch.
