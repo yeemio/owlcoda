@@ -10,6 +10,19 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.43] - 2026-05-29
+
+Language Server Protocol tool activation and context-window display patch.
+
+- The LSP tool is now functional: it auto-starts a language server
+  (TypeScript/JavaScript via `typescript-language-server`) per project and
+  supports diagnostics, hover, definition, references, symbols, and
+  completion. Previously the tool was registered but always reported
+  unavailable. Unsupported file types and missing servers report clearly.
+- Context-window sizes now display consistently across the status bar and
+  model labels. Large windows render as e.g. "2M" instead of the
+  misread-prone "2097.2k".
+
 ## [0.14.42] - 2026-05-28
 
 Chat-completions routing, WebFetch fallback recovery, StructuredOutput

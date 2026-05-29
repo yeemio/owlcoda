@@ -9,7 +9,7 @@ Admin，以及由你掌控的模型路由。它连接你自己的本地 runtime 
 或云端 API key。没有 OwlCoda 账号，没有托管控制面，也没有 telemetry
 管线。
 
-**当前公开 npm 包：** `owlcoda@0.14.42`
+**当前公开 npm 包：** `owlcoda@0.14.43`
 
 ```bash
 npm install -g owlcoda
