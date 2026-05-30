@@ -10,6 +10,23 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.47] - 2026-05-30
+
+Project Map runtime control plane and Permission Modes default-on cutover.
+
+- `/mode` is now available by default. OwlCoda still starts in `normal` mode;
+  choose `/mode auto` explicitly for low-risk auto approvals, or set
+  `OWLCODA_MODES=0` to disable the mode surface.
+- Project Map is now default-on with `OWLCODA_PROJECT_MAP=0` as the rollback
+  override. It provides a bounded project snapshot, `/project-map`, headless
+  JSON evidence, and task verification profile hints.
+- Project Map snapshot failures are isolated so a scan failure does not break
+  the conversation loop.
+- Project Map freshness uses full-content hashes while keeping bounded
+  evidence metadata.
+- Project Map does not grant write permission; existing provenance,
+  write-scope, deny, and headless approval gates remain authoritative.
+
 ## [0.14.46] - 2026-05-30
 
 Opt-in permission modes, adaptive admission observability, and clearer
