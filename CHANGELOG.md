@@ -10,6 +10,17 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.48] - 2026-05-30
+
+Terminal/PTY Ctrl+C input hotfix.
+
+- Parsed Ctrl+C input from Terminal.app, Windows Terminal, and
+  PowerShell-style terminals is now filtered out of the composer instead of
+  appearing as a literal `c` draft character.
+- Same-chunk Ctrl+C bursts such as `\x03\x03` now arm the exit confirmation
+  once instead of immediately confirming exit.
+- Normal separate-keypress "Ctrl+C again to exit" behavior is unchanged.
+
 ## [0.14.47] - 2026-05-30
 
 Project Map runtime control plane and Permission Modes default-on cutover.
