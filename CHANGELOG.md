@@ -10,6 +10,23 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.46] - 2026-05-30
+
+Opt-in permission modes, adaptive admission observability, and clearer
+no-progress diagnostics.
+
+- Permission Modes are available for dogfood behind `OWLCODA_MODES=1`, adding
+  `/mode`, `--mode`, plan/normal/auto mode state, mode-gate telemetry, and
+  auto-mode low-risk approvals. Default behavior is unchanged while the flag
+  is unset.
+- Adaptive sub-agent concurrency now has daemon-side admission coordination and
+  a `GET /v1/admission` observability surface when
+  `OWLCODA_AGENT_ADAPTIVE_CONCURRENCY=1`.
+- `/cost` now reflects prompt-cache hits for OpenAI- and
+  Anthropic-compatible usage paths.
+- Task no-progress hard stops now explain the cause and name the relevant
+  budget knob.
+
 ## [0.14.45] - 2026-05-29
 
 Conversation-prefix prompt caching and CI gate speedup.
