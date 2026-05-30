@@ -10,6 +10,17 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.49] - 2026-05-31
+
+Terminal.app Enter hotfix.
+
+- macOS Terminal.app modifier-key detection now degrades safely when the
+  optional native modifier addon is unavailable.
+- Pressing Enter in Terminal.app no longer terminates the REPL before submit
+  when native Shift-key detection cannot load.
+- Normal Enter-to-submit behavior is preserved; Shift+Enter native detection
+  remains best-effort.
+
 ## [0.14.48] - 2026-05-30
 
 Terminal/PTY Ctrl+C input hotfix.
