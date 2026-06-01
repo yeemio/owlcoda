@@ -10,6 +10,18 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.51] - 2026-06-01
+
+Bash progress ledger hardening for interpreter-inline writes.
+
+- Bash artifact progress now uses the actual tool execution window so files
+  written by interpreter-inline commands such as `python3 -c` can be credited
+  by task no-progress checks.
+- Interpreter-internal artifact writes can be grounded through filesystem mtime
+  evidence, with `OWLCODA_BASH_FS_PROGRESS=0` available as an escape hatch.
+- The behavior is intentionally conservative: old read-only file mentions are
+  not counted, while very recent file mtimes can still be treated as progress.
+
 ## [0.14.50] - 2026-06-01
 
 TUI rendering stability and evidence-ledger observability.
