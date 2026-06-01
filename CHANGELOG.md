@@ -10,6 +10,18 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.50] - 2026-06-01
+
+TUI rendering stability and evidence-ledger observability.
+
+- Assistant narration is now flushed at tool boundaries and turn endings so
+  buffered text does not glue itself to later output.
+- Terminal scrollback rendering is steadier around warning-sign width handling
+  and committed output lines that contain control characters.
+- Evidence-ledger fidelity observability is available as a debug-only shadow
+  surface for compaction and grounding review. It is not a default enforcement
+  gate.
+
 ## [0.14.49] - 2026-05-31
 
 Terminal.app Enter hotfix.
