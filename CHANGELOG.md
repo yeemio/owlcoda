@@ -10,6 +10,16 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.52] - 2026-06-01
+
+Task no-progress guard refinement for read-heavy investigation and plan mode.
+
+- Task no-progress hard stops now respect active distinct-file read
+  investigation while repeated or zero-signal reading remains guarded.
+- Plan mode now suppresses execution-pressure hard stops and task-step nudges.
+- Successful TaskCreate, TaskUpdate, and TaskOutput display is routed to the
+  footer; errors remain visible.
+
 ## [0.14.51] - 2026-06-01
 
 Bash progress ledger hardening for interpreter-inline writes.
