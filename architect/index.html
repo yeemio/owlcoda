@@ -3,243 +3,651 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OwlCoda 架构看板 · 全景仪表盘</title>
+<title>OwlCoda Runtime Architecture</title>
 <style>
-  :root{
-    --bg:#0c0f16; --panel:#141925; --panel2:#1b2233; --line:#28324a;
-    --ink:#e8edf6; --dim:#93a0b8; --faint:#5e6b85;
-    --owl:#e8a04f;            /* 猫头鹰暖橙 */
-    --owl2:#f4c87a;
-    --good:#3fb98f; --warn:#e8b14f; --bad:#e8675f; --info:#5aa9e6;
-    --shadow:0 10px 40px rgba(0,0,0,.45);
+  :root {
+    color-scheme: dark;
+    --bg: #0d1117;
+    --bg-2: #111722;
+    --panel: #151d2a;
+    --panel-2: #1b2534;
+    --panel-3: #202b3c;
+    --line: #334155;
+    --line-soft: #263244;
+    --ink: #edf2f7;
+    --muted: #9aa8bc;
+    --faint: #66758d;
+    --amber: #e8a04f;
+    --cyan: #5db7d8;
+    --green: #54c68f;
+    --rose: #ee7482;
+    --violet: #a78bfa;
+    --blue: #7aa7ff;
+    --shadow: 0 18px 45px rgba(0,0,0,.32);
   }
-  *{box-sizing:border-box}
-  html,body{margin:0;background:
-     radial-gradient(1200px 600px at 80% -10%, rgba(232,160,79,.10), transparent 60%),
-     radial-gradient(900px 500px at -10% 110%, rgba(90,169,230,.08), transparent 60%),
-     var(--bg);
-     color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
-     -webkit-font-smoothing:antialiased;line-height:1.5}
-  .wrap{max-width:1180px;margin:0 auto;padding:28px 22px 60px}
-  .sub{color:var(--dim);font-size:13px}
-  .faint{color:var(--faint)}
-  h1{font-size:26px;margin:0 0 4px;letter-spacing:.3px}
-  h2{font-size:15px;letter-spacing:.5px;color:var(--owl2);margin:0 0 14px;text-transform:uppercase;font-weight:700}
-  .card{background:linear-gradient(180deg,var(--panel),#11151f);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:var(--shadow)}
-  .grid{display:grid;gap:16px}
-  /* ── hero ── */
-  .hero{grid-template-columns:1.5fr 1fr;align-items:stretch;margin-bottom:16px}
-  .hero .left{display:flex;flex-direction:column;justify-content:center}
-  .badge{display:inline-block;font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;border:1px solid}
-  .b-prev{color:var(--owl);border-color:rgba(232,160,79,.4);background:rgba(232,160,79,.08)}
-  .tagline{font-size:15px;color:var(--dim);margin-top:10px;max-width:46ch}
-  .gauge-wrap{display:flex;align-items:center;gap:18px;justify-content:center}
-  .gauge{position:relative;width:170px;height:170px;flex:none}
-  .gauge .score{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
-  .gauge .score b{font-size:40px;line-height:1}
-  .gauge .score span{font-size:12px;color:var(--dim);margin-top:2px}
-  .trend{flex:1}
-  .trend .lbl{font-size:12px;color:var(--dim);margin-bottom:6px}
-  .kpis{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
-  .kpi{flex:1;min-width:90px;background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:10px 12px}
-  .kpi b{display:block;font-size:22px}
-  .kpi small{color:var(--dim);font-size:11px}
-  /* ── lanes ── */
-  .lanes{grid-template-columns:repeat(3,1fr)}
-  .lane{position:relative;overflow:hidden}
-  .lane .num{font-size:13px;color:var(--faint);font-weight:700}
-  .lane h3{margin:2px 0 8px;font-size:17px}
-  .lane p{margin:0;color:var(--dim);font-size:13px;min-height:54px}
-  .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:700;margin-top:12px;padding:4px 10px;border-radius:999px}
-  .p-go{color:var(--good);background:rgba(63,185,143,.12)}
-  .p-doing{color:var(--warn);background:rgba(232,177,79,.12)}
-  .dot{width:8px;height:8px;border-radius:50%}
-  .d-go{background:var(--good)} .d-doing{background:var(--warn)} .d-bad{background:var(--bad)}
-  /* ── health bars ── */
-  .bars{display:flex;flex-direction:column;gap:13px}
-  .bar .row{display:flex;justify-content:space-between;font-size:13px;margin-bottom:5px}
-  .bar .row .v{color:var(--dim);font-variant-numeric:tabular-nums}
-  .track{height:9px;background:#0c1019;border:1px solid var(--line);border-radius:999px;overflow:hidden}
-  .fill{height:100%;border-radius:999px}
-  .two{grid-template-columns:1.1fr .9fr}
-  /* ── adr columns ── */
-  .adr{grid-template-columns:repeat(3,1fr)}
-  .adr .col h4{margin:0 0 10px;font-size:13px;display:flex;align-items:center;gap:8px;color:var(--dim)}
-  .item{background:var(--panel2);border:1px solid var(--line);border-left-width:3px;border-radius:10px;padding:9px 11px;margin-bottom:8px;font-size:13px}
-  .item b{display:block;font-size:13px;margin-bottom:1px}
-  .item small{color:var(--dim);font-size:11.5px}
-  .lg{border-left-color:var(--good)} .ly{border-left-color:var(--warn)} .lr{border-left-color:var(--bad)}
-  /* ── swe ── */
-  .swe{grid-template-columns:auto 1fr;gap:22px;align-items:center}
-  .scorebig{text-align:center;flex:none}
-  .scorebig b{font-size:48px;color:var(--owl2);line-height:1}
-  .scorebig small{display:block;color:var(--dim);font-size:12px}
-  .swe ul{margin:0;padding-left:18px;color:var(--dim);font-size:13px}
-  .swe ul li{margin:4px 0}
-  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--dim);margin-top:6px}
-  .legend span{display:inline-flex;align-items:center;gap:6px}
-  footer{margin-top:26px;color:var(--faint);font-size:12px;text-align:center;line-height:1.8}
-  .secthead{display:flex;align-items:baseline;justify-content:space-between;margin:30px 2px 14px}
-  .secthead .sub{font-size:12px}
-  @media(max-width:860px){
-    .hero,.lanes,.two,.adr,.swe{grid-template-columns:1fr}
-    .gauge-wrap{flex-direction:column}
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background:
+      linear-gradient(180deg, #0d1117 0%, #0f1520 42%, #0b1018 100%);
+    color: var(--ink);
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+
+  a { color: inherit; }
+
+  .wrap {
+    width: min(1220px, calc(100vw - 36px));
+    margin: 0 auto;
+    padding: 28px 0 56px;
+  }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 18px;
+  }
+
+  .brand {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .brand__eyebrow {
+    color: var(--amber);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+  }
+
+  .brand h1 {
+    margin: 0;
+    font-size: clamp(28px, 4.5vw, 54px);
+    line-height: 1.02;
+    letter-spacing: 0;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 30px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 5px 10px;
+    color: var(--muted);
+    background: rgba(255,255,255,.03);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .chip strong { color: var(--ink); font-weight: 700; }
+
+  .intro {
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(320px, .95fr);
+    gap: 16px;
+    align-items: stretch;
+    margin-bottom: 16px;
+  }
+
+  .intro__text {
+    border: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(255,255,255,.055), rgba(255,255,255,.025));
+    border-radius: 10px;
+    padding: 22px;
+    box-shadow: var(--shadow);
+  }
+
+  .intro__text p {
+    margin: 0;
+    max-width: 68ch;
+    color: var(--muted);
+    font-size: 15px;
+  }
+
+  .install {
+    display: grid;
+    gap: 10px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    border-radius: 10px;
+    padding: 18px;
+    box-shadow: var(--shadow);
+  }
+
+  .install__label {
+    color: var(--faint);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+
+  code, pre {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  .cmd {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+    border: 1px solid var(--line-soft);
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: #0a0f17;
+    color: #dbe7f3;
+    font-size: 13px;
+  }
+
+  .section {
+    margin-top: 18px;
+  }
+
+  .section__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: end;
+    gap: 14px;
+    margin: 28px 2px 12px;
+  }
+
+  h2 {
+    margin: 0;
+    color: var(--ink);
+    font-size: 18px;
+    letter-spacing: 0;
+  }
+
+  .section__head span {
+    color: var(--faint);
+    font-size: 12px;
+    text-align: right;
+  }
+
+  .architecture {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #101723;
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+
+  .lane {
+    display: grid;
+    grid-template-columns: 170px 1fr;
+    border-top: 1px solid var(--line-soft);
+    min-height: 92px;
+  }
+
+  .lane:first-child { border-top: 0; }
+
+  .lane__label {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
+    padding: 18px;
+    background: rgba(255,255,255,.025);
+    border-right: 1px solid var(--line-soft);
+  }
+
+  .lane__label b {
+    color: var(--ink);
+    font-size: 13px;
+  }
+
+  .lane__label small {
+    color: var(--faint);
+    font-size: 11px;
+  }
+
+  .lane__body {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(130px, 1fr));
+    gap: 10px;
+    padding: 14px;
+    align-items: stretch;
+  }
+
+  .node {
+    position: relative;
+    min-height: 68px;
+    border: 1px solid var(--line-soft);
+    border-radius: 9px;
+    padding: 11px 12px;
+    background: var(--panel);
+  }
+
+  .node::before {
+    content: "";
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 3px;
+    border-radius: 9px 0 0 9px;
+    background: var(--accent, var(--amber));
+  }
+
+  .node b {
+    display: block;
+    font-size: 13px;
+    line-height: 1.25;
+    margin-bottom: 4px;
+  }
+
+  .node span {
+    display: block;
+    color: var(--muted);
+    font-size: 11.5px;
+  }
+
+  .node--amber { --accent: var(--amber); }
+  .node--cyan { --accent: var(--cyan); }
+  .node--green { --accent: var(--green); }
+  .node--rose { --accent: var(--rose); }
+  .node--violet { --accent: var(--violet); }
+  .node--blue { --accent: var(--blue); }
+
+  .flow-note {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .note {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    padding: 14px 15px;
+  }
+
+  .note b {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 13px;
+  }
+
+  .note p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .status-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+  }
+
+  .status {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    padding: 16px;
+  }
+
+  .status h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+  }
+
+  .status ul {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 8px;
+  }
+
+  .status li {
+    display: grid;
+    grid-template-columns: 14px 1fr;
+    gap: 8px;
+    align-items: start;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .mark {
+    width: 9px;
+    height: 9px;
+    margin-top: 5px;
+    border-radius: 50%;
+    background: var(--green);
+  }
+
+  .mark--amber { background: var(--amber); }
+  .mark--rose { background: var(--rose); }
+
+  .delta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+  }
+
+  .delta__group {
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--panel);
+    padding: 16px;
+  }
+
+  .delta__group h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+  }
+
+  .delta__list {
+    display: grid;
+    gap: 9px;
+  }
+
+  .delta__item {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 10px;
+    align-items: start;
+    border-top: 1px solid var(--line-soft);
+    padding-top: 9px;
+    color: var(--muted);
+    font-size: 12.5px;
+  }
+
+  .delta__item:first-child {
+    border-top: 0;
+    padding-top: 0;
+  }
+
+  .delta__item b {
+    color: var(--ink);
+    font-size: 12.5px;
+  }
+
+  .boundary {
+    border: 1px solid rgba(232,160,79,.38);
+    border-radius: 10px;
+    background: rgba(232,160,79,.075);
+    padding: 16px;
+  }
+
+  .boundary p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  footer {
+    margin-top: 28px;
+    color: var(--faint);
+    font-size: 12px;
+    text-align: center;
+    line-height: 1.8;
+  }
+
+  @media (max-width: 980px) {
+    .intro,
+    .status-grid,
+    .flow-note,
+    .delta {
+      grid-template-columns: 1fr;
+    }
+
+    .lane {
+      grid-template-columns: 1fr;
+    }
+
+    .lane__label {
+      border-right: 0;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .lane__body {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 620px) {
+    .wrap { width: min(100vw - 24px, 1220px); padding-top: 18px; }
+    .topbar { align-items: flex-start; flex-direction: column; }
+    .meta { justify-content: flex-start; }
+    .lane__body { grid-template-columns: 1fr; }
+    .delta__item { grid-template-columns: 1fr; gap: 3px; }
   }
 </style>
 </head>
 <body>
 <div class="wrap">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand__eyebrow">OwlCoda runtime architecture</span>
+      <h1>本地优先的 AI 编程运行时</h1>
+    </div>
+    <div class="meta" aria-label="snapshot metadata">
+      <span class="chip"><strong>npm</strong>&nbsp;0.14.53</span>
+      <span class="chip"><strong>updated</strong>&nbsp;2026-06-02</span>
+      <span class="chip">Developer Preview</span>
+    </div>
+  </header>
 
-  <!-- HERO -->
-  <div class="grid hero">
-    <div class="card left">
-      <div>
-        <span class="badge b-prev">● 开发者预览 (Developer Preview)</span>
-      </div>
-      <h1 style="margin-top:14px">🦉 OwlCoda</h1>
-      <div class="tagline">装在你自己电脑里的 AI 编程助手。像 Claude Code，但<b style="color:var(--ink)">模型、工具、数据全在本地</b>——不登录、不上云。</div>
-      <div class="kpis">
-        <div class="kpi"><b>20</b><small>13 天内发版次数</small></div>
-        <div class="kpi"><b style="color:var(--owl2)">0.14.45</b><small>当前 npm 版本</small></div>
-        <div class="kpi"><b>19</b><small>架构决策 (ADR)</small></div>
-        <div class="kpi"><b style="color:var(--good)">+0.6</b><small>13 天健康度增长</small></div>
-      </div>
+  <section class="intro">
+    <div class="intro__text">
+      <p>
+        OwlCoda 现在不是一个“聊天壳”，而是一套在用户机器上运行的 workbench runtime：
+        native REPL、browser Admin、headless run、shared daemon、工具执行、权限/溯源/任务守卫、
+        provider middleware 和本地证据账本围成同一个闭环。模型和数据都归用户，公开入口是 npm 包。
+      </p>
+    </div>
+    <aside class="install" aria-label="install command">
+      <span class="install__label">public install path</span>
+      <code class="cmd">npm install -g owlcoda@latest</code>
+      <span class="chip">no hosted OwlCoda control plane</span>
+    </aside>
+  </section>
+
+  <section class="section">
+    <div class="section__head">
+      <h2>运行架构图</h2>
+      <span>从用户输入到模型、工具、证据与公开发布面的闭环</span>
     </div>
 
-    <div class="card">
-      <div class="gauge-wrap">
-        <div class="gauge">
-          <svg width="170" height="170" viewBox="0 0 170 170">
-            <circle cx="85" cy="85" r="72" fill="none" stroke="#0c1019" stroke-width="14"/>
-            <circle cx="85" cy="85" r="72" fill="none" stroke="url(#g)" stroke-width="14"
-              stroke-linecap="round" stroke-dasharray="452.4"
-              stroke-dashoffset="135.7" transform="rotate(-90 85 85)"/>
-            <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#e8a04f"/><stop offset="1" stop-color="#3fb98f"/>
-            </linearGradient></defs>
-          </svg>
-          <div class="score"><b>3.5</b><span>满分 5 · 等级 B</span></div>
+    <div class="architecture" role="img" aria-label="OwlCoda runtime architecture layered diagram">
+      <div class="lane">
+        <div class="lane__label">
+          <b>Public surface</b>
+          <small>公开入口</small>
         </div>
-        <div class="trend">
-          <div class="lbl">健康度走势（4 次评估）</div>
-          <svg width="100%" height="92" viewBox="0 0 100 100" preserveAspectRatio="none">
-            <polyline points="10,62 30,46 50,46 70,21 90,13" fill="none" stroke="var(--owl)" stroke-width="2.5" vector-effect="non-scaling-stroke"/>
-            <circle cx="10" cy="62" r="3" fill="var(--faint)"/>
-            <circle cx="30" cy="46" r="3" fill="var(--dim)"/>
-            <circle cx="50" cy="46" r="3" fill="var(--dim)"/>
-            <circle cx="70" cy="21" r="3" fill="var(--dim)"/>
-            <circle cx="90" cy="13" r="3.5" fill="var(--owl2)"/>
-          </svg>
-          <div class="legend" style="margin-top:2px">
-            <span class="faint">2.9 起步</span>
-            <span style="color:var(--owl2);margin-left:auto">→ 3.4 现在</span>
-          </div>
+        <div class="lane__body">
+          <div class="node node--amber"><b>npm package</b><span>用户安装与版本真相</span></div>
+          <div class="node node--amber"><b>public router</b><span>README / docs / issues</span></div>
+          <div class="node node--amber"><b>website</b><span>install / changelog / trust surface</span></div>
+          <div class="node node--amber"><b>release gates</b><span>clean clone / tarball / smoke</span></div>
+        </div>
+      </div>
+
+      <div class="lane">
+        <div class="lane__label">
+          <b>User machine</b>
+          <small>产品入口</small>
+        </div>
+        <div class="lane__body">
+          <div class="node node--cyan"><b>CLI core</b><span>start / run / serve / doctor</span></div>
+          <div class="node node--cyan"><b>Native REPL</b><span>42+ tools · 69+ commands</span></div>
+          <div class="node node--cyan"><b>Browser Admin</b><span>first-run provider setup</span></div>
+          <div class="node node--cyan"><b>Headless run</b><span>JSON contract / automation</span></div>
+        </div>
+      </div>
+
+      <div class="lane">
+        <div class="lane__label">
+          <b>Runtime control</b>
+          <small>daemon + governance</small>
+        </div>
+        <div class="lane__body">
+          <div class="node node--blue"><b>Shared daemon</b><span>version identity / live clients / force stop</span></div>
+          <div class="node node--blue"><b>HTTP proxy</b><span>/v1/messages / chat completions / dashboard</span></div>
+          <div class="node node--blue"><b>Permission Modes</b><span>normal / plan / auto · default-on</span></div>
+          <div class="node node--blue"><b>Project Map</b><span>bounded snapshot · default-on</span></div>
+        </div>
+      </div>
+
+      <div class="lane">
+        <div class="lane__label">
+          <b>Work engine</b>
+          <small>会话与工具</small>
+        </div>
+        <div class="lane__body">
+          <div class="node node--green"><b>Conversation loop</b><span>streaming / retry / recovery</span></div>
+          <div class="node node--green"><b>Task contract</b><span>no-progress ledger / verification packs</span></div>
+          <div class="node node--green"><b>Native tools</b><span>Read / Write / Bash / LSP / MCP / Agent</span></div>
+          <div class="node node--green"><b>Skills</b><span>curated + learned local capability layer</span></div>
+        </div>
+      </div>
+
+      <div class="lane">
+        <div class="lane__label">
+          <b>Safety & evidence</b>
+          <small>可审计事实</small>
+        </div>
+        <div class="lane__body">
+          <div class="node node--rose"><b>Intent guard</b><span>dangerous asks and mode-aware pressure</span></div>
+          <div class="node node--rose"><b>Write/provenance gate</b><span>path scope + artifact truth</span></div>
+          <div class="node node--rose"><b>Fidelity shadow</b><span>claims matched to runtime facts</span></div>
+          <div class="node node--rose"><b>Audit traces</b><span>logs / metrics / cost / doctor</span></div>
+        </div>
+      </div>
+
+      <div class="lane">
+        <div class="lane__label">
+          <b>Provider edge</b>
+          <small>用户自带模型</small>
+        </div>
+        <div class="lane__body">
+          <div class="node node--violet"><b>Local runtimes</b><span>Ollama / LM Studio / vLLM</span></div>
+          <div class="node node--violet"><b>Cloud keys</b><span>OpenAI-compatible / Anthropic-compatible</span></div>
+          <div class="node node--violet"><b>Middleware</b><span>fallback / circuit / rate limit / headers timeout</span></div>
+          <div class="node node--violet"><b>Cost & cache</b><span>prefix-cache tokens per model + session</span></div>
+        </div>
+      </div>
+
+      <div class="lane">
+        <div class="lane__label">
+          <b>Local data</b>
+          <small>不上云</small>
+        </div>
+        <div class="lane__body">
+          <div class="node node--green"><b>Sessions</b><span>transcripts and resumes under user home</span></div>
+          <div class="node node--green"><b>Artifacts</b><span>tool evidence / exports / follow-ups</span></div>
+          <div class="node node--green"><b>Telemetry files</b><span>local JSONL for review and doctor</span></div>
+          <div class="node node--green"><b>Training data</b><span>opt-in and local-only</span></div>
         </div>
       </div>
     </div>
-  </div>
 
-  <!-- 三条主线 -->
-  <div class="secthead"><h2 style="margin:0">现在三条主线在跑</h2><span class="sub">这两周精力花在哪</span></div>
-  <div class="grid lanes">
-    <div class="card lane">
-      <div class="num">① 考试</div>
-      <h3>跑行业标准考卷</h3>
-      <p>SWE-bench：让 AI 真去改开源项目的 bug，官方判卷。证明"能改代码"不是吹的。</p>
-      <span class="pill p-doing"><span class="dot d-doing"></span>进行中 · 考了 62 分</span>
-    </div>
-    <div class="card lane">
-      <div class="num">② 防打架</div>
-      <h3>多个 AI 别互相杀</h3>
-      <p>出过事故：5 个 AI 并行干活，1 个卡住把另外 4 个连坐杀掉。现在各干各的，互相隔离。</p>
-      <span class="pill p-go"><span class="dot d-go"></span>已修复</span>
-    </div>
-    <div class="card lane">
-      <div class="num">③ 补真功能</div>
-      <h3>把"空壳工具"做实</h3>
-      <p>有些工具只是摆设。代码跳转 (LSP) 以前是假的、现在真能用了。还剩 5 个空壳要清。</p>
-      <span class="pill p-go"><span class="dot d-go"></span>大部分已修</span>
-    </div>
-  </div>
-
-  <!-- 体检 + SWE -->
-  <div class="secthead"><h2 style="margin:0">体检表 & 考试成绩</h2><span class="sub">六个维度打分 · 行业考卷结果</span></div>
-  <div class="grid two">
-    <div class="card">
-      <h2>OwlCoda 六项体检</h2>
-      <div class="bars">
-        <div class="bar"><div class="row"><span>🔒 信任（数据安全）</span><span class="v">3.7 · 最强</span></div><div class="track"><div class="fill" style="width:74%;background:var(--good)"></div></div></div>
-        <div class="bar"><div class="row"><span>🎯 产品定位</span><span class="v">3.5</span></div><div class="track"><div class="fill" style="width:70%;background:var(--good)"></div></div></div>
-        <div class="bar"><div class="row"><span>⚙️ 跑得对不对</span><span class="v">3.5</span></div><div class="track"><div class="fill" style="width:70%;background:var(--warn)"></div></div></div>
-        <div class="bar"><div class="row"><span>🔌 生态（模型/工具）</span><span class="v">3.0</span></div><div class="track"><div class="fill" style="width:60%;background:var(--warn)"></div></div></div>
-        <div class="bar"><div class="row"><span>🛠️ 好不好维护 <small style="color:var(--good)">↑CI闸</small></span><span class="v">2.3 → 3.2</span></div><div class="track"><div class="fill" style="width:64%;background:var(--warn)"></div></div></div>
-        <div class="bar"><div class="row"><span>💰 花钱（省不省 token）<small style="color:var(--good)">↑缓存</small></span><span class="v">2.0 → 3.0</span></div><div class="track"><div class="fill" style="width:60%;background:var(--warn)"></div></div></div>
+    <div class="flow-note">
+      <div class="note">
+        <b>闭环 1: 输入到行动</b>
+        <p>用户输入进入 REPL/headless，经过 mode、intent、task、write/provenance 约束，再落到工具或模型请求。</p>
       </div>
-      <div class="legend">
-        <span><span class="dot d-go"></span>好 (3.5+)</span>
-        <span><span class="dot d-doing"></span>中 (3.0)</span>
-        <span><span class="dot d-bad"></span>待补 (&lt;2.5)</span>
-        <span style="color:var(--good)">本轮两红区都脱红 ↑</span>
+      <div class="note">
+        <b>闭环 2: 模型到证据</b>
+        <p>模型输出不只看自报；工具调用、路径、mtime、artifact、telemetry 都进入可审计 runtime fact。</p>
+      </div>
+      <div class="note">
+        <b>闭环 3: 包到官网</b>
+        <p>npm 包是用户安装真相；public router 和网站只承载公开文案、安装说明和 changelog。</p>
       </div>
     </div>
+  </section>
 
-    <div class="card">
-      <h2>SWE-bench 考试</h2>
-      <div class="grid swe">
-        <div class="scorebig"><b>62%</b><small>非空答卷得分<br>(77 / 124 题)</small></div>
+  <section class="section">
+    <div class="section__head">
+      <h2>现在哪些是默认、哪些还在观察</h2>
+      <span>避免把 shadow / opt-in 写成 default-on</span>
+    </div>
+    <div class="status-grid">
+      <div class="status">
+        <h3>Default-on</h3>
         <ul>
-          <li>300 题里有效作答 124 题</li>
-          <li>其余多为网络/额度故障，<b style="color:var(--ink)">不算分</b></li>
-          <li>顶尖闭源模型 ~90%，<b style="color:var(--ink)">差距明确</b></li>
-          <li>意义：已进考场，有了可对比的基线</li>
+          <li><span class="mark"></span><span>Native REPL 是默认交互路径，Admin 负责 first-run 配置。</span></li>
+          <li><span class="mark"></span><span>Permission Modes 默认可用，默认 mode 仍是 normal。</span></li>
+          <li><span class="mark"></span><span>Project Map runtime control plane 默认开启，失败降级不炸 loop。</span></li>
+          <li><span class="mark"></span><span>Daemon version drift / orphan daemon recovery 已进入启动保护。</span></li>
+        </ul>
+      </div>
+      <div class="status">
+        <h3>Opt-in / dogfood</h3>
+        <ul>
+          <li><span class="mark mark--amber"></span><span>Adaptive concurrency 仍按 flag / coordinator dogfood 节奏推进。</span></li>
+          <li><span class="mark mark--amber"></span><span>Provenance / GATE_V2 类阻断线继续按 evidence gate 规则推进。</span></li>
+          <li><span class="mark mark--amber"></span><span>Auto mode 是可选工作方式，不等于全自动无守卫。</span></li>
+        </ul>
+      </div>
+      <div class="status">
+        <h3>Shadow / debug-only</h3>
+        <ul>
+          <li><span class="mark mark--rose"></span><span>Evidence-ledger fidelity 目前是观测与人工 review，不是拒绝 gate。</span></li>
+          <li><span class="mark mark--rose"></span><span>SWE-bench 数据不在官网宣称为产品分数。</span></li>
+          <li><span class="mark mark--rose"></span><span>Architecture board 不替代 package smoke、doctor 和 clean-clone release truth。</span></li>
         </ul>
       </div>
     </div>
-  </div>
+  </section>
 
-  <!-- ADR -->
-  <div class="secthead"><h2 style="margin:0">我在盯的大决策</h2><span class="sub">19 项 · 挑重点说人话</span></div>
-  <div class="grid adr">
-    <div class="card col">
-      <h4><span class="dot d-go"></span>已完成</h4>
-      <div class="item lg"><b>自动修复</b><small>活没过检查就自动重做</small></div>
-      <div class="item lg"><b>发版必检查</b><small>发布前强制自检，不准跳过</small></div>
-      <div class="item lg"><b>AI 隔离干活</b><small>并行不打架，故障不连坐</small></div>
-      <div class="item lg"><b>LSP 接真功能</b><small>代码跳转从空壳变真</small></div>
-      <div class="item lg"><b>自动化体检 ✨新</b><small>CI 自托管常驻，发版前全套体检</small></div>
-      <div class="item lg"><b>省钱缓存 ✨新</b><small>对话前缀缓存，重复内容不重发</small></div>
-      <div class="item lg"><b>自适应并发 ✨新</b><small>AI 群干活自动调速，已发 0.14.44</small></div>
+  <section class="section">
+    <div class="section__head">
+      <h2>相比旧图变化最大的地方</h2>
+      <span>0.14.46 到 0.14.53 的结构性变化</span>
     </div>
-    <div class="card col">
-      <h4><span class="dot d-doing"></span>试用中 / 待转正</h4>
-      <div class="item ly"><b>权限闸门</b><small>删库等危险操作默认拦住</small></div>
-      <div class="item ly"><b>写入溯源</b><small>AI 只能写它该写的文件</small></div>
-      <div class="item ly"><b>清剩余空壳工具</b><small>5 个摆设工具待删/改</small></div>
+    <div class="delta">
+      <div class="delta__group">
+        <h3>控制面变厚了</h3>
+        <div class="delta__list">
+          <div class="delta__item"><b>Permission Modes</b><span>从 flag 试用变成默认可见的 mode 系统，plan/normal/auto 成为 hard boundary。</span></div>
+          <div class="delta__item"><b>Project Map</b><span>从项目扫描工具升级为 runtime control plane 的 context source。</span></div>
+          <div class="delta__item"><b>Daemon identity</b><span>旧 daemon、orphan port holder、live client 都进入 runtime 判断，不再靠用户猜。</span></div>
+          <div class="delta__item"><b>Slash surface</b><span>/copy、/editor、/tasks、/hooks 补齐展示和 handler 漂移保护。</span></div>
+        </div>
+      </div>
+      <div class="delta__group">
+        <h3>事实账本更硬了</h3>
+        <div class="delta__list">
+          <div class="delta__item"><b>No-progress</b><span>能区分 read-heavy investigation、plan mode、interpreter-inline artifact progress。</span></div>
+          <div class="delta__item"><b>Bash risk</b><span>/dev/null 和标准流重定向不再误判为 mutating artifact write。</span></div>
+          <div class="delta__item"><b>Fidelity shadow</b><span>模型硬锚点、路径事实和 compaction summary 有了 runtime fact 对账面。</span></div>
+          <div class="delta__item"><b>Cost/cache</b><span>prefix-cache tokens 进入 per-model 与 session total，缓存效果不再只靠感觉。</span></div>
+        </div>
+      </div>
     </div>
-    <div class="card col">
-      <h4><span class="dot d-bad"></span>下一步重点</h4>
-      <div class="item lr"><b>跨进程协调 ⭐</b><small>多窗口共用一个额度池（本轮起点）</small></div>
-      <div class="item lr"><b>体检项补全</b><small>12 项还差 4 项（缓存命中率等）</small></div>
-      <div class="item lr"><b>SWE 干净跑满 300</b><small>排除网络故障，拿可比基线</small></div>
-    </div>
-  </div>
+  </section>
 
-  <div class="card" style="margin-top:16px;border-color:rgba(232,177,79,.35)">
-    <h2 style="color:var(--owl2)">⚠ 一条容易误读的设计行为（不是 bug）</h2>
-    <p style="margin:0;color:var(--dim);font-size:13.5px">
-      <b style="color:var(--ink)">省钱缓存只在 Anthropic 协议后端生效</b>（云端 Anthropic，或本地配 <code>anthropic_messages</code> 的 runtime）。
-      如果你的模型走的是 <b style="color:var(--ink)">OpenAI 协议</b>（翻译路径），缓存标记会在翻译时被剥掉，<code>/cost</code> 里的 <b>Cache read 恒为 0</b> ——
-      这是设计行为，<b style="color:var(--ink)">不是回归</b>。验证省钱效果前先确认后端协议。<br>
-      <span class="faint">看法：第 1 轮是 Cache write（写缓存），第 2 轮起 Cache read 才开始爬；相邻两轮要在 5 分钟内（缓存到期前）。</span>
-    </p>
-  </div>
+  <section class="section">
+    <div class="boundary">
+      <p>
+        边界口径：OwlCoda 不捆绑模型、不托管会话、不提供云端控制面。用户配置自己的 local runtime 或 cloud API key。
+        官网架构图只讲公开运行结构；内部 release provenance、私有文档、operator handoff 和未公开评分不放进公共页面。
+      </p>
+    </div>
+  </section>
 
   <footer>
-    数据来源：<code>docs/architect/KANBAN.md</code>（R9 · 2026-05-29 · npm 0.14.45 · build b41887f）与 <code>docs/ARCHITECT-PLAN-2026-05-16.md</code><br>
-    口径：健康度=6 维加权均分 · SWE-bench=清洗污染后的非空答卷得分 · 仅供架构跟踪，非对外宣传数字<br>
-    本轮（R9）：两红区都动过 → 维护 2.3→3.2（CI 体检闸）、花钱 2.0→3.0（对话前缀缓存）。下一块：跨进程额度协调。
+    Source snapshot: npm package 0.14.53 · public website architecture page · live product truth still comes from the installed runtime and doctor output.
   </footer>
-
 </div>
 </body>
 </html>
