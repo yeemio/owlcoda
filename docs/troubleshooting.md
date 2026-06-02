@@ -178,6 +178,30 @@ chat, not `owlcoda` REPL. See [model-requirements.md](model-requirements.md).
   `"middleware": { "fallbackEnabled": false }` in `~/.owlcoda/config.json`
 - prefer GPU-backed inference for local agents
 
+**Why ~60 seconds sometimes:** with default `fallbackEnabled`, a 30s headers
+timeout on the primary model may be followed by another attempt on a heavier
+configured model (audit log: `fallbackUsed: true`). That is OwlCoda behavior,
+not Ollama hanging forever.
+
+**30s limit (streaming):** the proxy uses a fixed ~30s “headers” phase for
+streaming upstream calls. Full agent tool payloads on CPU can exceed that even
+when `curl` / `ollama run` feel fine. See
+[dogfood-findings.md](dogfood-findings.md#detail-30s-headers-timeout-finding-7).
+
+## Admin: local model misconfiguration
+
+**Symptoms:** runtime looks healthy in `curl`, but REPL fails or routes to the
+wrong model; `owlcoda config` shows a model with `endpoint: http://127.0.0.1:11434/v1`
+and `provider: openai-compat` **in addition to** `routerUrl`.
+
+**Fix for standard Ollama:** use **one** local routing style:
+
+- Set `routerUrl` to `http://127.0.0.1:11434` (no `/v1`)
+- List models with `backendModel` only (no per-model `endpoint` unless you truly
+  need a separate direct URL)
+
+Remove duplicate “cloud-style” localhost entries that point at Ollama’s `/v1`.
+
 ## Clean reinstall (global npm package)
 
 To remove user state and reinstall:
@@ -219,10 +243,13 @@ npm install -g owlcoda
 Do not open a public issue for security vulnerabilities. See
 [SECURITY.md](../SECURITY.md).
 
-## Product feedback (daemon messages, Windows UX)
+## Product feedback (npm package)
 
 This public repository accepts **documentation** pull requests. Runtime
-behavior changes (for example clearer orphan-daemon detection or improved port
-conflict messages) are tracked via
-[GitHub Issues](https://github.com/yeemio/owlcoda/issues). Please include
-`owlcoda --version`, OS, terminal, and `npm config get registry` in reports.
+behavior changes are tracked via
+[GitHub Issues](https://github.com/yeemio/owlcoda/issues).
+
+Full dogfood list (install + model policy + timeouts): [dogfood-findings.md](dogfood-findings.md).
+
+Please include `owlcoda --version`, OS, terminal, and `npm config get registry`
+in reports.

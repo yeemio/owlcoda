@@ -62,6 +62,7 @@ owlcoda init --endpoint http://127.0.0.1:11434
 
 - [模型要求](docs/model-requirements.zh.md)（Agent 与聊天区分；本地建议 8B 起）
 - [故障排除](docs/troubleshooting.zh.md)（镜像、8019、首次配置、小模型超时）
+- [Dogfood 汇总](docs/dogfood-findings.zh.md)（安装/Agent 问题索引）
 
 ## 升级
 

@@ -165,6 +165,22 @@ owlcoda models
   `"middleware": { "fallbackEnabled": false }`（`~/.owlcoda/config.json`）
 - 本地 Agent 尽量使用 GPU 推理
 
+**为何有时约 60 秒：** 默认开启 fallback 时，主模型 30s headers 超时后可能再试
+配置中的更大模型（audit：`fallbackUsed: true`），属 OwlCoda 行为。
+
+**30 秒上限（流式）：** 代理对流式上游有约 30s 的 headers 阶段；CPU 上全量
+agent tools 可能超时，而 `ollama run` 仍很快。见
+[dogfood-findings.zh.md](dogfood-findings.zh.md)。
+
+## Admin：本地模型误配
+
+**现象：** `curl` 正常，REPL 失败或路由错乱；`owlcoda config` 里某模型带
+`endpoint: http://127.0.0.1:11434/v1` 且 `provider: openai-compat`，同时又配置了
+`routerUrl`。
+
+**标准 Ollama 写法：** 只保留一种本地路由——`routerUrl`（无 `/v1`）+ 各模型的
+`backendModel`，不要对 Ollama 再建一条「云端式」localhost endpoint。
+
 ## 干净重装（全局 npm 包）
 
 ```bash
@@ -193,9 +209,11 @@ owlcoda
 
 勿在公开 issue 中提交漏洞，见 [SECURITY.zh.md](../SECURITY.zh.md)。
 
-## 产品反馈（daemon 提示、Windows 体验）
+## 产品反馈（npm 包）
 
-本公开仓库接受**文档** PR；运行时行为改进（如更准确的端口占用提示、孤儿
-daemon 自动清理）请通过
-[GitHub Issues](https://github.com/yeemio/owlcoda/issues) 反馈，并附上
-`owlcoda --version`、系统、终端类型及 `npm config get registry`。
+本公开仓库接受**文档** PR；运行时改动见
+[GitHub Issues](https://github.com/yeemio/owlcoda/issues)。
+
+完整 dogfood 列表：[dogfood-findings.zh.md](dogfood-findings.zh.md)。
+
+反馈请附 `owlcoda --version`、系统、终端及 `npm config get registry`。

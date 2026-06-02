@@ -64,6 +64,7 @@ See [docs/install.md](docs/install.md) for platform notes.
 
 - [Model requirements](docs/model-requirements.md) (Agent vs chat; ≥ 8B local guidance)
 - [Troubleshooting](docs/troubleshooting.md) (npm mirror, port 8019, first-run, small models)
+- [Dogfood findings](docs/dogfood-findings.md) (full install/agent issue index)
 
 ## Upgrade
 
