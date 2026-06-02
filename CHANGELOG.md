@@ -10,6 +10,19 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.53] - 2026-06-02
+
+Slash-command completion, startup diagnostics, and provider-runtime hardening.
+
+- `/copy`, `/hooks`, `/tasks`, and `/editor` are now registered in the visible
+  command surface, with `/editor` using a guarded temporary-file flow.
+- Prefix-cache token usage is now surfaced in per-model and session cost
+  reporting.
+- `owlcoda doctor` can warn when the npm registry has a newer OwlCoda version
+  than the local install.
+- Daemon recovery, router URL probing, OpenAI-compatible header timeouts, and
+  bash-risk classification for `/dev/null` and standard streams were tightened.
+
 ## [0.14.52] - 2026-06-01
 
 Task no-progress guard refinement for read-heavy investigation and plan mode.
