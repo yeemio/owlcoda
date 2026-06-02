@@ -35,6 +35,8 @@ owlcoda
 - Node.js `>= 20.19.0`，推荐 Node 22+
 - macOS、Linux 或 Windows
 - 一个本地 OpenAI-compatible runtime，或一个云端 provider API key
+- 使用原生 Agent / REPL：需支持 tools 的模型，本地通常 **≥ 8B** — 见
+  [模型要求](docs/model-requirements.zh.md)
 
 ```bash
 npm install -g owlcoda
@@ -53,10 +55,14 @@ owlcoda admin
 如果你已经有本地 OpenAI-compatible runtime，也可以直接初始化 endpoint：
 
 ```bash
-owlcoda init --endpoint http://127.0.0.1:11434/v1
+owlcoda init --endpoint http://127.0.0.1:11434
 ```
 
 平台说明见 [docs/install.md](docs/install.md)。
+
+- [模型要求](docs/model-requirements.zh.md)（Agent 与聊天区分；本地建议 8B 起）
+- [故障排除](docs/troubleshooting.zh.md)（镜像、8019、首次配置、小模型超时）
+- [Dogfood 汇总](docs/dogfood-findings.zh.md)（安装/Agent 问题索引）
 
 ## 升级
 
