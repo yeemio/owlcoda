@@ -56,7 +56,8 @@ owlcoda admin
 owlcoda init --endpoint http://127.0.0.1:11434/v1
 ```
 
-平台说明见 [docs/install.md](docs/install.md)。
+平台说明见 [docs/install.md](docs/install.md)。安装常见问题（镜像滞后、8019
+端口、首次无模型）：[docs/troubleshooting.zh.md](docs/troubleshooting.zh.md)。
 
 ## 升级
 

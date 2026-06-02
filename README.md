@@ -58,7 +58,8 @@ directly:
 owlcoda init --endpoint http://127.0.0.1:11434/v1
 ```
 
-See [docs/install.md](docs/install.md) for platform notes.
+See [docs/install.md](docs/install.md) for platform notes. Common install issues
+(npm mirror lag, port 8019, first-run models): [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Upgrade
 
