@@ -11,7 +11,7 @@ provider。
 2. 运行 `owlcoda` 或 `owlcoda admin`，在 Admin 里添加**云端**或**本地
    runtime**
 3. 若已有本地 OpenAI 兼容 endpoint，可选：
-   `owlcoda init --endpoint http://127.0.0.1:11434/v1`
+   `owlcoda init --endpoint http://127.0.0.1:11434`（主机根地址，**不要**加 `/v1`）
 
 ```bash
 owlcoda admin
@@ -116,7 +116,30 @@ curl -s http://127.0.0.1:8019/healthz
 配置本地 runtime 或云端 provider，或使用：
 
 ```bash
-owlcoda init --endpoint http://127.0.0.1:11434/v1
+owlcoda init --endpoint http://127.0.0.1:11434
+```
+
+## Ollama：Ollama 正常但 OwlCoda 显示 runtime 不可达
+
+**现象：**
+
+- `ollama list` 有模型，`curl http://127.0.0.1:11434/v1/models` 正常
+- `owlcoda doctor` 报本地 runtime 不可达，或配置后仍无可用模型
+
+**常见原因：**
+
+1. **`routerUrl` 写成了带 `/v1` 的地址**（如 `http://127.0.0.1:11434/v1`）。  
+   OwlCoda 会请求 `${routerUrl}/v1/models`，实际变成 `…/v1/v1/models`（404）。  
+   **修正：** `routerUrl` 应为 `http://127.0.0.1:11434`（**不要**末尾 `/v1`）。
+
+2. **`config.json` 里 `models` 为空** — Admin 可能只写了 runtime 地址，未添加模型。  
+   需至少一条模型，`backendModel` 与 `ollama list` 中的名称完全一致（如 `gemma3:1b`）。
+
+**验证：**
+
+```bash
+owlcoda doctor
+owlcoda models
 ```
 
 ## 干净重装（全局 npm 包）

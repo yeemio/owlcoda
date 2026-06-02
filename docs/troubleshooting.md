@@ -10,8 +10,8 @@ Recommended order:
 1. `npm install -g owlcoda`
 2. `owlcoda` (or `owlcoda admin`) — Admin opens so you can add a **cloud
    provider** or **local runtime**
-3. Optional: `owlcoda init --endpoint http://127.0.0.1:11434/v1` if you already
-   have a local OpenAI-compatible endpoint
+3. Optional: `owlcoda init --endpoint http://127.0.0.1:11434` if you already
+   have a local OpenAI-compatible endpoint (host base URL, **no** trailing `/v1`)
 
 ```bash
 owlcoda admin
@@ -128,7 +128,31 @@ owlcoda admin
 For a local OpenAI-compatible runtime:
 
 ```bash
-owlcoda init --endpoint http://127.0.0.1:11434/v1
+owlcoda init --endpoint http://127.0.0.1:11434
+```
+
+## Ollama: local runtime “unreachable” but `curl` works
+
+**Symptoms:**
+
+- Ollama is running; `curl http://127.0.0.1:11434/v1/models` returns your models
+- `owlcoda doctor` / Admin says local runtime unreachable, or `models: []` after setup
+
+**Common causes:**
+
+1. **`routerUrl` includes `/v1`** — e.g. `http://127.0.0.1:11434/v1`. OwlCoda
+   probes `${routerUrl}/v1/models`, which becomes `…/v1/v1/models` (404).
+   **Fix:** set `routerUrl` to `http://127.0.0.1:11434` (no `/v1` suffix).
+
+2. **No model entries in `config.json`** — Admin may set the runtime URL but leave
+   `models` empty. Add at least one model with `backendModel` equal to the exact
+   id from `ollama list` (e.g. `gemma3:1b`).
+
+**Verify:**
+
+```bash
+owlcoda doctor
+owlcoda models
 ```
 
 ## Clean reinstall (global npm package)

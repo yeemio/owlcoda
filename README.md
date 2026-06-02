@@ -55,7 +55,7 @@ For a local OpenAI-compatible runtime, you can also initialize the endpoint
 directly:
 
 ```bash
-owlcoda init --endpoint http://127.0.0.1:11434/v1
+owlcoda init --endpoint http://127.0.0.1:11434
 ```
 
 See [docs/install.md](docs/install.md) for platform notes. Common install issues

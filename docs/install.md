@@ -32,11 +32,39 @@ cloud API provider that speaks an OpenAI-compatible or supported
 Messages-style API.
 
 For a local OpenAI-compatible runtime, `--endpoint` is the canonical CLI setup
-flag:
+flag. Use the **host base URL without a trailing `/v1`** (OwlCoda appends API
+paths itself):
 
 ```bash
-owlcoda init --endpoint http://127.0.0.1:11434/v1
+owlcoda init --endpoint http://127.0.0.1:11434
 ```
+
+### Ollama (Windows / macOS / Linux)
+
+1. Install [Ollama](https://ollama.com) and pull a model, e.g. `ollama pull gemma3:1b`
+2. Confirm: `curl http://127.0.0.1:11434/v1/models`
+3. Set `routerUrl` to `http://127.0.0.1:11434` (**not** `…/v1`) and add a model
+   whose `backendModel` matches `ollama list` (e.g. `gemma3:1b`)
+
+Example `~/.owlcoda/config.json` fragment:
+
+```json
+{
+  "routerUrl": "http://127.0.0.1:11434",
+  "localRuntimeProtocol": "openai_chat",
+  "models": [
+    {
+      "id": "gemma3-1b",
+      "label": "Gemma 3 1B",
+      "backendModel": "gemma3:1b",
+      "default": true
+    }
+  ]
+}
+```
+
+If `owlcoda doctor` reports the local runtime unreachable but `curl` works, see
+[troubleshooting.md](troubleshooting.md#ollama-local-runtime-unreachable).
 
 ## npm registry
 

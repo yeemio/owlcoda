@@ -53,7 +53,7 @@ owlcoda admin
 如果你已经有本地 OpenAI-compatible runtime，也可以直接初始化 endpoint：
 
 ```bash
-owlcoda init --endpoint http://127.0.0.1:11434/v1
+owlcoda init --endpoint http://127.0.0.1:11434
 ```
 
 平台说明见 [docs/install.md](docs/install.md)。安装常见问题（镜像滞后、8019
