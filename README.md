@@ -36,6 +36,8 @@ Prerequisites:
 - Node.js `>= 20.19.0`; Node 22+ recommended
 - macOS, Linux, or Windows
 - a local OpenAI-compatible runtime or a cloud provider API key
+- for native Agent / REPL: tool-capable models, typically **≥ 8B** locally — see
+  [model requirements](docs/model-requirements.md)
 
 ```bash
 npm install -g owlcoda
@@ -58,8 +60,10 @@ directly:
 owlcoda init --endpoint http://127.0.0.1:11434
 ```
 
-See [docs/install.md](docs/install.md) for platform notes. Common install issues
-(npm mirror lag, port 8019, first-run models): [docs/troubleshooting.md](docs/troubleshooting.md).
+See [docs/install.md](docs/install.md) for platform notes.
+
+- [Model requirements](docs/model-requirements.md) (Agent vs chat; ≥ 8B local guidance)
+- [Troubleshooting](docs/troubleshooting.md) (npm mirror, port 8019, first-run, small models)
 
 ## Upgrade
 

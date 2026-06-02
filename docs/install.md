@@ -7,6 +7,9 @@ OwlCoda is distributed publicly through npm during the trial phase.
 - Node.js `>= 20.19.0`; Node 22+ recommended
 - macOS, Linux, or Windows
 - a local OpenAI-compatible runtime or a cloud provider API key
+- for **native Agent / REPL**: a model with **tool calling**, typically **≥ 8B**
+  locally ([model requirements](model-requirements.md)) — OwlCoda is not aimed at
+  sub-8B “chat only” models
 
 ## Install
 
@@ -39,12 +42,15 @@ paths itself):
 owlcoda init --endpoint http://127.0.0.1:11434
 ```
 
-### Ollama (Windows / macOS / Linux)
+### Ollama (macOS / Linux / Windows)
 
-1. Install [Ollama](https://ollama.com) and pull a model, e.g. `ollama pull gemma3:1b`
+1. Install [Ollama](https://ollama.com) and pull an **Agent-capable** model, e.g.
+   `ollama pull qwen2.5:7b` or `ollama pull llama3.1:8b` (see
+   [model-requirements.md](model-requirements.md); **do not** use 1B–4B chat models
+   as your default for `owlcoda` REPL).
 2. Confirm: `curl http://127.0.0.1:11434/v1/models`
 3. Set `routerUrl` to `http://127.0.0.1:11434` (**not** `…/v1`) and add a model
-   whose `backendModel` matches `ollama list` (e.g. `gemma3:1b`)
+   whose `backendModel` matches `ollama list` (e.g. `qwen2.5:7b`)
 
 Example `~/.owlcoda/config.json` fragment:
 
@@ -54,9 +60,9 @@ Example `~/.owlcoda/config.json` fragment:
   "localRuntimeProtocol": "openai_chat",
   "models": [
     {
-      "id": "gemma3-1b",
-      "label": "Gemma 3 1B",
-      "backendModel": "gemma3:1b",
+      "id": "qwen25-7b",
+      "label": "Qwen2.5 7B",
+      "backendModel": "qwen2.5:7b",
       "default": true
     }
   ]
@@ -118,5 +124,6 @@ First-run checklist:
 3. If port **8019** is busy, see
    [troubleshooting.md](troubleshooting.md#port-8019-already-in-use)
 
-More: [troubleshooting.md](troubleshooting.md) ·
+More: [model-requirements.md](model-requirements.md) ·
+[troubleshooting.md](troubleshooting.md) ·
 [troubleshooting.zh.md](troubleshooting.zh.md)

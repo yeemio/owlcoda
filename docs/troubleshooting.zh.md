@@ -133,7 +133,7 @@ owlcoda init --endpoint http://127.0.0.1:11434
    **修正：** `routerUrl` 应为 `http://127.0.0.1:11434`（**不要**末尾 `/v1`）。
 
 2. **`config.json` 里 `models` 为空** — Admin 可能只写了 runtime 地址，未添加模型。  
-   需至少一条模型，`backendModel` 与 `ollama list` 中的名称完全一致（如 `gemma3:1b`）。
+   需至少一条模型，`backendModel` 与 `ollama list` 中的名称完全一致（如 `qwen2.5:7b`）。
 
 **验证：**
 
@@ -141,6 +141,29 @@ owlcoda init --endpoint http://127.0.0.1:11434
 owlcoda doctor
 owlcoda models
 ```
+
+## 小本地模型 Agent 超时或 400（全平台）
+
+**现象：**
+
+- `ollama run <小模型>` 很快有回复
+- `owlcoda` REPL 报 `upstream 400`、`does not support tools` 或
+  `headers timeout after 30000ms`
+
+**原因：** OwlCoda 是 **tool agent**，不是极简聊天壳。原生 REPL 每轮会带大量
+工具定义。许多 **8B 以下** 模型要么不支持 tools，要么首包远比一句 `ollama run`
+慢得多。
+
+**策略：** 本地 Agent 建议 **≥ 8B** 且支持 tools；**7B** 仅作实验下限（需较好
+硬件）。8B 以下请用运行时直连聊天，不要用 `owlcoda` REPL。见
+[model-requirements.zh.md](model-requirements.zh.md)。
+
+**缓解：**
+
+- `ollama pull qwen2.5:7b` 等，并在配置/Admin 中设为默认
+- 测试单一本地模型时可关闭自动 fallback：
+  `"middleware": { "fallbackEnabled": false }`（`~/.owlcoda/config.json`）
+- 本地 Agent 尽量使用 GPU 推理
 
 ## 干净重装（全局 npm 包）
 

@@ -146,7 +146,7 @@ owlcoda init --endpoint http://127.0.0.1:11434
 
 2. **No model entries in `config.json`** — Admin may set the runtime URL but leave
    `models` empty. Add at least one model with `backendModel` equal to the exact
-   id from `ollama list` (e.g. `gemma3:1b`).
+   id from `ollama list` (e.g. `qwen2.5:7b`).
 
 **Verify:**
 
@@ -154,6 +154,29 @@ owlcoda init --endpoint http://127.0.0.1:11434
 owlcoda doctor
 owlcoda models
 ```
+
+## Agent timeouts or 400 with small local models (all platforms)
+
+**Symptoms:**
+
+- `ollama run <small-model>` replies quickly
+- `owlcoda` REPL errors with `upstream 400`, `does not support tools`, or
+  `headers timeout after 30000ms`
+
+**Cause:** OwlCoda is a **tool agent**, not a minimal chat UI. The native REPL
+sends a large tool surface each turn. Many **&lt; 8B** models either reject tools
+or need much longer prefill than a one-line Ollama chat.
+
+**Policy:** use **≥ 8B** tool-capable models for local Agent work; use **7B** only
+as an experimental floor on capable hardware. Sub-8B models are for direct runtime
+chat, not `owlcoda` REPL. See [model-requirements.md](model-requirements.md).
+
+**Mitigations:**
+
+- `ollama pull qwen2.5:7b` (or similar) and set it as the default in config/Admin
+- disable automatic fallback to a heavier model if you are testing one local model:
+  `"middleware": { "fallbackEnabled": false }` in `~/.owlcoda/config.json`
+- prefer GPU-backed inference for local agents
 
 ## Clean reinstall (global npm package)
 
