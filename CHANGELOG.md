@@ -10,6 +10,23 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.55] - 2026-06-03
+
+Admin model onboarding and terminal rendering hardening.
+
+- Admin model setup now uses two clearer lanes: brand one-click providers for
+  hosted models, and custom/local runtimes for Ollama, LM Studio, vLLM,
+  owlmlx, OpenAI-compatible, and Anthropic-compatible endpoints.
+- Switching from a hosted brand provider to a local runtime now clears stale
+  cloud-template model fields.
+- StartPage, Add Model, and edit fields now share a clearer bilingual labeling
+  and advanced-field disclosure pattern.
+- Terminal ambiguous-width detection reduces CJK/Terminal.app layout drift while
+  keeping the default Western-width behavior. `OWLCODA_AMBIGUOUS_WIDTH` remains
+  available as an explicit override.
+- The startup width probe uses an alternate-screen scratch buffer so detection
+  does not erase the user's main-screen row.
+
 ## [0.14.54] - 2026-06-03
 
 Task progress guard and terminal rendering hardening.
