@@ -10,6 +10,22 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.54] - 2026-06-03
+
+Task progress guard and terminal rendering hardening.
+
+- Task no-progress is now advisory by default instead of a default hard-stop;
+  operators can still enable the legacy hard-stop with
+  `OWLCODA_TASK_NO_PROGRESS_HARD_STOP=1`.
+- Narration-loop detection now stops only repeated identical text-only replies,
+  reducing false stops during ordinary investigation.
+- Runtime stop messages no longer stack an extra generic “No response” fallback
+  on top of deliberate guard exits.
+- Curated multi-line runtime guidance is preserved in slash-command error
+  rendering.
+- Fallback prose splitting now measures terminal display cells, with additional
+  CJK rendering regression guards.
+
 ## [0.14.53] - 2026-06-02
 
 Slash-command completion, startup diagnostics, and provider-runtime hardening.
