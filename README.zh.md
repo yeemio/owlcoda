@@ -9,7 +9,11 @@ Admin，以及由你掌控的模型路由。它连接你自己的本地 runtime 
 或云端 API key。没有 OwlCoda 账号，没有托管控制面，也没有 telemetry
 管线。
 
-**当前公开 npm 包：** `owlcoda@0.14.55`
+**当前公开 npm 包：** `owlcoda@0.14.56`
+
+0.14.56 改进 daemon 诊断、macOS service 管理，并把 Admin 首页收敛到
+Models。新的 `owlcoda service install|uninstall|status` 是 opt-in；已有
+安装不会自动改成后台服务。
 
 ```bash
 npm install -g owlcoda

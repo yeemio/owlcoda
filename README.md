@@ -9,7 +9,11 @@ a browser Admin, and model routing you control. It connects to your own
 local runtime endpoint or cloud API key. There is no OwlCoda account, no
 hosted control plane, and no telemetry pipeline.
 
-**Current public package:** `owlcoda@0.14.55`
+**Current public package:** `owlcoda@0.14.56`
+
+0.14.56 improves daemon diagnostics and macOS service management, and makes
+Models the Admin home surface. The new `owlcoda service install|uninstall|status`
+flow is opt-in; existing installs keep their current launch behavior.
 
 ```bash
 npm install -g owlcoda

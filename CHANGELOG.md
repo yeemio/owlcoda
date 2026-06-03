@@ -10,6 +10,24 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.56] - 2026-06-03
+
+Daemon/service resilience and Admin Models-as-home.
+
+- The daemon now writes stdout/stderr to `~/.owlcoda/daemon.log` with rotation,
+  making background lifecycle failures easier to diagnose.
+- Request-handler crashes are isolated to the failing request instead of taking
+  down the daemon process.
+- `owlcoda service install|uninstall|status` adds opt-in macOS launchd
+  KeepAlive management. Existing users are not enrolled automatically.
+- launchd-started daemons self-register runtime metadata, and the CLI
+  coordinates with launchd instead of spawning a second daemon.
+- `OWLCODA_*` values, including `OWLCODA_HOME`, are persisted into the launchd
+  plist for isolated service installs.
+- Admin now opens on Models instead of a separate Start page. Empty installs
+  show a direct add-model entry, and local runtime setup appears in the local
+  model context.
+
 ## [0.14.55] - 2026-06-03
 
 Admin model onboarding and terminal rendering hardening.
