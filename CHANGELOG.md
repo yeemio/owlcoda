@@ -10,6 +10,16 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.58] - 2026-06-04
+
+Cloud-model startup escape hatch.
+
+- When the default model points at an unavailable local runtime but configured
+  cloud models are available, bare `owlcoda` now prints the direct `-m` startup
+  escape hatch and default-model guidance before opening Admin. This keeps
+  users from getting trapped in the first-run shunt when a working cloud route
+  is already configured.
+
 ## [0.14.57] - 2026-06-04
 
 Slash picker hotfix, streaming cache-usage visibility, and local readiness

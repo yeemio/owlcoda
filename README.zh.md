@@ -9,12 +9,11 @@ Admin，以及由你掌控的模型路由。它连接你自己的本地 runtime 
 或云端 API key。没有 OwlCoda 账号，没有托管控制面，也没有托管
 telemetry 管线。
 
-**当前公开 npm 包：** `owlcoda@0.14.57`
+**当前公开 npm 包：** `owlcoda@0.14.58`
 
-0.14.57 修复 slash picker 里带参数命令无法回车提交的问题，让流式响应结尾
-把真实 input/cache usage 传给下游，并新增本地 JSONL readiness 诊断采样。
-本地采样可用 `OWLCODA_TELEMETRY_EVENTS=0` 和
-`OWLCODA_PROJECT_MAP_SHADOW=0` 关闭。
+0.14.58 改进首次启动恢复：当默认模型指向未启动的本地 runtime、但已有可用
+云模型配置时，OwlCoda 会先显示 `-m` 启动逃生口和默认模型设置建议，再打开
+Admin。
 
 ```bash
 npm install -g owlcoda

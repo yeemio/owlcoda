@@ -9,12 +9,12 @@ a browser Admin, and model routing you control. It connects to your own
 local runtime endpoint or cloud API key. There is no OwlCoda account, no
 hosted control plane, and no hosted telemetry pipeline.
 
-**Current public package:** `owlcoda@0.14.57`
+**Current public package:** `owlcoda@0.14.58`
 
-0.14.57 fixes slash commands typed with arguments in the picker, surfaces final
-streaming input/cache usage to downstream clients, and adds local JSONL
-readiness sampling for diagnostics. The local sampling can be disabled with
-`OWLCODA_TELEMETRY_EVENTS=0` and `OWLCODA_PROJECT_MAP_SHADOW=0`.
+0.14.58 improves first-run recovery when the default model points at an
+unavailable local runtime but a configured cloud model can be used directly.
+OwlCoda now shows the `-m` startup escape hatch and default-model guidance
+before opening Admin.
 
 ```bash
 npm install -g owlcoda
