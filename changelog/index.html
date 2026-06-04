@@ -24,6 +24,28 @@ owlcoda --version
 npm view owlcoda version
 </code></pre>
 
+<h2>[0.14.57] - 2026-06-04</h2>
+
+<p>Slash picker hotfix, streaming cache-usage visibility, and local readiness</p>
+<p>sampling.</p>
+
+<ul>
+<li>Slash commands typed with arguments, such as <code>/mode normal</code> or</li>
+<p>  <code>/model &lt;name&gt;</code>, now submit correctly from the picker even when the visible</p>
+<p>  fuzzy-match list is empty.</p>
+<li>Streaming responses now include final input-token and cache-read usage in the</li>
+<p>  terminal <code>message_delta</code>, so downstream clients can see the same cache</p>
+<p>  accounting OwlCoda uses internally.</p>
+<li>Added local JSONL telemetry-envelope plumbing for readiness diagnostics. This</li>
+<p>  is local file output, not a hosted telemetry pipeline, and can be disabled</p>
+<p>  with <code>OWLCODA_TELEMETRY_EVENTS=0</code>.</p>
+<li>Added Project Map day-0 shadow sampling for fresh/stale snapshot decisions;</li>
+<p>  disable it with <code>OWLCODA_PROJECT_MAP_SHADOW=0</code>.</p>
+<li>Added Tier-1 fault-injection matrix coverage and an inline upstream 5xx probe</li>
+<p>  to keep provider-runtime diagnostics visible in release gates.</p>
+<li>Daemon port-in-use errors now point at the local daemon log path and suggest</li>
+<p>  <code>owlcoda service status</code> when service ownership may matter.</p>
+</ul>
 <h2>[0.14.56] - 2026-06-03</h2>
 
 <p>Daemon/service resilience and Admin Models-as-home.</p>
@@ -606,4 +628,4 @@ npm view owlcoda version
 <p>  their own local runtime or cloud provider in Admin.</p>
 <li>The public repository is now a router for install docs, issues, changelog,</li>
 <p>  security contact, and website links rather than the product source tree.</p>
-</ul></div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>A local-first AI coding workbench</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/docs/install" data-astro-cid-sz7xmlte>Docs</a></li> <li data-astro-cid-sz7xmlte><a href="/architect/" data-astro-cid-sz7xmlte>Architecture Board</a></li> <li data-astro-cid-sz7xmlte><a href="/changelog" data-astro-cid-sz7xmlte>Changelog</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.14.56</li> <li class="pill" data-astro-cid-sz7xmlte>npm package</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>No telemetry</li> </ul> </div> </footer>  </body></html>
+</ul></div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>A local-first AI coding workbench</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/docs/install" data-astro-cid-sz7xmlte>Docs</a></li> <li data-astro-cid-sz7xmlte><a href="/architect/" data-astro-cid-sz7xmlte>Architecture Board</a></li> <li data-astro-cid-sz7xmlte><a href="/changelog" data-astro-cid-sz7xmlte>Changelog</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.14.57</li> <li class="pill" data-astro-cid-sz7xmlte>npm package</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>Local diagnostics</li> </ul> </div> </footer>  </body></html>
