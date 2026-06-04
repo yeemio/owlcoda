@@ -6,14 +6,15 @@
 
 OwlCoda 是一个本地优先的 AI 编码工作台：native 终端 agent、浏览器
 Admin，以及由你掌控的模型路由。它连接你自己的本地 runtime endpoint
-或云端 API key。没有 OwlCoda 账号，没有托管控制面，也没有 telemetry
-管线。
+或云端 API key。没有 OwlCoda 账号，没有托管控制面，也没有托管
+telemetry 管线。
 
-**当前公开 npm 包：** `owlcoda@0.14.56`
+**当前公开 npm 包：** `owlcoda@0.14.57`
 
-0.14.56 改进 daemon 诊断、macOS service 管理，并把 Admin 首页收敛到
-Models。新的 `owlcoda service install|uninstall|status` 是 opt-in；已有
-安装不会自动改成后台服务。
+0.14.57 修复 slash picker 里带参数命令无法回车提交的问题，让流式响应结尾
+把真实 input/cache usage 传给下游，并新增本地 JSONL readiness 诊断采样。
+本地采样可用 `OWLCODA_TELEMETRY_EVENTS=0` 和
+`OWLCODA_PROJECT_MAP_SHADOW=0` 关闭。
 
 ```bash
 npm install -g owlcoda

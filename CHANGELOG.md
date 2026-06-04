@@ -10,6 +10,27 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.57] - 2026-06-04
+
+Slash picker hotfix, streaming cache-usage visibility, and local readiness
+sampling.
+
+- Slash commands typed with arguments, such as `/mode normal` or
+  `/model <name>`, now submit correctly from the picker even when the visible
+  fuzzy-match list is empty.
+- Streaming responses now include final input-token and cache-read usage in the
+  terminal `message_delta`, so downstream clients can see the same cache
+  accounting OwlCoda uses internally.
+- Added local JSONL telemetry-envelope plumbing for readiness diagnostics. This
+  is local file output, not a hosted telemetry pipeline, and can be disabled
+  with `OWLCODA_TELEMETRY_EVENTS=0`.
+- Added Project Map day-0 shadow sampling for fresh/stale snapshot decisions;
+  disable it with `OWLCODA_PROJECT_MAP_SHADOW=0`.
+- Added Tier-1 fault-injection matrix coverage and an inline upstream 5xx probe
+  to keep provider-runtime diagnostics visible in release gates.
+- Daemon port-in-use errors now point at the local daemon log path and suggest
+  `owlcoda service status` when service ownership may matter.
+
 ## [0.14.56] - 2026-06-03
 
 Daemon/service resilience and Admin Models-as-home.

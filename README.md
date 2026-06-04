@@ -7,13 +7,14 @@
 OwlCoda is a local-first AI coding workbench: a native terminal agent,
 a browser Admin, and model routing you control. It connects to your own
 local runtime endpoint or cloud API key. There is no OwlCoda account, no
-hosted control plane, and no telemetry pipeline.
+hosted control plane, and no hosted telemetry pipeline.
 
-**Current public package:** `owlcoda@0.14.56`
+**Current public package:** `owlcoda@0.14.57`
 
-0.14.56 improves daemon diagnostics and macOS service management, and makes
-Models the Admin home surface. The new `owlcoda service install|uninstall|status`
-flow is opt-in; existing installs keep their current launch behavior.
+0.14.57 fixes slash commands typed with arguments in the picker, surfaces final
+streaming input/cache usage to downstream clients, and adds local JSONL
+readiness sampling for diagnostics. The local sampling can be disabled with
+`OWLCODA_TELEMETRY_EVENTS=0` and `OWLCODA_PROJECT_MAP_SHADOW=0`.
 
 ```bash
 npm install -g owlcoda
