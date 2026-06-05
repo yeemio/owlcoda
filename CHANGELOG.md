@@ -10,6 +10,23 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.59] - 2026-06-05
+
+Project-scoped third-party skill enablement.
+
+- Added `owlcoda skills add`, `owlcoda skills list`, and
+  `owlcoda skills remove` for project-scoped third-party skill installation,
+  inventory, and cleanup.
+- Third-party skill installs are pinned and vendored into the project boundary
+  with manifest records and integrity checks. OwlCoda loads the vendored copy
+  rather than re-fetching at runtime.
+- Added path traversal and out-of-tree vendored-path guards around the
+  third-party skill installer and loader.
+- `owlcoda skills list --json` now returns separate `learned` and
+  `thirdParty` sections instead of a flat array.
+- The cloud-model startup escape hatch introduced in 0.14.58 remains available
+  when the default local runtime is unavailable.
+
 ## [0.14.58] - 2026-06-04
 
 Cloud-model startup escape hatch.

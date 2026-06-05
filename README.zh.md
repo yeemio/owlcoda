@@ -9,11 +9,10 @@ Admin，以及由你掌控的模型路由。它连接你自己的本地 runtime 
 或云端 API key。没有 OwlCoda 账号，没有托管控制面，也没有托管
 telemetry 管线。
 
-**当前公开 npm 包：** `owlcoda@0.14.58`
+**当前公开 npm 包：** `owlcoda@0.14.59`
 
-0.14.58 改进首次启动恢复：当默认模型指向未启动的本地 runtime、但已有可用
-云模型配置时，OwlCoda 会先显示 `-m` 启动逃生口和默认模型设置建议，再打开
-Admin。
+0.14.59 增加项目级第三方 skill 安装、列表和移除命令，并带 pinned vendor
+与完整性校验。0.14.58 的云模型启动逃生口继续保留。
 
 ```bash
 npm install -g owlcoda
