@@ -10,6 +10,28 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.60] - 2026-06-09
+
+Rendering stability, shadow-readiness tooling, and config routing fixes.
+
+- Short terminal layouts now keep the user's just-submitted message visible
+  while the assistant live preview streams.
+- tmux/screen/zellij-like terminals automatically fall back to safe rendering
+  instead of using fragile diff rendering. Set `OWLCODA_FORCE_UNSAFE_DIFF=1`
+  only when intentionally reproducing diff-render issues.
+- Terminal rendering diagnostics can be written locally with `OWLCODA_DEBUG=1`
+  or `OWLCODA_DEBUG_LOG=/path`.
+- Ambiguous-width terminal probing now falls back to CJK locale metadata when
+  the probe cannot complete.
+- Added an opt-in output repetition detector. `OWLCODA_OUTPUT_REPETITION_SHADOW=1`
+  records local telemetry only; `OWLCODA_OUTPUT_REPETITION_GUARD=1` enables the
+  soft-stop guard.
+- Loaded catalog `intent_defaults` into config so intent routing can honor
+  catalog-defined default models.
+- Added shadow/readout tooling for routing, cutover status, microcompact, lazy
+  skills, and benchmark trace-diff verification without changing default user
+  behavior.
+
 ## [0.14.59] - 2026-06-05
 
 Project-scoped third-party skill enablement.

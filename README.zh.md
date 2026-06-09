@@ -9,10 +9,11 @@ Admin，以及由你掌控的模型路由。它连接你自己的本地 runtime 
 或云端 API key。没有 OwlCoda 账号，没有托管控制面，也没有托管
 telemetry 管线。
 
-**当前公开 npm 包：** `owlcoda@0.14.59`
+**当前公开 npm 包：** `owlcoda@0.14.60`
 
-0.14.59 增加项目级第三方 skill 安装、列表和移除命令，并带 pinned vendor
-与完整性校验。0.14.58 的云模型启动逃生口继续保留。
+0.14.60 强化短终端和 tmux/screen/zellij 等多路复用终端里的渲染稳定性，
+新增本地渲染 debug 开关，并加入 opt-in 的输出重复检测。0.14.59 的项目级
+第三方 skill 能力也包含在当前 npm 包里。
 
 ```bash
 npm install -g owlcoda

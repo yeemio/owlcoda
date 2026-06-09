@@ -9,11 +9,11 @@ a browser Admin, and model routing you control. It connects to your own
 local runtime endpoint or cloud API key. There is no OwlCoda account, no
 hosted control plane, and no hosted telemetry pipeline.
 
-**Current public package:** `owlcoda@0.14.59`
+**Current public package:** `owlcoda@0.14.60`
 
-0.14.59 adds project-scoped third-party skill install, list, and remove
-commands with pinned vendoring and integrity checks. It also keeps the
-cloud-model startup escape hatch from 0.14.58.
+0.14.60 hardens terminal rendering in short and multiplexed terminals, adds
+local debug switches for rendering diagnostics, and ships opt-in output
+repetition detection. It also includes the 0.14.59 project-scoped skill work.
 
 ```bash
 npm install -g owlcoda
