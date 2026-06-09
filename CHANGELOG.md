@@ -10,6 +10,22 @@ owlcoda --version
 npm view owlcoda version
 ```
 
+## [0.14.61] - 2026-06-09
+
+Headless public API, safer OpenAI-compatible routing, and resume/runtime polish.
+
+- Added the public `owlcoda/headless` package export so external runners can
+  call `runHeadless` without importing OwlCoda internals.
+- Normalized `/v1`-suffixed base URLs before appending OwlCoda routes, avoiding
+  accidental `/v1/v1/messages` or `/v1/v1/chat/completions` requests for
+  OpenAI-compatible runtimes.
+- Resumed sessions that end on an unanswered user/tool-result turn now continue
+  automatically, and queued input clears as soon as it is accepted.
+- Added `OWLCODA_CLOUD_HEADERS_TIMEOUT_MS` for known-slow cloud reasoning
+  models while keeping the default cloud headers budget unchanged.
+- Added strict explicit-model checks for runner flows that should fail fast
+  instead of silently falling back to the default model.
+
 ## [0.14.60] - 2026-06-09
 
 Rendering stability, shadow-readiness tooling, and config routing fixes.
