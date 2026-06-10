@@ -1,11 +1,35 @@
-.DS_Store
-node_modules/
 dist/
-admin/dist/
-.env
-.env.*
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+node_modules/
+*.pid
+*.tsbuildinfo
+.DS_Store
 
+# User-specific config (may contain API keys)
+config.json
+
+# Vendored upstream (users must provide their own)
+upstream/
+docs/*-REVIEW-*.md
+
+# Test/experimentation leftovers
+fibonacci.ts
+tmp/
+.tmp/
+.claude/
+
+# Local-only working notes (plans, specs, manual trial reports). Stays
+# out of the public repo so we can keep evolving them without exposing
+# half-finished roadmap thinking.
+/internal/
+
+# Brainstorming visual companion artifacts (per-session HTML mockups
+# for the static-site brainstorming and any future design sessions).
+.superpowers/
+
+# Legacy working documents from pre-public development. Kept out of the
+# public repo — historical task boards, phase-round prompts, and release
+# gate reports reference retired names and absolute local paths. Their
+# content is preserved in git history (pre-2026-04-23 commits).
+/AGENT-TASKS.md
+/prompts/
+/reports/

@@ -1,0 +1,8 @@
+控制域字段：
+
+- _admission_*、release_candidate
+- host_pressure、cache_pre_gate
+- runtime_governance、hazardous_operations
+- _controls、_visibility、reclaim_barrier_event
+
+这些下划线标识符出现在散文中，不应被解析成 italic/emphasis。
