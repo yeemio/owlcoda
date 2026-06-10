@@ -16,6 +16,7 @@ describe('isPublicPath — default-deny allowlist for the public source tree', (
       'package-lock.json',
       'config.example.json',
       'README.md',
+      'README.zh.md',
       'CHANGELOG.md',
       'LICENSE',
       'NOTICE.md',

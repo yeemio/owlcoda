@@ -33,6 +33,7 @@ const ALLOW_FILES = [
   'package-lock.json',
   'config.example.json',
   'README.md',
+  'README.zh.md',
   'CHANGELOG.md',
   'LICENSE',
   'NOTICE.md',
