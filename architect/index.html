@@ -19,7 +19,7 @@
      radial-gradient(900px 500px at -10% 110%, rgba(90,169,230,.08), transparent 60%),
      var(--bg);
      color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"PingFang SC","Microsoft YaHei",sans-serif;
-     -webkit-font-smoothing:antialiased;line-height:1.5}
+     -webkit-font-smoothing:antialiased;line-height:1.5;overflow-x:hidden}
   .wrap{max-width:1180px;margin:0 auto;padding:28px 22px 60px}
   .sub{color:var(--dim);font-size:13px}
   .faint{color:var(--faint)}
@@ -85,6 +85,18 @@
     .hero,.lanes,.two,.adr,.swe{grid-template-columns:1fr}
     .gauge-wrap{flex-direction:column}
   }
+  @media(max-width:520px){
+    .wrap{padding-left:22px;padding-right:22px;overflow:hidden}
+    .kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+    .kpi{min-width:0}
+    .kpi b{font-size:20px}
+    .secthead{align-items:flex-start;gap:10px;flex-wrap:wrap}
+    .secthead h2,.secthead .sub{min-width:0;max-width:100%}
+    .secthead .sub{display:none}
+    .card{min-width:0}
+    .bar .row{display:block}
+    .bar .row .v{display:block;text-align:left;white-space:normal;margin-top:2px}
+  }
 </style>
 </head>
 <body>
@@ -99,10 +111,10 @@
       <h1 style="margin-top:14px">🦉 OwlCoda</h1>
       <div class="tagline">装在你自己电脑里的 AI 编程助手。像 Claude Code，但<b style="color:var(--ink)">模型、工具、数据全在本地</b>——不登录、不上云。</div>
       <div class="kpis">
-        <div class="kpi"><b>32</b><small>18 天内发版次数</small></div>
-        <div class="kpi"><b style="color:var(--owl2)">0.14.59</b><small>当前 npm 版本</small></div>
-        <div class="kpi"><b>22</b><small>架构决策 (ADR)</small></div>
-        <div class="kpi"><b style="color:var(--good)">2/4</b><small>cutover 翻默认</small></div>
+        <div class="kpi"><b>37</b><small>高频发版轮次</small></div>
+        <div class="kpi"><b style="color:var(--owl2)">0.14.64</b><small>当前 npm latest</small></div>
+        <div class="kpi"><b>v0.15.0</b><small>GPL 源码 tag</small></div>
+        <div class="kpi"><b style="color:var(--good)">R23</b><small>source-open 已入账</small></div>
       </div>
     </div>
 
@@ -113,12 +125,12 @@
             <circle cx="85" cy="85" r="72" fill="none" stroke="#0c1019" stroke-width="14"/>
             <circle cx="85" cy="85" r="72" fill="none" stroke="url(#g)" stroke-width="14"
               stroke-linecap="round" stroke-dasharray="452.4"
-              stroke-dashoffset="126.7" transform="rotate(-90 85 85)"/>
+              stroke-dashoffset="117.6" transform="rotate(-90 85 85)"/>
             <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
               <stop offset="0" stop-color="#e8a04f"/><stop offset="1" stop-color="#3fb98f"/>
             </linearGradient></defs>
           </svg>
-          <div class="score"><b>3.6</b><span>满分 5 · B→B+ 下沿</span></div>
+          <div class="score"><b>3.7</b><span>满分 5 · B→B+ 下沿</span></div>
         </div>
         <div class="trend">
           <div class="lbl">健康度走势（4 次评估）</div>
@@ -133,7 +145,7 @@
           </svg>
           <div class="legend" style="margin-top:2px">
             <span class="faint">2.9 起步</span>
-            <span style="color:var(--owl2);margin-left:auto">→ 3.6 现在</span>
+            <span style="color:var(--owl2);margin-left:auto">→ 3.7 现在</span>
           </div>
         </div>
       </div>
@@ -144,22 +156,22 @@
   <div class="secthead"><h2 style="margin:0">现在三条主线在跑</h2><span class="sub">这两周精力花在哪</span></div>
   <div class="grid lanes">
     <div class="card lane">
-      <div class="num">① 考试</div>
-      <h3>跑行业标准考卷</h3>
-      <p>SWE-bench：让 AI 真去改开源项目的 bug，官方判卷。证明"能改代码"不是吹的。</p>
-      <span class="pill p-doing"><span class="dot d-doing"></span>进行中 · 考了 62 分</span>
+      <div class="num">① 开源</div>
+      <h3>GPL source 已公开</h3>
+      <p>公仓 v0.15.0 已承载源码线。npm 仍是安装入口，但 dist 与 SOURCE.md 现在能回到可审计源码。</p>
+      <span class="pill p-go"><span class="dot d-go"></span>已落地 · 双线对齐</span>
     </div>
     <div class="card lane">
-      <div class="num">② 防打架</div>
-      <h3>多个 AI 别互相杀</h3>
-      <p>出过事故：5 个 AI 并行干活，1 个卡住把另外 4 个连坐杀掉。现在各干各的，互相隔离。</p>
-      <span class="pill p-go"><span class="dot d-go"></span>已修复</span>
+      <div class="num">② 审计</div>
+      <h3>供应链和输入竞态收口</h3>
+      <p>开源前后补了 skill git-source RCE、防 symlink traversal、SubmissionGuard 回收、mode 可见性等整类 bug。</p>
+      <span class="pill p-go"><span class="dot d-go"></span>已 ship · 0.14.62-64</span>
     </div>
     <div class="card lane">
-      <div class="num">③ 补真功能</div>
-      <h3>把"空壳工具"做实</h3>
-      <p>有些工具只是摆设。代码跳转 (LSP) 以前是假的、现在真能用了。还剩 5 个空壳要清。</p>
-      <span class="pill p-go"><span class="dot d-go"></span>大部分已修</span>
+      <div class="num">③ 纪律</div>
+      <h3>npm 与源码 tag 要成对</h3>
+      <p>0.14.x 是历史 npm 线；开源后主线要进入 0.15.x。以后漏同步就是 license 合规风险。</p>
+      <span class="pill p-doing"><span class="dot d-doing"></span>下一步 · npm 0.15.x</span>
     </div>
   </div>
 
@@ -169,18 +181,18 @@
     <div class="card">
       <h2>OwlCoda 六项体检</h2>
       <div class="bars">
-        <div class="bar"><div class="row"><span>🔒 信任（数据安全）</span><span class="v">4.2 · 王牌</span></div><div class="track"><div class="fill" style="width:84%;background:var(--good)"></div></div></div>
-        <div class="bar"><div class="row"><span>🎯 产品定位</span><span class="v">3.5</span></div><div class="track"><div class="fill" style="width:70%;background:var(--good)"></div></div></div>
-        <div class="bar"><div class="row"><span>⚙️ 跑得对不对</span><span class="v">3.5</span></div><div class="track"><div class="fill" style="width:70%;background:var(--warn)"></div></div></div>
-        <div class="bar"><div class="row"><span>🔌 生态（模型/工具）<small style="color:var(--good)">↑LSP+模式</small></span><span class="v">3.0 → 3.5</span></div><div class="track"><div class="fill" style="width:70%;background:var(--warn)"></div></div></div>
-        <div class="bar"><div class="row"><span>🛠️ 好不好维护 <small style="color:var(--good)">↑CI闸</small></span><span class="v">2.3 → 3.2</span></div><div class="track"><div class="fill" style="width:64%;background:var(--warn)"></div></div></div>
-        <div class="bar"><div class="row"><span>💰 花钱（省不省 token）<small style="color:var(--good)">↑缓存+可见性闭环</small></span><span class="v">2.0 → 3.5</span></div><div class="track"><div class="fill" style="width:70%;background:var(--warn)"></div></div></div>
+        <div class="bar"><div class="row"><span>🔒 信任（数据安全）</span><span class="v">4.3 · 源码可审计</span></div><div class="track"><div class="fill" style="width:86%;background:var(--good)"></div></div></div>
+        <div class="bar"><div class="row"><span>🎯 产品定位</span><span class="v">3.7 · 中立基底</span></div><div class="track"><div class="fill" style="width:74%;background:var(--good)"></div></div></div>
+        <div class="bar"><div class="row"><span>⚙️ 跑得对不对</span><span class="v">3.6 · 审计收口</span></div><div class="track"><div class="fill" style="width:72%;background:var(--warn)"></div></div></div>
+        <div class="bar"><div class="row"><span>🔌 生态（模型/工具）<small style="color:var(--good)">↑source+headless</small></span><span class="v">3.5 → 3.7</span></div><div class="track"><div class="fill" style="width:74%;background:var(--good)"></div></div></div>
+        <div class="bar"><div class="row"><span>🛠️ 好不好维护 <small style="color:var(--good)">↑CI+开源纪律</small></span><span class="v">3.2 → 3.3</span></div><div class="track"><div class="fill" style="width:66%;background:var(--warn)"></div></div></div>
+        <div class="bar"><div class="row"><span>💰 花钱（省不省 token）<small style="color:var(--good)">↑账本诚实</small></span><span class="v">3.5 → 3.6</span></div><div class="track"><div class="fill" style="width:72%;background:var(--warn)"></div></div></div>
       </div>
       <div class="legend">
         <span><span class="dot d-go"></span>好 (3.5+)</span>
         <span><span class="dot d-doing"></span>中 (3.0)</span>
         <span><span class="dot d-bad"></span>待补 (&lt;2.5)</span>
-        <span style="color:var(--good)">本轮两红区都脱红 ↑</span>
+        <span style="color:var(--good)">source-open 改变信任与生态底座 ↑</span>
       </div>
     </div>
 
@@ -209,49 +221,50 @@
       <div class="item lg"><b>LSP 接真功能</b><small>代码跳转从空壳变真</small></div>
       <div class="item lg"><b>自动化体检 ✨新</b><small>CI 自托管常驻，发版前全套体检</small></div>
       <div class="item lg"><b>省钱缓存 ✨新</b><small>对话前缀缓存，重复内容不重发</small></div>
-      <div class="item lg"><b>自适应并发 ✨新</b><small>AI 群干活自动调速，已发 0.14.44</small></div>
-      <div class="item lg"><b>跨进程额度协调 ✨新</b><small>多窗口共用额度池，0.14.46 已实现</small></div>
+      <div class="item lg"><b>自适应并发</b><small>AI 群干活自动调速，已发 0.14.44</small></div>
+      <div class="item lg"><b>跨进程额度协调</b><small>多窗口共用额度池，0.14.46 已实现</small></div>
       <div class="item lg"><b>操作模式默认开</b><small>plan/normal/auto 翻默认，第 1 条 cutover</small></div>
       <div class="item lg"><b>项目地图默认开</b><small>对标 CC 项目记忆，第 2 条 cutover</small></div>
-      <div class="item lg"><b>项目地图漂移已修 ✅本轮</b><small>read-only 跑不再漂移（guard 修好）</small></div>
+      <div class="item lg"><b>GPL 源码公开 ✨新</b><small>v0.15.0 公仓源码线已落地</small></div>
+      <div class="item lg"><b>供应链安全审计 ✨新</b><small>skill RCE / symlink / root 删除保护</small></div>
     </div>
     <div class="card col">
       <h4><span class="dot d-doing"></span>造好了 · 等开默认 / 早期播种</h4>
       <div class="item ly"><b>权限闸门</b><small>删库等危险操作默认拦住</small></div>
       <div class="item ly"><b>写入溯源</b><small>AI 只能写它该写的文件</small></div>
-      <div class="item ly"><b>行为账本对账 ✨新</b><small>"说做了"vs"真做了"可审计，先观测</small></div>
+      <div class="item ly"><b>行为账本对账</b><small>"说做了"vs"真做了"可审计，先观测</small></div>
+      <div class="item ly"><b>npm 0.15 版本纪律 ✨新</b><small>npm runtime line ↔ GPL source tag 成对发布</small></div>
     </div>
     <div class="card col">
       <h4><span class="dot d-bad"></span>破高原的大门槛（3 选 1 先啃）</h4>
-      <div class="item lr"><b>SWE 干净跑满 300 ⭐</b><small>最快产出可对外引用的质量数字</small></div>
+      <div class="item lr"><b>SWE 干净跑满 300</b><small>已降级但仍是破高原质量数字</small></div>
       <div class="item lr"><b>体检项补全</b><small>12 项还差 F6/F11（内部证据）</small></div>
       <div class="item lr"><b>对话循环显式状态机</b><small>内部重构，提可维护性</small></div>
     </div>
   </div>
 
   <div class="card" style="margin-top:16px;border-color:rgba(63,185,143,.35)">
-    <h2 style="color:var(--good)">✅ 缓存可见性已闭环 · /cost 怎么读（本轮更新）</h2>
+    <h2 style="color:var(--good)">🔓 公仓 GPL source 已落地 · npm 与源码线怎么读（本轮更新）</h2>
     <p style="margin:0 0 8px;color:var(--dim);font-size:13.5px">
-      两种协议 × 流式/非流，<b style="color:var(--ink)">只要命中缓存，<code>/cost</code> 的 Cache read 都会涨</b>。上一版"OpenAI 恒为 0"的说法已作废。
+      OwlCoda 现在是<b style="color:var(--ink)"> npm 安装 + GPL 源码可审计</b>的双线结构。npm 仍给用户装；公仓 tag 给源码、许可证和对应源码义务对账。
     </p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:12.5px;color:var(--dim)">
       <div style="flex:1;min-width:200px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px">
-        <b style="color:var(--ink)">Anthropic 协议</b>（云 / 本地 anthropic_messages）<br>OwlCoda <b style="color:var(--good)">主动打</b>缓存断点（系统提示/工具/对话前缀）。流+非流都进 /cost。
+        <b style="color:var(--ink)">npm runtime line</b><br>当前 latest 是 <b style="color:var(--good)">0.14.64</b>。0.14.x 属于开源前历史线；下一次正式 npm 主线应进入 0.15.x。
       </div>
       <div style="flex:1;min-width:200px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px">
-        <b style="color:var(--ink)">OpenAI 协议</b><br>OwlCoda 不打断点，但上游<b style="color:var(--good)">自己缓存</b>并回报 cached_tokens（多数云端支持）也会读进来显示。
+        <b style="color:var(--ink)">GPL source line</b><br>公仓 tag <b style="color:var(--good)">v0.15.0</b> 已公开。之后 npm 包应能对应到同版本 source tag 与 SOURCE.md。
       </div>
     </div>
     <p style="margin:8px 0 0;color:var(--faint);font-size:12.5px">
-      唯一正常的 0：本地 runtime（Ollama / LM Studio）多不回报 cached_tokens → 这是<b style="color:var(--dim)">上游不报，不是 bug</b>。
-      看法：turn 1 写缓存、turn 2 起读才爬；相邻两轮要在 5 分钟内（Anthropic 侧）。
+      新纪律：<b style="color:var(--dim)">漏同步就是 license 合规风险</b>。以后发布报告要分清 npm publish、公仓 tag、website deploy 三个面。
     </p>
   </div>
 
   <footer>
-    数据来源：<code>KANBAN.md</code>（R17 · 2026-06-05 · npm 0.14.59）· <code>ASSESSMENT-2026-05-30.md</code> · <code>ARCHITECT-PLAN-2026-05-16.md</code><br>
-    口径：健康度=6 维加权均分（≈3.6）· SWE-bench=清洗污染后的非空答卷得分 · 仅供架构跟踪，非对外宣传数字<br>
-    本轮（R17）：技能信任平面 — 第三方 skill 进入项目级安装 / vendor / integrity 约束。<b>高频收口模式继续成立；这轮不是默认托管扩张，而是把可扩展能力先收进本地边界。</b>
+    数据来源：<code>KANBAN.md</code> / <code>ASSESSMENT-2026-05-30.md</code>（R23 · 2026-06-10 · npm 0.14.64 · GPL source v0.15.0）· 公仓 tag <code>v0.15.0</code><br>
+    口径：健康度=6 维加权均分（≈3.7）· source-open 是定位/信任里程碑，不直接宣传 SWE clean score · 仅供架构跟踪，非对外宣传数字<br>
+    本轮（R23）：source-open 落地 + 审计修复 cluster。<b>评分维持 3.7：定位可信度和可审计性上台阶，但破高原三门槛仍未 ship。下一跳不是再堆小修，是 npm 0.15 对齐、fitness 补全、显式状态机或 clean SWE 证据。</b>
   </footer>
 
 </div>
