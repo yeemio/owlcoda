@@ -224,7 +224,7 @@ describe('native conversation free-mode long task loop policy', () => {
       'curl -fsS http://127.0.0.1:8001/mes/health',
       'docker compose -f deploy/p0.yml restart middleware',
       'docker compose ps --format json',
-      "grep MES_CLIENT_KEY /home/sieracclaw/sieracMes-AI/deploy/env/mes.env",
+      "grep MES_CLIENT_KEY /home/publicuser/sieracMes-AI/deploy/env/mes.env",
       'docker compose -f deploy/p0.yml exec middleware env',
       'curl -fsS http://127.0.0.1:8001/mes/admin/stats -H "X-MES-Client-Key: ..."',
       'docker compose -f deploy/p0.yml stop middleware',
@@ -235,7 +235,7 @@ describe('native conversation free-mode long task loop policy', () => {
     const responses = [
       ...remoteCmds.map((cmd, index) =>
         toolUseResponse('bash', `tool-${index + 1}`, {
-          cwd: '/Users/yeemio/AI/project/sieracMes-AI',
+          cwd: '/Users/publicuser/AI/project/sieracMes-AI',
           command: `${sshPrefix}${cmd}'`,
         }),
       ),
@@ -1901,8 +1901,8 @@ describe('production gate v1 (0.13.70)', () => {
     addUserMessage(
       conv,
       [
-        '先读 /Users/yeemio/AI/OwlManage/docs/prompts/industrial-ai-agent-ppt-v1.4-new-executor-full-rebuild-prompt-20260514.md',
-        '再读 /Users/yeemio/work/ppt/claude-design-input-v1.3.1/06-new-executor-v1.4-full-rebuild.md',
+        '先读 /Users/publicuser/AI/OwlManage/docs/prompts/industrial-ai-agent-ppt-v1.4-new-executor-full-rebuild-prompt-20260514.md',
+        '再读 /Users/publicuser/work/ppt/claude-design-input-v1.3.1/06-new-executor-v1.4-full-rebuild.md',
         '目标产物：46 页 HTML PPT + build notes',
         '只交付：',
         '1. HTML',
@@ -1949,8 +1949,8 @@ describe('production gate v1 (0.13.70)', () => {
     )
     expect(injectedUserTurns).toHaveLength(1)
     const injectedText = JSON.stringify(injectedUserTurns[0].content)
-    expect(injectedText).not.toContain('/Users/yeemio/AI/OwlManage/docs/prompts/')
-    expect(injectedText).not.toContain('/Users/yeemio/work/ppt/claude-design-input-v1.3.1/')
+    expect(injectedText).not.toContain('/Users/publicuser/AI/OwlManage/docs/prompts/')
+    expect(injectedText).not.toContain('/Users/publicuser/work/ppt/claude-design-input-v1.3.1/')
     expect(injectedText).not.toContain('build-notes-v1.4-content-rebuild-46p.md')
     expect(injectedText).toContain('path scoped by the task contract')
   })
@@ -3338,7 +3338,7 @@ describe('contract.confidence fail-open gate (0.14.18)', () => {
     // Prompt uses "write" to trigger taskHasWriteRequiredContract=true.
     addUserMessage(
       conv,
-      'Write the slide deck referencing `/Users/yeemio/work/ppt/deck-stage.js`',
+      'Write the slide deck referencing `/Users/publicuser/work/ppt/deck-stage.js`',
     )
 
     const dispatcher = new ToolDispatcher()
@@ -3380,7 +3380,7 @@ describe('contract.confidence fail-open gate (0.14.18)', () => {
     const conv = createConversation({ system: 'test', model: 'test-model' })
     // Write-required contract. The advisory fires on the demoted (default) path
     // regardless of scope confidence.
-    addUserMessage(conv, 'Write the slide deck referencing `/Users/yeemio/work/ppt/deck-stage.js`')
+    addUserMessage(conv, 'Write the slide deck referencing `/Users/publicuser/work/ppt/deck-stage.js`')
 
     const dispatcher = new ToolDispatcher()
     dispatcher.register({
@@ -3554,8 +3554,8 @@ describe('Slice 0 deliverable contract: file artifact legacy hard-stop', () => {
     addUserMessage(
       conv,
       [
-        '先读 /Users/yeemio/AI/OwlManage/docs/prompts/industrial-ai-agent-ppt-v1.4-new-executor-full-rebuild-prompt-20260514.md',
-        '再读 /Users/yeemio/work/ppt/claude-design-input-v1.3.1/06-new-executor-v1.4-full-rebuild.md',
+        '先读 /Users/publicuser/AI/OwlManage/docs/prompts/industrial-ai-agent-ppt-v1.4-new-executor-full-rebuild-prompt-20260514.md',
+        '再读 /Users/publicuser/work/ppt/claude-design-input-v1.3.1/06-new-executor-v1.4-full-rebuild.md',
         '目标产物：46 页 HTML PPT + build notes',
         '只交付：',
         '1. HTML',
@@ -3603,7 +3603,7 @@ describe('Slice 0 deliverable contract: file artifact legacy hard-stop', () => {
     process.env['OWLCODA_TASK_NO_PROGRESS_HARD_STOP'] = '1'
     const conv = createConversation({ system: 'test', model: 'test-model' })
     // Explicit write to file: file_artifact_delivery/high
-    addUserMessage(conv, 'Write the deck to /Users/yeemio/work/ppt/output/owlcoda/deck.html')
+    addUserMessage(conv, 'Write the deck to /Users/publicuser/work/ppt/output/owlcoda/deck.html')
 
     const dispatcher = new ToolDispatcher()
     dispatcher.register({

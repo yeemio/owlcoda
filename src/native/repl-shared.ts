@@ -301,6 +301,56 @@ export function conversationEndsAwaitingAssistant(
   return turns[turns.length - 1]?.role === 'user'
 }
 
+export type EscapeKeyAction =
+  | 'permission_deny'
+  | 'question_cancel'
+  | 'cancel_queue'
+  | 'none'
+
+/**
+ * Decide what Escape does right now, by priority.
+ *
+ * The composer advertises "esc to cancel" next to a queued message, but
+ * historically Escape was only wired to permission-prompt deny and
+ * AskUserQuestion cancel — a queued submission had NO Escape path at all.
+ * The only way to drop it was /clear, which wipes the whole conversation.
+ * So when a task wedged (e.g. a hung upstream that never unwinds to drain
+ * the queue), the queued message could neither run nor be cancelled — a
+ * dead end matching the on-screen "N queued will run after cancel completes"
+ * that never arrives. This function gives Escape a defined, prioritized
+ * meaning so the queue gets a non-destructive cancel path.
+ */
+export function decideEscapeKeyAction(state: {
+  hasPermissionPrompt: boolean
+  hasQuestionPrompt: boolean
+  queuedSize: number
+}): EscapeKeyAction {
+  if (state.hasPermissionPrompt) return 'permission_deny'
+  if (state.hasQuestionPrompt) return 'question_cancel'
+  if (state.queuedSize > 0) return 'cancel_queue'
+  return 'none'
+}
+
+/**
+ * Detect a tool call the model emitted as TEXT that was never executed as a
+ * structured tool_use. Covers the native/pseudo formats local models emit:
+ * `[TOOL_CALL]`, `<invoke …>`, `<tool_call>`/`<minimax:tool_call>`,
+ * `<function=…>` (Qwen/Hermes), and `<|tool_call …>` (gemma channel form).
+ *
+ * headless uses this to stop reporting a false "completed": when a run executed
+ * zero tools yet the final assistant text carries one of these markers, the
+ * upstream is not converting native tool calls into structured tool_use — e.g.
+ * a raw local runtime's /v1/messages was hit directly instead of the daemon's
+ * /v1/chat/completions translate path. Returns the matched marker, or null.
+ */
+export function detectEmittedButUnexecutedToolCall(finalText: string): string | null {
+  if (!finalText) return null
+  const match = finalText.match(
+    /\[TOOL_CALL\]|<invoke\b|<\/?(?:minimax:)?tool_call\b|<function\s*=|<\|tool_call\b/i,
+  )
+  return match ? match[0] : null
+}
+
 export type ExitInterruptAction = 'arm' | 'confirm' | 'ignore_duplicate'
 
 export const EXIT_CONFIRM_WINDOW_MS = 1500
@@ -601,6 +651,14 @@ export function fallbackSplitIfLong(line: string): string {
   // ANSI-wrapped, and emoji-ZWJ segments being mis-measured (the latter let an
   // over-long line through to a hard wrap that split tokens mid-word).
   const threshold = 80
+
+  // List-marker lines are structure, not prose. The Latin sentence-ender
+  // pattern below matches right after an ordered marker ("1. ") and severs
+  // it onto its own line; the downstream OL/UL regexes then can't see a
+  // list item, list state resets, and later items renumber from 1.
+  // Splitting mid-item is just as destructive (the continuation parses as
+  // a new paragraph), so leave the whole line to the display-width wrapper.
+  if (/^\s*(?:\d+\.\s|[-*+]\s)/.test(line)) return line
 
   // Segments between sentence boundaries (keeping the boundary in the left segment).
   // Latin enders (.!?) require trailing whitespace. CJK enders (。！？) split
@@ -1034,6 +1092,7 @@ const SLASH_PICKER_HINTS: Record<string, string> = {
   '/rename': 'Rename current session',
   '/init': 'Create OWLCODA.md in project',
   '/verbose': 'Toggle verbose tool output',
+  '/expand': 'Re-print full output of a recent tool call',
   '/quit': 'Exit OwlCoda',
   '/exit': 'Exit OwlCoda',
   '/version': 'Show version info',

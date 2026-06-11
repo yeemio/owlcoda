@@ -22,7 +22,7 @@
  *     ordinary isLoading state changes; queue size is read synchronously
  *     when needed.
  *
- * Slice 4 (full module-level unified queue, à la OwlCC upstream) is
+ * Slice 4 (full module-level unified queue, à la legacy internal build upstream) is
  * explicitly deferred behind hard gates. See slicing plan memory.
  */
 

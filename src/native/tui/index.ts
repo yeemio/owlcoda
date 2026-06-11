@@ -127,7 +127,7 @@ export {
 
 // Message & tool display
 export {
-  formatToolUseHeader, formatToolResult, formatToolResultBox, formatToolProgress,
+  formatToolUseHeader, formatToolResult, formatToolGroup, formatToolProgress,
   formatChangeBlockResult,
   type ChangeAction, type ChangeBlockResultOptions,
   formatPromptDock,

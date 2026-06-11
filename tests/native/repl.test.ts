@@ -18,6 +18,7 @@ import {
   countTranscriptLines,
   createSyntheticLineSuppression,
   decideFailedContinuationSubmitAction,
+  decideEscapeKeyAction,
   decideExitInterruptAction,
   detectBufferedInputSignals,
   detectInputSignals,
@@ -61,6 +62,7 @@ import {
   type ThinkingState,
   type TranscriptItem,
 } from '../../src/native/repl.js'
+import { detectEmittedButUnexecutedToolCall } from '../../src/native/repl-shared.js'
 import { createConversation, addUserMessage } from '../../src/native/conversation.js'
 import { ToolDispatcher } from '../../src/native/dispatch.js'
 import { UsageTracker } from '../../src/native/usage.js'
@@ -1413,6 +1415,38 @@ describe('failed continuation submit handling', () => {
         { role: 'user' },
         { role: 'user' },
       ])).toBe(true)
+    })
+  })
+
+  describe('decideEscapeKeyAction (queue cancel)', () => {
+    it('prioritizes a permission prompt over a queued message', () => {
+      expect(decideEscapeKeyAction({ hasPermissionPrompt: true, hasQuestionPrompt: true, queuedSize: 3 })).toBe('permission_deny')
+    })
+    it('cancels an AskUserQuestion before a queued message', () => {
+      expect(decideEscapeKeyAction({ hasPermissionPrompt: false, hasQuestionPrompt: true, queuedSize: 3 })).toBe('question_cancel')
+    })
+    it('cancels the queue when nothing else is pending and a message is queued', () => {
+      expect(decideEscapeKeyAction({ hasPermissionPrompt: false, hasQuestionPrompt: false, queuedSize: 1 })).toBe('cancel_queue')
+    })
+    it('does nothing when no prompt is open and the queue is empty', () => {
+      expect(decideEscapeKeyAction({ hasPermissionPrompt: false, hasQuestionPrompt: false, queuedSize: 0 })).toBe('none')
+    })
+  })
+
+  describe('detectEmittedButUnexecutedToolCall (headless silent tool-loss guard)', () => {
+    it('flags a Qwen/Hermes <function=…> tool call left in text', () => {
+      expect(detectEmittedButUnexecutedToolCall('ok\n<function=write>\n<parameter=path>x</parameter>')).toBeTruthy()
+    })
+    it('flags a gemma <|tool_call> channel form', () => {
+      expect(detectEmittedButUnexecutedToolCall('<|channel>thought<|tool_call>call:write{}')).toBeTruthy()
+    })
+    it('flags [TOOL_CALL], <invoke>, and <tool_call> forms', () => {
+      expect(detectEmittedButUnexecutedToolCall('[TOOL_CALL]{}')).toBeTruthy()
+      expect(detectEmittedButUnexecutedToolCall('<invoke name="write">')).toBeTruthy()
+      expect(detectEmittedButUnexecutedToolCall('<tool_call>{}')).toBeTruthy()
+    })
+    it('returns null for ordinary prose that mentions a function', () => {
+      expect(detectEmittedButUnexecutedToolCall('Here is the function add(a, b) => a + b')).toBeNull()
     })
   })
 

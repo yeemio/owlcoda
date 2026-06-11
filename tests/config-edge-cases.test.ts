@@ -30,9 +30,9 @@ describe('config edge cases (via import)', async () => {
     expect(m.contextWindow).toBe(128000)
   })
 
-  it('normalizeModel defaults contextWindow to 32768', () => {
+  it('normalizeModel defaults contextWindow to the conservative 200000', () => {
     const m = normalizeModel({ id: 'x' })
-    expect(m.contextWindow).toBe(32768)
+    expect(m.contextWindow).toBe(200000)
   })
 
   it('normalizeModel with empty backendModel defaults to id', () => {

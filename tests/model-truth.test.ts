@@ -167,7 +167,7 @@ describe('ModelTruthAggregator', () => {
       catalog: false,
     })
     expect(cloud.providerKind).toBe('cloud')
-    expect(cloud.contextCapability?.contextWindow).toBe(32768)
+    expect(cloud.contextCapability?.contextWindow).toBe(200000)
     expect(discovered.presentIn).toEqual({
       config: false,
       router: false,

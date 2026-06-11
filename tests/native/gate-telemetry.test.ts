@@ -419,7 +419,7 @@ describe('gate-telemetry integration — task_no_progress events', () => {
   it('confidence=medium / 9 iter / 0 touched → emits task_no_progress_suppressed event', async () => {
     const conv = createConversation({ system: 'test', model: 'test-model' })
     // External explicit path without ALLOW phrasing → confidence=medium
-    addUserMessage(conv, 'Write the deck referencing `/Users/yeemio/work/ppt/deck-stage.js`')
+    addUserMessage(conv, 'Write the deck referencing `/Users/publicuser/work/ppt/deck-stage.js`')
 
     const dispatcher = new ToolDispatcher()
     dispatcher.register({

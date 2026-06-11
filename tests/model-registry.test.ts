@@ -234,7 +234,8 @@ describe('normalizeModel comprehensive', () => {
     expect(m.apiKey).toBeUndefined()
     expect(m.apiKeyEnv).toBeUndefined()
     expect(m.headers).toBeUndefined()
-    expect(m.contextWindow).toBe(32768)
+    // Unknown/empty model → modern conservative default (raised from 32768).
+    expect(m.contextWindow).toBe(200000)
   })
 
   it('preserves all explicitly set fields', () => {
@@ -352,15 +353,29 @@ describe('normalizeModel comprehensive', () => {
     expect(resolveModelContextWindow(config, 'MiniMax-M2.7-highspeed')).toBe(204800)
   })
 
-  it('recognizes official 1M OpenAI model ids without changing unknown fallback', () => {
+  it('recognizes official 1M OpenAI model ids; unknown models use the conservative fallback', () => {
     const config = makeRegistryConfig([makeModel({ id: 'default-local', contextWindow: 204800 })])
 
     expect(resolveModelContextWindow(config, 'gpt-4.1')).toBe(1_000_000)
     expect(resolveModelContextWindow(config, 'gpt-4.1-mini')).toBe(1_000_000)
 
     const unknown = resolveModelContextCapability(config, 'unknown-cloud-model')
-    expect(unknown.contextWindow).toBe(32768)
+    expect(unknown.contextWindow).toBe(200000)
     expect(unknown.source).toBe('fallback')
+  })
+
+  it('recognizes mimo-v2.5 as 1M context even when config carries the stale 32K default', () => {
+    const config = makeRegistryConfig([
+      normalizeModel({ id: 'mimo-v2.5-pro', contextWindow: 32768 }),
+    ])
+    expect(resolveModelContextWindow(config, 'mimo-v2.5-pro')).toBe(1_000_000)
+  })
+
+  it('gives unknown models a 200K conservative default instead of 32K', () => {
+    const config = makeRegistryConfig([])
+    const cap = resolveModelContextCapability(config, 'some-unknown-model-xyz')
+    expect(cap.contextWindow).toBe(200000)
+    expect(cap.source).toBe('fallback')
   })
 
   it('recognizes Gemini 1M and 2M-style context windows by exact model id', () => {

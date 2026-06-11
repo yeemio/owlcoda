@@ -2,6 +2,33 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.2] — 2026-06-11
+
+Transcript chrome, compaction-resilience, and protocol-hygiene release.
+
+### Added
+
+- Transcript chrome S1–S3: collapsed tool results with a unified ok/err shape
+  and an `/expand` toggle; narration `●` gutter with merged action+result
+  groups and hanging-indent wrapping; one-line notices, a merged turn footer,
+  and shared key-value slash panels (including `/cost`).
+
+### Fixed
+
+- Emergency heap-pressure compaction no longer erases task context: task
+  anchors stay pinned, an ineffective-cut breaker stops repeated zero-value
+  cuts, and a heap-significance gate skips conversations too small to matter,
+  with pressure diagnostics for each decision.
+- Orphaned `tool_use`/`tool_result` pairs are stripped at the send chokepoint,
+  preventing deterministic 400 loops after interruptions; the daemon now dumps
+  4xx request shapes for diagnosis.
+- Long CJK ordered-list items are no longer split mid-item and renumbered by
+  the fallback sentence splitter.
+- Headless runs fail loudly when a model emits tool-call markers that never
+  executed, instead of reporting silent success.
+- Unknown models now default to a 200k context window instead of 32768, and
+  `mimo-v2.5` models are recognized at 1M.
+
 ## [0.15.1] — 2026-06-11
 
 First npm package release on the GPL source line.
@@ -21,9 +48,7 @@ First npm package release on the GPL source line.
 
 ### Notes
 
-- This release must be paired with public source tag `v0.15.1`.
-- Existing public source tag `v0.15.0` remains the GPL source-open boundary
-  tag and is not moved.
+- Paired with public source tag `v0.15.1`.
 
 ## [0.15.0] — 2026-06-04
 

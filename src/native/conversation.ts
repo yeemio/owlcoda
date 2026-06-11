@@ -21,6 +21,7 @@ import { computeAdaptiveTimeoutMs } from '../middleware/adaptive-timeout.js'
 import { buildAnthropicMessagesUrl } from '../url-normalize.js'
 import type { AskUserQuestionOpts, ToolProgressEvent } from './tools/types.js'
 import { buildRequest, sanitizeConversationTurns } from './protocol/request.js'
+import { stripOrphanToolUseBlocks } from './protocol/tool-pairing.js'
 import { consumeStream } from './protocol/stream.js'
 import { parseResponse } from './protocol/response.js'
 import { ToolDispatcher, type ToolExecutionResult } from './dispatch.js'
@@ -274,6 +275,15 @@ const AUTO_COMPACT_KEEP_RATIO = 0.5 // keep 50% of turns after compact
 // `heapUsed`. If we're past `HEAP_PRESSURE_THRESHOLD`, run an
 // aggressive compact (keep ratio 0.2 vs 0.5) regardless of token
 // state. Knob-able via env if anyone needs to disable.
+//
+// 2026-06-11: the cut is now conditional — task anchor pinned, a
+// governor stops repeat cuts that don't relieve pressure, and a
+// significance gate skips the cut entirely when the conversation is
+// <10% of heapUsed (post-0.13.60 entry truncation makes turns
+// structurally small; the observed 3.2GB incident heap lived outside
+// the conversation, so cutting bought amnesia for zero relief).
+// OWLCODA_HEAP_SNAPSHOT_ON_PRESSURE=1 writes a heap snapshot on the
+// first skipped cut for offline attribution.
 const HEAP_PRESSURE_THRESHOLD = 0.75
 const HEAP_PRESSURE_KEEP_RATIO = 0.2
 // 0.13.63 (D): output-bloat detection. When the assistant emits
@@ -821,6 +831,8 @@ export async function runConversationLoop(
   let narrationLoopCount = 0
   let lastNarrationLoopText: string | null = null
   const convergence = createConvergenceRuntimeState()
+  const heapCompactGovernor = createHeapCompactGovernor()
+  let heapPressureAdvisoryFired = false
   const taskState = ensureTaskExecutionState(conversation, opts.cwd)
   ensureConversationProjectMap(conversation, opts.cwd)
 
@@ -1216,11 +1228,49 @@ export async function runConversationLoop(
     // 0.13.62 heap-pressure emergency compact (A). Runs BEFORE the
     // token-window compact: the host-process heap can exhaust well
     // before any model context window does. When `heapUsed` crosses
-    // 75% of `heap_size_limit`, drop to last 20% of turns. This is
-    // OOM defense, not token-budget management.
+    // 75% of `heap_size_limit`, drop to last 20% of turns (plus the
+    // pinned task anchor). This is OOM defense, not token-budget
+    // management. The governor stops repeat cuts once they prove
+    // ineffective — the heap hog is elsewhere and shredding more
+    // history only buys amnesia.
     const heapRatio = getHeapPressureRatio()
-    const heapResult = emergencyHeapCompact(conversation, heapRatio)
+    const heapVerdict = heapCompactGovernor.evaluate(heapRatio)
+    if (heapVerdict.justTripped) {
+      opts.callbacks?.onNotice?.(
+        `Heap pressure persists at ${(heapRatio * 100).toFixed(0)}% after repeated history compactions — ` +
+        `conversation history is not the dominant heap consumer. Disabling further emergency cuts for this run; ` +
+        `if pressure continues, finish up and restart the session.`,
+      )
+    }
+    let heapResult: { before: number; after: number } | null = null
+    if (heapVerdict.allowCompact) {
+      const heapUsedBytes = process.memoryUsage().heapUsed
+      heapResult = emergencyHeapCompact(conversation, heapRatio, heapUsedBytes)
+      if (!heapResult && !heapPressureAdvisoryFired && conversation.turns.length > 4) {
+        // Pressure is past the threshold but the conversation is too small
+        // a share of the heap for a cut to relieve anything (the owlmodel
+        // incident shape: 3.4MB of turns vs 3.2GB of heap). Skip the cut —
+        // amnesia for zero relief — and say so once, with numbers, so the
+        // transcript carries the diagnostic the next investigation needs.
+        heapPressureAdvisoryFired = true
+        const convMb = (estimateConversationBytes(conversation) / 1024 / 1024).toFixed(1)
+        opts.callbacks?.onNotice?.(
+          `Heap pressure ${(heapRatio * 100).toFixed(0)}% but conversation history is only ~${convMb}MB — ` +
+          `cutting history would not relieve it (heap consumer is elsewhere). ` +
+          `If pressure persists, finish up and restart the session.`,
+        )
+        if (process.env['OWLCODA_HEAP_SNAPSHOT_ON_PRESSURE'] === '1') {
+          try {
+            const snapPath = v8.writeHeapSnapshot()
+            opts.callbacks?.onNotice?.(`Heap snapshot written: ${snapPath}`)
+          } catch {
+            // diagnostics must never take down the loop
+          }
+        }
+      }
+    }
     if (heapResult) {
+      heapCompactGovernor.recordCompacted()
       opts.callbacks?.onNotice?.(
         `Heap pressure compaction: heap ${(heapRatio * 100).toFixed(0)}% used, ` +
         `compacted ${heapResult.before} → ${heapResult.after} turns to prevent OOM.`,
@@ -2046,11 +2096,11 @@ export async function runConversationLoop(
       // Before breaking: synthesize tool_result blocks for any
       // tool_use block that didn't complete. Without this, the
       // assistant turn (which was pushed above at step 2) sits in
-      // conversation.turns with orphaned tool_use IDs — the next
-      // turn triggers validateAndRepairConversation which strips
-      // the whole turn, and the model (seeing the user's original
-      // query untouched) frequently re-executes the exact same
-      // tool call the user just cancelled. Injecting an explicit
+      // conversation.turns with orphaned tool_use IDs — the request
+      // sanitizer (prepareTurnsForRequest, via buildRequest) strips
+      // the orphan on the next send, and the model (seeing the
+      // user's original query untouched) frequently re-executes the
+      // exact same tool call the user just cancelled. Injecting an explicit
       // "[aborted] cancelled by user" tool_result keeps the turn
       // well-formed: the model reads "tool ran and was cancelled"
       // instead of "tool request vanished, retry it".
@@ -3454,6 +3504,23 @@ async function sendRequest(
   request: AnthropicMessagesRequest,
   opts: ConversationLoopOptions,
 ): Promise<AssistantResponse> {
+  // 2026-06-11 tool-pairing guard: an assistant `tool_use` without a
+  // `tool_result` in the immediately-following message 400s on every
+  // anthropic-family provider, and because the poison is in the history
+  // the user's retries fail identically (observed 7× in one dogfood
+  // session). buildRequest's sanitizer strips every turns-shape we could
+  // reconstruct, yet a poison body still reached the wire once — so the
+  // send chokepoint gets a final structural check. Firing means some
+  // upstream path shipped an unsanitized body: repair, but say so.
+  const orphanGuard = stripOrphanToolUseBlocks(request.messages)
+  if (orphanGuard.strippedIds.length > 0) {
+    request = { ...request, messages: orphanGuard.messages as AnthropicMessagesRequest['messages'] }
+    opts.callbacks?.onNotice?.(
+      `Outbound request repaired: stripped ${orphanGuard.strippedIds.length} orphan tool_use block(s) ` +
+      `(${orphanGuard.strippedIds.join(', ')}) that would 400 upstream. This indicates a request-builder ` +
+      `bug — the daemon log carries the message shape for this request.`,
+    )
+  }
   // Normalize the base before appending `/v1/messages` so a programmatic
   // caller that passes a `/v1`-suffixed apiBaseUrl (the Ollama footgun
   // `…:11434/v1`) does not POST to `/v1/v1/messages` — which 404s every
@@ -4470,25 +4537,126 @@ export function getHeapPressureRatio(
 
 /**
  * 0.13.62: emergency heap compaction. Trims the conversation to the
- * last 20% of turns when heap pressure is high. Returns the new turn
- * count if compaction happened, otherwise null (no-op when below
- * threshold or already small enough).
+ * last 20% of turns (plus the pinned task anchor) when heap pressure
+ * is high. Returns the new turn count if compaction happened,
+ * otherwise null (no-op when below threshold, already small enough,
+ * or — when `heapUsedBytes` is supplied — when the conversation is
+ * too small a share of the heap for a cut to relieve anything).
  *
  * The 20% keep ratio is intentionally aggressive — when the host
  * process is genuinely at OOM risk the cost of dropping context is
  * trivial vs the cost of a hard crash that ends the session.
+ *
+ * 2026-06-11 empirical note: with entry-side tool-output truncation
+ * (0.13.60+) the conversation is structurally small — a 150-iteration
+ * probe with ~2MB noisy bash output per call ended at 302 turns =
+ * 3.4MB serialized, with a flat 20MB live set. A cut can therefore
+ * only matter when something regresses those caps (the significance
+ * gate keeps the defense armed for that case without paying amnesia
+ * when the heap hog is elsewhere).
  */
+/**
+ * 2026-06-11: cheap upper-bound estimate of the heap held by conversation
+ * turns (UTF-16 ≈ 2 bytes per char of the serialized form). Only called
+ * when heap pressure is already past the threshold, so the stringify cost
+ * is acceptable — with entry-side tool-output truncation (0.13.60+) the
+ * serialized form is structurally small (a 302-turn max-noise probe
+ * measured 3.4MB).
+ */
+export function estimateConversationBytes(conversation: Conversation): number {
+  if (conversation.turns.length === 0) return 0
+  return JSON.stringify(conversation.turns).length * 2
+}
+
+/**
+ * 2026-06-11: minimum share of heapUsed the conversation must account for
+ * before an emergency cut is allowed. Empirical basis (heap probe + the
+ * owlmodel incident): with entry-side truncation the conversation tops out
+ * at single-digit MB while the incident heap sat at 3.2GB — cutting
+ * history could never relieve that pressure, so the cut bought total task
+ * amnesia for zero relief. Below this share, skip the cut: the heap hog
+ * is elsewhere.
+ */
+const HEAP_COMPACT_MIN_CONV_SHARE = 0.1
+
 export function emergencyHeapCompact(
   conversation: Conversation,
   ratio: number,
+  heapUsedBytes?: number,
 ): { before: number; after: number } | null {
   if (ratio < HEAP_PRESSURE_THRESHOLD) return null
   const before = conversation.turns.length
   if (before <= 4) return null
+  if (
+    typeof heapUsedBytes === 'number' &&
+    heapUsedBytes > 0 &&
+    estimateConversationBytes(conversation) < heapUsedBytes * HEAP_COMPACT_MIN_CONV_SHARE
+  ) {
+    return null
+  }
   const keep = Math.max(2, Math.floor(before * HEAP_PRESSURE_KEEP_RATIO))
   if (keep >= before) return null
-  conversation.turns = sanitizeConversationTurns(conversation.turns.slice(-keep))
+  const tail = conversation.turns.slice(-keep)
+  // 2026-06-11 task-anchor pinning: a recency-only cut drops the original
+  // task instructions, so a hard compact (down to the 2-turn floor)
+  // guaranteed task amnesia — the model woke up with two trailing tool
+  // turns and no idea what it was doing. Pin the first text-bearing user
+  // turn (the task statement) alongside the tail. Consecutive same-role
+  // turns this can create are collapsed at request-build time.
+  const anchor = conversation.turns.find(
+    (turn) => turn.role === 'user' && turn.content.some((block) => block.type === 'text'),
+  )
+  const kept = anchor && !tail.includes(anchor) ? [anchor, ...tail] : tail
+  conversation.turns = sanitizeConversationTurns(kept)
   return { before, after: conversation.turns.length }
+}
+
+/**
+ * 2026-06-11: effectiveness circuit breaker for the heap-pressure compact.
+ *
+ * Dropping turn references does not necessarily lower `heapUsed` (GC lag),
+ * and the dominant heap consumer may not be the conversation at all — a
+ * long-running task streaming large outputs can hold the heap at 75%+ no
+ * matter how hard we cut history. Without a breaker the loop re-fired the
+ * emergency compact every iteration (observed 55 → 10 → 2 turns, a dozen
+ * times in one run), paying total amnesia for zero memory relief.
+ *
+ * Semantics: a cut is "ineffective" when the next pressure reading after it
+ * is still at/above HEAP_PRESSURE_THRESHOLD. After `maxIneffectiveCuts`
+ * consecutive ineffective cuts the governor trips: no further emergency
+ * cuts this run (sticky — re-arming risks repeated shredding cycles), and
+ * `justTripped` is reported exactly once so the loop can warn the user.
+ * A reading below the threshold before tripping resets the budget.
+ */
+export function createHeapCompactGovernor(maxIneffectiveCuts = 2): {
+  evaluate(ratio: number): { allowCompact: boolean; justTripped: boolean }
+  recordCompacted(): void
+} {
+  let ineffectiveCuts = 0
+  let cutSinceLastEval = false
+  let tripped = false
+  return {
+    evaluate(ratio: number) {
+      if (tripped) return { allowCompact: false, justTripped: false }
+      if (ratio < HEAP_PRESSURE_THRESHOLD) {
+        ineffectiveCuts = 0
+        cutSinceLastEval = false
+        return { allowCompact: false, justTripped: false }
+      }
+      if (cutSinceLastEval) {
+        cutSinceLastEval = false
+        ineffectiveCuts++
+        if (ineffectiveCuts >= maxIneffectiveCuts) {
+          tripped = true
+          return { allowCompact: false, justTripped: true }
+        }
+      }
+      return { allowCompact: true, justTripped: false }
+    },
+    recordCompacted() {
+      cutSinceLastEval = true
+    },
+  }
 }
 
 function formatTokenCount(tokens: number): string {
@@ -5721,12 +5889,12 @@ export function createConversation(opts: {
  * being too long for one turn — heap pressure, output bloat, max-
  * tokens continuation handling. Then a 2026-05-07 industry survey
  * exposed the upstream cause: owlcoda's default of 4096 was an
- * outlier on the low end. Claude Code uses 32K, Aider 8K-32K per
+ * outlier on the low end. external coding-assistant uses 32K, Aider 8K-32K per
  * model, opencode 32K. Every model in our supported matrix
  * (Claude 4.x, DeepSeek V4, Kimi K2, GPT-5, Gemini 2.5, Qwen 3)
  * supports ≥16K output natively; many support 32K-128K.
  *
- * 0.13.65 raises the default to 32,768 (matches Claude Code) and
+ * 0.13.65 raises the default to 32,768 (matches external coding-assistant) and
  * exposes `OWLCODA_MAX_OUTPUT_TOKENS` as a per-session override.
  * Callers passing an explicit `opts.maxTokens` still win — the
  * resolver only applies to call sites that previously used the

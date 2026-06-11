@@ -41,7 +41,7 @@ describe('Native Conversation', () => {
     expect(conv.id).toMatch(/^conv-/)
     expect(conv.system).toBe('You are helpful.')
     expect(conv.model).toBe('test-model')
-    // 0.13.65: bumped default from 4096 → 32_768 (matches Claude Code,
+    // 0.13.65: bumped default from 4096 → 32_768 (matches external coding-assistant,
     // Aider, opencode mainstream). 4096 was outlier on the low end.
     expect(conv.maxTokens).toBe(32_768)
     expect(conv.turns).toHaveLength(0)
@@ -723,7 +723,7 @@ describe('runConversationLoop', () => {
     const conv = createConversation({ system: 'test', model: 'test-model' })
     addUserMessage(conv, [
       'Continue the dogfood for another 5-6 minutes to better match the requested long-task duration.',
-      'Stay read-only in /Users/yeemio/AI/gitrep/owlcoda, use multiple tools, create any temporary artifacts only under /tmp/owlcoda-dogfood-minimax, clean them before finishing, and produce a short addendum with any new checks, cleanup status, and whether terminal rendering corruption appeared.',
+      'Stay read-only in /Users/publicuser/AI/gitrep/owlcoda, use multiple tools, create any temporary artifacts only under /tmp/owlcoda-dogfood-minimax, clean them before finishing, and produce a short addendum with any new checks, cleanup status, and whether terminal rendering corruption appeared.',
       'Do not modify the repository.',
     ].join(' '))
     const requestBodies: Array<Record<string, unknown>> = []
@@ -774,7 +774,7 @@ describe('runConversationLoop', () => {
       '',
       '### Repository Modification',
       '',
-      '**None.** All analysis was read-only. No changes made to `/Users/yeemio/AI/gitrep/owlcoda`.',
+      '**None.** All analysis was read-only. No changes made to `/Users/publicuser/AI/gitrep/owlcoda`.',
     ].join('\n')
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {

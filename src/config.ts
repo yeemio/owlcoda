@@ -5,7 +5,7 @@ import { loadCatalog, type PlatformCatalog } from './models/catalog.js'
 import { validateConfig } from './config-validate.js'
 import { needsMigration, migrateConfig } from './config-migrate.js'
 import { normalizeModel } from './model-registry.js'
-import { inferContextWindow } from './model-capabilities.js'
+import { inferContextWindow, CONSERVATIVE_FALLBACK_CONTEXT_WINDOW } from './model-capabilities.js'
 import type { ConfiguredModel, LocalRuntimeProtocol, ResponseModelStyle } from './model-registry.js'
 import type { OperatingMode } from './native/modes.js'
 import { normalizeRouterBaseUrl } from './url-normalize.js'
@@ -53,7 +53,7 @@ export interface MiddlewareConfig {
    *  content_block_delta / content_block_start. If it fires before any
    *  visible chunk arrives, the stream is aborted with kind
    *  `stream_first_token_timeout` (frontend: pre_first_token_stream_close).
-   *  Does NOT apply to non-streaming. Default 90_000 — matches OwlCC
+   *  Does NOT apply to non-streaming. Default 90_000 — matches legacy internal build
    *  upstream watchdog convention; lower for impatient setups, higher
    *  (e.g. 180_000) for cold-start cloud models with large context. */
   streamFirstTokenTimeoutMs?: number
@@ -271,7 +271,7 @@ export function estimateContextWindow(id: string): number {
   if (id.includes('Nemotron')) return 131072
   if (id.includes('Kimi')) return 131072
   if (id.includes('MiroThinker')) return 32768
-  return 32768 // conservative default for unknown models
+  return CONSERVATIVE_FALLBACK_CONTEXT_WINDOW // modern conservative default for unknown models
 }
 
 function buildModelsFromCatalog(catalog: PlatformCatalog): ConfiguredModel[] {
@@ -517,7 +517,7 @@ export function mergeDiscoveredModels(
       aliases: [],
       tier: 'discovered',
       endpoint: `${dm.baseUrl}/v1/chat/completions`,
-      contextWindow: dm.contextWindow ?? 32768,
+      contextWindow: dm.contextWindow ?? CONSERVATIVE_FALLBACK_CONTEXT_WINDOW,
     }))
   }
 

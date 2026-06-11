@@ -177,7 +177,7 @@ describe('normalizeModel edge cases', () => {
     expect(m.backendModel).toBe('')
     expect(m.aliases).toEqual([])
     expect(m.tier).toBe('general')
-    expect(m.contextWindow).toBe(32768)
+    expect(m.contextWindow).toBe(200000)
   })
 
   it('preserves extra unknown fields on input (ignores them)', () => {

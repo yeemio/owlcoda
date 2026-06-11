@@ -82,13 +82,13 @@ describe('UsageTracker', () => {
     expect(snap.startedAt).toBeNull()
   })
 
-  it('formats usage as readable string', () => {
+  it('formats usage as an aligned key-value panel (chrome spec S3)', () => {
     tracker.recordUsage({ inputTokens: 1500, outputTokens: 3000 })
-    const formatted = tracker.formatUsage()
+    const formatted = tracker.formatUsage().replace(/\x1b\[[0-9;]*m/g, '')
     expect(formatted).toContain('1,500 in')
     expect(formatted).toContain('3,000 out')
     expect(formatted).toContain('4,500 total')
-    expect(formatted).toContain('Requests: 1')
+    expect(formatted).toMatch(/Requests\s+1/)
     expect(formatted).toContain('fictional')
   })
 

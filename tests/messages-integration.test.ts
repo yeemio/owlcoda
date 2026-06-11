@@ -37,7 +37,7 @@ function startMockRouter(): Promise<void> {
         // Probe endpoints: return proper responses so protocol detection works
         const url = req.url ?? '/'
         if (url === '/v1/runtime/status') {
-          // Return 404 — this mock is an OpenAI-compatible router, not an owlmlx runtime
+          // Return 404 — this mock is an OpenAI-compatible router rather than an owlmlx runtime
           res.writeHead(404, { 'Content-Type': 'application/json' })
           res.end('{"error":"not found"}')
           return

@@ -6,6 +6,7 @@ import { translateResponse } from '../translate/response.js'
 import { StreamTranslator } from '../translate/stream.js'
 import { parseSSEStream, readStreamChunkWithDeadline } from '../utils/sse.js'
 import { LocalRuntimeProtocolUnresolvedError, resolveModelRoute } from '../config.js'
+import { detailLooksLikeToolPairingError, summarizeMessagesShape } from '../native/protocol/tool-pairing.js'
 import { readBody } from '../server.js'
 import { makeAnthropicError } from '../utils/errors.js'
 import { setRateLimitHeaders } from '../utils/ratelimit.js'
@@ -592,6 +593,17 @@ async function handleMessagesNonStream(
       upstreamRequestId: upstreamRequestIdFromHeaders(upstream.headers),
     })
     if (diagnosticLooksLikeRateLimit(diagnostic)) markAdmissionRateLimited(res)
+    // 2026-06-11: a tool_use/tool_result pairing 400 means some client
+    // shipped a structurally invalid history. The daemon is the only
+    // chokepoint that sees every sender — log the content-free message
+    // shape so the offending request builder can be identified.
+    if (upstream.status < 500 && detailLooksLikeToolPairingError(diagnostic.detail)) {
+      logWarn('tool-pairing', `upstream ${upstream.status} tool-pairing violation`, {
+        requestId,
+        model: body.model,
+        shape: summarizeMessagesShape(body.messages ?? []),
+      })
+    }
     const mapped = diagnosticToAnthropicError(diagnostic)
     const traceResult = trace.end()
     await runErrorHooks({ endpoint: '/v1/messages', errorType: 'upstream_error', message: diagnostic.detail.slice(0, 200) })
@@ -953,6 +965,15 @@ async function handleMessagesStream(
       upstreamRequestId: upstreamRequestIdFromHeaders(upstream.headers),
     })
     if (diagnosticLooksLikeRateLimit(diagnostic)) markAdmissionRateLimited(res)
+    // 2026-06-11: same tool-pairing shape dump as the non-streaming path —
+    // the observed incident (deepseek 400 × 7) came through here.
+    if (upstream.status < 500 && detailLooksLikeToolPairingError(diagnostic.detail)) {
+      logWarn('tool-pairing', `upstream ${upstream.status} tool-pairing violation`, {
+        requestId: streamRequestId,
+        model: body.model,
+        shape: summarizeMessagesShape(body.messages ?? []),
+      })
+    }
     const mapped = diagnosticToAnthropicError(diagnostic)
     const traceResult = trace.end()
     await runErrorHooks({ endpoint: '/v1/messages (stream)', errorType: 'upstream_error', message: diagnostic.detail.slice(0, 200) })

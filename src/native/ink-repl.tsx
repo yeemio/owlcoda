@@ -25,11 +25,7 @@ import { ToolDispatcher } from './dispatch.js'
 import {
   formatBanner,
   formatError,
-  formatIterations,
   formatStopReason,
-  formatToolEnd,
-  formatToolStart,
-  formatUsage,
 } from './display.js'
 import {
   countDiffStats,
@@ -82,6 +78,7 @@ import {
   isExpensiveFailedContinuationFailure,
   isRetryEligibleContinuationFailure,
   conversationEndsAwaitingAssistant,
+  decideEscapeKeyAction,
   recoverGuardRejectedSubmission,
   preflightCheck,
   scrubPseudoToolCall,
@@ -155,12 +152,14 @@ import {
   ToolResultCollector,
   formatFooterOnlyToolEnd,
   formatFooterOnlyToolStart,
-  formatToolResultBox,
+  formatToolGroup,
   formatUserMessage,
   renderComposerRail,
   shouldRouteToolEndFooterOnly,
   shouldRouteToolStartFooterOnly,
 } from './tui/message.js'
+import { recordFullToolOutput, renderNarration, renderNotice, renderTurnFooter } from './tui/chrome.js'
+import { stripAnsi } from './tui/colors.js'
 import {
   renderBashPermission,
   detectDestructiveCommand,
@@ -857,6 +856,9 @@ function NativeReplApp({
   const perToolApproveRef = useRef<Set<string>>(conversation.options?.alwaysApprove ?? new Set<string>())
   const liveResponseRef = useRef('')
   const hasShownAssistantHeaderRef = useRef(false)
+  // Tool input stashed at onToolStart so the merged action+result group can
+  // render the command summary on completion (chrome spec S2).
+  const pendingToolInputRef = useRef(new Map<string, Record<string, unknown>>())
   const toolCollectorRef = useRef(new ToolResultCollector())
   const mdRendererRef = useRef(new StreamingMarkdownRenderer())
   const lastExitAttemptRef = useRef(0)
@@ -1028,17 +1030,15 @@ function NativeReplApp({
 
   const appendRenderedLiveResponse = useCallback((rendered: string): void => {
     if (!rendered) return
-    const prefix = dim('⎿ ')
-    const indent = '  '
-    const lines = rendered.split('\n')
-    liveResponseRef.current += lines.map((line, index) => {
-      if (index === lines.length - 1 && line === '') return ''
-      if (!hasShownAssistantHeaderRef.current) {
-        hasShownAssistantHeaderRef.current = true
-        return prefix + line
-      }
-      return indent + line
-    }).join('\n')
+    // Chrome spec S2: narration gets the ● gutter (⎿ is reserved for tool
+    // output) and the chrome layer wraps with a hanging indent so terminal
+    // hard-wrap never lands continuations at col 0.
+    const narrated = renderNarration(rendered, {
+      firstBlock: !hasShownAssistantHeaderRef.current,
+      columns: Math.max(1, stdout.columns || 80),
+    })
+    if (/\S/.test(stripAnsi(narrated))) hasShownAssistantHeaderRef.current = true
+    liveResponseRef.current += narrated
   }, [])
 
   const flushBufferedAssistantResponse = useCallback((): void => {
@@ -1258,17 +1258,14 @@ function NativeReplApp({
   if (!callbacksRef.current) {
     const prefixResponse = (rendered: string): string => {
       if (!rendered) return ''
-      const prefix = dim('⎿ ')
-      const indent = '  '
-      const lines = rendered.split('\n')
-      return lines.map((line, index) => {
-        if (index === lines.length - 1 && line === '') return ''
-        if (!hasShownAssistantHeaderRef.current) {
-          hasShownAssistantHeaderRef.current = true
-          return prefix + line
-        }
-        return indent + line
-      }).join('\n')
+      // Chrome spec S2: narration ● gutter + hanging-indent wrap (see
+      // appendRenderedLiveResponse — same vocabulary, same state).
+      const narrated = renderNarration(rendered, {
+        firstBlock: !hasShownAssistantHeaderRef.current,
+        columns: Math.max(1, stdout.columns || 80),
+      })
+      if (/\S/.test(stripAnsi(narrated))) hasShownAssistantHeaderRef.current = true
+      return narrated
     }
 
     const bumpProgress = (): void => {
@@ -1315,12 +1312,18 @@ function NativeReplApp({
           setSpinnerState({ mode: 'tool', toolName: name, message: 'Running…' })
           return
         }
-        appendTranscript(formatToolStart(name, input))
+        // Chrome spec S2: the action row commits MERGED with its result on
+        // completion (formatToolGroup in onToolEnd). While running, the live
+        // region's spinner carries the tool identity — no premature commit.
+        pendingToolInputRef.current.set(name, input)
         setSpinnerState({ mode: 'tool', toolName: name, message: 'Running…' })
       },
       onToolEnd(name, result, isError, durationMs, metadata) {
         bumpProgress()
         setSpinnerState(null)
+        // Chrome spec S1: record the full output before any collapse so
+        // /expand can always recall what the fold line hid.
+        if (result.length > 0) recordFullToolOutput(name, result, isError)
         const changeBlock = !isError ? buildChangeBlockFromMetadata(name, durationMs, metadata) : null
         if (changeBlock) {
           appendTranscript(changeBlock)
@@ -1330,15 +1333,16 @@ function NativeReplApp({
           setFooterNotice(formatFooterOnlyToolEnd(name, durationMs))
           return
         }
+        const pendingInput = pendingToolInputRef.current.get(name) ?? {}
+        pendingToolInputRef.current.delete(name)
         if (toolCollectorRef.current.isCollapsible(name) && !isError) {
-          toolCollectorRef.current.add({ name, input: {}, output: result, isError, durationMs })
+          toolCollectorRef.current.add({ name, input: pendingInput, output: result, isError, durationMs })
           return
         }
-        if (isError && result.length > 0) {
-          appendTranscript(formatToolResultBox(name, result, true, durationMs))
-          return
-        }
-        appendTranscript(formatToolEnd(name, result, isError, durationMs))
+        // Chrome spec S2: action + result commit as ONE group (▸ verb arg
+        // ✓ dur header + ⎿ body). Errors are the same shape with ✗ — the
+        // ╴╴╴ box family stays retired.
+        appendTranscript(formatToolGroup(name, pendingInput, result, isError, durationMs))
       },
       onToolProgress(name, event) {
         // Heartbeat vs real advance: bash fires onProgress every 250ms
@@ -1703,11 +1707,15 @@ function NativeReplApp({
 
         const stopDisplay = formatStopReason(stopReason)
         if (stopDisplay) appendTranscript(stopDisplay)
-        if (iterations > 1) appendTranscript(formatIterations(iterations))
-        if (apiUsage.inputTokens > 0 || apiUsage.outputTokens > 0) {
-          const elapsedSeconds = ((Date.now() - requestStartMs) / 1000).toFixed(1)
-          appendTranscript(formatUsage(apiUsage.inputTokens, apiUsage.outputTokens) + dim(` · ${elapsedSeconds}s`))
-        }
+        // Chrome spec S3: one quiet progress line per turn instead of the
+        // stacked "(N iterations)" + "[X in / Y out — Z total] · 12.3s" pair.
+        const turnFooter = renderTurnFooter({
+          iterations,
+          inputTokens: apiUsage.inputTokens,
+          outputTokens: apiUsage.outputTokens,
+          elapsedSeconds: (Date.now() - requestStartMs) / 1000,
+        })
+        if (turnFooter) appendTranscript(turnFooter)
 
         saveSession(conversation)
         if (!runtimeFailure) {
@@ -2413,7 +2421,7 @@ function NativeReplApp({
 
     if (currentOverlay.type === 'model') {
       conversation.model = item.value
-      appendTranscript(`${themeColor('success')}✓ Switched to: ${sgr.bold}${item.value}${sgr.reset}`)
+      appendTranscript(renderNotice(`Switched to: ${item.value}`, 'success'))
       setUiVersion((value) => value + 1)
       return
     }
@@ -2653,6 +2661,27 @@ function NativeReplApp({
       setQuestionPrompt(null)
       setFooterNotice(dim('Question cancelled.'))
       setInputValue('')
+      return
+    }
+
+    // Escape with a queued message (and no permission/question prompt open)
+    // cancels the queue. The composer advertises "esc to cancel" next to the
+    // QUEUED NEXT chip, but Escape was never wired to the queue — only /clear
+    // could drop it, and /clear wipes the whole conversation. When a task is
+    // wedged (e.g. a hung upstream that never unwinds to drain the queue),
+    // this is the only non-destructive way to drop the pending message.
+    if (
+      key.escape &&
+      decideEscapeKeyAction({
+        hasPermissionPrompt: Boolean(permissionPrompt),
+        hasQuestionPrompt: Boolean(questionPrompt),
+        queuedSize: submissionQueueRef.current.size,
+      }) === 'cancel_queue'
+    ) {
+      submissionQueueRef.current.clear()
+      queueHeldNoticeShownRef.current = false
+      setFooterNotice(dim('Queued message cancelled.'))
+      setUiVersion((value) => value + 1)
       return
     }
 

@@ -39,6 +39,7 @@ import {
   type ThemeName,
   type PickerItem,
 } from "./tui/index.js"
+import { getRecordedToolOutput, renderKeyValue, renderNotice, renderSection } from "./tui/chrome.js"
 import { StreamingMarkdownRenderer } from "./markdown.js"
 import { VERSION } from "../version.js"
 import {
@@ -368,7 +369,7 @@ export const SLASH_COMMANDS = [
   "/approve", "/yolo", "/branch", "/branches", "/tag", "/compress",
   "/theme", "/themes", "/thinking", "/undo", "/retry", "/rewind", "/context",
   "/mode", "/plan", "/permissions", "/diff", "/memory", "/rename",
-  "/init", "/verbose", "/quit", "/exit",
+  "/init", "/verbose", "/expand", "/quit", "/exit",
   "/version", "/files", "/stats", "/brief", "/fast", "/effort",
   "/color", "/vim", "/btw", "/commit", "/release-notes",
   "/skills", "/tasks", "/mcp", "/hooks", "/pr-comments",
@@ -519,6 +520,7 @@ export async function handleSlashCommand(input: string, conversation: Conversati
     /approve [on|off] Toggle auto-approve mode
     /yolo [on|off]    Toggle YOLO mode (= /approve, but with dangerous-bash warning)
     /verbose [on|off] Toggle verbose tool output
+    /expand [n]       Re-print full output of a recent tool call (default: last)
     /permissions      Show permission settings
     /settings         Show settings panel
     /memory           Show memory/context files
@@ -1219,26 +1221,28 @@ ${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|aut
     // ─── Round 32: core slash commands ──────────────────────
 
     case '/status': {
+      // Chrome spec S3: aligned key-value panel via the shared helper —
+      // no hand-rolled space padding.
       const operatingMode = conversation.options?.operatingModeState?.mode ?? 'normal'
-      const lines = [
-        `${ansi.bold}Session status:${ansi.reset}`,
-        `  Model:     ${ansi.cyan}${conversation.model}${ansi.reset}`,
-        `  Session:   ${conversation.id}`,
-        `  Turns:     ${conversation.turns.length}`,
-        `  Max tokens: ${conversation.maxTokens}`,
+      const pairs: Array<readonly [string, string]> = [
+        ['Model', `${ansi.cyan}${conversation.model}${ansi.reset}`],
+        ['Session', conversation.id],
+        ['Turns', String(conversation.turns.length)],
+        ['Max tokens', String(conversation.maxTokens)],
       ]
       if (isModesEnabled()) {
-        lines.splice(2, 0, `  Mode:      ${operatingMode}`)
+        pairs.splice(1, 0, ['Mode', operatingMode])
       }
       if (opts) {
-        lines.push(`  Proxy:     ${opts.apiBaseUrl}`)
+        pairs.push(['Proxy', opts.apiBaseUrl])
       }
-      lines.push(`  Trace:     ${isTraceEnabled() ? 'ON' : 'OFF'}`)
-      lines.push(`  Config:    ${getOwlcodaConfigLabel()}`)
+      pairs.push(['Trace', isTraceEnabled() ? 'ON' : 'OFF'])
+      pairs.push(['Config', getOwlcodaConfigLabel()])
       if (approveState) {
-        lines.push(`  Approve:   ${approveState.autoApprove ? 'auto' : 'manual'}`)
+        pairs.push(['Approve', approveState.autoApprove ? 'auto' : 'manual'])
       }
-      console.log(lines.join('\n'))
+      console.log(renderSection('Session status'))
+      console.log(renderKeyValue(pairs))
       return true
     }
 
@@ -1331,7 +1335,7 @@ ${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|aut
 
       const previous = state.mode
       state.mode = nextMode
-      console.log(`${ansi.green}✓${ansi.reset} Operating mode set to ${ansi.cyan}${nextMode}${ansi.reset} (was ${previous}).`)
+      console.log(renderNotice(`Operating mode set to ${nextMode} (was ${previous}).`, 'success'))
       // Say what the mode DOES — in a read-only session plan/normal/auto
       // are behaviorally indistinguishable, so without this line (and the
       // rail MODE cell) a switch produces no visible change at all.
@@ -1984,6 +1988,26 @@ ${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|aut
         ? `${themeColor('success')}ON${sgr.reset} — tool results shown individually`
         : `${themeColor('warning')}OFF${sgr.reset} — tool results collapsed when grouped`
       console.log(`Verbose: ${state}`)
+      return true
+    }
+
+    case '/expand': {
+      // Chrome spec S1: collapsed tool bodies never lose data — re-print
+      // the full recorded output. `/expand` = most recent, `/expand 2` =
+      // two calls back. Interactive in-place expansion is future work.
+      const offset = arg ? Math.max(0, Number.parseInt(arg, 10) || 0) : 0
+      const recorded = getRecordedToolOutput(offset)
+      if (!recorded) {
+        console.log(dim(offset === 0
+          ? 'No tool output recorded yet in this session.'
+          : `No tool output recorded ${offset} calls back.`))
+        return true
+      }
+      const icon = recorded.isError
+        ? `${themeColor('error')}✗${sgr.reset}`
+        : `${themeColor('success')}✓${sgr.reset}`
+      console.log(`${icon} ${recorded.name} ${dim('(full output)')}`)
+      console.log(recorded.output)
       return true
     }
 

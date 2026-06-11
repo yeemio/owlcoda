@@ -6,6 +6,8 @@
  * may not report usage in the Anthropic format.
  */
 
+import { renderKeyValue } from './tui/chrome.js'
+
 export interface TokenUsage {
   inputTokens: number
   outputTokens: number
@@ -245,22 +247,21 @@ export class UsageTracker {
     this.startedAt = null
   }
 
-  /** Format usage for display. */
+  /** Format usage for display (chrome spec S3: shared key-value layout). */
   formatUsage(): string {
     const snap = this.getSnapshot()
-    const lines = [
-      `Tokens: ${snap.totalInputTokens.toLocaleString()} in / ${snap.totalOutputTokens.toLocaleString()} out (${snap.totalTokens.toLocaleString()} total)`,
-      `Requests: ${snap.requestCount}`,
+    const pairs: Array<readonly [string, string]> = [
+      ['Tokens', `${snap.totalInputTokens.toLocaleString()} in / ${snap.totalOutputTokens.toLocaleString()} out (${snap.totalTokens.toLocaleString()} total)`],
+      ['Requests', String(snap.requestCount)],
     ]
 
     if (snap.elapsedMs > 0) {
-      const secs = (snap.elapsedMs / 1000).toFixed(1)
-      lines.push(`Duration: ${secs}s`)
+      pairs.push(['Duration', `${(snap.elapsedMs / 1000).toFixed(1)}s`])
     }
 
     // Estimated cost (fictional for local models)
-    lines.push(`Est. cost: $${snap.estimatedCostUsd.toFixed(4)} (fictional — local models are free)`)
+    pairs.push(['Est. cost', `$${snap.estimatedCostUsd.toFixed(4)} (fictional — local models are free)`])
 
-    return lines.join('\n')
+    return renderKeyValue(pairs)
   }
 }

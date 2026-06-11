@@ -25,7 +25,7 @@
  * latency to first chunk.
  *
  * Anti-pattern guard (project memory):
- *   - We don't port OwlCC's tengu `SystemAPIErrorMessage` heartbeat —
+ *   - We don't port legacy internal build's tengu `SystemAPIErrorMessage` heartbeat —
  *     that's an upstream-specific protocol
  *   - We don't gate this on a "foreground vs background" source flag —
  *     owlcoda has no such distinction (all queries are foreground in

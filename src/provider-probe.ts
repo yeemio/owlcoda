@@ -120,7 +120,7 @@ const PROVIDER_TEMPLATES: ProviderTemplate[] = [
     testPath: '/v1/messages',
     testMode: 'messages',
     family: 'single-model',
-    description: 'Domestic brand adapter. Uses the Anthropic-compatible DeepSeek route favored by Claude Code switchers.',
+    description: 'Domestic brand adapter. Uses the Anthropic-compatible DeepSeek route favored by external coding-assistant switchers.',
     backendModelHint: 'Default is deepseek-chat.',
     featured: true,
   },

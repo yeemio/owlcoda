@@ -6,6 +6,7 @@
  */
 
 import { ToolDispatcher } from './dispatch.js'
+import { detectEmittedButUnexecutedToolCall } from './repl-shared.js'
 import { ensureOperatingModeState, initializeOperatingModeState, type OperatingMode } from './modes.js'
 import {
   createConversation,
@@ -407,7 +408,26 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
         const taskState = conversation.options?.taskState
         const taskStatus = taskState?.run.status
         const taskGuardReason = taskState?.run.lastGuardReason ?? undefined
-        const exitCode = shouldHeadlessExitNonZero(stopReason, taskStatus, finalText) ? 1 : 0
+        // Silent tool-loss guard: a run that executed zero tools yet left a
+        // tool-call marker in the final text means the upstream returned the
+        // model's native tool call as plain text instead of structured
+        // tool_use — so the deliverable never landed. Surface it loudly and
+        // fail non-zero rather than reporting a false "completed". (Common
+        // cause: runHeadless pointed straight at a raw runtime's /v1/messages;
+        // point it at the OwlCoda daemon so local runtimes route through the
+        // /v1/chat/completions translate path where tool calls round-trip.)
+        const emittedToolMarker = toolCallLog.length === 0
+          ? detectEmittedButUnexecutedToolCall(finalText)
+          : null
+        if (emittedToolMarker) {
+          process.stderr.write(formatHeadlessError(
+            `Model emitted a tool call as text ("${emittedToolMarker}") but no tool executed — ` +
+            `the upstream is not converting native tool calls into structured tool_use. ` +
+            `Point runHeadless at the OwlCoda daemon (local runtimes then route through ` +
+            `/v1/chat/completions), not at a raw runtime's /v1/messages.`,
+          ) + '\n')
+        }
+        const exitCode = (shouldHeadlessExitNonZero(stopReason, taskStatus, finalText) || emittedToolMarker !== null) ? 1 : 0
         const projectMapRuntime = buildHeadlessProjectMapRuntimeEvidence(conversation, noticeLog)
         const projectMapAcceptance = buildHeadlessProjectMapAcceptanceEvidence({
           conversation,

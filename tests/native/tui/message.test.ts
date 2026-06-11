@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
-  formatToolUseHeader, formatToolResult, formatToolResultBox, formatToolProgress,
+  formatToolUseHeader, formatToolResult, formatToolProgress,
   formatChangeBlockResult,
   formatPrompt, formatPromptDock, renderPromptDockFrame, formatUserMessage, formatAssistantHeader, formatThinking, formatSystemMessage,
   formatErrorMessage, formatErrorBox,
@@ -213,31 +213,31 @@ describe('formatToolResult', () => {
     expect(result).toContain('Error: not found')
   })
 
-  it('truncates write output to 10 lines', () => {
+  it('collapses ok output to the head-3 default budget (chrome spec S1)', () => {
     const longOutput = Array.from({ length: 30 }, (_, i) => `line${i}`).join('\n')
     const result = formatToolResult('write', longOutput, false, 100)
     const plain = stripAnsi(result)
     expect(plain).toContain('line0')
-    expect(plain).toContain('line9')
-    expect(plain).not.toContain('line10')
-    expect(plain).toContain('+20 lines')
+    expect(plain).toContain('line2')
+    expect(plain).not.toContain('line3\n')
+    expect(plain).toContain('+27 lines')
   })
 
-  it('truncates bash output to 15 lines', () => {
+  it('collapses bash ok output to the head-5 budget (chrome spec S1)', () => {
     const longOutput = Array.from({ length: 25 }, (_, i) => `out${i}`).join('\n')
     const result = formatToolResult('bash', longOutput, false, 100)
     const plain = stripAnsi(result)
     expect(plain).toContain('out0')
-    expect(plain).toContain('out14')
-    expect(plain).not.toContain('out15')
-    expect(plain).toContain('+10 lines')
+    expect(plain).toContain('out4')
+    expect(plain).not.toContain('out5\n')
+    expect(plain).toContain('+20 lines')
   })
 
   it('hard-wraps long output lines so continuation rows keep the tool indent', () => {
     withStdoutColumns(48, () => {
       const result = formatToolResult(
         'Brief',
-        '已将反馈写入 /Users/yeemio/AI/Article/02-读者反馈/mimo-6章评审.md, 署名 mimo',
+        '已将反馈写入 /Users/publicuser/AI/Article/02-读者反馈/mimo-6章评审.md, 署名 mimo',
         false,
         100,
       )
@@ -251,64 +251,47 @@ describe('formatToolResult', () => {
   })
 })
 
-describe('formatToolResultBox', () => {
-  it('renders in a box', () => {
-    const result = formatToolResultBox('bash', 'output line', false, 200)
-    expect(result).toContain('output line')
-  })
-
-  // 2026-05-28 Patch 9: fast-validation errors render compact (single line),
-  // not the full ╴╴╴ banner + ▎ rail chrome that real runtime failures get.
-  it('uses compact one-line form for fast validation errors (0ms + single short line)', () => {
-    const result = formatToolResultBox('TaskCreate', 'steps must be a non-empty array.', true, 0)
+describe('unified error rendering (chrome spec S1 — box family retired)', () => {
+  it('compact one-line form survives for fast validation errors (0ms + single short line)', () => {
+    const result = formatToolResult('TaskCreate', 'steps must be a non-empty array.', true, 0)
     const plain = stripAnsi(result)
-    // Compact form: leading 2-space indent + ✗ + name + (dur) + em-dash + msg, all on one line.
-    expect(plain).not.toMatch(/╴╴╴/)
-    expect(plain).not.toMatch(/▎/)
+    expect(plain).not.toMatch(/\u2574/)
     expect(plain.split('\n').length).toBe(1)
-    expect(plain).toContain('✗')
+    expect(plain).toContain('\u2717')
     expect(plain).toContain('TaskCreate')
     expect(plain).toContain('(0ms)')
-    expect(plain).toContain('—')
+    expect(plain).toContain('\u2014')
     expect(plain).toContain('steps must be a non-empty array.')
   })
 
-  it('keeps the heavy ╴╴╴ box for real runtime failures (>= 50ms)', () => {
-    const result = formatToolResultBox('bash', 'command failed: file not found', true, 150)
-    expect(result).toMatch(/╴╴╴/)
-    expect(result).toMatch(/▎/)
+  it('runtime failures use the same \u23bf shape as success — no \u2574 banner, no \u258e rail', () => {
+    const result = stripAnsi(formatToolResult('bash', 'command failed: file not found', true, 150))
+    expect(result).not.toMatch(/\u2574/)
+    expect(result.split('\n')[0]).toContain('\u23bf')
+    expect(result).toContain('\u2717')
+    expect(result).toContain('command failed: file not found')
   })
 
-  it('keeps the heavy box for multi-line errors regardless of speed', () => {
-    const result = formatToolResultBox(
-      'edit',
-      'line1: error here\nline2: more context\nline3: even more',
-      true,
-      0,
-    )
-    expect(result).toMatch(/╴╴╴/)
-    expect(result).toMatch(/▎/)
+  it('multi-line errors collapse to the tail behind the constant fold line', () => {
+    const lines = Array.from({ length: 14 }, (_, i) => `diag ${i + 1}`).join('\n')
+    const result = stripAnsi(formatToolResult('edit', lines, true, 80))
+    expect(result).toContain('diag 14')
+    expect(result).not.toContain('diag 1\n')
+    expect(result).toMatch(/\u2026 \+4 lines/)
   })
 
-  it('keeps the heavy box for successful calls (success always compact-line elsewhere, but the box renderer keeps banner+rail)', () => {
-    const result = formatToolResultBox('bash', 'output line', false, 0)
-    // Success path is unchanged; banner + rail are still present.
-    expect(result).toMatch(/╴╴╴/)
-    expect(result).toMatch(/▎/)
-  })
-
-  it('hard-wraps long box output lines with the rail on every continuation row', () => {
+  it('hard-wraps long output lines within the content width', () => {
     withStdoutColumns(52, () => {
-      const result = formatToolResultBox(
+      const result = formatToolResult(
         'Brief',
-        '已将反馈写入 /Users/yeemio/AI/Article/02-读者反馈/mimo-6章评审.md, 署名 mimo',
+        '已将反馈写入 /Users/publicuser/AI/Article/02-读者反馈/mimo-6章评审.md, 署名 mimo',
         false,
         100,
       )
       const bodyLines = stripAnsi(result).split('\n').slice(1)
       expect(bodyLines.length).toBeGreaterThan(1)
       for (const line of bodyLines) {
-        expect(line.startsWith('  ▎ ')).toBe(true)
+        expect(line.startsWith('     ')).toBe(true)
         expect(visibleWidth(line)).toBeLessThanOrEqual(52)
       }
     })

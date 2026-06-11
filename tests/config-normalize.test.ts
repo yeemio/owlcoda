@@ -32,7 +32,7 @@ describe('normalizeModel defaults (via import)', async () => {
     expect(m.aliases).toEqual([])
     expect(m.tier).toBe('general')
     expect(m.default).toBeUndefined()
-    expect(m.contextWindow).toBe(32768)
+    expect(m.contextWindow).toBe(200000)
   })
 
   it('preserves all specified fields', () => {

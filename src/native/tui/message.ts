@@ -18,6 +18,7 @@ import { visibleWidth, stripAnsi } from './colors.js'
 import { renderUserBlock } from './user-block.js'
 import { renderToolRow } from './tool-row.js'
 import { renderBanner } from './banner.js'
+import { collapseResultBody, foldLine, parseBashPayload, renderNotice, resultBodyBudget } from './chrome.js'
 import { formatTokenCompact } from '../../model-capabilities.js'
 
 // ─── Constants (native terminal visual characters) ──────────
@@ -64,19 +65,6 @@ const TOOL_ICONS: Record<string, string> = {
  * ⏺ bash  echo "hello world"
  * ```
  */
-/**
- * Maximum display lines for tool output by category.
- * Bash search/read results get collapsed, file writes show max 10 lines.
- */
-const MAX_TOOL_OUTPUT_LINES: Record<string, number> = {
-  bash: 15,
-  read: 10,
-  write: 10,
-  edit: 10,
-  glob: 20,
-  grep: 20,
-}
-
 /** Maximum characters for command display (2 lines / 160 chars). */
 const MAX_COMMAND_DISPLAY_CHARS = 160
 const MAX_COMMAND_DISPLAY_LINES = 2
@@ -271,50 +259,153 @@ export function formatToolResult(
     : `${(durationMs / 1000).toFixed(1)}s`
 
   const lines: string[] = []
-  // Tree bracket prefix for the result header
   const displayName = userFacingToolName(canonicalName)
+  const cols = Math.max(40, process.stdout.columns ?? 80)
+
+  // Chrome spec S1: human display ≠ model payload. For bash, strip the
+  // [stdout]/[stderr]/[exit code] protocol into clean body lines and carry
+  // the exit code on the fold line instead.
+  const bashPayload = canonicalName === 'bash' ? parseBashPayload(output) : null
+  const displayOutput = bashPayload ? bashPayload.lines.join('\n') : output
+  const foldMeta = bashPayload?.exitCode != null ? `exit ${bashPayload.exitCode}` : undefined
+
+  // Fast validation reject: synchronous schema errors are one short line —
+  // keep them one line in the transcript too (same gutter, ✗ accent).
+  if (isError && durationMs < 50 && !displayOutput.includes('\n')) {
+    const compactMsg = displayOutput.trim()
+    const compact = `${dim(TREE_PREFIX)}${icon} ${displayName}${sgr.reset} ${dim(`(${dur})`)} ${dim('—')} ${compactMsg}`
+    if (visibleWidth(stripAnsi(compact)) <= cols - 2) return compact
+  }
+
+  // Tree bracket prefix for the result header
   lines.push(`${dim(TREE_PREFIX)}${icon} ${displayName}${sgr.reset} ${dim(`(${dur})`)}`)
 
-  // Show output (truncated) with indentation matching tree bracket
+  // Show output (collapsed) with indentation matching tree bracket
   const indent = '     ' // 5 chars to align under tree bracket content
-  const cols = Math.max(40, process.stdout.columns ?? 80)
   const contentWidth = Math.max(20, Math.min(120, cols - visibleWidth(indent) - 4))
-  if (output && output.trim().length > 0) {
-    // Extract and show special warnings before main output
-    const { cleanOutput, warnings } = extractOutputWarnings(canonicalName, output)
-    for (const warning of warnings) {
-      lines.push(`${indent}${themeColor('warning')}⚠ ${warning}${sgr.reset}`)
-    }
-
-    // Try JSON pretty-printing for bash tool output.
-    const formattedOutput = (canonicalName === 'bash') ? tryJsonFormatOutput(cleanOutput) : cleanOutput
-
-    const outputLines = formattedOutput.split('\n')
-    // Per-tool max lines (error gets more) to keep output readable.
-    const maxLines = isError ? 30 : (MAX_TOOL_OUTPUT_LINES[canonicalName] ?? 15)
-    const display = outputLines.length > maxLines
-      ? [...outputLines.slice(0, maxLines), `… (+${outputLines.length - maxLines} lines)`]
-      : outputLines
-
-    for (const line of display) {
-      const color = isError ? themeColor('error') : ''
-      const reset = isError ? sgr.reset : ''
-      // Expand literal tabs — Ink / terminal tab-stop handling inside a
-      // nested indent-box is unreliable (Read tool's `N\tcontent` format
-      // was rendering as "1te#..." on the user's mac terminal where the
-      // tab stop fell inside adjacent text). 4-space expansion keeps
-      // column alignment without depending on the host terminal's stops.
-      const expanded = line.replace(/\t/g, '    ')
-      for (const chunk of wrapDisplayLine(expanded, contentWidth)) {
-        lines.push(`${indent}${color}${dim(chunk)}${reset}`)
-      }
-    }
+  if (displayOutput && displayOutput.trim().length > 0) {
+    const rows = composeResultBodyRows(canonicalName, displayOutput, isError, contentWidth, foldMeta, bashPayload?.killed ?? false)
+    for (const row of rows) lines.push(`${indent}${row}`)
   } else if (!isError) {
     // Empty output shows "(No output)" dimmed
     lines.push(`${indent}${dim('(No output)')}`)
   }
 
   return lines.join('\n')
+}
+
+/**
+ * Shared body assembly for tool results (chrome spec S1/S2): warnings,
+ * collapse (ok head / err tail), constant fold line. Returns content rows
+ * WITHOUT a left gutter — callers apply their own (formatToolResult's
+ * 5-space indent, formatToolGroup's `⎿` block).
+ */
+function composeResultBodyRows(
+  canonicalName: string,
+  displayOutput: string,
+  isError: boolean,
+  contentWidth: number,
+  foldMeta: string | undefined,
+  killed: boolean,
+): string[] {
+  const rows: string[] = []
+  // Extract and show special warnings before main output
+  const { cleanOutput, warnings } = extractOutputWarnings(canonicalName, displayOutput)
+  for (const warning of warnings) {
+    rows.push(`${themeColor('warning')}⚠ ${warning}${sgr.reset}`)
+  }
+  if (killed) {
+    rows.push(`${themeColor('warning')}⚠ process killed (timeout)${sgr.reset}`)
+  }
+
+  // Try JSON pretty-printing for bash tool output.
+  const formattedOutput = (canonicalName === 'bash') ? tryJsonFormatOutput(cleanOutput) : cleanOutput
+
+  const outputLines = formattedOutput.split('\n')
+  // Collapse: ok keeps the head, err keeps the tail (errors live at the
+  // end). Fold-line shape is constant — locked by chrome-s1 tests.
+  const { shown, hidden, fromTail } = collapseResultBody(outputLines, {
+    isError,
+    budget: resultBodyBudget(canonicalName, isError),
+  })
+
+  if (fromTail && hidden > 0) {
+    // Tail collapse: the fold sits above the body — what follows is the
+    // end of the output, where the error actually is.
+    rows.push(foldLine(hidden, foldMeta))
+  }
+  for (const line of shown) {
+    const color = isError ? themeColor('error') : ''
+    const reset = isError ? sgr.reset : ''
+    // Expand literal tabs — Ink / terminal tab-stop handling inside a
+    // nested indent-box is unreliable (Read tool's `N\tcontent` format
+    // was rendering as "1te#..." on the user's mac terminal where the
+    // tab stop fell inside adjacent text). 4-space expansion keeps
+    // column alignment without depending on the host terminal's stops.
+    const expanded = line.replace(/\t/g, '    ')
+    for (const chunk of wrapDisplayLine(expanded, contentWidth)) {
+      rows.push(`${color}${dim(chunk)}${reset}`)
+    }
+  }
+  if (!fromTail && hidden > 0) {
+    rows.push(foldLine(hidden, foldMeta))
+  } else if (hidden === 0 && foldMeta && isError) {
+    // Errors always surface the exit code even when nothing folded.
+    rows.push(dim(foldMeta))
+  }
+  return rows
+}
+
+/**
+ * Merged action+result block (chrome spec S2). One group committed on tool
+ * completion: a ▸ tool row carrying the final status + duration, and the
+ * body riding under ⎿ — retiring the duplicated "▸ Bash cmd ●" +
+ * "⎿ ✓ Bash (3.4s)" pair (the running state lives in the live region).
+ *
+ *   ▸ Bash docker logs --since 11:45 openclaw-ga…  3.4s ✓
+ *     ⎿ 2026-06-11T11:45:16 [diagnostic] stalled session: …
+ *       … +12 lines · exit 0
+ */
+export function formatToolGroup(
+  name: string,
+  input: Record<string, unknown>,
+  output: string,
+  isError: boolean,
+  durationMs: number,
+): string {
+  const canonicalName = canonicalToolName(name)
+  if (canonicalName === 'TodoWrite' && !isError) {
+    return formatTodoWriteResult(output, durationMs)
+  }
+
+  const dur = durationMs < 1000
+    ? `${durationMs}ms`
+    : `${(durationMs / 1000).toFixed(1)}s`
+  const cols = Math.max(40, process.stdout.columns ?? 80)
+  const displayName = userFacingToolName(canonicalName)
+
+  const header = renderToolRow({
+    verb: displayName,
+    arg: truncateCommandDisplay(summarizeToolInput(name, input)),
+    state: isError ? 'err' : 'ok',
+    duration: dur,
+    columns: cols,
+  })
+
+  const bashPayload = canonicalName === 'bash' ? parseBashPayload(output) : null
+  const displayOutput = bashPayload ? bashPayload.lines.join('\n') : output
+  const foldMeta = bashPayload?.exitCode != null ? `exit ${bashPayload.exitCode}` : undefined
+
+  if (!displayOutput || displayOutput.trim().length === 0) {
+    return header
+  }
+
+  const firstGutter = `  ${dim(TREE_BRACKET)} `
+  const restGutter = '    '
+  const contentWidth = Math.max(20, Math.min(120, cols - 4 - 4))
+  const rows = composeResultBodyRows(canonicalName, displayOutput, isError, contentWidth, foldMeta, bashPayload?.killed ?? false)
+  const body = rows.map((row, index) => index === 0 ? `${firstGutter}${row}` : `${restGutter}${row}`)
+  return [header, ...body].join('\n')
 }
 
 /**
@@ -576,95 +667,6 @@ function extractOutputWarnings(name: string, output: string): { cleanOutput: str
   return { cleanOutput: cleanOutput.trim(), warnings }
 }
 
-/**
- * Format a tool result for transcript display.
- *
- * Previous version wrapped every output line with `│ … │` via renderBox
- * — when a tool errored and produced 15-30 lines of diagnostic output,
- * every row drew a bright red `│` on both sides, producing a "wall of
- * red verticals" that dominated the transcript and made the real error
- * message hard to pick out.
- *
- * New layout, git-log-ish:
- *
- *   ╴╴╴ ✗ Bash (11.2s) ╴╴╴╴╴╴╴╴╴╴╴╴╴╴╴
- *     ▎ cat: /var/folders/…/tmp.xxx/smoke_reporting.log
- *     ▎ No such file or directory
- *     ▎ …
- *
- * Header: single horizontal rule prefixed with the status icon + tool
- * name + duration, colored by outcome (success green / error red).
- * Body: each output line indented and tagged with a single thin left
- * rail `▎` — one vertical glyph per row, dimmed for success and
- * colored for error. No right border, no bottom border. Quieter in
- * scrollback, still easy to visually bracket.
- */
-export function formatToolResultBox(
-  name: string,
-  output: string,
-  isError: boolean,
-  durationMs: number,
-): string {
-  const dur = durationMs < 1000
-    ? `${durationMs}ms`
-    : `${(durationMs / 1000).toFixed(1)}s`
-
-  const icon = isError ? '✗' : '✓'
-  const accent = isError ? themeColor('error') : themeColor('success')
-  const displayName = userFacingToolName(name)
-
-  const outputLines = output.split('\n').slice(0, 30)
-  const truncated = output.split('\n').length > 30
-
-  const cols = Math.max(40, process.stdout.columns ?? 80)
-
-  // 2026-05-28 Patch 9: fast-validation errors get a compact one-line
-  // form instead of the full ╴╴╴ banner + ▎ rail chrome.
-  //
-  // Heuristic: durationMs < 50ms + single non-truncated line + fits on
-  // one row. A synchronous argument-schema reject (e.g. "steps must be
-  // a non-empty array") can't do I/O so it always lands in this regime;
-  // real runtime failures (timeouts, network, watchdog) blow past 50ms
-  // and/or produce multi-line output, so they keep the heavy box.
-  //
-  // Visual asymmetry between successful tool calls (compact single
-  // line) and failed validation (full-width banner + rail body) is
-  // distracting in transcripts where a model retries a malformed call
-  // immediately — the failure dominates a line of work that the model
-  // already recovered from.
-  if (
-    isError
-    && durationMs < 50
-    && outputLines.length === 1
-    && !truncated
-  ) {
-    const compactMsg = outputLines[0]!.trim()
-    const compactWidth = visibleWidth(`  ✗ ${displayName} (${dur}) — ${compactMsg}`)
-    if (compactWidth <= cols - 4) {
-      const dimDur = `${themeColor('textDim')}(${dur})${sgr.reset}`
-      return `  ${accent}✗${sgr.reset} ${displayName} ${dimDur} ${themeColor('textDim')}—${sgr.reset} ${compactMsg}`
-    }
-  }
-
-  // Leave room for the assistant-prefix indent that ink-repl.tsx adds
-  // around every transcript item (`⎿ ` + 2-space indent = 4 cols).
-  const ruleWidth = Math.max(20, cols - 10)
-  const title = ` ${icon} ${displayName} (${dur}) `
-  const titleVisWidth = visibleWidth(title)
-  const remainingRule = Math.max(3, ruleWidth - titleVisWidth - 3)
-
-  const header = `${accent}╴╴╴${title}${'╴'.repeat(remainingRule)}${sgr.reset}`
-
-  const rail = isError ? `${accent}▎${sgr.reset}` : `${themeColor('textDim')}▎${sgr.reset}`
-  const bodyPrefix = `  ${rail} `
-  const bodyWidth = Math.max(20, cols - visibleWidth(stripAnsi(bodyPrefix)) - 4)
-  const body = outputLines.flatMap((line) =>
-    wrapDisplayLine(line, bodyWidth).map((chunk) => `${bodyPrefix}${chunk}`),
-  )
-  if (truncated) body.push(`  ${rail} ${dim('… (truncated)')}`)
-
-  return [header, ...body].join('\n')
-}
 
 // ─── Tool Result Collapsing ───────────────────────────────────
 
@@ -1019,7 +1021,9 @@ export function formatPlatformEvent(kind: PlatformEventKind, text: string): stri
       columns: process.stdout.columns ?? 80,
     })
   }
-  return renderBanner({ kind: 'info', title: text, columns: process.stdout.columns ?? 80 })
+  // Chrome spec S3: session lifecycle events are one quiet notice line,
+  // not a banner box — they're context, not headlines.
+  return renderNotice(text)
 }
 
 /**

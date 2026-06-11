@@ -182,9 +182,9 @@ describe('Display + Usage integration', () => {
     expect(snap.totalInputTokens).toBeGreaterThan(0)
     expect(snap.totalOutputTokens).toBeGreaterThan(0)
 
-    const formatted = tracker.formatUsage()
-    expect(formatted).toContain('Tokens:')
-    expect(formatted).toContain('Requests: 2')
+    const formatted = tracker.formatUsage().replace(/\x1b\[[0-9;]*m/g, '')
+    expect(formatted).toContain('Tokens')
+    expect(formatted).toMatch(/Requests\s+2/)
   })
 })
 

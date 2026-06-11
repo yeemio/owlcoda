@@ -72,7 +72,7 @@ describe('handleModels', () => {
     expect(body.data).toHaveLength(2)
     expect(body.data[0]).toMatchObject({ id: 'model-a', display_name: 'Model A', type: 'model', availability: 'available' })
     expect(body.data[1]).toMatchObject({ id: 'model-b', display_name: 'Model B', type: 'model', availability: 'unavailable' })
-    expect(body.data[0]).toMatchObject({ context_window: 32768, context_window_source: 'fallback' })
+    expect(body.data[0]).toMatchObject({ context_window: 200000, context_window_source: 'fallback' })
   })
 
   it('availability defaults to unknown when not set', async () => {
