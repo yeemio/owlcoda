@@ -54,7 +54,6 @@ export {
   isFailedRequestRecoveryInput,
   isRetryEligibleContinuationFailure,
   conversationEndsAwaitingAssistant,
-  decideEscapeKeyAction,
   shouldDrainQueuedInputAfterTurn,
   shouldQueueSubmitBehindRunningTask,
   shouldScheduleRuntimeAutoRetry,

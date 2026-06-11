@@ -78,12 +78,10 @@ export class StreamTranslator {
       return []
     }
 
-    const choice = chunk.choices?.[0]
-    if (!choice) return []
-
-    const delta = choice.delta
-    const finishReason = choice.finish_reason
-
+    // Capture usage BEFORE bailing on an empty choices[]: per the OpenAI spec,
+    // stream usage arrives in a trailing chunk whose choices is [] (with
+    // stream_options.include_usage). Bailing first dropped it for every
+    // spec-conformant upstream and forced char/4 estimates.
     if (chunk.usage) {
       this.upstreamUsage = {
         prompt_tokens: chunk.usage.prompt_tokens,
@@ -91,6 +89,12 @@ export class StreamTranslator {
         cached_tokens: chunk.usage.prompt_tokens_details?.cached_tokens ?? 0,
       }
     }
+
+    const choice = chunk.choices?.[0]
+    if (!choice) return []
+
+    const delta = choice.delta
+    const finishReason = choice.finish_reason
 
     const events: string[] = []
 

@@ -45,6 +45,7 @@ export const GATE_REGISTRY: readonly GateRegistryEntry[] = [
   { id: 'gate_v2', envVar: 'OWLCODA_GATE_V2', stage: 'shadow', openedDate: '2026-05-05', reviewBy: '2026-05-25' },
   { id: 'provenance', envVar: 'OWLCODA_GATE_PROVENANCE', stage: 'shadow', openedDate: '2026-05-27', reviewBy: '2026-06-10' },
   { id: 'routing_shadow', envVar: 'OWLCODA_ROUTING_SHADOW', stage: 'shadow', openedDate: '2026-06-06', reviewBy: '2026-06-20' },
+  { id: 'microcompact', envVar: 'OWLCODA_MICROCOMPACT_SHADOW', stage: 'shadow', openedDate: '2026-06-06', reviewBy: '2026-06-20' },
   { id: 'output_repetition', envVar: 'OWLCODA_OUTPUT_REPETITION_GUARD', stage: 'shadow', openedDate: '2026-06-08', reviewBy: '2026-06-22' },
 ]
 

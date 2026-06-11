@@ -237,7 +237,7 @@ describe('formatToolResult', () => {
     withStdoutColumns(48, () => {
       const result = formatToolResult(
         'Brief',
-        '已将反馈写入 /Users/publicuser/AI/Article/02-读者反馈/mimo-6章评审.md, 署名 mimo',
+        '已将反馈写入 /Users/yeemio/AI/Article/02-读者反馈/mimo-6章评审.md, 署名 mimo',
         false,
         100,
       )
@@ -301,7 +301,7 @@ describe('formatToolResultBox', () => {
     withStdoutColumns(52, () => {
       const result = formatToolResultBox(
         'Brief',
-        '已将反馈写入 /Users/publicuser/AI/Article/02-读者反馈/mimo-6章评审.md, 署名 mimo',
+        '已将反馈写入 /Users/yeemio/AI/Article/02-读者反馈/mimo-6章评审.md, 署名 mimo',
         false,
         100,
       )

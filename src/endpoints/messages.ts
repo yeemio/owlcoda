@@ -91,6 +91,21 @@ export function extractAnthropicSseUsageDelta(
   return delta
 }
 
+export interface CloudSseUsage { input: number; output: number; cacheRead: number; cacheCreation: number }
+
+/** Fold one SSE event's usage into a running total across the stream's events. */
+export function foldAnthropicSseUsage(acc: CloudSseUsage, parsed: unknown): CloudSseUsage {
+  const d = extractAnthropicSseUsageDelta(parsed)
+  // input/cache are request-fixed; output is cumulative. Take the max of each so
+  // message_start + message_delta (which now also carries input) never double-counts.
+  return {
+    input: Math.max(acc.input, d.input),
+    output: Math.max(acc.output, d.output),
+    cacheRead: Math.max(acc.cacheRead, d.cacheRead),
+    cacheCreation: Math.max(acc.cacheCreation, d.cacheCreation),
+  }
+}
+
 /** Flag a response as having hit an upstream rate-limit, for the admission AIMD signal. */
 function markAdmissionRateLimited(res: ServerResponse): void {
   ;(res as { __owlcodaAdmissionRateLimited?: boolean }).__owlcodaAdmissionRateLimited = true
@@ -1149,11 +1164,14 @@ async function handleMessagesStream(
       // each parsed SSE event, so /cost surfaces cache savings on the cloud
       // streaming path too — not just the non-stream path.
       const extractUsage = (parsed: unknown) => {
-        const d = extractAnthropicSseUsageDelta(parsed)
-        cloudInputTokens += d.input
-        cloudOutputTokens += d.output
-        cloudCacheReadTokens += d.cacheRead
-        cloudCacheCreationTokens += d.cacheCreation
+        const folded = foldAnthropicSseUsage(
+          { input: cloudInputTokens, output: cloudOutputTokens, cacheRead: cloudCacheReadTokens, cacheCreation: cloudCacheCreationTokens },
+          parsed,
+        )
+        cloudInputTokens = folded.input
+        cloudOutputTokens = folded.output
+        cloudCacheReadTokens = folded.cacheRead
+        cloudCacheCreationTokens = folded.cacheCreation
       }
 
       // Cross-chunk buffer for SSE parsing. Previous versions used

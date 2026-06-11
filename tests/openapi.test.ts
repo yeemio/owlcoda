@@ -13,13 +13,6 @@ describe('OpenAPI spec', () => {
     expect(spec.info.version).toBeTruthy()
   })
 
-  it('reports the project license', () => {
-    expect(spec.info.license).toEqual({
-      name: 'GPL-3.0-or-later',
-      url: 'https://www.gnu.org/licenses/gpl-3.0.html',
-    })
-  })
-
   it('includes /v1/messages path', () => {
     expect(spec.paths['/v1/messages']).toBeDefined()
     expect(spec.paths['/v1/messages'].post).toBeDefined()

@@ -48,10 +48,17 @@ export function readEnvelopeEvents(
       for (const line of content.split(/\r?\n/)) {
         const trimmed = line.trim()
         if (!trimmed) continue
+        let parsed: unknown
         try {
-          events.push(JSON.parse(trimmed) as TelemetryEventEnvelope)
+          parsed = JSON.parse(trimmed)
         } catch {
-          // skip malformed line
+          continue // skip malformed line
+        }
+        // Only real envelopes enter the stream — a bare null/number/string or an
+        // object without eventType would crash downstream summarizers (e.eventType).
+        if (parsed != null && typeof parsed === 'object'
+          && typeof (parsed as { eventType?: unknown }).eventType === 'string') {
+          events.push(parsed as TelemetryEventEnvelope)
         }
       }
     }

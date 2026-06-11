@@ -1,7 +1,7 @@
 /**
  * Settings-driven permission rules (Slice 3 / PERM track).
  *
- * The schema mirrors external coding-assistant's `settings.json` `permissions` block:
+ * The schema mirrors Claude Code's `settings.json` `permissions` block:
  *
  *   {
  *     "permissions": {

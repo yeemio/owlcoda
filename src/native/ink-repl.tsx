@@ -39,6 +39,7 @@ import {
   buildFilePickerItems,
   ComposerInputChrome,
   ComposerPanel,
+  computeTranscriptHeight,
   parseInputAttachments,
   formatMarker,
   formatWelcomeMarker,
@@ -81,7 +82,7 @@ import {
   isExpensiveFailedContinuationFailure,
   isRetryEligibleContinuationFailure,
   conversationEndsAwaitingAssistant,
-  decideEscapeKeyAction,
+  recoverGuardRejectedSubmission,
   preflightCheck,
   scrubPseudoToolCall,
   shouldDrainQueuedInputAfterTurn,
@@ -149,7 +150,7 @@ import { createConfigTool } from './tools/config.js'
 import { createEnterPlanModeTool, type PlanModeState } from './tools/enter-plan-mode.js'
 import { createExitPlanModeTool } from './tools/exit-plan-mode.js'
 import { createProbePlanTool } from './tools/probe-plan.js'
-import { ensureOperatingModeState, initializeOperatingModeState } from './modes.js'
+import { ensureOperatingModeState, initializeOperatingModeState, isModesEnabled } from './modes.js'
 import {
   ToolResultCollector,
   formatFooterOnlyToolEnd,
@@ -1529,7 +1530,7 @@ function NativeReplApp({
       kind: 'retry_failed_continuation'
       failure: ConversationRuntimeFailure
     } | { kind: 'resume_continuation' },
-  ) => {
+  ): Promise<boolean> => {
     // 0.13.99 SubmissionGuard: atomic check-and-set "is a turn lifecycle
     // slot free right now?". Returns null when another turn is already
     // running (auto-retry timer racing user submit; queued drain racing
@@ -1541,9 +1542,13 @@ function NativeReplApp({
     // queued drain) bypass that gate.
     const turnGen = submissionGuardRef.current.tryStart()
     if (turnGen === null) {
-      // Silent skip — no spinner change, no transcript noise. The owner
-      // of the running turn will produce all UI output.
-      return
+      // No spinner change, no transcript noise — the owner of the running
+      // turn produces all UI output. Returning false (not silence) lets
+      // user-facing call sites recover the submission: pre-fix, a fresh
+      // submit losing this race left the typed text stuck in the composer
+      // with zero feedback, and the drain path lost its already-dequeued
+      // message outright.
+      return false
     }
     clearScheduledAutoRetry()
     const isContinuationRetry = request.kind === 'retry_failed_continuation'
@@ -1757,7 +1762,7 @@ function NativeReplApp({
       // (finishReplTask + activeAbortRef clear above) DID run because
       // those are scoped to this task and don't conflict.
       if (!submissionGuardRef.current.end(turnGen)) {
-        return
+        return true
       }
 
       if (turnClearEpoch !== clearEpochRef.current) {
@@ -1778,7 +1783,7 @@ function NativeReplApp({
         })
         resetReplToIdle(runtime)
         setUiVersion((value) => value + 1)
-        return
+        return true
       }
 
       // Error/interrupt fallback: normal completion drains this before
@@ -1918,7 +1923,7 @@ function NativeReplApp({
           scheduledAutoRetryTimerRef.current = null
           void runConversationTurn({ kind: 'retry_failed_continuation', failure })
         }, autoRetryDelayMs)
-        return
+        return true
       }
 
       // Drain queued input — auto-send if user submitted while task was running.
@@ -1936,7 +1941,7 @@ function NativeReplApp({
       }) && queued) {
         // 0.14.0: dequeue the head item we're about to run. Keeps tail
         // items in the queue for the next drain pass.
-        submissionQueueRef.current.dequeue()
+        const drainItem = submissionQueueRef.current.dequeue()
         queueHeldNoticeShownRef.current = false
         setInputValue('')
         const drainDelayMs = task.aborted ? QUEUED_INPUT_DRAIN_AFTER_INTERRUPT_MS : 0
@@ -1950,7 +1955,14 @@ function NativeReplApp({
         // users and black-box PTY polling see "Ctrl+C" jump straight back
         // into busy without an observable cancellation boundary.
         setTimeout(() => {
-          void runConversationTurn({ kind: 'user_turn', input: queued })
+          void runConversationTurn({ kind: 'user_turn', input: queued }).then((started) => {
+            // The item was dequeued BEFORE this ran. If the guard rejected
+            // (another turn grabbed the slot in the drain-delay window),
+            // re-enqueue it — pre-fix the message was silently lost here.
+            if (!started && drainItem) {
+              setFooterNotice(dim(recoverGuardRejectedSubmission(submissionQueueRef.current, drainItem)))
+            }
+          })
         }, drainDelayMs)
       } else if (queued) {
         // shouldDrain=false (taskFailed AND not auto-retry-eligible).
@@ -1981,6 +1993,7 @@ function NativeReplApp({
         queueHeldNoticeShownRef.current = false
       }
     }
+    return true
   }, [appendTranscript, clearRetryContinuationState, clearScheduledAutoRetry, conversation, dispatcher, flushBufferedAssistantResponse, opts, syncPendingRetry, usage, withTaskCallbacks])
 
   const runCapturedSlashCommand = useCallback(async (command: string) => {
@@ -2192,7 +2205,13 @@ function NativeReplApp({
     if (failedContinuationAction === 'retry_failed_continuation') {
       const failure = retryEligibleContinuationFailureRef.current
       if (failure && isRetryEligibleContinuationFailure(failure)) {
-        await runConversationTurn({ kind: 'retry_failed_continuation', failure })
+        const started = await runConversationTurn({ kind: 'retry_failed_continuation', failure })
+        if (!started) {
+          // Guard race lost — a turn is already in flight. Mirror the
+          // dedupe branch: clear the trigger text, tell the user.
+          setInputValue('')
+          setFooterNotice(dim('Already retrying failed continuation...'))
+        }
         return
       }
     }
@@ -2336,7 +2355,23 @@ function NativeReplApp({
       }
     }
 
-    await runConversationTurn({ kind: 'user_turn', input: value })
+    const started = await runConversationTurn({ kind: 'user_turn', input: value })
+    if (!started) {
+      // Guard race lost (isLoading was false at submit time but another
+      // entry path — queued drain / auto-retry timer — grabbed the slot
+      // first). Pre-fix this was a silent swallow: the typed text stayed
+      // stuck in the composer with no feedback. Recover with the same
+      // semantics as the isLoading queue branch: message into the queue,
+      // composer cleared, footer notice.
+      const notice = recoverGuardRejectedSubmission(submissionQueueRef.current, {
+        kind: 'user_turn',
+        text: value,
+        submittedAt: Date.now(),
+        origin: 'user',
+      })
+      setInputValue('')
+      setFooterNotice(dim(notice))
+    }
   }, [appendTranscript, clearRetryContinuationState, clearScheduledAutoRetry, handleSlashSubmit, isLoading, questionPrompt, runCapturedSlashCommand, runConversationTurn])
   // Keep the ref in sync so runCapturedSlashCommand can call handleSubmit
   // without a circular useCallback dependency.
@@ -2621,27 +2656,6 @@ function NativeReplApp({
       return
     }
 
-    // Escape with a queued message (and no permission/question prompt open)
-    // cancels the queue. The composer advertises "esc to cancel" next to the
-    // QUEUED NEXT chip, but Escape was never wired to the queue — only /clear
-    // could drop it, and /clear wipes the whole conversation. When a task is
-    // wedged (e.g. a hung upstream that never unwinds to drain the queue),
-    // this is the only non-destructive way to drop the pending message.
-    if (
-      key.escape &&
-      decideEscapeKeyAction({
-        hasPermissionPrompt: Boolean(permissionPrompt),
-        hasQuestionPrompt: Boolean(questionPrompt),
-        queuedSize: submissionQueueRef.current.size,
-      }) === 'cancel_queue'
-    ) {
-      submissionQueueRef.current.clear()
-      queueHeldNoticeShownRef.current = false
-      setFooterNotice(dim('Queued message cancelled.'))
-      setUiVersion((value) => value + 1)
-      return
-    }
-
     // Transcript scroll via line-based transcript owner.
     // Mouse stays terminal-native; app-side transcript scrolling is keyboard-only.
     // scrollBy(negative) = older history/up, scrollBy(positive) = back toward live/down.
@@ -2875,6 +2889,11 @@ function NativeReplApp({
       mcpConnected,
       hintContext: railHintContext,
       yolo: approveStateRef.current.autoApprove,
+      // Live operating mode — re-read each render; /mode bumps uiVersion
+      // (slash-command return), which is in the dep list below.
+      operatingMode: isModesEnabled()
+        ? (conversation.options?.operatingModeState?.mode ?? 'normal')
+        : undefined,
     }),
     [
       cols,
@@ -2900,7 +2919,7 @@ function NativeReplApp({
       ? 8 + pickerVisibleCount
       : Math.max(1, Math.min(inputMaxVisibleLines, inputBottomWrappedLines))
         + (queuedDraft ? 1 : 0)
-  const transcriptHeight = Math.max(3, rows - (bottomBodyLines + 1))
+  const transcriptHeight = computeTranscriptHeight(rows, bottomBodyLines)
   if (traceInputLatency) {
     traceInputLatencyCheckpoint('native-repl-after-layout-calcs', {
       inputLength: inputValue.length,

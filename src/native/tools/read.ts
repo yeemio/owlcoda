@@ -27,7 +27,7 @@ import { detectLineEnding, type LineEndingKind } from './edit-helpers.js'
  *     too high; cost cap fires anyway") — arxiv 2405.15793.
  *   - Cursor ships hard-stop, gets disable-this complaints.
  *   - Anthropic explicitly declined to ship loop detection (closed
- *     not-planned, external-coding-assistant#4277).
+ *     not-planned, claude-code#4277).
  *   - The technique with the most cited evidence is *tool-result
  *     side-channel signaling*: enrich the tool output with a runtime
  *     nudge so the model sees "you already read this" in-context,

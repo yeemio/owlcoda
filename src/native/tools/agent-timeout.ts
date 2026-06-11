@@ -32,7 +32,7 @@
  * Industry reference (per 2026-05-06 survey):
  *   - Aider / Continue: per-request timeout, no idle vs max split
  *   - Codex CLI: `max_runtime_seconds` per subagent (1800s default)
- *   - external coding-assistant, Cursor: no built-in deadline; user-Esc only
+ *   - Claude Code, Cursor: no built-in deadline; user-Esc only
  *   - OpenHands: Stuck Detector (semantic loop, not wall-clock)
  *
  * 0.13.57 picks idle+max with progress-signal heartbeat — closer to

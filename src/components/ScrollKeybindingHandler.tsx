@@ -107,7 +107,7 @@ const WHEEL_DECAY_IDLE_MS = 500;
 /**
  * Whether a keypress should clear the virtual text selection. Mimics
  * native terminal selection: any keystroke clears, EXCEPT modified nav
- * keys (shift/opt/cmd + arrow/home/you/page*). In native macOS contexts,
+ * keys (shift/opt/cmd + arrow/home/end/page*). In native macOS contexts,
  * shift+nav extends selection, and cmd/opt+nav are often intercepted by
  * the terminal emulator for scrollback nav — neither disturbs selection.
  * Bare arrows DO clear (user's cursor moves, native deselects). Wheel is
@@ -899,7 +899,7 @@ export type ModalPagerAction = 'lineUp' | 'lineDown' | 'halfPageUp' | 'halfPageD
  */
 export function modalPagerAction(input: string, key: Pick<Key, 'ctrl' | 'meta' | 'shift' | 'upArrow' | 'downArrow' | 'home' | 'end'>): ModalPagerAction | null {
   if (key.meta) return null;
-  // Special keys first — arrows/home/you arrive with empty or junk input,
+  // Special keys first — arrows/home/end arrive with empty or junk input,
   // so these must be checked before any input-string logic. shift is
   // reserved for selection-extend (selectionFocusMoveForKey); ctrl+home/end
   // already has a useKeybindings route to scroll:top/bottom.

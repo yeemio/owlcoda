@@ -1181,6 +1181,13 @@ export function renderStatusBar(opts: StatusBarOptions): string {
 export interface ComposerRailOptions {
   readonly model: string
   readonly mode: 'plan' | 'act' | 'auto' | 'manual'
+  /**
+   * Live operating mode (permission modes: plan/normal/auto). Painted as a
+   * MODE cell when non-default — `normal` (and absent = modes disabled)
+   * paints nothing, so the default rail is unchanged. Distinct from the
+   * legacy derived `mode` prop above, which the state pulse already carries.
+   */
+  readonly operatingMode?: 'plan' | 'normal' | 'auto'
   readonly busy: boolean
   readonly queued: number
   readonly contextTokens: number
@@ -1259,6 +1266,18 @@ export function renderComposerRail(opts: ComposerRailOptions): string {
       label: 'mode',
       value: 'YOLO',
       valueColor: themeColor('error'),
+    })
+  } else if (opts.operatingMode && opts.operatingMode !== 'normal') {
+    // Non-default operating mode (plan = read-only gate, auto = low-risk
+    // auto-approve). Same prune-resistant slot as YOLO: switching modes
+    // with /mode must produce a persistent visible change, or the feature
+    // reads as broken. `plan` is the safe direction (accent); `auto`
+    // loosens the prompt net (warning).
+    cells.splice(1, 0, {
+      kind: 'kv',
+      label: 'mode',
+      value: opts.operatingMode,
+      valueColor: opts.operatingMode === 'auto' ? themeColor('warning') : themeColor('owl'),
     })
   }
   if (opts.contextMax > 0) {

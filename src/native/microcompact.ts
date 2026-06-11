@@ -53,7 +53,10 @@ function toolResultText(block: AnthropicToolResultBlock): string {
 }
 
 function blockPath(block: AnthropicToolUseBlock): string | undefined {
-  const p = (block.input as { path?: unknown }).path
+  // A streamed tool_use whose args failed to parse can have a null/undefined or
+  // non-object input — guard before reading .path so analysis never throws.
+  const input = block.input as { path?: unknown } | null | undefined
+  const p = input?.path
   return typeof p === 'string' ? p : undefined
 }
 
@@ -147,9 +150,13 @@ export function recordMicrocompactShadow(
   env: NodeJS.ProcessEnv = process.env,
 ): void {
   if (!isMicrocompactShadowEnabled(env)) return
-  const analysis = analyzeMicrocompact(turns)
-  if (analysis.totalReads === 0) return
-  recordTelemetryEnvelope(buildMicrocompactShadowEvent(analysis), env)
+  try {
+    const analysis = analyzeMicrocompact(turns)
+    if (analysis.totalReads === 0) return
+    recordTelemetryEnvelope(buildMicrocompactShadowEvent(analysis), env)
+  } catch {
+    // shadow telemetry must never disturb the conversation loop
+  }
 }
 
 export interface MicrocompactShadowSummary {

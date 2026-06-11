@@ -185,7 +185,7 @@ describe('markdown 路径等价性 (0.13.90 contract — failing today)', () => 
     }
   })
 
-  // 显式 P0 期望：external-coding-assistant-style 表格必须在所有路径都被识别成 boxed 表格，
+  // 显式 P0 期望：Claude-Code-style 表格必须在所有路径都被识别成 boxed 表格，
   // 而不是 raw |cell|cell|。我们通过查看输出里是否有 ┌ 或 └ 来判定。
   describe('P0 invariant: malformed input 必须被 normalizer 修复成 boxed 表格', () => {
     const malformedTableCases = CASES.filter(c => c.name.startsWith('A1.') || c.name.startsWith('A2.') || c.name.startsWith('A3.'))

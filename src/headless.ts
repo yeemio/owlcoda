@@ -16,3 +16,7 @@
  */
 export { runHeadless } from './native/headless.js'
 export type { HeadlessOptions, HeadlessResult } from './native/headless.js'
+// Re-export the types HeadlessResult references so external TS consumers can name
+// them (result.taskStatus, result.mode) without reaching into internal ./native/*.
+export type { TaskRunStatus } from './native/protocol/types.js'
+export type { OperatingMode } from './native/modes.js'

@@ -1,18 +1,5 @@
 export const DEFAULT_CONTEXT_WINDOW = 32_768
 
-/**
- * Conservative-but-modern default context window for a model OwlCoda does not
- * recognize. Raised from the old 32_768 because most current models are far
- * larger (e.g. mimo-v2.5-pro is 1M), and a too-small window silently forces
- * constant compaction / loop-budget trimming that degrades long tasks. A model
- * that is actually smaller than this can be capped down in config.
- *
- * DEFAULT_CONTEXT_WINDOW stays 32_768 as the "stale historical default"
- * sentinel that resolveContextCapability uses to migrate old config values up
- * (config carrying exactly 32_768 + no inferred window → this fallback).
- */
-export const CONSERVATIVE_FALLBACK_CONTEXT_WINDOW = 200_000
-
 export type ContextWindowSource = 'configured' | 'official_known' | 'runtime_discovered' | 'fallback'
 export type ContextWindowConfidence = 'verified' | 'documented' | 'inferred' | 'unknown'
 
@@ -109,15 +96,6 @@ const KNOWN_CONTEXT_CAPABILITIES: ContextCapability[] = [
     labels: ['200K ctx', 'ctx documented'],
     patterns: [
       /\bclaude[-_\s]?(?:sonnet[-_\s]?4(?:\.|-)?5|sonnet[-_\s]?4\b|3(?:\.|-)?7[-_\s]?sonnet|3[-_\s]?5[-_\s]?sonnet|3[-_\s]?opus|3[-_\s]?haiku)\b/i,
-    ],
-  },
-  {
-    contextWindow: 1_000_000,
-    source: 'official_known',
-    confidence: 'documented',
-    labels: ['1M ctx', 'ctx documented'],
-    patterns: [
-      /\bmimo[-_\s]?v?2\.?5\b/i,
     ],
   },
   {
@@ -331,14 +309,12 @@ export function resolveContextCapability(identity: ModelIdentity): ModelContextC
 }
 
 function fallbackContextCapability(): ModelContextCapability {
-  const contextWindow = CONSERVATIVE_FALLBACK_CONTEXT_WINDOW
-  const short = formatTokenCompact(contextWindow)
   return {
-    contextWindow,
+    contextWindow: DEFAULT_CONTEXT_WINDOW,
     source: 'fallback',
     confidence: 'unknown',
-    labels: [`${short} ctx`, `ctx fallback ${short}`],
-    notes: ['Unknown model; OwlCoda uses a conservative context budget until config, provider docs, or runtime discovery proves more. If this model is actually smaller, set contextWindow in config to cap it down.'],
+    labels: ['32K ctx', 'ctx fallback 32K'],
+    notes: ['Unknown model; OwlCoda uses a conservative context budget until config, provider docs, or runtime discovery proves more.'],
   }
 }
 

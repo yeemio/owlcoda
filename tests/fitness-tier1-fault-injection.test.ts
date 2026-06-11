@@ -16,15 +16,8 @@ import { loadConfig } from '../src/config.js'
 import { checkRouterHealth } from '../src/preflight.js'
 import { createProviderHttpDiagnostic } from '../src/provider-error.js'
 import { dispatchRequestSafely } from '../src/server.js'
-import { isPublicPath } from '../src/public-mirror/manifest.js'
 
 const repoRoot = join(import.meta.dirname, '..')
-// The public GPL source tree intentionally omits manifest-denied paths (e.g.
-// .github/workflows/ci.yml — private self-hosted CI infra must not ship in a
-// public repo). In that tree, denied evidence refs cannot exist, so the
-// existence assertion skips them; the private repo (docs/ present) still
-// asserts every ref at full strength.
-const inPublicSourceTree = !existsSync(join(repoRoot, 'docs'))
 
 function makeRes(headersSent = false): ServerResponse {
   return {
@@ -62,8 +55,7 @@ describe('Fitness Matrix Tier-1 fault-injection contract', () => {
         expect(assertion).not.toMatch(/\b(flag|boolean|ctx\.|private state|internal flag)\b/i)
       }
       for (const ref of cell.currentEvidence) {
-        if (inPublicSourceTree && !isPublicPath(ref)) continue
-        expect(existsSync(join(repoRoot, ref)), `evidence ref ${ref}`).toBe(true)
+        expect(existsSync(join(repoRoot, ref))).toBe(true)
       }
     }
   })

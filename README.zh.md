@@ -83,6 +83,9 @@ OwlCoda 站在你的模型和真实工程现场之间。模型可以动手，但
 能力标签（`supported` / `partial` / `manual-only` / `unsupported`）声明在
 [`src/capabilities.ts`](src/capabilities.ts)，与运行时实际行为对账保持诚实。
 
+产品真相和分发边界见
+[`docs/PRODUCT-TRUTH.md`](https://github.com/yeemio/owlcoda/blob/main/docs/PRODUCT-TRUTH.md)。
+
 ## 常用命令
 
 ```bash

@@ -570,7 +570,7 @@ describe('Agent Tool', () => {
   it('uses 80 iterations as the default Explore sub-agent budget', async () => {
     // Explore agents are read-only and used for fast scoped lookups —
     // their natural budget is smaller than the general-purpose 200,
-    // matching the upstream external coding-assistant Explore preset and the cmux
+    // matching the upstream Claude Code Explore preset and the cmux
     // 0.13.20 evidence (live run reported "80 iterations,
     // stop_reason=max_iterations" for an Explore call).
     const tool = createAgentTool({

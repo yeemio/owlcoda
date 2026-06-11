@@ -12,7 +12,7 @@ https://github.com/yeemio/owlcoda
 Release requirement:
 
 - the public repository must contain a source tag matching the npm package
-  version, for example `v0.15.0`;
+  version, for example `v0.15.1`;
 - the tagged source must include the source files, build scripts, package
   metadata, lockfile, and public documentation needed to rebuild and inspect
   the corresponding package;

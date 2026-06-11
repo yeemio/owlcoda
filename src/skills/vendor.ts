@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readdirSync, statSync, readFileSync, cpSync, rmSync, existsSync } from 'node:fs'
+import { readdirSync, lstatSync, readFileSync, cpSync, rmSync, existsSync } from 'node:fs'
 import { join, relative } from 'node:path'
 
 const SKIP_DIRS = new Set(['.git', 'node_modules'])
@@ -10,7 +10,9 @@ function listFilesSorted(root: string): string[] {
     for (const entry of readdirSync(dir).sort()) {
       if (SKIP_DIRS.has(entry)) continue
       const full = join(dir, entry)
-      const s = statSync(full)
+      // lstatSync (not statSync): a symlink must be neither recursed into (cycle
+      // / escape DoS) nor hashed as a file (integrity blind spot).
+      const s = lstatSync(full)
       if (s.isDirectory()) walk(full)
       else if (s.isFile()) out.push(relative(root, full))
     }

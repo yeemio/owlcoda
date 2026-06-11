@@ -9,6 +9,8 @@ import { classifyRecoveryInput, classifyFailureRecoveryAction } from './failure-
 import wrapText from '../ink/wrap-text.js'
 import { stringWidth, isAmbiguousWidthWide } from '../ink/stringWidth.js'
 import { dim } from './tui/colors.js'
+import type { QueuedSubmission } from './submission-queue.js'
+import type { SubmissionQueue } from './submission-queue.js'
 import type { PickerItem } from './tui/picker.js'
 
 export type FailedContinuationSubmitAction =
@@ -263,6 +265,26 @@ export function shouldQueueSubmitBehindRunningTask(options: {
 }
 
 /**
+ * Recover a submission that lost the SubmissionGuard race (runConversationTurn
+ * tryStart returned null). Pre-fix this was a silent skip: a fresh submit left
+ * the typed characters stuck in the composer with no feedback, and the drain
+ * path — which dequeues BEFORE running — lost the message outright. Contract:
+ * the submission goes (back) into the queue so the owning turn's finally-drain
+ * picks it up, and the returned notice is surfaced to the footer.
+ */
+export function recoverGuardRejectedSubmission(
+  queue: SubmissionQueue,
+  submission: QueuedSubmission,
+): string {
+  const clean = queue.enqueue(submission)
+  queue.consumeOverflowFlag()
+  const size = queue.size
+  return clean
+    ? `A turn is already running — queued (${size} pending).`
+    : `A turn is already running — queue full, oldest dropped (${size} pending).`
+}
+
+/**
  * True when a (restored) conversation ends awaiting an assistant response —
  * i.e. its final turn is a user turn (plain text, a tool_result, or both).
  *
@@ -277,56 +299,6 @@ export function conversationEndsAwaitingAssistant(
   turns: ReadonlyArray<{ role: 'user' | 'assistant' }>,
 ): boolean {
   return turns[turns.length - 1]?.role === 'user'
-}
-
-export type EscapeKeyAction =
-  | 'permission_deny'
-  | 'question_cancel'
-  | 'cancel_queue'
-  | 'none'
-
-/**
- * Decide what Escape does right now, by priority.
- *
- * The composer advertises "esc to cancel" next to a queued message, but
- * historically Escape was only wired to permission-prompt deny and
- * AskUserQuestion cancel — a queued submission had NO Escape path at all.
- * The only way to drop it was /clear, which wipes the whole conversation.
- * So when a task wedged (e.g. a hung upstream that never unwinds to drain
- * the queue), the queued message could neither run nor be cancelled — a
- * dead end matching the on-screen "N queued will run after cancel completes"
- * that never arrives. This function gives Escape a defined, prioritized
- * meaning so the queue gets a non-destructive cancel path.
- */
-export function decideEscapeKeyAction(state: {
-  hasPermissionPrompt: boolean
-  hasQuestionPrompt: boolean
-  queuedSize: number
-}): EscapeKeyAction {
-  if (state.hasPermissionPrompt) return 'permission_deny'
-  if (state.hasQuestionPrompt) return 'question_cancel'
-  if (state.queuedSize > 0) return 'cancel_queue'
-  return 'none'
-}
-
-/**
- * Detect a tool call the model emitted as TEXT that was never executed as a
- * structured tool_use. Covers the native/pseudo formats local models emit:
- * `[TOOL_CALL]`, `<invoke …>`, `<tool_call>`/`<minimax:tool_call>`,
- * `<function=…>` (Qwen/Hermes), and `<|tool_call …>` (gemma channel form).
- *
- * headless uses this to stop reporting a false "completed": when a run executed
- * zero tools yet the final assistant text carries one of these markers, the
- * upstream is not converting native tool calls into structured tool_use — e.g.
- * a raw local runtime's /v1/messages was hit directly instead of the daemon's
- * /v1/chat/completions translate path. Returns the matched marker, or null.
- */
-export function detectEmittedButUnexecutedToolCall(finalText: string): string | null {
-  if (!finalText) return null
-  const match = finalText.match(
-    /\[TOOL_CALL\]|<invoke\b|<\/?(?:minimax:)?tool_call\b|<function\s*=|<\|tool_call\b/i,
-  )
-  return match ? match[0] : null
 }
 
 export type ExitInterruptAction = 'arm' | 'confirm' | 'ignore_duplicate'
@@ -1088,6 +1060,9 @@ const SLASH_PICKER_HINTS: Record<string, string> = {
 }
 
 export const SLASH_COMMANDS_REQUIRING_ARGS = new Set([
+  // Picking /mode from the picker used to EXECUTE it argless (printing a
+  // status blurb) instead of letting the user type the target mode.
+  '/mode',
   '/resume',
   '/rename',
   '/branch',

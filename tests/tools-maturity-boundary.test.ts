@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import { readFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { ToolDispatcher } from '../src/native/dispatch.js'
 import { buildNativeToolDefs, NATIVE_TOOL_SCHEMAS } from '../src/native/tool-defs.js'
@@ -16,10 +15,6 @@ interface ToolRow {
 
 const REPO_ROOT = join(import.meta.dirname, '..')
 const TOOLS_DOC = join(REPO_ROOT, 'docs', 'TOOLS.md')
-// The public GPL source tree ships no docs/ (public-mirror manifest denies all
-// of docs/**), so the doc-sync assertions below are private-repo guards. The
-// honest-stub-disclosure test reads only code and runs everywhere.
-const HAS_TOOLS_DOC = existsSync(TOOLS_DOC)
 
 function normalizeMaturity(raw: string): Maturity {
   const lower = raw.toLowerCase()
@@ -83,7 +78,7 @@ function sorted(values: Iterable<string>): string[] {
 }
 
 describe('native tool maturity and registration boundary', () => {
-  it.skipIf(!HAS_TOOLS_DOC)('documents every schema surface and the current default registration count', async () => {
+  it('documents every schema surface and the current default registration count', async () => {
     const markdown = await readFile(TOOLS_DOC, 'utf-8')
     const rows = parseToolRows(markdown)
     const rowNames = rows.map(row => row.name)
@@ -109,7 +104,7 @@ describe('native tool maturity and registration boundary', () => {
     expect(markdown).toContain('47 schema rows')
   })
 
-  it.skipIf(!HAS_TOOLS_DOC)('keeps docs summary counts aligned with the tool-by-tool table', async () => {
+  it('keeps docs summary counts aligned with the tool-by-tool table', async () => {
     const markdown = await readFile(TOOLS_DOC, 'utf-8')
     const rows = parseToolRows(markdown)
 
@@ -122,7 +117,7 @@ describe('native tool maturity and registration boundary', () => {
     })
   })
 
-  it.skipIf(!HAS_TOOLS_DOC)('does not count stub or orphan surfaces as production', async () => {
+  it('does not count stub or orphan surfaces as production', async () => {
     const markdown = await readFile(TOOLS_DOC, 'utf-8')
     const rows = parseToolRows(markdown)
     const rowsByName = new Map(rows.map(row => [row.name, row]))

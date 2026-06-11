@@ -801,4 +801,10 @@ export function themeBg(token: keyof OwlTheme): string {
 export function themed(text: string, token: keyof OwlTheme): string {
   return colorize(text, themeColor(token))
 }
-import stringWidth from 'string-width'
+// One width authority: the ambiguous-width-aware internal stringWidth (probe +
+// CJK-locale fallback + OWLCODA_AMBIGUOUS_WIDTH), NOT the npm string-width
+// package. The npm package always counts East-Asian Ambiguous glyphs (like the
+// rail hint's `·`) as 1 cell; on CJK terminals that render them wide, every
+// such glyph put the rail's ledger one column short of reality and the footer
+// clipped its last character(s).
+import { stringWidth } from '../../ink/stringWidth.js'

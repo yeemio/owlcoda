@@ -44,4 +44,10 @@ describe('GATE_REGISTRY', () => {
     expect(ids).toContain('provenance')
     expect(ids).toContain('gate_v2')
   })
+
+  it('registers the microcompact shadow gate so doctor flag-debt can track it', () => {
+    const entry = GATE_REGISTRY.find(e => e.id === 'microcompact')
+    expect(entry).toBeDefined()
+    expect(entry!.envVar).toBe('OWLCODA_MICROCOMPACT_SHADOW')
+  })
 })

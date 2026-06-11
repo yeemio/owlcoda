@@ -36,10 +36,23 @@ export function launchAgentPath(home: string = homedir()): string {
  * wrong config root and clobbers the real daemon's pid file) and force the
  * launchd markers (OWLCODA_LAUNCHD + a stable OWLCODA_RUNTIME_TOKEN).
  */
+/**
+ * Cloud-credential env vars that config.ts reads directly from the environment
+ * (NOT OWLCODA_*-prefixed). These must also cross into the launchd environment,
+ * otherwise a launchd-spawned daemon cannot authenticate to the cloud preset
+ * (e.g. KIMI_API_KEY at config.ts:186 → 401 on every cloud turn). Keep this in
+ * sync with the non-OWLCODA_ credential reads in config.ts.
+ */
+export const LAUNCHD_FORWARDED_CREDENTIAL_ENV = ['KIMI_API_KEY', 'MOONSHOT_API_KEY'] as const
+
 export function buildLaunchdEnv(env: NodeJS.ProcessEnv, runtimeToken: string): Record<string, string> {
   const out: Record<string, string> = {}
   for (const [k, v] of Object.entries(env)) {
     if (k.startsWith('OWLCODA_') && v !== undefined) out[k] = v
+  }
+  for (const k of LAUNCHD_FORWARDED_CREDENTIAL_ENV) {
+    const v = env[k]
+    if (v !== undefined) out[k] = v
   }
   out['OWLCODA_LAUNCHD'] = '1'
   out['OWLCODA_RUNTIME_TOKEN'] = runtimeToken

@@ -3,7 +3,9 @@ import { useI18n } from '../i18n'
 
 // ─── Report data ────────────────────────────────────────────────────────
 //
-// Public demo snapshot for the Runs dashboard. Per-request bars and coarse
+// Hardcoded snapshot of the Lane A cmux long-stress signoff
+// (docs/qa/OWLCODA_LANE_A_CMUX_LONG_STRESS_SIGNOFF_REPORT_20260427.md).
+// Only the report-level totals are authoritative; per-request bars and coarse
 // tool counts are representative placeholders until a real run-report endpoint
 // exists.
 
@@ -46,14 +48,14 @@ interface Blocker {
 
 const RUNS_TEXT = {
   en: {
-    reportEyebrow: 'RUN OBSERVABILITY · DEMO',
-    reportTitle: 'cloud-primary + local-runtime reliability demo',
-    titleSuffix: 'Public demo',
+    reportEyebrow: 'STRESS VERIFICATION · LANE A · 2026-04-27',
+    reportTitle: 'minimax-m27 + kimi-code stress run',
+    titleSuffix: 'Lane A',
     description:
-      'Representative OwlCoda daemon · runtime run data. This view shows request totals, rendering checks, tool coverage, repo diff, and follow-up items. Values are demo data until a live run-report endpoint feeds this page.',
-    verdictLabel: 'Demo run healthy · no runtime regressions',
+      'Real cmux and official-route runs against OwlCoda daemon · runtime. Captures audit, rendering verdict, Kimi sustained-work evidence, repo diff, and remaining blockers. Lane A is green; Kimi provider-side 10-minute parity is proven, with clean runtime signoff pending the completion-guard rerun.',
+    verdictLabel: 'Lane A green · Kimi provider-side passed',
     runVerdict: 'RUN VERDICT',
-    packageCliDaemon: 'DEMO PACKAGE · DAEMON',
+    packageCliDaemon: 'HISTORICAL REPORT PACKAGE · DAEMON',
     daemon: 'DAEMON',
     runtime: 'RUNTIME',
     npmRunBuild: 'NPM RUN BUILD',
@@ -84,7 +86,7 @@ const RUNS_TEXT = {
     toolCoverage: 'TOOL COVERAGE · {run}',
     representativeCounts: 'representative counts · pending real audit-log feed',
     toolCoverageNote:
-      'Authoritative: tool list (the run report enumerates which tools were exercised). Per-tool invocation counts are placeholder; yellow = the run did not invoke this tool (LSP requires user-installed language servers).',
+      'Authoritative: tool list (signoff markdown enumerates which tools were exercised). Per-tool invocation counts are placeholder; yellow = the run did not invoke this tool (LSP requires user-installed language servers).',
     inRunTests: 'IN-RUN TESTS · NPM TEST',
     passed: 'PASSED',
     testFiles: 'TEST FILES',
@@ -97,37 +99,37 @@ const RUNS_TEXT = {
     filesChangedBy: 'FILES CHANGED BY {lane}',
     filesChangedLine: '{lane} changed {count} files in repo',
     preExistingDirty: 'Worktree retains pre-existing dirty entries (not touched by this lane):',
-    remainingBlockers: 'FOLLOW-UP ITEMS',
+    remainingBlockers: 'REMAINING BLOCKERS',
     all: 'ALL',
-    trackedInReport: 'tracked in report',
-    trackedInReportTitle: 'Follow-up status is displayed locally until Admin write-back lands behind a backend route.',
+    trackedInSignoff: 'tracked in signoff',
+    trackedInSignoffTitle: 'Blocker resolution is tracked in the signoff markdown. Admin write-back lands when a backend route exists.',
     verification: 'VERIFICATION',
     beforeStress: 'before stress',
     bullets: {
-      'cloud-primary': [
-        'Run reached the ready state after completing the requested task.',
-        'All 12 requests returned HTTP 200 streaming, fallbackUsed=false',
-        'Exercised bash · read · glob · grep · Agent · Task · Config · ToolSearch',
-        'Focused verification passed: 42 test files, 640 tests',
+      'minimax-m27': [
+        'Real cmux run reached "Nothing remaining. Task done." and returned to ready.',
+        'All 21 requests HTTP 200 streaming, fallbackUsed=false',
+        'Exercised bash · read · glob · grep · Agent · Task · Config · WebFetch · StructuredOutput · ToolSearch · LSP',
+        'npm test passed: 272 test files, 3,630 tests',
       ],
-      'local-runtime': [
-        'Local runtime objective completed inside a sustained-work window.',
-        'All 18 runtime requests returned HTTP 200 streaming, fallbackUsed=false',
-        '4 checkpoints completed; focused suites passed 28/28; temp workspace cleanup completed',
-        'Follow-up: wire this dashboard to the live audit-log endpoint',
+      'kimi-code': [
+        'Official-route objective ran 10.6 minutes / 637 seconds inside a 26m10s wall-clock window.',
+        'All 66 provider requests HTTP 200 streaming, fallbackUsed=false',
+        '7 checkpoints completed; 5 focused suites passed 70/70; temp workspace cleanup completed',
+        'Runtime completion guard drifted after the final report; guard fix is patched, rerun still required for clean signoff',
       ],
     },
     renderingChecks: [
-      'No terminal row-smear during active runs',
+      'No cmux row-smear during active runs',
       'No overlap or stale prompt observed',
       'No composer corruption',
     ],
     captureCaveat:
-      'The terminal capture is representative demo data until the live audit-log endpoint feeds this section.',
+      'The ANSI capture is still the Lane A cmux artifact; Kimi official-route parity is proven from session and audit JSON.',
     runtimeFailures: [
       {
-        title: 'Provider request paths',
-        detail: 'No transport, fallback, rate-limit, or provider outage evidence in this demo dataset.',
+        title: 'Provider request paths (minimax / kimi)',
+        detail: 'No transport, fallback, rate-limit, or provider outage evidence. Kimi drift was a completion-guard classification issue after final delivery.',
       },
       {
         title: 'LSP',
@@ -138,34 +140,34 @@ const RUNS_TEXT = {
         detail: 'Required a server name — parameter-specific, not a runtime defect.',
       },
       {
-        title: 'Terminal control',
-        detail: 'No terminal-control defect is represented in this demo dataset.',
+        title: 'cmux CLI',
+        detail: 'Socket commands failed with Broken pipe; cmux GUI control worked.',
       },
     ],
     blockers: [
       {
-        title: 'Connect live audit-log feed',
-        detail: 'Replace representative per-request bars with data from the runtime audit-log endpoint.',
+        title: 'cmux CLI control surface unhealthy',
+        detail: 'cmux CLI socket commands fail with Broken pipe; cmux GUI control still works as workaround.',
       },
       {
-        title: 'Persist run annotations',
-        detail: 'Allow operators to store notes and close follow-up items from Admin.',
+        title: 'cmux text injection corrupts shell syntax',
+        detail: 'Underscores and special shell characters can be mangled when injecting text via cmux.',
       },
       {
-        title: 'Export run packet',
-        detail: 'Package request totals, rendering checks, and tool coverage into a shareable report.',
+        title: 'Kimi 10-minute parity comparison',
+        detail: 'Official-route run completed 10.6 minutes with 66/66 HTTP 200 requests and fallbackUsed=false; clean product signoff still needs a post-guard-fix rerun.',
       },
     ],
   },
   zh: {
-    reportEyebrow: '运行观测 · Demo',
-    reportTitle: 'cloud-primary + local-runtime 可靠性演示',
-    titleSuffix: '公开演示',
+    reportEyebrow: '压力验证 · Lane A · 2026-04-27',
+    reportTitle: 'minimax-m27 + kimi-code 压力运行',
+    titleSuffix: 'Lane A',
     description:
-      '代表性的 OwlCoda daemon/runtime 运行数据。该页面展示请求总量、渲染检查、工具覆盖、仓库 diff 与跟进项。实时 run-report endpoint 接入前，这些值是公开演示数据。',
-    verdictLabel: '演示运行健康 · 无运行时回归',
+      '基于真实 cmux 与官方路由的 OwlCoda daemon/runtime 压力运行。该报告汇总审计、渲染结论、Kimi 持续工作证据、仓库 diff 与剩余阻塞项。Lane A 已绿；Kimi provider 侧 10 分钟对齐已证明，完整运行时签收仍等待 completion-guard 修复后的复跑。',
+    verdictLabel: 'Lane A 通过 · Kimi provider 侧已通过',
     runVerdict: '运行结论',
-    packageCliDaemon: '演示包版本 · Daemon',
+    packageCliDaemon: '历史报告包版本 · Daemon',
     daemon: 'Daemon',
     runtime: 'Runtime',
     npmRunBuild: 'npm run build',
@@ -196,7 +198,7 @@ const RUNS_TEXT = {
     toolCoverage: '工具覆盖 · {run}',
     representativeCounts: '代表性计数 · 等待真实 audit-log 接入',
     toolCoverageNote:
-      '权威数据：工具清单（运行报告枚举了已使用工具）。单工具调用次数目前是占位；黄色表示该轮没有调用此工具（LSP 需要用户安装语言服务器）。',
+      '权威数据：工具清单（签收 markdown 枚举了已使用工具）。单工具调用次数目前是占位；黄色表示该轮没有调用此工具（LSP 需要用户安装语言服务器）。',
     inRunTests: '运行内测试 · npm test',
     passed: '通过',
     testFiles: '测试文件',
@@ -209,37 +211,37 @@ const RUNS_TEXT = {
     filesChangedBy: '{lane} 修改文件',
     filesChangedLine: '{lane} 在仓库中修改了 {count} 个文件',
     preExistingDirty: '工作树保留了预先存在的 dirty 项（本轮未触碰）：',
-    remainingBlockers: '跟进项',
+    remainingBlockers: '剩余阻塞项',
     all: '全部',
-    trackedInReport: '报告中跟踪',
-    trackedInReportTitle: '跟进状态先在本地展示；Admin 写回要等后端 route 落地。',
+    trackedInSignoff: '签收中跟踪',
+    trackedInSignoffTitle: '阻塞项解决状态在签收 markdown 中跟踪。Admin 写回要等后端 route 落地。',
     verification: '验证',
     beforeStress: '压力测试前',
     bullets: {
-      'cloud-primary': [
-        '运行在完成请求任务后回到 ready 状态。',
-        '12 个请求全部 HTTP 200 streaming，fallbackUsed=false',
-        '覆盖 bash · read · glob · grep · Agent · Task · Config · ToolSearch',
-        '聚焦验证通过：42 个测试文件，640 个测试',
+      'minimax-m27': [
+        '真实 cmux 运行到达 “Nothing remaining. Task done.” 并回到 ready。',
+        '21 个请求全部 HTTP 200 streaming，fallbackUsed=false',
+        '覆盖 bash · read · glob · grep · Agent · Task · Config · WebFetch · StructuredOutput · ToolSearch · LSP',
+        'npm test 通过：272 个测试文件，3,630 个测试',
       ],
-      'local-runtime': [
-        '本地 runtime 目标在持续工作窗口内完成。',
-        '18 个 runtime 请求全部 HTTP 200 streaming，fallbackUsed=false',
-        '完成 4 个 checkpoint；聚焦套件 28/28 通过；临时工作区已清理',
-        '跟进：把该页面接入实时 audit-log endpoint',
+      'kimi-code': [
+        '官方路由目标在 26m10s 墙钟窗口内运行 10.6 分钟 / 637 秒。',
+        '66 个 provider 请求全部 HTTP 200 streaming，fallbackUsed=false',
+        '完成 7 个 checkpoint；5 个聚焦测试套件 70/70 通过；临时工作区已清理',
+        '最终报告后 runtime completion guard 出现漂移；guard 修复已打上，仍需复跑完成干净签收',
       ],
     },
     renderingChecks: [
-      '活跃运行期间无终端行涂抹',
+      '活跃运行期间无 cmux 行涂抹',
       '未观察到重叠或过期 prompt',
       '无输入框损坏',
     ],
     captureCaveat:
-      '终端 capture 是公开演示数据；实时 audit-log endpoint 接入后会替换该区域。',
+      'ANSI capture 仍是 Lane A cmux 产物；Kimi 官方路由对齐由 session 与 audit JSON 证明。',
     runtimeFailures: [
       {
-        title: 'Provider 请求路径',
-        detail: '该演示数据中没有 transport、fallback、rate-limit 或 provider 故障证据。',
+        title: 'Provider 请求路径（minimax / kimi）',
+        detail: '没有 transport、fallback、rate-limit 或 provider 故障证据。Kimi 漂移是最终交付后的 completion-guard 分类问题。',
       },
       {
         title: 'LSP',
@@ -250,22 +252,22 @@ const RUNS_TEXT = {
         detail: '需要 server name——这是参数特定问题，不是运行时缺陷。',
       },
       {
-        title: '终端控制',
-        detail: '该演示数据不代表终端控制缺陷。',
+        title: 'cmux CLI',
+        detail: 'Socket 命令因 Broken pipe 失败；cmux GUI 控制可作为 workaround。',
       },
     ],
     blockers: [
       {
-        title: '接入实时 audit-log feed',
-        detail: '用 runtime audit-log endpoint 替换代表性的单请求柱状图。',
+        title: 'cmux CLI 控制面不健康',
+        detail: 'cmux CLI socket 命令因 Broken pipe 失败；cmux GUI 控制仍可作为 workaround。',
       },
       {
-        title: '持久化运行备注',
-        detail: '允许操作者在 Admin 中保存备注并关闭跟进项。',
+        title: 'cmux 文本注入会破坏 shell 语法',
+        detail: '通过 cmux 注入文本时，下划线和特殊 shell 字符可能被破坏。',
       },
       {
-        title: '导出运行包',
-        detail: '把请求总量、渲染检查和工具覆盖打包成可分享报告。',
+        title: 'Kimi 10 分钟对齐比较',
+        detail: '官方路由运行 10.6 分钟，66/66 个 HTTP 200 请求且 fallbackUsed=false；干净产品签收仍需在 guard 修复后复跑。',
       },
     ],
   },
@@ -283,68 +285,69 @@ function fmt(template: string, vars: Record<string, string | number>): string {
 }
 
 const REPORT = {
-  eyebrow: 'RUN OBSERVABILITY · DEMO',
-  title: 'cloud-primary + local-runtime reliability demo',
-  titleSuffix: 'Public demo',
+  eyebrow: 'STRESS VERIFICATION · LANE A · 2026-04-27',
+  title: 'minimax-m27 + kimi-code stress run',
+  titleSuffix: 'Lane A',
   description:
-    'Representative OwlCoda daemon · runtime run data. This view shows request totals, rendering checks, tool coverage, repo diff, and follow-up items. Values are demo data until a live run-report endpoint feeds this page.',
+    'Real cmux and official-route runs against OwlCoda daemon · runtime. Captures audit, rendering verdict, Kimi sustained-work evidence, repo diff, and remaining blockers. Lane A is green; Kimi provider-side 10-minute parity is proven, with clean runtime signoff pending the completion-guard rerun.',
   verdict: {
     tone: 'ok' as Tone,
-    label: 'Demo run healthy · no runtime regressions',
+    label: 'Lane A green · Kimi provider-side passed',
   },
-  packageVersion: '0.15.0',
+  packageVersion: '0.13.21',
   daemonHealth: 'HEALTHY' as const,
   daemon: '127.0.0.1:9999',
   runtime: '127.0.0.1:8009',
   npmBuild: 'PASSED' as const,
   runs: [
     {
-      id: 'cloud-primary',
+      id: 'minimax-m27',
       verdict: 'pass',
-      servedBy: 'cloud demo backend',
-      requests: 12,
-      http200: '12/12',
+      servedBy: 'MiniMax-M2.7-highspeed',
+      requests: 21,
+      http200: '21/21',
       fallback: 'false',
-      duration: '~6 min',
+      duration: '~10 min',
       bullets: [
-        { tone: 'caret', text: 'Run reached the ready state after completing the requested task.' },
-        { tone: 'ok', text: 'All 12 requests returned HTTP 200 streaming, fallbackUsed=false' },
-        { tone: 'ok', text: 'Exercised bash · read · glob · grep · Agent · Task · Config · ToolSearch' },
-        { tone: 'ok', text: 'Focused verification passed: 42 test files, 640 tests' },
+        { tone: 'caret', text: 'Real cmux run reached "Nothing remaining. Task done." and returned to ready.' },
+        { tone: 'ok', text: 'All 21 requests HTTP 200 streaming, fallbackUsed=false' },
+        { tone: 'ok', text: 'Exercised bash · read · glob · grep · Agent · Task · Config · WebFetch · StructuredOutput · ToolSearch · LSP' },
+        { tone: 'ok', text: 'npm test passed: 272 test files, 3,630 tests' },
       ],
-      sessionPath: '~/.owlcoda/sessions/demo-cloud-primary.json',
+      sessionPath: '~/.owlcoda/sessions/conv-1777282931302-ah9wa9.json',
       requestDurations: [
-        18000, 22000, 16000, 28000, 24000, 32000, 20000, 30000, 26000, 34000, 22000, 28000,
+        18000, 22000, 16000, 28000, 24000, 32000, 20000, 30000, 26000, 34000,
+        22000, 38000, 28000, 24000, 30000, 26000, 32000, 20000, 28000, 36000, 24000,
       ],
       toolCounts: [
-        { name: 'bash', count: 7 },
-        { name: 'read', count: 9 },
-        { name: 'glob', count: 3 },
-        { name: 'grep', count: 4 },
-        { name: 'Agent', count: 2 },
-        { name: 'Task', count: 3 },
+        { name: 'bash', count: 12 },
+        { name: 'read', count: 18 },
+        { name: 'glob', count: 6 },
+        { name: 'grep', count: 8 },
+        { name: 'Agent', count: 3 },
+        { name: 'Task', count: 4 },
         { name: 'Config', count: 1 },
-        { name: 'WebFetch', count: 0 },
+        { name: 'WebFetch', count: 2 },
         { name: 'Structure…', count: 1 },
-        { name: 'ToolSearch', count: 2 },
+        { name: 'ToolSearch', count: 5 },
         { name: 'LSP', count: 0 },
       ],
     },
     {
-      id: 'local-runtime',
+      id: 'kimi-code',
       verdict: 'partial',
-      servedBy: 'local runtime adapter',
-      requests: 18,
-      http200: '18/18',
+      servedBy: 'kimi-for-coding',
+      requests: 66,
+      http200: '66/66',
       fallback: 'false',
-      duration: '8.4 min',
+      duration: '10.6 min',
       bullets: [
-        { tone: 'caret', text: 'Local runtime objective completed inside a sustained-work window.' },
-        { tone: 'ok', text: 'All 18 runtime requests returned HTTP 200 streaming, fallbackUsed=false' },
-        { tone: 'ok', text: '4 checkpoints completed; focused suites passed 28/28; temp workspace cleanup completed' },
-        { tone: 'warn', text: 'Follow-up: wire this dashboard to the live audit-log endpoint' },
+        { tone: 'caret', text: 'Official-route objective ran 10.6 minutes / 637 seconds inside a 26m10s wall-clock window.' },
+        { tone: 'ok', text: 'All 66 provider requests HTTP 200 streaming, fallbackUsed=false' },
+        { tone: 'ok', text: '7 checkpoints completed; 5 focused suites passed 70/70; temp workspace cleanup completed' },
+        { tone: 'warn', text: 'Runtime completion guard drifted after the final report; guard fix is patched, rerun still required for clean signoff' },
       ],
-      sessionPath: '~/.owlcoda/sessions/demo-local-runtime.json',
+      sessionPath: '~/.owlcoda/sessions/conv-1777344095836-kfqoja.json',
       requestDurations: [
         18000, 24000, 19000, 26000, 22000, 30000, 25000, 28000, 21000, 32000,
         24000, 36000, 29000, 23000, 31000, 27000, 34000, 26000, 30000, 33000,
@@ -368,32 +371,32 @@ const REPORT = {
   rendering: {
     verdict: 'NO SMEAR' as const,
     checks: [
-      'No terminal row-smear during active runs',
+      'No cmux row-smear during active runs',
       'No overlap or stale prompt observed',
       'No composer corruption',
     ],
-    capturePath: '/tmp/owlcoda-demo/run.ansi',
-    captureBytes: 128024,
+    capturePath: '/tmp/owlcoda-stress-20260427/minimax.ansi',
+    captureBytes: 546674,
     capture: [
-      { prompt: '~/owlcoda $', text: 'owlcoda --model cloud-primary' },
+      { prompt: '~/owlcoda $', text: 'owlcoda --model minimax-m27' },
       { ts: '14:02:11', tone: 'ok', text: 'daemon healthy 127.0.0.1:9999' },
-      { ts: '14:02:11', tone: 'ok', text: 'runtime 127.0.0.1:8009 · cloud demo backend' },
-      { ts: '14:02:14', tone: 'caret', text: 'Task demo · plan loaded' },
+      { ts: '14:02:11', tone: 'ok', text: 'runtime 127.0.0.1:8009 · MiniMax-M2.7-highspeed' },
+      { ts: '14:02:14', tone: 'caret', text: 'Task stress · 21-step plan loaded' },
       { ts: '14:02:18', tone: 'caret', text: 'bash npm test --reporter=basic' },
-      { ts: '14:02:55', tone: 'check', text: '42 files · 640 tests pass' },
+      { ts: '14:02:55', tone: 'check', text: '272 files · 3630 tests pass' },
       { ts: '14:03:02', tone: 'caret', text: 'ToolSearch "rate limit" → 4 hits' },
       { ts: '14:03:11', tone: 'caret', text: 'Agent dispatch StructuredOutput' },
       { ts: '14:03:17', tone: 'ok', text: 'Nothing remaining. Task done.' },
       { prompt: '~/owlcoda $', text: '_' },
     ] as Array<{ ts?: string; tone?: 'ok' | 'caret' | 'check'; prompt?: string; text: string }>,
     captureCaveat:
-      'The terminal capture is representative demo data until the live audit-log endpoint feeds this section.',
+      'The ANSI capture is still the Lane A cmux artifact; Kimi official-route parity is proven from session and audit JSON.',
   },
   runtimeFailures: [
     {
       badge: 'PASS',
-      title: 'Provider request paths',
-      detail: 'No transport, fallback, rate-limit, or provider outage evidence in this demo dataset.',
+      title: 'Provider request paths (minimax / kimi)',
+      detail: 'No transport, fallback, rate-limit, or provider outage evidence. Kimi drift was a completion-guard classification issue after final delivery.',
     },
     {
       badge: 'INFO',
@@ -407,38 +410,38 @@ const REPORT = {
     },
     {
       badge: 'PARTIAL',
-      title: 'Terminal control',
-      detail: 'No terminal-control defect is represented in this demo dataset.',
+      title: 'cmux CLI',
+      detail: 'Socket commands failed with Broken pipe; cmux GUI control worked.',
     },
   ] as FailureVerdict[],
   filesChanged: {
     count: 0,
-    laneLabel: 'Demo run',
-    preExistingDirty: ['local notes/', 'scratch artifacts/', 'operator draft (new)'],
+    laneLabel: 'Lane A',
+    preExistingDirty: ['.gitignore', 'archived prompts/', 'Lane B brief (new)'],
   },
   blockers: [
     {
       badge: 'PARTIAL',
-      title: 'Connect live audit-log feed',
-      detail: 'Replace representative per-request bars with data from the runtime audit-log endpoint.',
+      title: 'cmux CLI control surface unhealthy',
+      detail: 'cmux CLI socket commands fail with Broken pipe; cmux GUI control still works as workaround.',
       status: 'open',
     },
     {
       badge: 'PARTIAL',
-      title: 'Persist run annotations',
-      detail: 'Allow operators to store notes and close follow-up items from Admin.',
+      title: 'cmux text injection corrupts shell syntax',
+      detail: 'Underscores and special shell characters can be mangled when injecting text via cmux.',
       status: 'open',
     },
     {
       badge: 'RESOLVED',
-      title: 'Export run packet',
-      detail: 'Package request totals, rendering checks, and tool coverage into a shareable report.',
+      title: 'Kimi 10-minute parity comparison',
+      detail: 'Official-route run completed 10.6 minutes with 66/66 HTTP 200 requests and fallbackUsed=false; clean product signoff still needs a post-guard-fix rerun.',
       status: 'resolved',
     },
   ] as Blocker[],
   inRunTests: {
-    testFiles: 42,
-    tests: 640,
+    testFiles: 272,
+    tests: 3630,
     failures: 0,
   },
   verification: [
@@ -863,7 +866,7 @@ function FilesChangedSection() {
   )
 }
 
-// ─── Follow-up items ───────────────────────────────────────────────────
+// ─── Remaining blockers ────────────────────────────────────────────────
 
 function RemainingBlockersSection() {
   const copy = useRunCopy()
@@ -901,8 +904,8 @@ function RemainingBlockersSection() {
               className="run-blocker-action"
               data-testid={`blocker-${index}-resolve`}
               disabled
-              title={copy.trackedInReportTitle}
-            >{copy.trackedInReport}</button>
+              title={copy.trackedInSignoffTitle}
+            >{copy.trackedInSignoff}</button>
           </li>
         ))}
       </ul>

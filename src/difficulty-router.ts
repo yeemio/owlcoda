@@ -43,8 +43,13 @@ interface RoutableBody {
 const COMPLEX_VERB =
   /\b(implement|implementing|refactor|debug|fix the bug|fix the failing|design|architect|migrat|optimi[sz]e|investigat|root[- ]cause|rewrite|diagnos|reason about|trace through)\b/i
 // Short, bounded confirmations — the highest-precision "simple" signal.
-const CONFIRMATION =
-  /^(y(es)?|no?|ok(ay)?|sure|continue|proceed|go ahead|approved?|lgtm|looks good|sounds good|do it|confirm(ed)?|thanks?|ship it)\b/i
+// A PURE confirmation: one or more confirmation words ("yes", "lgtm, proceed"),
+// and nothing else. A turn that merely STARTS with a confirmation word but then
+// carries a correction or new instruction ("no, fix it properly") must fall
+// through to moderate rather than route down to a weak model.
+const CONFIRM_WORD =
+  'y(?:es)?|no?|ok(?:ay)?|sure|continue|proceed|go ahead|approved?|lgtm|looks good|sounds good|do it|confirm(?:ed)?|thanks?|ship it'
+const CONFIRMATION = new RegExp(`^(?:${CONFIRM_WORD})(?:[\\s,.!]+(?:${CONFIRM_WORD}))*[\\s.!,]*$`, 'i')
 // Explicit restatement of already-present content.
 const SUMMARIZE = /\b(summar(y|ize|ise)|tl;?dr|recap|rephrase|restate|brief overview)\b/i
 

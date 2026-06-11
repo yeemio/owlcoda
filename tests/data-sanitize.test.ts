@@ -43,7 +43,7 @@ describe('sanitizeText', () => {
   })
 
   it('redacts Linux home paths', () => {
-    const result = sanitizeText('Dir: /home/publicuser/.ssh/config')
+    const result = sanitizeText('Dir: /home/ubuntu/.ssh/config')
     expect(result.text).toBe('Dir: /home/[USER]/.ssh/config')
   })
 

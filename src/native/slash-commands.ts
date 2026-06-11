@@ -1332,6 +1332,15 @@ ${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|aut
       const previous = state.mode
       state.mode = nextMode
       console.log(`${ansi.green}✓${ansi.reset} Operating mode set to ${ansi.cyan}${nextMode}${ansi.reset} (was ${previous}).`)
+      // Say what the mode DOES — in a read-only session plan/normal/auto
+      // are behaviorally indistinguishable, so without this line (and the
+      // rail MODE cell) a switch produces no visible change at all.
+      const modeEffect: Record<typeof nextMode, string> = {
+        plan: 'Read-only: write/edit and mutating bash are refused until you switch back.',
+        normal: 'Default gates: mutating tools prompt for approval.',
+        auto: 'Low-risk edits and session state auto-approved; destructive/external actions still prompt.',
+      }
+      console.log(dim(`  ${modeEffect[nextMode]}`))
       return true
     }
 

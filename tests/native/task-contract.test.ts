@@ -249,7 +249,7 @@ describe('Slice 0 bridge: contract.confidence (path scope) is orthogonal to Deli
     // the path scope layer (fs-policy / task-state). It must not bleed into
     // deliverable mode classification.
     const deliverable = classifyDeliverableContract(
-      '修改 /Users/publicuser/external/project/src/foo.ts',
+      '修改 /Users/yeemio/external/project/src/foo.ts',
     )
     expect((deliverable as unknown as Record<string, unknown>)['origin']).toBeUndefined()
   })

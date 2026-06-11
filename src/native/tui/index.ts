@@ -26,7 +26,7 @@ export type { AuthoringTokens } from './theme-tokens.js'
 export { renderUserBlock } from './user-block.js'
 
 // Composer panel (React frame shared by input / slash picker / permission modes)
-export { ComposerInputChrome, ComposerPanel, parseInputAttachments } from './composer.js'
+export { ComposerInputChrome, ComposerPanel, computeTranscriptHeight, parseInputAttachments } from './composer.js'
 export type { ComposerInputChromeProps, ComposerPanelProps, ComposerAttachment } from './composer.js'
 
 // Fullscreen-first redesign primitives

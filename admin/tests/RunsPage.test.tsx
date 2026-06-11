@@ -9,55 +9,39 @@ beforeEach(() => {
 })
 
 describe('RunsPage', () => {
-  it('does not expose internal QA snapshot labels in the public admin UI', () => {
+  it('renders the Lane A header, hero strip, and both run cards', () => {
     render(<RunsPage />)
 
-    const internalLane = new RegExp(['Lane', 'A'].join(' '), 'i')
-    const internalReportWord = new RegExp(['sign', 'off'].join(''), 'i')
-    const internalBlockers = new RegExp(['remaining', 'blockers'].join(' '), 'i')
-    const internalGuardFix = new RegExp(['guard', 'fix'].join(' '), 'i')
-    const internalRerun = new RegExp(['rerun', 'still', 'required'].join(' '), 'i')
+    expect(screen.getByTestId('run-title')).toHaveTextContent(/minimax-m27 \+ kimi-code/i)
+    expect(screen.getByTestId('run-hero-verdict')).toHaveTextContent(/Kimi provider-side passed/)
+    expect(screen.getByText('HISTORICAL REPORT PACKAGE · DAEMON')).toBeInTheDocument()
 
-    expect(screen.queryByText(internalLane)).not.toBeInTheDocument()
-    expect(screen.queryByText(internalReportWord)).not.toBeInTheDocument()
-    expect(screen.queryByText(internalBlockers)).not.toBeInTheDocument()
-    expect(screen.queryByText(internalGuardFix)).not.toBeInTheDocument()
-    expect(screen.queryByText(internalRerun)).not.toBeInTheDocument()
+    const minimax = screen.getByTestId('run-card-minimax-m27')
+    expect(within(minimax).getByText(/served by/i)).toBeInTheDocument()
+    expect(within(minimax).getByText(/MiniMax-M2.7-highspeed/)).toBeInTheDocument()
+    expect(within(minimax).getByText('PASS')).toBeInTheDocument()
+    expect(within(minimax).getByText('21')).toBeInTheDocument()
+    expect(within(minimax).getByText('21/21')).toBeInTheDocument()
+
+    const kimi = screen.getByTestId('run-card-kimi-code')
+    expect(within(kimi).getByText('PARTIAL')).toBeInTheDocument()
+    expect(within(kimi).getByText('66/66')).toBeInTheDocument()
+    expect(within(kimi).getByText('10.6 min')).toBeInTheDocument()
+    expect(within(kimi).getByText(/completion guard drifted/i)).toBeInTheDocument()
   })
 
-  it('renders the public demo header, hero strip, and both run cards', () => {
+  it('switches the tool coverage tab between minimax-m27 and kimi-code without losing the grid', () => {
     render(<RunsPage />)
 
-    expect(screen.getByTestId('run-title')).toHaveTextContent(/cloud-primary \+ local-runtime/i)
-    expect(screen.getByTestId('run-hero-verdict')).toHaveTextContent(/Demo run healthy/)
-    expect(screen.getByText('DEMO PACKAGE · DAEMON')).toBeInTheDocument()
+    // Default tab is the last run (kimi-code). Verify by tile count for the active grid.
+    const kimiGrid = screen.getByTestId('tool-coverage-grid-kimi-code')
+    expect(within(kimiGrid).getByTestId('tool-tile-bash')).toHaveTextContent('9')
+    expect(within(kimiGrid).getByTestId('tool-tile-LSP')).toHaveTextContent('0')
 
-    const cloud = screen.getByTestId('run-card-cloud-primary')
-    expect(within(cloud).getByText(/served by/i)).toBeInTheDocument()
-    expect(within(cloud).getByText(/cloud demo backend/)).toBeInTheDocument()
-    expect(within(cloud).getByText('PASS')).toBeInTheDocument()
-    expect(within(cloud).getByText('12')).toBeInTheDocument()
-    expect(within(cloud).getByText('12/12')).toBeInTheDocument()
-
-    const local = screen.getByTestId('run-card-local-runtime')
-    expect(within(local).getByText('PARTIAL')).toBeInTheDocument()
-    expect(within(local).getByText('18/18')).toBeInTheDocument()
-    expect(within(local).getByText('8.4 min')).toBeInTheDocument()
-    expect(within(local).getByText(/live audit-log endpoint/i)).toBeInTheDocument()
-  })
-
-  it('switches the tool coverage tab between cloud-primary and local-runtime without losing the grid', () => {
-    render(<RunsPage />)
-
-    // Default tab is the last run (local-runtime). Verify by tile count for the active grid.
-    const localGrid = screen.getByTestId('tool-coverage-grid-local-runtime')
-    expect(within(localGrid).getByTestId('tool-tile-bash')).toHaveTextContent('9')
-    expect(within(localGrid).getByTestId('tool-tile-LSP')).toHaveTextContent('0')
-
-    fireEvent.click(screen.getByTestId('tool-coverage-tab-cloud-primary'))
-    const cloudGrid = screen.getByTestId('tool-coverage-grid-cloud-primary')
-    expect(within(cloudGrid).getByTestId('tool-tile-bash')).toHaveTextContent('7')
-    expect(within(cloudGrid).getByTestId('tool-tile-LSP')).toHaveTextContent('0')
+    fireEvent.click(screen.getByTestId('tool-coverage-tab-minimax-m27'))
+    const mGrid = screen.getByTestId('tool-coverage-grid-minimax-m27')
+    expect(within(mGrid).getByTestId('tool-tile-bash')).toHaveTextContent('12')
+    expect(within(mGrid).getByTestId('tool-tile-LSP')).toHaveTextContent('0')
   })
 
   it('renders all blockers under ALL filter and only open ones under OPEN', () => {
@@ -68,28 +52,28 @@ describe('RunsPage', () => {
     expect(screen.getByTestId('blocker-2')).toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('blockers-filter-resolved'))
-    expect(screen.getByText('Export run packet')).toBeInTheDocument()
-    expect(screen.queryByText('Connect live audit-log feed')).not.toBeInTheDocument()
+    expect(screen.getByText('Kimi 10-minute parity comparison')).toBeInTheDocument()
+    expect(screen.queryByText('cmux CLI control surface unhealthy')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('blockers-filter-open'))
     expect(screen.getByTestId('blocker-0')).toBeInTheDocument()
-    expect(screen.queryByText('Export run packet')).not.toBeInTheDocument()
+    expect(screen.queryByText('Kimi 10-minute parity comparison')).not.toBeInTheDocument()
   })
 
-  it('surfaces all four runtime failure verdicts including terminal control status', () => {
+  it('surfaces all four runtime failure verdicts including the truthful PARTIAL on cmux CLI', () => {
     render(<RunsPage />)
 
     const list = screen.getByTestId('runtime-failures')
-    expect(within(list).getByText('Provider request paths')).toBeInTheDocument()
-    expect(within(list).getByText(/Terminal control/)).toBeInTheDocument()
-    expect(within(list).getByText(/No terminal-control defect/)).toBeInTheDocument()
+    expect(within(list).getByText('Provider request paths (minimax / kimi)')).toBeInTheDocument()
+    expect(within(list).getByText(/cmux CLI/)).toBeInTheDocument()
+    expect(within(list).getByText(/Broken pipe/)).toBeInTheDocument()
   })
 
-  it('renders the captured terminal output with timestamps and the demo file size', () => {
+  it('renders the captured terminal output with timestamps and the 546,674-byte file size', () => {
     render(<RunsPage />)
 
     const term = screen.getByTestId('run-terminal')
-    expect(within(term).getByText('128,024 bytes')).toBeInTheDocument()
+    expect(within(term).getByText('546,674 bytes')).toBeInTheDocument()
     expect(within(term).getByText(/Nothing remaining\. Task done\./)).toBeInTheDocument()
   })
 
@@ -101,13 +85,13 @@ describe('RunsPage', () => {
       </I18nProvider>,
     )
 
-    expect(screen.getByTestId('run-title')).toHaveTextContent('可靠性演示')
-    expect(screen.getByTestId('run-hero-verdict')).toHaveTextContent('演示运行健康')
-    expect(screen.getByText('演示包版本 · Daemon')).toBeInTheDocument()
+    expect(screen.getByTestId('run-title')).toHaveTextContent('压力运行')
+    expect(screen.getByTestId('run-hero-verdict')).toHaveTextContent('Kimi provider 侧已通过')
+    expect(screen.getByText('历史报告包版本 · Daemon')).toBeInTheDocument()
     expect(screen.getByText('运行记录')).toBeInTheDocument()
     expect(screen.getByText('审计 · 请求时间线')).toBeInTheDocument()
     expect(screen.getByText('运行时失败判定')).toBeInTheDocument()
-    expect(screen.getByText('跟进项')).toBeInTheDocument()
-    expect(screen.getAllByText('报告中跟踪')).toHaveLength(3)
+    expect(screen.getByText('剩余阻塞项')).toBeInTheDocument()
+    expect(screen.getAllByText('签收中跟踪')).toHaveLength(3)
   })
 })

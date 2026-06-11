@@ -91,6 +91,9 @@ Capability labels (`supported` / `partial` / `manual-only` / `unsupported`) are
 declared in [`src/capabilities.ts`](src/capabilities.ts) and kept honest against
 runtime behavior.
 
+Product truth and distribution authority live in
+[`docs/PRODUCT-TRUTH.md`](https://github.com/yeemio/owlcoda/blob/main/docs/PRODUCT-TRUTH.md).
+
 ## Common commands
 
 ```bash

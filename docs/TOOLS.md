@@ -1,0 +1,186 @@
+# OwlCoda Tools — Maturity Matrix
+
+> Refreshed 2026-05-30, owlcoda 0.14.46
+> Source of truth: `src/native/dispatch.ts` default registration,
+> `src/native/tool-defs.ts` schemas, and `src/native/tools/*.ts`
+> behavioral audit (not comments).
+> Scope: 47 native tool schemas/factories are tracked below. The default
+> dispatcher currently advertises **45 registered tool_defs** through
+> `buildNativeToolDefs(new ToolDispatcher())`. `Agent` is host-wired by
+> `ink-repl.tsx` because it needs provider deps; `REPL` is schema/factory
+> only and remains an orphan. The "42+ tools" headline is therefore a
+> lower-bound count, not a production-count claim.
+
+## Summary
+
+- **production**: 13
+  bash, read, write, edit, glob, grep, NotebookEdit, WebFetch, WebSearch,
+  EnterWorktree, ExitWorktree, TeamCreate, TeamDelete
+- **beta**: 26
+  Agent, AskUserQuestion, Sleep, EnterPlanMode, ExitPlanMode, Config,
+  TodoWrite, Skill, ToolSearch, StructuredOutput, Brief, PowerShell, REPL,
+  TaskCreate, TaskList, TaskGet, TaskUpdate, TaskStop, TaskOutput,
+  TaskVerify, DeliveryAudit, SkillRoutePreview, RunWorkspace,
+  ProjectMap, ArtifactVerify, ProbePlan
+- **stub**: 3
+  SendMessage, ScheduleCron, McpAuth
+- **experimental**: 5
+  RemoteTrigger, LSP, MCPTool, ListMcpResources, ReadMcpResource
+
+Default registration truth: 45 registered tool_defs, 47 schema rows.
+Schema-only / host-wired surfaces: Agent (registered by `ink-repl.tsx`
+with live provider deps) and REPL (exported/tested but not wired into
+the default dispatcher). Tungsten and Workflow were removed in 0.13.32 —
+they were upstream-cloud-only placeholders that returned "not available"
+in local mode and had no realistic local implementation path.
+
+### Maturity/registration contract
+
+- The table below must contain exactly one row for every
+  `NATIVE_TOOL_SCHEMAS` key.
+- The default advertised count must match both
+  `new ToolDispatcher().getToolNames()` and `buildNativeToolDefs(...)`.
+- Production rows must be default-registered and must not carry stub or
+  orphan notes.
+- Stub/orphan surfaces may stay documented while they are being retired,
+  renamed, or wired, but they must not be counted as production.
+
+## Tool-by-tool
+
+| Name | LOC | Maturity | Real I/O | Test coverage | Notes |
+| --- | --- | --- | --- | --- | --- |
+| bash | 321 | production | spawn child_process (detached, pgid kill, timeout, progress) | bash.test.ts (271) — full | full implementation |
+| read | 209 | production | fs/promises readFile + image handling, fs-policy sensitive-path gate | read.test.ts (164) + fs-policy.test.ts read cases — behavioral | full; sensitive reads denied without narrowing normal absolute-path reads |
+| write | 73 | production | fs/promises writeFile via tmp + rename, fs-policy gate | write.test.ts (98) + write-edit-guard.test.ts (110) — behavioral | full |
+| edit | 103 | production | fs/promises read/write, exact-match replacement, fs-policy gate | edit.test.ts (133) — behavioral | full |
+| glob | 398 | production | spawn rg (with fallback walker) | glob.test.ts (101) | full; uses rg-detect helper |
+| grep | 384 | production | spawn rg | grep.test.ts (145) | full |
+| NotebookEdit | 220 | production | fs read/write, JSON parse, fs-policy gate | notebook-edit.test.ts (177) — behavioral | full nbformat handling |
+| WebFetch | 137 | production | fetch() + html-to-text | none (no test file) | functional but UNTESTED |
+| WebSearch | 153 | production | fetch() to DuckDuckGo lite + parse | none (no test file) | functional but UNTESTED; brittle DDG HTML scraping |
+| EnterWorktree | 133 | production | execSync `git worktree add` + chdir | worktree.test.ts (150) | real git ops |
+| ExitWorktree | 144 | production | execSync `git worktree remove`, change counting | worktree.test.ts (150) | real git ops |
+| TeamCreate | 91 | production (label: experimental) | mkdir + writeFile under ~/.owlcoda/teams | team-create.test.ts (55) | real disk persistence; only "experimental" because the *team* feature itself is half-built (no agents actually consume the team dir) |
+| TeamDelete | 83 | production (label: experimental) | rm + readFile under ~/.owlcoda | team-delete.test.ts (61) | real disk; same caveat |
+| Agent | 589 | beta | spawns sub-conversation via runConversationLoop, real provider calls | agent.test.ts (299) — behavioral | schema/factory exists; host-wired by ink-repl.tsx with provider deps, not default-registered |
+| AskUserQuestion | 173 | beta | host UI callback or readline fallback on stdin | none directly (covered indirectly) | depends on ToolExecutionContext.askUserQuestion |
+| Sleep | 45 | beta | setTimeout | none (no test file) | trivial; works |
+| EnterPlanMode | 59 | beta | mutates shared PlanModeState | enter-plan-mode.test.ts (52) | state-only; no enforcement of "no writes during plan mode" inside the tool itself |
+| ExitPlanMode | 49 | beta | mutates shared PlanModeState | exit-plan-mode.test.ts (57) | state-only |
+| Config | 110 | beta | reads/writes process.env + tui theme | config.test.ts (104) — behavioral | only 4 settings (theme, model, verbose, autoCompact); not persisted to disk |
+| TodoWrite | 93 | beta | mutates module-level array | none (no test file) | session-only in-memory list; no persistence |
+| Skill | 225 | beta | unified curated + learned registry via loadAllSkills() | skill.test.ts (81) — registry/actions/error paths | same source of truth as slash /skills; list/info/run accept curated library entries |
+| ToolSearch | 87 | beta | reads NATIVE_TOOL_SCHEMAS map | tool-search.test.ts (47) | string matching against in-memory schema map |
+| StructuredOutput | 40 | beta | none (passes input through JSON.stringify) | structured-output.test.ts (29) | no schema validation despite description; just pretty-prints |
+| Brief | 71 | beta | stat/access for attachment validation | brief.test.ts (33) — schema/error only | validates files exist; doesn't actually upload anywhere |
+| PowerShell | 63 | beta | execFile pwsh / powershell.exe | powershell.test.ts (22) | shells out to pwsh if installed; correct error path otherwise |
+| DeliveryAudit | 583 | beta | reads git/status/files and can lint weak test assertions | delivery-audit.test.ts | local audit helper; useful for honesty checks but not a release gate by itself |
+| SkillRoutePreview | 61 | beta | classifies a prompt against skill routing logic | skill-route-preview.test.ts | read-only preview; no artifact creation |
+| RunWorkspace | 361 | beta | creates/reads `.owlcoda-run` metadata, ledger, artifacts, checkpoints | run-workspace.test.ts | real disk persistence for run metadata; not a job executor |
+| ProjectMap | 136 | beta | bounded default-on project scan plus optional `.owlcoda-run/project-map.json` persistence | project-map.test.ts + project-map-dogfood-acceptance.test.ts | Runtime Control Plane snapshot surface; `OWLCODA_PROJECT_MAP=0` is the rollback override; not a full-repo index, does not execute commands, and does not bypass write gates |
+| ArtifactVerify | 108 | beta | runs supported artifact verification packs | artifact-verify.test.ts | currently supports `html_deck`; narrow verification helper |
+| ProbePlan | 376 | beta | stores probe plans and optionally mutates live conversation options | probe-plan.test.ts | default dispatcher has no live-conversation accessor; ink-repl re-registers it with one |
+| REPL | 79 | beta | delegates to dispatcher.executeTool | repl.test.ts (51) | **orphan: schema/factory exists but not registered in dispatch.ts**; only callable if a host wires it manually |
+| TaskCreate | 49 | beta | in-memory task entry; optional safe_readonly bash child via task-store | task-create.test.ts (163) — behavior + safety gates | pure-TODO mode is still manual; command mode only spawns after bash-risk + headless-approval + direct safe_readonly recheck |
+| TaskList | 59 | beta | reads in-memory Map | task-list.test.ts | in-memory session task list; not a process/job discovery tool |
+| TaskGet | 57 | beta | reads in-memory Map | task-get.test.ts (48) | returns task record fields; command output is surfaced by TaskOutput |
+| TaskUpdate | 108 | beta | mutates in-memory Map | task-update.test.ts (74) | manual task annotation/status changes; never executes work |
+| TaskStop | 62 | beta | cancels Map entry; SIGTERM for TaskCreate command-backed child | task-stop.test.ts (57) | only stops processes launched through TaskCreate(command=...); pure-TODO tasks are status-only |
+| TaskOutput | 115 | beta | reads Map and captured stdout/stderr/exitCode for command-backed tasks | task-output.test.ts (51) | block=true only makes sense for command-backed tasks or tasks another turn will update |
+| TaskVerify | 362 | beta | runs task-step verification checks and writes results back to task-store | task-verify.test.ts | real verification runner for file/command/artifact checks; still session-scoped task state |
+| SendMessage | 79 | stub | writes to module-level Map | send-message.test.ts (44) | **no recipient ever consumes the queue from anywhere except getMessageQueue() helper** — fire-and-forget into a Map |
+| ScheduleCron | 124 | stub | mutates in-memory Map | schedule-cron.test.ts (46) | **no cron daemon, no scheduler, no execution path** — just stores cron strings; "create" never causes anything to fire |
+| McpAuth | 77 | stub | mutates in-memory Map | mcp-auth.test.ts (42) | **records `authenticated: true` regardless of token validity**; no real auth flow even when MCP manager is connected |
+| RemoteTrigger | 127 | experimental | fs read/write under ~/.owlcoda/triggers | remote-trigger.test.ts (64) | **`run` action only updates a `lastRun` timestamp — does not actually invoke anything**; create/list/get/update do real disk I/O |
+| LSP | 71 | experimental | none with default provider; delegates if a provider is wired | lsp.test.ts (38) | default provider is a "not available" stub. No LSP provider is wired in dispatch.ts |
+| MCPTool | 64 | experimental | none with default provider; delegates to MCPManager when constructor is given one | mcp-tool.test.ts (38) | dispatch.ts passes mcpManager through, so this is real iff an MCP server is connected; otherwise stub |
+| ListMcpResources | 71 | experimental | same as MCPTool | list-mcp-resources.test.ts (34) | same |
+| ReadMcpResource | 61 | experimental | same as MCPTool | read-mcp-resource.test.ts (38) | same |
+
+### Infrastructure (excluded from native tool schema/registration counts)
+
+| File | Role |
+| --- | --- |
+| types.ts | shared NativeToolDef, ToolResult, input typings |
+| index.ts | barrel export |
+| fs-policy.ts | shared write-path guard used by Write/Edit/NotebookEdit |
+| ignore.ts | shared ignore patterns used by Glob/Grep |
+| rg-detect.ts | ripgrep binary detection used by Glob/Grep |
+| task-store.ts | in-memory Task store used by all Task* tools |
+
+## Stub tools that need attention
+
+1. **SendMessage** — the in-memory queue has no consumer. No tool, no
+   loop, no scheduler reads from `messageQueues`. Fix: either remove
+   the tool or wire team-mode agents to drain their inbox before each
+   turn.
+
+2. **ScheduleCron** — there is no cron runner. Cron entries are stored
+   and listed, never executed. Fix: actually start a cron-style timer
+   on `create`, or rename the tool to something honest like `CronStore`.
+
+3. **McpAuth** — does not validate tokens or perform OAuth. Fix: route
+   into the MCP manager's auth flow (or remove the OAuth branch which
+   is misleading).
+
+4. **RemoteTrigger.run** — same shape problem as ScheduleCron: stores
+   and reports, doesn't trigger anything. Fix: wire `run` to actually
+   fire the trigger's payload, or document this as a "log only" stub.
+
+5. **Task tools** — no longer pure stubs in 0.13.31: TaskCreate can
+   launch safe_readonly commands, TaskOutput surfaces captured I/O, and
+   TaskStop signals TaskCreate-owned children. Remaining caveat: the
+   backing store is still in-memory/session-lifetime only, and pure-TODO
+   tasks still need explicit TaskUpdate. Keep calling this beta, not a
+   durable job scheduler.
+
+6. **REPL** — exported and tested but never registered in dispatch.
+   Either register it or remove from `index.ts` to stop the public
+   surface from suggesting it's available.
+
+## False advertising risk
+
+The headline "42+ native tools" is still a defensible lower-bound
+because the default dispatcher advertises 45 registered tool_defs. The
+risk is in the *implication* that all advertised tools are production
+features:
+
+- **Task coordination** — 7 tools (TaskCreate, TaskList, TaskGet,
+  TaskUpdate, TaskStop, TaskOutput, TaskVerify) are real but **beta**.
+  They share an in-memory session store. TaskCreate has a command-backed
+  path for safe_readonly commands only; TaskOutput can show captured I/O;
+  TaskStop can signal those TaskCreate-owned children; TaskVerify can
+  evaluate step checks. This is still not a durable scheduler, queue,
+  worker pool, or remote agent runtime.
+
+- **Project Map Runtime Control Plane** — ProjectMap is real but **beta**
+  and default-on with `OWLCODA_PROJECT_MAP=0` rollback. It provides bounded project
+  orientation, runtime evidence, dogfood acceptance, and TaskCreate /
+  TaskVerify verification-profile bridging. It is not a full-repo index,
+  embedding index, repo graph, hook runner, or write-authorization bypass.
+
+- **Team coordination** — TeamCreate/TeamDelete create directories
+  but nothing else uses them. SendMessage queues into a Map that
+  nothing drains. Together these advertise "multi-agent teamwork"
+  that doesn't exist as runtime behavior.
+
+- **Scheduling** — ScheduleCron and RemoteTrigger.run both look like
+  they enable scheduling/automation but neither has an executor.
+
+- **MCP** — three MCP tools and McpAuth all *can* work when an MCP
+  manager is wired (dispatch passes one through). McpAuth specifically
+  is not wired through MCPManager and will rubber-stamp any token.
+
+- **LSP** — the default provider is a "not available" stub and no
+  real provider is wired in dispatch.ts. The CLI advertising LSP
+  capability is misleading until someone calls `createLSPTool(provider)`
+  with a real provider.
+
+- **REPL** — exported but unregistered. If "/tools" or capability
+  listings include it, that's wrong.
+
+Recommendation: keep the headline "42+ tools" only when paired with an
+honest split such as "13 production, 26 beta, 3 stub, 5 experimental;
+45 default-registered tool_defs; 2 schema-only/host-wired surfaces".
+For user-facing marketing, lead with the production/beta capabilities
+and hide or gate the remaining stubs behind an experimental surface.

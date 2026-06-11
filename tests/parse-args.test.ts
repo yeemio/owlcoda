@@ -225,4 +225,33 @@ describe('parseArgs', () => {
     expect(result.command).toBe('ui')
     expect(result.route).toBe('start')
   })
+
+  // `owlcoda --stop force` (typo for `owlcoda stop --force`) used to swallow
+  // the unknown flag into passthroughArgs and fall through to the default
+  // REPL/daemon LAUNCH — the opposite of the user's intent. Unknown top-level
+  // options must surface as an error, never start a session.
+  describe('unknown top-level option', () => {
+    it('flags --stop as an unknown option instead of launching', () => {
+      const result = parse('--stop', 'force')
+      expect(result.unknownOption).toBe('--stop')
+    })
+
+    it('flags a typo like --jsn', () => {
+      expect(parse('--jsn').unknownOption).toBe('--jsn')
+    })
+
+    it('leaves subcommand flags alone (subcommands parse their own)', () => {
+      const result = parse('skills', 'add', '--pin', 'abc123')
+      expect(result.unknownOption).toBeUndefined()
+      expect(result.passthroughArgs).toContain('--pin')
+    })
+
+    it('leaves args past the -- separator alone', () => {
+      expect(parse('--', '--stop').unknownOption).toBeUndefined()
+    })
+
+    it('known top-level flags are unaffected', () => {
+      expect(parse('--json', '-p', 'hi').unknownOption).toBeUndefined()
+    })
+  })
 })

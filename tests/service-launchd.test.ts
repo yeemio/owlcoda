@@ -112,4 +112,25 @@ describe('buildLaunchdEnv', () => {
     expect(e.OWLCODA_LAUNCHD).toBe('1')
     expect(e.OWLCODA_RUNTIME_TOKEN).toBe('fresh')
   })
+
+  it('forwards cloud credential env vars config reads from env (KIMI/MOONSHOT)', () => {
+    // config.ts:186 resolves the Kimi/Moonshot cloud preset key from
+    // KIMI_API_KEY/MOONSHOT_API_KEY (NOT OWLCODA_*-prefixed). launchd does not
+    // inherit the shell, so dropping these leaves a launchd-spawned daemon
+    // unable to authenticate to Kimi → 401 on every cloud turn.
+    const e = buildLaunchdEnv(
+      { OWLCODA_HOME: '/h', KIMI_API_KEY: 'sk-kimi', MOONSHOT_API_KEY: 'sk-moon' },
+      'tok',
+    )
+    expect(e.KIMI_API_KEY).toBe('sk-kimi')
+    expect(e.MOONSHOT_API_KEY).toBe('sk-moon')
+    expect(e.OWLCODA_HOME).toBe('/h')
+  })
+
+  it('does not forward unrelated non-OWLCODA env (no broad leak)', () => {
+    const e = buildLaunchdEnv({ PATH: '/bin', HOME: '/h', AWS_SECRET_ACCESS_KEY: 'x' }, 'tok')
+    expect(e.PATH).toBeUndefined()
+    expect(e.HOME).toBeUndefined()
+    expect(e.AWS_SECRET_ACCESS_KEY).toBeUndefined()
+  })
 })

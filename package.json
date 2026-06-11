@@ -1,6 +1,6 @@
 {
   "name": "owlcoda",
-  "version": "0.15.0",
+  "version": "0.15.1",
   "description": "OwlCoda — independent local-first AI coding platform with a native REPL, 42+ tools, and local model routing.",
   "license": "GPL-3.0-or-later",
   "author": "yeemio <yeemio@gmail.com>",
@@ -33,6 +33,7 @@
     "config.example.json",
     "scripts/postbuild.mjs",
     "README.md",
+    "README.zh.md",
     "CHANGELOG.md",
     "LICENSE",
     "SOURCE.md",
@@ -91,6 +92,7 @@
     "signal-exit": "^4.1.0",
     "slice-ansi": "^8.0.0",
     "stack-utils": "^2.0.6",
+    "string-width": "^8.2.0",
     "strip-ansi": "^7.2.0",
     "supports-hyperlinks": "^4.4.0",
     "type-fest": "^5.6.0",

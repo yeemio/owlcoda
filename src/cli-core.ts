@@ -159,6 +159,9 @@ function resolveResumeSessionTarget(
 
 export function parseArgs(argv: string[]): {
   command: string
+  /** First unrecognized top-level option (e.g. `--stop`). The dispatcher
+   *  must error out instead of launching. */
+  unknownOption?: string
   port?: number
   configPath?: string
   routerUrl?: string
@@ -183,6 +186,7 @@ export function parseArgs(argv: string[]): {
   const args = argv.slice(2)
   let command = 'launch'
   let commandExplicit = false
+  let unknownOption: string | undefined
   let port: number | undefined
   let configPath: string | undefined
   let routerUrl: string | undefined
@@ -388,6 +392,15 @@ export function parseArgs(argv: string[]): {
         command = 'shadow-status'
         break
       default:
+        // Unknown TOP-LEVEL option: record it so the dispatcher can fail
+        // fast. Pre-fix, `owlcoda --stop force` (typo for `owlcoda stop
+        // --force`) swallowed the flag into passthroughArgs and fell
+        // through to the default LAUNCH — starting a session when the
+        // user meant to stop one. Flags appearing AFTER an explicit
+        // subcommand stay passthrough: subcommands parse their own.
+        if (!commandExplicit && arg.startsWith('-') && unknownOption === undefined) {
+          unknownOption = arg
+        }
         passthroughArgs.push(arg)
     }
     if (command !== prevCommand) commandExplicit = true
@@ -395,6 +408,7 @@ export function parseArgs(argv: string[]): {
 
   return {
     command,
+    unknownOption,
     port,
     configPath,
     routerUrl,
@@ -1253,7 +1267,16 @@ export async function main(): Promise<void> {
     select,
     view,
     passthroughArgs,
+    unknownOption,
   } = parseArgs(process.argv)
+
+  // Unknown top-level option: fail fast. Falling through to LAUNCH turns a
+  // typo'd management command (`owlcoda --stop force`) into a session start.
+  if (unknownOption) {
+    console.error(`Unknown option: ${unknownOption}`)
+    console.error(`Run \`owlcoda --help\` for usage. (Did you mean a subcommand, e.g. \`owlcoda stop --force\`?)`)
+    process.exit(1)
+  }
 
   // Top-level `-p` / `--prompt` is documented (README, CHANGELOG, smoke
   // tests) as a shorthand for `owlcoda run --prompt …`. The parser captures

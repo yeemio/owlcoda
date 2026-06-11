@@ -6,7 +6,6 @@
  */
 
 import { ToolDispatcher } from './dispatch.js'
-import { detectEmittedButUnexecutedToolCall } from './repl-shared.js'
 import { ensureOperatingModeState, initializeOperatingModeState, type OperatingMode } from './modes.js'
 import {
   createConversation,
@@ -21,6 +20,7 @@ import { buildSystemPrompt } from './system-prompt.js'
 import { formatToolStart, formatToolEnd, formatError, ansi } from './display.js'
 import { StreamingMarkdownRenderer } from './markdown.js'
 import { saveSession, loadSession, listSessions } from './session.js'
+import type { SessionFile } from './session.js'
 import { loadConfig, resolveModelContextWindow } from '../config.js'
 import type { ToolProgressEvent } from './tools/index.js'
 import type { TaskRunStatus } from './protocol/types.js'
@@ -131,6 +131,33 @@ export interface HeadlessResult {
   projectMapAcceptance?: HeadlessProjectMapAcceptanceEvidence
 }
 
+/** Outcome of resolving a `--resume` request, before any I/O side effects. */
+export type ResumeOutcome =
+  | { kind: 'fresh' }
+  | { kind: 'resume'; session: SessionFile }
+  | { kind: 'error'; requested: string; message: string }
+
+/**
+ * Decide how a headless `--resume` request resolves. An explicit resume that
+ * cannot be loaded (missing/corrupt session, or `last` with no history) is an
+ * ERROR — never a silent downgrade to a fresh session, which would burn a
+ * scripted run with no prior context while the caller believes it resumed. #10
+ */
+export function classifyResumeRequest(
+  resumeSession: string | undefined,
+  deps: { listSessions: () => SessionFile[]; loadSession: (id: string) => SessionFile | null },
+): ResumeOutcome {
+  if (!resumeSession) return { kind: 'fresh' }
+  let id = resumeSession
+  if (id === 'last') id = deps.listSessions()[0]?.id ?? ''
+  const loaded = id ? deps.loadSession(id) : null
+  if (loaded) return { kind: 'resume', session: loaded }
+  const detail = resumeSession === 'last'
+    ? 'no saved sessions to resume'
+    : `session not found or unreadable: ${resumeSession}`
+  return { kind: 'error', requested: resumeSession, message: `Cannot resume — ${detail}` }
+}
+
 /** Run a single-shot native conversation. */
 export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult> {
   const dispatcher = new ToolDispatcher()
@@ -154,28 +181,51 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     tools: toolDefs,
   })
 
-  if (opts.resumeSession) {
-    let sessionId = opts.resumeSession
-    if (sessionId === 'last') {
-      const sessions = listSessions()
-      sessionId = sessions[0]?.id ?? ''
+  const resumeOutcome = classifyResumeRequest(opts.resumeSession, { listSessions, loadSession })
+  if (resumeOutcome.kind === 'error') {
+    // Fail fast — never silently degrade an explicit --resume into a fresh run.
+    if (opts.json) {
+      await writeStdoutLine(JSON.stringify({
+        text: '',
+        model: opts.model,
+        session_id: resumeOutcome.requested,
+        resumed: false,
+        exit_code: 1,
+        tool_calls: [],
+        error: resumeOutcome.message,
+        approval_policy: approvalPolicy,
+        approval_tool_allowlist: allowTools,
+        approval_tool_denylist: denyTools,
+        approval_denials: [],
+      }))
+    } else {
+      process.stderr.write(formatError(resumeOutcome.message) + '\n')
     }
-    if (sessionId) {
-      const loaded = loadSession(sessionId)
-      if (loaded) {
-        // Restore the conversation from the saved session
-        conversation.id = loaded.id
-        conversation.model = loaded.model
-        conversation.system = appendHeadlessPolicyContext(
-          loaded.system ?? conversation.system,
-          buildHeadlessPolicyContext({ autoApprove, approvalPolicy, allowTools, denyTools }),
-        )
-        conversation.maxTokens = loaded.maxTokens ?? conversation.maxTokens
-        conversation.turns = [...loaded.turns]
-        resolvedSessionId = loaded.id
-        resumed = true
-      }
+    return {
+      text: '',
+      exitCode: 1,
+      iterations: 0,
+      sessionId: resumeOutcome.requested,
+      resumed: false,
+      approvalPolicy,
+      approvalToolAllowlist: allowTools,
+      approvalToolDenylist: denyTools,
+      approvalDenials: [],
     }
+  }
+  if (resumeOutcome.kind === 'resume') {
+    // Restore the conversation from the saved session
+    const loaded = resumeOutcome.session
+    conversation.id = loaded.id
+    conversation.model = loaded.model
+    conversation.system = appendHeadlessPolicyContext(
+      loaded.system ?? conversation.system,
+      buildHeadlessPolicyContext({ autoApprove, approvalPolicy, allowTools, denyTools }),
+    )
+    conversation.maxTokens = loaded.maxTokens ?? conversation.maxTokens
+    conversation.turns = [...loaded.turns]
+    resolvedSessionId = loaded.id
+    resumed = true
   }
   initializeOperatingModeState(conversation, opts.mode ?? 'normal')
 
@@ -357,26 +407,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
         const taskState = conversation.options?.taskState
         const taskStatus = taskState?.run.status
         const taskGuardReason = taskState?.run.lastGuardReason ?? undefined
-        // Silent tool-loss guard: a run that executed zero tools yet left a
-        // tool-call marker in the final text means the upstream returned the
-        // model's native tool call as plain text instead of structured
-        // tool_use — so the deliverable never landed. Surface it loudly and
-        // fail non-zero rather than reporting a false "completed". (Common
-        // cause: runHeadless pointed straight at a raw runtime's /v1/messages;
-        // point it at the OwlCoda daemon so local runtimes route through the
-        // /v1/chat/completions translate path where tool calls round-trip.)
-        const emittedToolMarker = toolCallLog.length === 0
-          ? detectEmittedButUnexecutedToolCall(finalText)
-          : null
-        if (emittedToolMarker) {
-          process.stderr.write(formatHeadlessError(
-            `Model emitted a tool call as text ("${emittedToolMarker}") but no tool executed — ` +
-            `the upstream is not converting native tool calls into structured tool_use. ` +
-            `Point runHeadless at the OwlCoda daemon (local runtimes then route through ` +
-            `/v1/chat/completions), not at a raw runtime's /v1/messages.`,
-          ) + '\n')
-        }
-        const exitCode = (shouldHeadlessExitNonZero(stopReason, taskStatus, finalText) || emittedToolMarker !== null) ? 1 : 0
+        const exitCode = shouldHeadlessExitNonZero(stopReason, taskStatus, finalText) ? 1 : 0
         const projectMapRuntime = buildHeadlessProjectMapRuntimeEvidence(conversation, noticeLog)
         const projectMapAcceptance = buildHeadlessProjectMapAcceptanceEvidence({
           conversation,
@@ -559,13 +590,13 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
   }
 }
 
-function shouldHeadlessExitNonZero(
+export function shouldHeadlessExitNonZero(
   stopReason: string | null,
   taskStatus: TaskRunStatus | undefined,
   finalText = '',
 ): boolean {
   if (stopReason === 'narration_loop' && finalText.trim()) return false
-  if (stopReason === 'task_no_progress' || stopReason === 'max_iterations' || stopReason === 'stalled') {
+  if (stopReason === 'hard_stop' || stopReason === 'task_no_progress' || stopReason === 'max_iterations' || stopReason === 'stalled') {
     return true
   }
   return taskStatus === 'blocked' || taskStatus === 'waiting_user' || taskStatus === 'drifted'

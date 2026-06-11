@@ -1,7 +1,7 @@
 /**
  * Tests for the 0.13.65 max_tokens default + env override.
  *
- * Pin: default is 32_768 (matches external coding-assistant), env
+ * Pin: default is 32_768 (matches Claude Code), env
  * `OWLCODA_MAX_OUTPUT_TOKENS` overrides, invalid values fall back to
  * default. The createConversation() default-arm path picks up the
  * resolver so all four legacy 4096-default call sites get the new

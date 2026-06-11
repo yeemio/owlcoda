@@ -224,6 +224,23 @@ export function parseInputAttachments(input: string): ComposerAttachment[] {
   return out
 }
 
+/**
+ * Fixed vertical chrome the ComposerPanel paints regardless of bodyLines: a top
+ * hair-faint divider, the divider between body and rail, and the rail row (see
+ * ComposerPanel below). The transcript reserve must subtract ALL of these or the
+ * newest transcript row and the rail clip on short viewports.
+ */
+export const COMPOSER_CHROME_LINES = 3
+
+/**
+ * Height to give the scrollable transcript so that it, plus the ComposerPanel
+ * rendered below it, exactly fill `rows`. Pure so the reserve is unit-testable
+ * against the panel's real rendered height (see composer-reserve-clip test).
+ */
+export function computeTranscriptHeight(rows: number, bottomBodyLines: number): number {
+  return Math.max(3, rows - (bottomBodyLines + COMPOSER_CHROME_LINES))
+}
+
 export function ComposerPanel({ children, rail, bodyLines }: ComposerPanelProps): React.ReactElement {
   // minHeight is only applied when the caller opts in via bodyLines.
   // undefined → no minimum, body sizes to children (correct for overlay

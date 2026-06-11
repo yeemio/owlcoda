@@ -2,6 +2,29 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.1] — 2026-06-11
+
+First npm package release on the GPL source line.
+
+### Changed
+
+- Moved the public npm install line from the historical `0.14.x` stream to
+  `0.15.x`.
+- Added the post-source-open runtime fixes already shipped through `0.14.64`
+  to the public source line, including mode visibility, submission recovery,
+  terminal width hardening, headless exports, third-party skill hardening, and
+  streaming usage accounting.
+- Synced the bilingual README and Admin model screenshot into the npm package
+  surface.
+- Updated package metadata, lockfile metadata, Admin display version, and
+  corresponding-source wording for `0.15.1`.
+
+### Notes
+
+- This release must be paired with public source tag `v0.15.1`.
+- Existing public source tag `v0.15.0` remains the GPL source-open boundary
+  tag and is not moved.
+
 ## [0.15.0] — 2026-06-04
 
 License boundary and public source availability.

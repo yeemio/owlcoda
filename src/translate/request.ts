@@ -204,7 +204,7 @@ export function translateRequest(
     ...(body.temperature !== undefined && { temperature: body.temperature }),
     ...(body.top_p !== undefined && { top_p: body.top_p }),
     ...(body.stop_sequences && { stop: body.stop_sequences }),
-    ...(body.stream && { stream: true }),
+    ...(body.stream && { stream: true, stream_options: { include_usage: true } }),
     ...(translatedTools.length > 0 && { tools: translatedTools }),
     ...(translatedToolChoice !== undefined && { tool_choice: translatedToolChoice }),
   }

@@ -1304,7 +1304,7 @@ export default class Ink {
   }
 
   /**
-   * Keyboard selection extension (shift+arrow/home/you). Moves focus;
+   * Keyboard selection extension (shift+arrow/home/end). Moves focus;
    * anchor stays fixed so the highlight grows or shrinks relative to it.
    * Left/right wrap across row boundaries — native macOS text-edit
    * behavior: shift+left at col 0 wraps to end of the previous row.

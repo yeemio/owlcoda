@@ -1424,6 +1424,10 @@ export async function runConversationLoop(
             `Request still exceeds context limit after compaction (${finalTokens} est. > ${hardLimit} limit). ` +
             `Use /clear to reset, or /model to switch to a model with a larger context window.`,
           )
+          // Mark the hard stop — otherwise lastStopReason keeps its previous value
+          // (typically 'tool_use'), which headless reports as a silent exit-0 success.
+          convergence.phase = 'hard_stop'
+          lastStopReason = 'hard_stop'
         }
         break // do NOT send — break out of the conversation loop
       }
@@ -5717,12 +5721,12 @@ export function createConversation(opts: {
  * being too long for one turn — heap pressure, output bloat, max-
  * tokens continuation handling. Then a 2026-05-07 industry survey
  * exposed the upstream cause: owlcoda's default of 4096 was an
- * outlier on the low end. external coding-assistant uses 32K, Aider 8K-32K per
+ * outlier on the low end. Claude Code uses 32K, Aider 8K-32K per
  * model, opencode 32K. Every model in our supported matrix
  * (Claude 4.x, DeepSeek V4, Kimi K2, GPT-5, Gemini 2.5, Qwen 3)
  * supports ≥16K output natively; many support 32K-128K.
  *
- * 0.13.65 raises the default to 32,768 (matches external coding-assistant) and
+ * 0.13.65 raises the default to 32,768 (matches Claude Code) and
  * exposes `OWLCODA_MAX_OUTPUT_TOKENS` as a per-session override.
  * Callers passing an explicit `opts.maxTokens` still win — the
  * resolver only applies to call sites that previously used the

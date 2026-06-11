@@ -1,5 +1,5 @@
 import { join, basename, relative, resolve, sep } from 'node:path'
-import { existsSync, readFileSync, mkdtempSync, rmSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, mkdtempSync, rmSync, readdirSync, lstatSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import type { SkillDocument } from './schema.js'
 import { isValidSkillId } from './schema.js'
@@ -18,7 +18,8 @@ function listMarkdownFiles(root: string): string[] {
     for (const entry of readdirSync(dir)) {
       if (entry === '.git' || entry === 'node_modules') continue
       const full = join(dir, entry)
-      const s = statSync(full)
+      // lstatSync (not statSync): never recurse into / hash a symlink (cycle/escape DoS).
+      const s = lstatSync(full)
       if (s.isDirectory()) walk(full)
       else if (s.isFile() && entry.toLowerCase().endsWith('.md')) out.push(full)
     }
@@ -30,7 +31,10 @@ function listMarkdownFiles(root: string): string[] {
 function resolveManagedSkillDir(projectRoot: string, vendoredPath: string): string | null {
   const skillsRoot = resolve(projectRoot, '.owlcoda', 'skills')
   const target = resolve(projectRoot, vendoredPath)
-  if (target !== skillsRoot && !target.startsWith(skillsRoot + sep)) return null
+  // A managed skill must live in a per-skill SUBDIR. Reject the managed root
+  // itself (== skillsRoot) — otherwise remove would rmSync the whole tree and
+  // wipe every sibling skill — as well as anything outside it (traversal).
+  if (target === skillsRoot || !target.startsWith(skillsRoot + sep)) return null
   return target
 }
 

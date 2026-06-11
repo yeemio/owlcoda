@@ -138,13 +138,13 @@ describe('mergeDiscoveredModels', () => {
     expect(merged.models[0]!.contextWindow).toBe(131072)
   })
 
-  it('defaults contextWindow to the conservative 200000 when not provided', () => {
+  it('defaults contextWindow to 32768 when not provided', () => {
     const config = makeMinimalConfig()
     const discovered = [
       makeDiscoveredModel({ id: 'ollama-model', contextWindow: undefined }),
     ]
     const merged = mergeDiscoveredModels(config, discovered)
-    expect(merged.models[0]!.contextWindow).toBe(200000)
+    expect(merged.models[0]!.contextWindow).toBe(32768)
   })
 
   it('sets tier to "discovered" for new models', () => {
