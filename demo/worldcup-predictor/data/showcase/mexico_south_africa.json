@@ -1,0 +1,300 @@
+{
+  "id": "mexico_south_africa",
+  "match": {
+    "home": "Mexico",
+    "away": "South Africa",
+    "commence": "2026-06-11T19:00:00Z"
+  },
+  "origin": "hermes-football world-cup-2026-md1 (vm-engineering), real production debate",
+  "replay": true,
+  "run_manifest": {
+    "generated_at": "2026-06-11T13:51:19.532506Z",
+    "task_root": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1",
+    "match_key": "Mexico::South Africa::2026-06-11T19:00:00Z",
+    "role_chains_config": "/home/you/projects/hermes-football/workspace/debate_model_chains.json",
+    "configured_role_chains": {
+      "pro": [
+        {
+          "runner": "hermes",
+          "provider": "xiaomi",
+          "model": "mimo-v2.5-pro"
+        },
+        {
+          "runner": "openai_chat",
+          "provider": "deepseek",
+          "model": "deepseek-chat",
+          "api_key_env": "DEEPSEEK_API_KEY",
+          "base_url_env": "DEEPSEEK_BASE_URL",
+          "default_base_url": "https://api.deepseek.com/v1"
+        },
+        {
+          "runner": "hermes",
+          "provider": "kimi-coding",
+          "model": "kimi-for-coding"
+        }
+      ],
+      "anti": [
+        {
+          "runner": "openai_chat",
+          "provider": "deepseek",
+          "model": "deepseek-chat",
+          "api_key_env": "DEEPSEEK_API_KEY",
+          "base_url_env": "DEEPSEEK_BASE_URL",
+          "default_base_url": "https://api.deepseek.com/v1"
+        },
+        {
+          "runner": "hermes",
+          "provider": "xiaomi",
+          "model": "mimo-v2.5-pro"
+        },
+        {
+          "runner": "hermes",
+          "provider": "kimi-coding",
+          "model": "kimi-for-coding"
+        }
+      ],
+      "judge": [
+        {
+          "runner": "openai_chat",
+          "provider": "deepseek",
+          "model": "deepseek-chat",
+          "api_key_env": "DEEPSEEK_API_KEY",
+          "base_url_env": "DEEPSEEK_BASE_URL",
+          "default_base_url": "https://api.deepseek.com/v1"
+        },
+        {
+          "runner": "hermes",
+          "provider": "xiaomi",
+          "model": "mimo-v2.5-pro"
+        }
+      ]
+    },
+    "evidence_file": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/evidence.json",
+    "evidence_brief_file": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/evidence_brief.md",
+    "roles": {
+      "pro": {
+        "role": "pro",
+        "runner": "hermes",
+        "provider": "xiaomi",
+        "model": "mimo-v2.5-pro",
+        "attempt": 1,
+        "raw_path": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/raw/pro.attempt1.hermes.xiaomi.mimo_v2_5_pro.txt",
+        "completed_at": "2026-06-11T13:50:50.803215Z"
+      },
+      "anti": {
+        "role": "anti",
+        "runner": "openai_chat",
+        "provider": "deepseek",
+        "model": "deepseek-chat",
+        "attempt": 1,
+        "raw_path": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/raw/anti.attempt1.openai_chat.deepseek.deepseek_chat.txt",
+        "completed_at": "2026-06-11T13:51:05.187562Z"
+      },
+      "judge": {
+        "role": "judge",
+        "runner": "openai_chat",
+        "provider": "deepseek",
+        "model": "deepseek-chat",
+        "attempt": 1,
+        "raw_path": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/raw/judge.attempt1.openai_chat.deepseek.deepseek_chat.txt",
+        "completed_at": "2026-06-11T13:51:19.531802Z"
+      }
+    },
+    "outputs": {
+      "pro_json": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/structured/pro.json",
+      "anti_json": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/structured/anti.json",
+      "judge_draft_json": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/structured/judge.draft.json",
+      "debate_brief_markdown": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/debate_brief.md",
+      "judge_draft_markdown": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/judge.draft.md",
+      "final_summary_markdown": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/final_summary.md",
+      "human_decision_json": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/human_decision.json"
+    }
+  },
+  "pro": {
+    "role": "pro",
+    "verdict": "lean",
+    "market": "asian_handicap",
+    "selection": "Mexico -1.25",
+    "confidence": "low",
+    "summary": "墨西哥东道主+排名差150位+欧洲骨架阵容构成基本面支撑，-1.25亚盘有单源上行空间，但亚盘仅Matchbook一家定价且缺少跨市场三角验证，只能定lean。",
+    "facts": [
+      "墨西哥FIFA排名第15，南非第60，排名差45位",
+      "墨西哥东道主，17次世界杯参赛经验；南非3次参赛",
+      "墨西哥26人名单中欧洲联赛球员≥10人（Gimenez/AC Milan、Alvarez/Fenerbahce、Vasquez/Genoa、Fidalgo/Real Betis、Chavez/Dynamo Moscow等）",
+      "南非26人名单中仅3人效力欧洲联赛（Foster/Burnley、Sithole/Tondela、Mbokazi/Chicago Fire），其余均为南非本土联赛",
+      "H2H 20家机构共识：墨西哥胜均值1.396、平局4.475、南非胜8.435，opening至t_minus_3h主胜赔无跳变（均值1.3985→1.396）",
+      "亚盘-1.25仅Matchbook 1家报价：Mexico 2.08 / South Africa 1.90，opening同样1.9675→2.08微升",
+      "大小球2.5：t_minus_3h Over均值2.178、Under均值1.674，隐含概率Over 42.6% / Under 57.4%",
+      "t_minus_1d至t_minus_3h平局均值从4.373升至4.475（+0.102），报告标注'强跳变'，客胜微降",
+      "没有lineup_confirmed快照，无法确认首发阵容",
+      "无两队近期进球/失球详细数据，无法做近12m进球模型验证"
+    ],
+    "core_points": [
+      "主场效应+FIFA排名差+世界杯经验差构成墨西哥胜的三重基本面锚",
+      "墨西哥防守骨架配置强：Montes(191cm/Lokomotiv)+Alvarez(Fenerbahce)+Vasquez(Genoa)+Rangel(Guadalajara门将190cm)，世界杯首轮大概率低失球",
+      "H2H 20家机构定价高度一致（Mexico 1.33-1.45窄区间），无异象，说明市场对墨西哥胜的信心基底稳固",
+      "Under 2.5隐含概率57.4%暗示机构预期低总进球比赛，与墨西哥赢1球（2-0/1-0）的比分场景兼容",
+      "-1.25亚盘仅Matchbook报价且home端2.08>均衡线，若其他机构跟进定价，存在向1.85-1.95收敛的上行空间",
+      "Gimenez(AC Milan主力前锋25岁)+Jimenez(Fulham经验锋线35岁)构成高低搭配，对南非本土联赛后防线有碾压级锋线优势"
+    ],
+    "risks": [
+      "亚盘-1.25仅Matchbook单源报价，无跨机构三角验证，定价可信度不完整",
+      "世界杯首轮节奏偏慢历史规律：强队首战赢1球概率高于赢2球，-1.25有输半风险",
+      "南非在Broos执教下防守组织性提升，可能限制墨西哥净胜球数",
+      "南非Foster(Burnley)+Sithole(197cm中场)+Mokoena(Sundowns核心)并非零威胁",
+      "缺少阵容确认快照，首发阵容不确定性未消除",
+      "缺少两队近期交锋记录和近12m进球数据，基本面锚只有静态实力差，缺少动态验证"
+    ],
+    "data_quality": "partial",
+    "market_coverage": [
+      "h2h",
+      "totals",
+      "asian_handicap"
+    ],
+    "data_gaps": [
+      "亚盘仅Matchbook单源报价，无Bet365/Pinnacle等主流机构定价",
+      "无lineup_confirmed快照，首发未确认",
+      "无两队近12m进球/失球详细统计",
+      "无两队历史交锋记录",
+      "无南非近期热身赛/预选赛表现数据",
+      "opening快照46家机构缩减至t_minus_3h仅20家，覆盖下降"
+    ]
+  },
+  "anti": {
+    "role": "anti",
+    "verdict": "pass",
+    "market": "none",
+    "selection": "pass",
+    "confidence": "low",
+    "summary": "基本面差距被过度放大，亚盘单源且赔率无优势，首战冷门风险与机会成本均不支持下注。",
+    "facts": [
+      "墨西哥FIFA排名第15，南非第60",
+      "墨西哥东道主，南非非东道主",
+      "H2H主胜均值1.396，20家机构共识",
+      "亚盘-1.25仅Matchbook一家报价，home赔率2.08",
+      "大小球2.5隐含under概率57.4%",
+      "t_minus_3h平局均值4.475，较t_minus_1d的4.373上升0.102",
+      "南非仅3人效力欧洲联赛，墨西哥欧洲联赛球员≥10人",
+      "无lineup_confirmed快照，无近期交锋记录，无近12m进球数据"
+    ],
+    "core_points": [
+      "亚盘-1.25仅Matchbook单源报价，无任何主流机构（Bet365/Pinnacle）交叉验证，定价可信度极低，2.08的home赔率相比opening的1.9675反而上升，说明市场并未因基本面优势而压缩赔率",
+      "平局赔率从t_minus_1d的4.373跳升至t_minus_3h的4.475，涨幅+0.102，报告标注'强跳变'，这是市场对墨西哥赢球信心减弱的明确信号，与pro声称的'信心基底稳固'直接矛盾",
+      "世界杯首轮历史规律：强队首战赢1球概率高于赢2球，-1.25盘口意味着墨西哥需净胜2球才能全赢，净胜1球则输半，结合under 2.5概率57.4%指向低比分，墨西哥2-0/1-0场景下该盘口回报极差",
+      "南非FIFA排名60并非鱼腩，非洲杯冠军级防守组织（Broos执教），Foster（Burnley）和Mokoena（Sundowns）具备反击威胁，墨西哥首战面对密集防守+反击的难度被低估",
+      "机会成本：世界杯首轮小组赛有大量强弱对话，墨西哥-1.25的预期价值远不如其他场次更清晰的盘口，当前候选池中该场不值得分配筹码"
+    ],
+    "counter_to_pro": [
+      "pro称'H2H 20家机构定价高度一致，无异象'：事实是平局赔率从4.373跳升至4.475，这是明显的异象，说明市场对墨西哥赢球的信心在赛前3小时反而下降，pro忽略了这一关键信号",
+      "pro称'-1.25亚盘home端2.08>均衡线，存在上行空间'：2.08相比opening的1.9675是上升而非下降，且仅Matchbook一家报价，无法判断是真实价值还是流动性不足导致的虚高，'上行空间'的推断缺乏依据",
+      "pro称'墨西哥防守骨架配置强，世界杯首轮大概率低失球'：这是主观推断，无任何近期防守数据支撑，且南非Foster（Burnley英冠前锋）具备个人能力，不能假设零封"
+    ],
+    "risks": [
+      "反方立场的主要风险是墨西哥确实实力碾压且主场大胜，若出现3-0/4-0则错过-1.25的高赔机会",
+      "若其他主流机构在临场前跟进-1.25并压缩赔率至1.85-1.95，则当前判断可能过于保守",
+      "南非首战经验不足+客场压力可能导致崩盘，但证据中无任何数据支持这一场景的概率高于正常水平"
+    ],
+    "data_quality": "partial",
+    "market_coverage": [
+      "h2h",
+      "asian_handicap",
+      "totals"
+    ],
+    "data_gaps": [
+      "亚盘仅Matchbook单源，无Bet365/Pinnacle定价",
+      "无lineup_confirmed快照，首发未确认",
+      "无两队近12m进球/失球详细统计",
+      "无历史交锋记录",
+      "无南非近期热身赛/预选赛表现数据",
+      "opening至t_minus_3h机构数从46降至20，覆盖下降"
+    ]
+  },
+  "judge": {
+    "role": "judge",
+    "verdict": "lean",
+    "market": "h2h",
+    "selection": "Mexico 胜",
+    "confidence": "low",
+    "summary": "墨西哥基本面优势明确，但亚盘单源、平赔跳变、首战冷门历史及机会成本均不支持下注，方向倾向墨西哥胜但 bet_grade=pass。",
+    "directional_pick": "主胜",
+    "directional_score": 55,
+    "bet_grade": "pass",
+    "accepted_pro_points": [
+      "墨西哥FIFA排名15 vs 南非60，东道主+17次世界杯经验 vs 3次，构成静态实力差",
+      "H2H 20家机构主胜均值1.396，区间1.33-1.45窄幅，市场对墨西哥胜的共识基础存在",
+      "墨西哥欧洲联赛球员≥10人，锋线Gimenez(AC米兰)+Jimenez(Fulham)对南非本土防线有优势"
+    ],
+    "accepted_anti_points": [
+      "亚盘-1.25仅Matchbook单源报价，home赔率2.08较opening的1.9675上升，无主流机构交叉验证，定价可信度极低",
+      "平局赔率从t_minus_1d的4.373跳升至t_minus_3h的4.475(+0.102)，报告标注'强跳变'，是市场对墨西哥赢球信心减弱的明确信号",
+      "世界杯首轮强队赢1球概率高于赢2球，-1.25盘口净胜2球才能全赢，结合under 2.5概率57.4%指向低比分，盘口回报结构不利",
+      "南非Foster(Burnley)+Mokoena(Sundowns)具备反击威胁，墨西哥首战面对密集防守难度被低估",
+      "机会成本：世界杯首轮候选池有大量更清晰盘口的强弱对话，本场不值得分配筹码"
+    ],
+    "rejected_points": [
+      "Pro称'-1.25亚盘home端2.08>均衡线，存在上行空间'：2.08较opening上升且仅单源，无法判断是价值还是流动性虚高，该推断无证据支撑",
+      "Pro称'墨西哥防守骨架配置强，首战大概率低失球'：无近期防守数据支撑，属主观推断",
+      "Anti称'南非非洲杯冠军级防守组织'：证据中无南非近期比赛数据或非洲杯表现记录，无法验证"
+    ],
+    "final_risks": [
+      "墨西哥实力碾压且主场大胜(3-0/4-0)的可能性真实存在，若发生则错过-1.25高赔机会",
+      "临场前若主流机构跟进-1.25并压缩赔率至1.85-1.95，当前判断可能过于保守",
+      "南非首战经验不足+客场压力可能导致崩盘，但无数据支持该场景概率高于正常水平"
+    ],
+    "directional_score_rationale": "分数55：仅依赖静态基本面（排名、东道主、经验、阵容）支撑方向，但缺乏动态证据（近期赛果、首发确认、赛前赔率轨迹、战术对位数据）。平赔跳变和亚盘单源导致证据质量扣分，无法超过55。",
+    "anti_direction_case": "最强反方向路径：平局或南非受让不败。平赔跳变+0.102是市场对墨西哥赢球信心下降的明确信号；under 2.5概率57.4%指向低比分，1-1或0-0场景下墨西哥-1.25输全；南非防守组织+反击威胁可能偷得平局。",
+    "risk_veto_assessment": "触发Anti风险veto：亚盘单源无交叉验证、平赔跳变、首战冷门历史、机会成本过高，四项风险叠加导致bet_grade从lean降为pass。",
+    "opportunity_cost_note": "世界杯首轮候选池存在大量更清晰盘口的强弱对话（如其他场次有主流机构亚盘多源定价、赔率轨迹稳定），本场证据质量partial且盘口结构不利，不值得占用投注注意力。",
+    "execution_action": "pass_bet",
+    "evidence_freshness_verdict": "fresh",
+    "data_quality": "partial",
+    "market_coverage": [
+      "h2h",
+      "asian_handicap",
+      "totals"
+    ],
+    "data_gaps": [
+      "亚盘仅Matchbook单源报价，无Bet365/Pinnacle等主流机构定价",
+      "无lineup_confirmed快照，首发未确认",
+      "无两队近12m进球/失球详细统计",
+      "无历史交锋记录",
+      "无南非近期热身赛/预选赛表现数据",
+      "opening至t_minus_3h机构数从46降至20，覆盖下降"
+    ]
+  },
+  "pro_meta": {
+    "role": "pro",
+    "runner": "hermes",
+    "provider": "xiaomi",
+    "model": "mimo-v2.5-pro",
+    "attempt": 1,
+    "raw_path": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/raw/pro.attempt1.hermes.xiaomi.mimo_v2_5_pro.txt",
+    "completed_at": "2026-06-11T13:50:50.803215Z"
+  },
+  "anti_meta": {
+    "role": "anti",
+    "runner": "openai_chat",
+    "provider": "deepseek",
+    "model": "deepseek-chat",
+    "attempt": 1,
+    "raw_path": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/raw/anti.attempt1.openai_chat.deepseek.deepseek_chat.txt",
+    "completed_at": "2026-06-11T13:51:05.187562Z"
+  },
+  "judge_meta": {
+    "role": "judge",
+    "runner": "openai_chat",
+    "provider": "deepseek",
+    "model": "deepseek-chat",
+    "attempt": 1,
+    "raw_path": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/mexico_south_africa_2026_06_11t19_00_00z/raw/judge.attempt1.openai_chat.deepseek.deepseek_chat.txt",
+    "completed_at": "2026-06-11T13:51:19.531802Z"
+  },
+  "human_decision": {
+    "decided_at": "2026-06-12",
+    "decision": "Mexico -1.25 lean(比线上 Judge 更偏墨西哥)",
+    "scoreline_lean": "2-0 / 3-0,激进 3-1",
+    "rationale": "线上 Judge 拍 Under 2.5 / pass 的主因是认为亚盘单源、覆盖不足、无首发确认;经核验 -1.25 并非单一来源,该降权需上修。东道主、实力差、阵容层级、南非缺强队检验都站在墨西哥这边。不把小球当主方向:墨西哥早进球会把比赛打开,-1.25 与 Under 2.5 两个剧本互相打架。",
+    "risks": "揭幕战慢热、南非低位死守,卡在 1-0 或 2-0 这种赢球但盘口难受的区间。",
+    "ranking": "墨西哥 -1.25 lean > 墨西哥胜 > 韩国捷克 pass"
+  }
+}

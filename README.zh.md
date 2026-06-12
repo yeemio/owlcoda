@@ -162,6 +162,7 @@ owlcoda --help                   # 完整命令列表
 - 官网：[owlcoda.com](https://owlcoda.com)
 - Issues 与 PR：[github.com/yeemio/owlcoda/issues](https://github.com/yeemio/owlcoda/issues)
 - 贡献指南：[CONTRIBUTING.md](CONTRIBUTING.md) · 安全：[SECURITY.md](SECURITY.md)
+- 示例项目：[世界杯预测器](demo/worldcup-predictor/README.md) —— 由 OwlCoda 编排的五角色模型辩论（侦查、视觉、正方、反方、裁判）
 
 ## 开发
 

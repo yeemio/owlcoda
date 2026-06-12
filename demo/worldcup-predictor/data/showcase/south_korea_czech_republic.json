@@ -1,0 +1,297 @@
+{
+  "id": "south_korea_czech_republic",
+  "match": {
+    "home": "South Korea",
+    "away": "Czech Republic",
+    "commence": "2026-06-12T02:00:00Z"
+  },
+  "origin": "hermes-football world-cup-2026-md1 (vm-engineering), real production debate",
+  "replay": true,
+  "run_manifest": {
+    "generated_at": "2026-06-11T12:59:09.118081Z",
+    "task_root": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1",
+    "match_key": "South Korea::Czech Republic::2026-06-12T02:00:00Z",
+    "role_chains_config": "/home/you/projects/hermes-football/workspace/debate_model_chains.json",
+    "configured_role_chains": {
+      "pro": [
+        {
+          "runner": "hermes",
+          "provider": "xiaomi",
+          "model": "mimo-v2.5-pro"
+        },
+        {
+          "runner": "openai_chat",
+          "provider": "deepseek",
+          "model": "deepseek-chat",
+          "api_key_env": "DEEPSEEK_API_KEY",
+          "base_url_env": "DEEPSEEK_BASE_URL",
+          "default_base_url": "https://api.deepseek.com/v1"
+        },
+        {
+          "runner": "hermes",
+          "provider": "kimi-coding",
+          "model": "kimi-for-coding"
+        }
+      ],
+      "anti": [
+        {
+          "runner": "openai_chat",
+          "provider": "deepseek",
+          "model": "deepseek-chat",
+          "api_key_env": "DEEPSEEK_API_KEY",
+          "base_url_env": "DEEPSEEK_BASE_URL",
+          "default_base_url": "https://api.deepseek.com/v1"
+        },
+        {
+          "runner": "hermes",
+          "provider": "xiaomi",
+          "model": "mimo-v2.5-pro"
+        },
+        {
+          "runner": "hermes",
+          "provider": "kimi-coding",
+          "model": "kimi-for-coding"
+        }
+      ],
+      "judge": [
+        {
+          "runner": "openai_chat",
+          "provider": "deepseek",
+          "model": "deepseek-chat",
+          "api_key_env": "DEEPSEEK_API_KEY",
+          "base_url_env": "DEEPSEEK_BASE_URL",
+          "default_base_url": "https://api.deepseek.com/v1"
+        },
+        {
+          "runner": "hermes",
+          "provider": "xiaomi",
+          "model": "mimo-v2.5-pro"
+        }
+      ]
+    },
+    "evidence_file": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/evidence.json",
+    "evidence_brief_file": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/evidence_brief.md",
+    "roles": {
+      "pro": {
+        "role": "pro",
+        "runner": "hermes",
+        "provider": "xiaomi",
+        "model": "mimo-v2.5-pro",
+        "attempt": 1,
+        "raw_path": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/raw/pro.attempt1.hermes.xiaomi.mimo_v2_5_pro.txt",
+        "completed_at": "2026-06-11T12:58:43.910062Z"
+      },
+      "anti": {
+        "role": "anti",
+        "runner": "openai_chat",
+        "provider": "deepseek",
+        "model": "deepseek-chat",
+        "attempt": 1,
+        "raw_path": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/raw/anti.attempt1.openai_chat.deepseek.deepseek_chat.txt",
+        "completed_at": "2026-06-11T12:58:56.318184Z"
+      },
+      "judge": {
+        "role": "judge",
+        "runner": "openai_chat",
+        "provider": "deepseek",
+        "model": "deepseek-chat",
+        "attempt": 1,
+        "raw_path": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/raw/judge.attempt1.openai_chat.deepseek.deepseek_chat.txt",
+        "completed_at": "2026-06-11T12:59:09.117448Z"
+      }
+    },
+    "outputs": {
+      "pro_json": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/structured/pro.json",
+      "anti_json": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/structured/anti.json",
+      "judge_draft_json": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/structured/judge.draft.json",
+      "debate_brief_markdown": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/debate_brief.md",
+      "judge_draft_markdown": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/judge.draft.md",
+      "final_summary_markdown": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/final_summary.md",
+      "human_decision_json": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/human_decision.json"
+    }
+  },
+  "pro": {
+    "role": "pro",
+    "verdict": "pass",
+    "market": "none",
+    "selection": "无明确单边方向；最不差候选为 Draw @ 3.00（drawish_or_longshot 区间）",
+    "confidence": "low",
+    "summary": "H2H三快照均价几乎锁死（home 2.62→2.67, draw 3.08→3.01, away 2.83→2.83），20家bookmaker中位数收敛度极高，无机构给出明确单边定价偏移；亚盘仅Matchbook一家提供0.0盘（1.94/2.04），样本不足无法做三角验证；大小球2.5盘under_prob稳定55-56%，但只有5家报价，无开盘到赛前的趋势跳变证据；阵容确认快照缺失，无法评估首发战术形态；整体缺乏支持下注方向的强催化剂，pass。",
+    "facts": [
+      "opening（2026-06-10T14:44Z）：18家bookmaker，home median 2.61, draw median 3.05, away median 2.80；亚盘无数据；大小球2.5 over median 2.12, under median 1.70，仅4家报价",
+      "t_minus_1d（2026-06-11T05:07Z）：20家bookmaker，home median 2.62, draw median 3.025, away median 2.80；亚盘0.0盘仅Matchbook（1.94/2.04）；大小球2.5 over median 2.10, under median 1.70，5家报价",
+      "t_minus_3h（2026-06-11T12:53Z）：20家bookmaker，home median 2.65, draw median 3.0, away median 2.80；亚盘0.0盘仅Matchbook（1.94/2.04）；大小球2.5 over median 2.14, under median 1.68，5家报价",
+      "opening→t_minus_3h最大跳幅0.030（home +0.03），属常规微调，未触发anomaly阈值（≥0.05）",
+      "draw均价从3.075降至3.0085（-0.067），draw implied prob从32.5%升至33.2%，为三方向中变动最大的单项",
+      "亚盘0.0盘在opening和t_minus_1d均无数据，仅t_minus_3h出现Matchbook单源报价，无cross-bookmaker收敛证据",
+      "大小球2.5盘over_prob从44.5%降至44.0%，under_prob从55.5%升至56.0%，方向一致但幅度极小",
+      "South Korea FIFA排名25，Czechia排名41；韩国10次世界杯参赛，捷克9次",
+      "韩国阵容核心：孙兴慜（33岁/MLS LAFC）、金玟哉（拜仁）、黄仁范（费耶诺德）、李刚仁（PSG）、黄喜灿（狼队）",
+      "捷克阵容核心：希克（勒沃库森）、赫洛泽克（霍芬海姆）、科瓦尔门将（PSV）、达里达（35岁/赫拉德茨）",
+      "无lineup_confirmed快照——所有快照均在赛前75-45分钟窗口之外，首发阵容未确认",
+      "无两队近5场战绩、进球数据、伤停状态等基本面数据层支撑"
+    ],
+    "core_points": [
+      "Draw @ 3.00是三个方向中隐含价值边际最明显的候选：opening draw均价3.075（隐含32.5%）→ t_minus_3h均价3.009（隐含33.2%），机构微幅收紧平局定价，表明对'实力接近无明确赢家'判断的共识在增强",
+      "世界杯小组赛首轮历来平局率偏高（历史约25-28%），两队均为非东道主、非种子强队，实力档位接近，比赛节奏可能偏保守",
+      "韩国阵容欧洲五大联赛球员密度高于捷克（金玟哉拜仁、李刚仁PSG、黄仁范费耶诺德、黄喜灿狼队），但孙兴慜33岁且在MLS，攻击力上限可能受限；捷克希克+赫洛泽克组合有德甲持续输出，但缺乏顶级豪门核心",
+      "Under 2.5 @ 1.68-1.70在5家报价中定价方向一致（under_prob 56%），首轮小组赛防守强度通常高于后续轮次，若两队都不敢冒进则0-0或1-1概率不低"
+    ],
+    "risks": [
+      "亚盘仅Matchbook单源报价（0.0盘1.94/2.04），无法完成欧赔-亚盘-大小球三角验证，这是最大的数据完整性缺陷",
+      "无lineup_confirmed快照，无法评估首发阵容和战术形态，所有阵容推断均基于大名单而非首发11人",
+      "Draw @ 3.00的隐含概率33%意味着67%的概率亏损，单场平局投注方差极高，不适合重仓",
+      "韩国若孙兴慜+李刚仁+黄喜灿同时首发且状态在线，前场创造力可能压倒捷克中后场，home方向的2.65并非无理定价",
+      "世界杯首轮比赛心态变量不可量化——两队可能都以不输为首要目标（支持draw），也可能一方主动抢攻打破平衡",
+      "大小球2.5报价仅5家，且over价格从2.12升至2.14-2.20（微幅升水），机构对进球数没有给出明确信号",
+      "此场为A组首轮，与同组其他比赛（美国/沙特等）存在小组出线博弈关联，战意可能受同组赛果影响但当前无法提前量化"
+    ],
+    "data_quality": "partial",
+    "market_coverage": [
+      "h2h（20家bookmaker，opening/t_minus_1d/t_minus_3h三快照完整）",
+      "totals（5家bookmaker报价2.5盘，三快照均有但样本偏小）",
+      "asian_handicap（仅Matchbook单源0.0盘，仅t_minus_3h出现，无法做cross-bookmaker验证）"
+    ],
+    "data_gaps": [
+      "lineup_confirmed快照缺失——开球时间为2026-06-12T02:00Z，当前为赛前约13小时，尚未进入75-45分钟自动窗口",
+      "亚盘报价严重不足（仅1家bookmaker），无法完成欧赔-亚盘联动分析",
+      "无两队近5场战绩、进失球统计、伤停名单等基本面数据层",
+      "无correct_score市场报价",
+      "无parlay组合市场报价",
+      "大小球报价仅5家，且无1.5/3.0等其他盘口线交叉验证"
+    ]
+  },
+  "anti": {
+    "role": "anti",
+    "verdict": "pass",
+    "market": "none",
+    "selection": "无方向",
+    "confidence": "low",
+    "summary": "数据质量partial，亚盘单源、大小球样本小、无首发确认，缺乏任何可下注的强信号，与Pro一致pass。",
+    "facts": [
+      "三快照H2H中位数home 2.61→2.62→2.65，draw 3.05→3.025→3.0，away 2.80→2.80→2.80，最大变动0.03，属常规微调",
+      "亚盘0.0盘仅t_minus_3h出现Matchbook单源报价（1.94/2.04），opening和t_minus_1d均无数据",
+      "大小球2.5盘仅5家报价，under_prob稳定55-56%，但over价格从2.12升至2.14-2.20，微幅升水",
+      "无lineup_confirmed快照，所有阵容推断基于大名单而非首发11人",
+      "韩国FIFA排名25，捷克41，但排名差16位在世界杯首轮非决定性差距",
+      "韩国核心孙兴慜33岁效力MLS，攻击力上限存疑；捷克希克+赫洛泽克有德甲持续输出但无顶级豪门核心"
+    ],
+    "core_points": [
+      "Pro自身verdict为pass，无下注方向，anti无需反击，但需指出Pro论点中draw @ 3.00和under 2.5的支撑证据不足",
+      "draw implied prob从32.5%升至33.2%仅0.7个百分点，在20家bookmaker中位数收敛下属噪声级变动，不足以构成价值信号",
+      "under 2.5 @ 1.68-1.70的56%隐含概率对应-127美式赔率，但仅5家报价且无1.5/3.0交叉验证，定价可靠性存疑",
+      "世界杯首轮平局率历史25-28%是全局统计，不适用于单场；且A组存在美国/沙特等对手，两队战意受同组赛果影响无法提前量化"
+    ],
+    "counter_to_pro": [
+      "Pro称draw @ 3.00是隐含价值边际最明显的候选，但draw均价从3.075降至3.0085仅-0.067，在20家bookmaker中位数收敛下属噪声级变动，且无亚盘或大小球联动验证，不足以构成价值信号",
+      "Pro称under 2.5定价方向一致（under_prob 56%），但仅5家报价且over价格微幅升水（2.12→2.14-2.20），机构对进球数无明确信号，且无1.5/3.0盘口交叉验证，样本太小无法排除单源偏差"
+    ],
+    "risks": [
+      "若坚持反对任何下注，可能错过draw或under在赛前最后时刻因首发确认而出现的价值窗口",
+      "Pro已pass，anti若也pass则无操作，但需警惕赛前75-45分钟窗口内若出现lineup_confirmed快照且韩国全主力首发，home方向可能获得支撑"
+    ],
+    "data_quality": "partial",
+    "market_coverage": [
+      "h2h（20家bookmaker，三快照完整）",
+      "totals（5家bookmaker报价2.5盘，样本偏小）",
+      "asian_handicap（仅Matchbook单源0.0盘，仅t_minus_3h出现）"
+    ],
+    "data_gaps": [
+      "lineup_confirmed快照缺失",
+      "亚盘报价严重不足（仅1家bookmaker）",
+      "无两队近5场战绩、进失球统计、伤停名单等基本面数据层",
+      "无correct_score市场报价",
+      "无parlay组合市场报价",
+      "大小球报价仅5家，且无1.5/3.0等其他盘口线交叉验证"
+    ]
+  },
+  "judge": {
+    "role": "judge",
+    "verdict": "pass",
+    "market": "none",
+    "selection": "无明确下注方向；最不差方向为平局",
+    "confidence": "low",
+    "summary": "数据质量partial，亚盘单源、大小球样本小、无首发确认，缺乏任何可下注的强信号，与Pro/Anti一致pass。",
+    "directional_pick": "draw",
+    "directional_score": 53,
+    "bet_grade": "pass",
+    "accepted_pro_points": [
+      "H2H三快照中位数收敛，无机构给出明确单边定价偏移",
+      "draw均价从3.075降至3.0085，为三方向中变动最大的单项",
+      "大小球2.5盘under_prob稳定55-56%",
+      "无lineup_confirmed快照，无法评估首发战术形态"
+    ],
+    "accepted_anti_points": [
+      "draw implied prob变动仅0.7个百分点，属噪声级变动",
+      "under 2.5仅5家报价且无1.5/3.0交叉验证，定价可靠性存疑",
+      "世界杯首轮平局率历史统计不适用于单场",
+      "Pro自身verdict为pass，无下注方向"
+    ],
+    "rejected_points": [
+      "Pro称draw @ 3.00是隐含价值边际最明显的候选——但证据显示变动幅度极小且无亚盘/大小球联动验证，不足以构成价值信号",
+      "Pro称under 2.5定价方向一致——但仅5家报价且over价格微幅升水，样本太小无法排除单源偏差"
+    ],
+    "final_risks": [
+      "亚盘仅Matchbook单源报价（0.0盘1.94/2.04），无法完成欧赔-亚盘-大小球三角验证",
+      "无lineup_confirmed快照，所有阵容推断基于大名单而非首发11人",
+      "draw @ 3.00隐含概率33%意味着67%的概率亏损，单场平局投注方差极高",
+      "世界杯首轮比赛心态变量不可量化——两队可能都以不输为首要目标，也可能一方主动抢攻打破平衡",
+      "大小球2.5报价仅5家，且over价格从2.12升至2.14-2.20（微幅升水），机构对进球数没有给出明确信号"
+    ],
+    "directional_score_rationale": "证据质量partial且freshness为fresh（所有快照均在赛前），但亚盘单源、大小球样本小、无首发确认，导致方向证据层级不足。H2H三快照中位数收敛，draw均价微降0.067，但变动幅度在20家bookmaker中属噪声级。韩国FIFA排名25 vs 捷克41，阵容纸面实力略优，但孙兴慜33岁效力MLS攻击力上限存疑，且无近5场战绩/伤停等基本面数据支撑。综合只能给53分，表示极微弱的平局倾向，不足以支撑任何下注。",
+    "anti_direction_case": "最强反方向为韩国主胜（home @ 2.65）：韩国阵容欧洲五大联赛球员密度高于捷克（金玟哉拜仁、李刚仁PSG、黄仁范费耶诺德、黄喜灿狼队），若孙兴慜+李刚仁+黄喜灿同时首发且状态在线，前场创造力可能压倒捷克中后场。FIFA排名差16位在世界杯首轮并非决定性差距，但韩国主场（虽非东道主但亚洲球队）可能获得额外支持。",
+    "risk_veto_assessment": "Anti指出数据质量partial、亚盘单源、大小球样本小、无首发确认，这些风险点全部成立。Pro自身verdict为pass，无下注方向，因此Anti的风险veto未触发主动否决，但数据缺陷已导致bet_grade=pass。",
+    "opportunity_cost_note": "本场为世界杯A组首轮，候选池中存在其他数据质量更高（亚盘多源、大小球交叉验证完整、有首发确认）的比赛。本场数据缺陷明显，不值得占用投注注意力，建议watch_trigger等待赛前75-45分钟窗口的lineup_confirmed快照。",
+    "execution_action": "pass_bet",
+    "evidence_freshness_verdict": "fresh",
+    "data_quality": "partial",
+    "market_coverage": [
+      "h2h（20家bookmaker，三快照完整）",
+      "totals（5家bookmaker报价2.5盘，样本偏小）",
+      "asian_handicap（仅Matchbook单源0.0盘，仅t_minus_3h出现）"
+    ],
+    "data_gaps": [
+      "lineup_confirmed快照缺失",
+      "亚盘报价严重不足（仅1家bookmaker）",
+      "无两队近5场战绩、进失球统计、伤停名单等基本面数据层",
+      "无correct_score市场报价",
+      "无parlay组合市场报价",
+      "大小球报价仅5家，且无1.5/3.0等其他盘口线交叉验证"
+    ]
+  },
+  "pro_meta": {
+    "role": "pro",
+    "runner": "hermes",
+    "provider": "xiaomi",
+    "model": "mimo-v2.5-pro",
+    "attempt": 1,
+    "raw_path": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/raw/pro.attempt1.hermes.xiaomi.mimo_v2_5_pro.txt",
+    "completed_at": "2026-06-11T12:58:43.910062Z"
+  },
+  "anti_meta": {
+    "role": "anti",
+    "runner": "openai_chat",
+    "provider": "deepseek",
+    "model": "deepseek-chat",
+    "attempt": 1,
+    "raw_path": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/raw/anti.attempt1.openai_chat.deepseek.deepseek_chat.txt",
+    "completed_at": "2026-06-11T12:58:56.318184Z"
+  },
+  "judge_meta": {
+    "role": "judge",
+    "runner": "openai_chat",
+    "provider": "deepseek",
+    "model": "deepseek-chat",
+    "attempt": 1,
+    "raw_path": "/home/you/projects/hermes-football/deliverables/jingcai_system/tasks/world-cup-2026-md1/debates/south_korea_czech_republic_2026_06_12t02_00_00z/raw/judge.attempt1.openai_chat.deepseek.deepseek_chat.txt",
+    "completed_at": "2026-06-11T12:59:09.117448Z"
+  },
+  "human_decision": {
+    "decided_at": "2026-06-12",
+    "decision": "pass(认可线上 Judge 的保守结论)",
+    "scoreline_lean": "",
+    "rationale": "韩国纸面强一点,但盘面五五开;平赔微降只算\"有一点点平局味\",不够下注。捷克不弱,韩国热身赛抗强队表现存疑,没首发确认之前没有安全边际。非要看只能轻看平局或小球,不进主单。",
+    "risks": "",
+    "ranking": "墨西哥 -1.25 lean > 墨西哥胜 > 韩国捷克 pass"
+  }
+}

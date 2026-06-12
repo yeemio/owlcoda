@@ -176,6 +176,7 @@ published versions keep the license they were published under.
 - Website: [owlcoda.com](https://owlcoda.com)
 - Issues & PRs: [github.com/yeemio/owlcoda/issues](https://github.com/yeemio/owlcoda/issues)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · Security: [SECURITY.md](SECURITY.md)
+- Demo: [World Cup predictor](demo/worldcup-predictor/README.md) — a five-role model debate (recon, vision, pro, anti, judge) orchestrated through OwlCoda
 
 ## Development
 
