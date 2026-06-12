@@ -220,7 +220,19 @@ function mergeContentBlocks(
   const combinedTextParts = [...aText.map(t => t.text), ...bText.map(t => t.text)].filter(s => s.length > 0)
   const merged: AnthropicContentBlock[] = [...aOther, ...bOther]
   if (combinedTextParts.length > 0) {
-    merged.unshift({ type: 'text', text: combinedTextParts.join('\n\n') })
+    const textBlock: AnthropicContentBlock = { type: 'text', text: combinedTextParts.join('\n\n') }
+    // The Anthropic content contract requires tool_result blocks to LEAD the
+    // user message that answers a tool_use. When the merged non-text content
+    // carries any tool_result (a queued/appended user text merging into a
+    // tool_result turn — the 2026-06-12 deterministic-400 incident), the
+    // text must follow the results, not unshift to the front. For every other
+    // case (assistant text-before-tool_use, pure-text merges) keep text
+    // leading.
+    if (merged.some(block => block.type === 'tool_result')) {
+      merged.push(textBlock)
+    } else {
+      merged.unshift(textBlock)
+    }
   }
   return merged
 }

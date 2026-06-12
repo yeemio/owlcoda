@@ -126,7 +126,6 @@ import {
 import {
   handleSlashCommand,
   parseApiError,
-  safeRender,
   SLASH_COMMANDS,
   type ApproveState,
   type ReplOptions,
@@ -158,7 +157,7 @@ import {
   shouldRouteToolEndFooterOnly,
   shouldRouteToolStartFooterOnly,
 } from './tui/message.js'
-import { recordFullToolOutput, renderNarration, renderNotice, renderTurnFooter } from './tui/chrome.js'
+import { dumpRenderIncident, recordFullToolOutput, recordRawMdChunk, renderNarration, renderNotice, renderTurnFooter } from './tui/chrome.js'
 import { stripAnsi } from './tui/colors.js'
 import {
   renderBashPermission,
@@ -1019,6 +1018,21 @@ function NativeReplApp({
     // No manual scroll management needed here.
   }, [])
 
+  // safeRender variant that persists first-hand evidence when the markdown
+  // render path throws: the silent fallback prints RAW markdown, which is
+  // exactly the corruption users report — make it leave a trace.
+  const safeRenderWithIncident = useCallback((fn: () => string, fallback = ''): string => {
+    try {
+      return fn()
+    } catch (err) {
+      const incidentPath = dumpRenderIncident(err)
+      if (incidentPath) {
+        appendTranscript(renderNotice(`markdown render error — incident saved: ${incidentPath}`, 'warning'))
+      }
+      return fallback
+    }
+  }, [appendTranscript])
+
   const flushLiveResponse = useCallback((): void => {
     const buffered = liveResponseRef.current.trimEnd()
     if (!buffered) return
@@ -1046,10 +1060,10 @@ function NativeReplApp({
       composeState: composeStateRef.current,
       renderer: mdRendererRef.current,
       appendRendered: appendRenderedLiveResponse,
-      safeRender,
+      safeRender: safeRenderWithIncident,
     })
     flushLiveResponse()
-  }, [appendRenderedLiveResponse, flushLiveResponse])
+  }, [appendRenderedLiveResponse, flushLiveResponse, safeRenderWithIncident])
 
   const syncPendingRetry = useCallback((
     canRetry: boolean,
@@ -1282,7 +1296,11 @@ function NativeReplApp({
         }
         setSpinnerState(null)
         const composed = composeAssistantChunk(scrubbed, composeStateRef.current)
-        const rendered = safeRender(() => mdRendererRef.current.push(composed), composed)
+        // Render incident capture: keep the raw chunk so a render-path throw
+        // (which falls back to printing RAW markdown) leaves first-hand
+        // evidence instead of a silent visual mess.
+        recordRawMdChunk(composed)
+        const rendered = safeRenderWithIncident(() => mdRendererRef.current.push(composed), composed)
         if (!rendered) return
         // Streaming progressive commit. mdRenderer.push returns only complete
         // \n-terminated logical lines (the partial in-progress line stays

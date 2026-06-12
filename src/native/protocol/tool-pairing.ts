@@ -92,6 +92,35 @@ export function stripOrphanToolUseBlocks(messages: WireMessageLike[]): {
 }
 
 /**
+ * Reorder any user message whose blocks lead with non-tool_result content
+ * ahead of tool_result blocks so the tool_results come first — the
+ * Anthropic contract for the user turn answering a tool_use. Returns the
+ * original array when every message already complies (zero allocation on
+ * the clean path). This is the send-chokepoint backstop for the
+ * 2026-06-12 ordering bug: even if some path bypasses
+ * prepareTurnsForRequest, the wire body is still contract-correct.
+ */
+export function reorderToolResultsFirst(messages: WireMessageLike[]): {
+  messages: WireMessageLike[]
+  reorderedCount: number
+} {
+  let reorderedCount = 0
+  const out = messages.map((message) => {
+    if (message.role !== 'user' || !Array.isArray(message.content)) return message
+    const blocks = message.content as BlockLike[]
+    const firstResult = blocks.findIndex((b) => b.type === 'tool_result')
+    if (firstResult <= 0) return message // no results, or already leading
+    const hasLeadingNonResult = blocks.slice(0, firstResult).some((b) => b.type !== 'tool_result')
+    if (!hasLeadingNonResult) return message
+    const results = blocks.filter((b) => b.type === 'tool_result')
+    const rest = blocks.filter((b) => b.type !== 'tool_result')
+    reorderedCount++
+    return { ...message, content: [...results, ...rest] }
+  })
+  return reorderedCount === 0 ? { messages, reorderedCount: 0 } : { messages: out, reorderedCount }
+}
+
+/**
  * Content-free shape summary for diagnostics: total count plus the tail of
  * the message list as `[index]role: blockType(,blockType…)` lines, with
  * tool ids (never text) attached so pairing can be reconciled offline.

@@ -21,7 +21,7 @@ import { computeAdaptiveTimeoutMs } from '../middleware/adaptive-timeout.js'
 import { buildAnthropicMessagesUrl } from '../url-normalize.js'
 import type { AskUserQuestionOpts, ToolProgressEvent } from './tools/types.js'
 import { buildRequest, sanitizeConversationTurns } from './protocol/request.js'
-import { stripOrphanToolUseBlocks } from './protocol/tool-pairing.js'
+import { reorderToolResultsFirst, stripOrphanToolUseBlocks } from './protocol/tool-pairing.js'
 import { consumeStream } from './protocol/stream.js'
 import { parseResponse } from './protocol/response.js'
 import { ToolDispatcher, type ToolExecutionResult } from './dispatch.js'
@@ -3519,6 +3519,20 @@ async function sendRequest(
       `Outbound request repaired: stripped ${orphanGuard.strippedIds.length} orphan tool_use block(s) ` +
       `(${orphanGuard.strippedIds.join(', ')}) that would 400 upstream. This indicates a request-builder ` +
       `bug — the daemon log carries the message shape for this request.`,
+    )
+  }
+  // 2026-06-12 tool_result-ordering backstop: a user turn answering a
+  // tool_use must LEAD with tool_result blocks. A queued/appended user text
+  // merging into a tool_result turn put text first and 400'd deterministically
+  // (fixed at source in mergeContentBlocks; this is the send-chokepoint net
+  // for any other path that bypasses prepareTurnsForRequest).
+  const orderGuard = reorderToolResultsFirst(request.messages)
+  if (orderGuard.reorderedCount > 0) {
+    request = { ...request, messages: orderGuard.messages as AnthropicMessagesRequest['messages'] }
+    opts.callbacks?.onNotice?.(
+      `Outbound request repaired: moved tool_result blocks ahead of text in ` +
+      `${orderGuard.reorderedCount} user turn(s) to satisfy the tool-pairing contract. ` +
+      `This indicates a request-builder bug — the daemon log carries the message shape.`,
     )
   }
   // Normalize the base before appending `/v1/messages` so a programmatic

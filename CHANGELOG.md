@@ -2,6 +2,27 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.3] — 2026-06-12
+
+Interrupt-recovery and rendering hotfix.
+
+### Fixed
+
+- Interrupting a tool loop and submitting a new message no longer poisons the
+  session with deterministic 400s: merged consecutive user turns now keep
+  `tool_result` blocks first, and an outbound wire guard re-orders any
+  non-conforming body as a last line of defense.
+- IME pre-edit no longer renders one row above the composer: the declared
+  cursor origin is clamped to the terminal's physical bottom row.
+- Ordered-list numbering resets at headings, code fences, and tables, and
+  honors an explicit start number — long CJK documents no longer continue
+  a previous list's counter.
+
+### Added
+
+- Render-incident capture: on a render-path throw, the raw-chunk ring buffer
+  is persisted to a dump for diagnosis.
+
 ## [0.15.2] — 2026-06-11
 
 Transcript chrome, compaction-resilience, and protocol-hygiene release.

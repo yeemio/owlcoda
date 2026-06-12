@@ -744,6 +744,10 @@ export default class Ink {
     // after remount, or scrolled out of view), it won't be in the cache
     // and no move is emitted.
     const decl = this.cursorDeclaration;
+    if (decl !== null && process.env['OWLCODA_DEBUG_CURSOR']) {
+      const r = nodeCache.get(decl.node)
+      logForDebugging(`declared-cursor: rel=(${decl.relativeX},${decl.relativeY}) rect=${r ? `(${r.x},${r.y} ${r.width}x${r.height})` : 'MISS'} frameCursor=(${this.frontFrame.cursor.x},${this.frontFrame.cursor.y}) screenH=${this.frontFrame.screen.height}`)
+    }
     const rect = decl !== null ? nodeCache.get(decl.node) : undefined;
     const target = decl !== null && rect !== undefined ? {
       x: rect.x + decl.relativeX,
@@ -783,9 +787,17 @@ export default class Ink {
           // After the diff (or preamble), cursor is at frame.cursor. If no
           // diff AND previously parked, it's still at the old park position
           // (log-update wrote nothing). Otherwise it's at frame.cursor.
+          //
+          // PHYSICAL clamp: when content fills the terminal, frame.cursor.y
+          // = screen.height = terminalRows — a row the terminal doesn't
+          // have. The restore's relative move clamps at the bottom row, so
+          // the physical cursor sits at terminalRows-1 while the frame
+          // model claims terminalRows. Computing dy from the unclamped
+          // value parked the preedit one row ABOVE the composer caret
+          // (2026-06-12 ghostty/Terminal.app IME bug, pyte-verified).
           const from = !hasDiff && parked !== null ? parked : {
             x: frame.cursor.x,
-            y: frame.cursor.y
+            y: Math.min(frame.cursor.y, terminalRows - 1)
           };
           const dx = target.x - from.x;
           const dy = target.y - from.y;

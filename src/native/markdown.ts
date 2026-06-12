@@ -824,6 +824,12 @@ export class TokenRenderer {
   }
 
   private handleToken(tok: NormalizedLine, out: string[]): void {
+    // Headings, code blocks, and tables render without going through
+    // renderLine, so they must end the current ordered list here — the
+    // renderLine-side reset never sees them (1-6 → 7-12 counter leak).
+    if (tok.kind === 'heading' || tok.kind === 'code-fence-open' || tok.kind === 'table-header') {
+      resetListState()
+    }
     switch (tok.kind) {
       case 'code-fence-open': {
         this.flushTableTo(out)
@@ -918,8 +924,17 @@ export function resetListState(): void {
   olStack = []
 }
 
+const OL_ITEM_RE = /^(\s*)(\d+)\.\s+(.+)$/
+
 /** Render a single non-code-block line. */
 function renderLine(line: string): string {
+  // Any non-blank, non-OL line ends the current ordered list — headings,
+  // rules, UL items, prose. Doing this up front (instead of on the prose
+  // fall-through only) is what keeps early-return branches like `## …`
+  // from leaking the counter into the next list (1-6 → 7-12 bug).
+  if (line.trim() !== '' && !OL_ITEM_RE.test(line)) {
+    olStack = []
+  }
   // Headers. CommonMark requires whitespace between the `#` run and the
   // heading text (`## Title`), but models — particularly Chinese-LLM
   // output — frequently omit the space (`##1.完成情况`, `##标题`) because
@@ -965,7 +980,7 @@ function renderLine(line: string): string {
   }
 
   // Ordered list items with depth-aware numbering
-  const olMatch = line.match(/^(\s*)(\d+)\.\s+(.+)$/)
+  const olMatch = line.match(OL_ITEM_RE)
   if (olMatch) {
     const indent = olMatch[1] ?? ''
     const depth = Math.floor(indent.length / 2)
@@ -977,17 +992,13 @@ function renderLine(line: string): string {
       olStack.pop()
     }
     if (olStack.length === 0 || olStack[olStack.length - 1]!.depth < depth) {
-      olStack.push({ depth, count: 1 })
+      // CommonMark: the first item's number sets the list start.
+      olStack.push({ depth, count: num })
     } else {
       olStack[olStack.length - 1]!.count++
     }
     const displayNum = formatListNumber(olStack[olStack.length - 1]!.count, depth)
     return `${indent}${listColor()}${displayNum}.${RESET} ${content}`
-  }
-
-  // Not a list item — reset ordered list stack
-  if (line.trim() !== '') {
-    olStack = []
   }
 
   // Blockquote

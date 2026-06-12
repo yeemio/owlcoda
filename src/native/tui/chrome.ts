@@ -218,6 +218,55 @@ export function renderSection(title: string): string {
   return `${sgr.bold}${themeColor('owl')}${title.replace(/\n/g, ' ')}${sgr.reset}`
 }
 
+// ─── Render incident capture ─────────────────────────────────────────────
+// 2026-06-12: long CJK turns rendered corrupted in live sessions but every
+// layer replays clean from the saved text — the failing input only exists
+// at render time. Keep a bounded ring of the raw chunks fed to
+// mdRenderer.push(); when the render path throws (the safeRender fallback
+// otherwise prints RAW markdown silently), persist ring + error to
+// <home>/render-incidents/ so the next occurrence pins the layer.
+
+const RAW_MD_RING_LIMIT = 256
+const rawMdRing: string[] = []
+let lastIncidentDumpMs = 0
+const INCIDENT_THROTTLE_MS = 60_000
+
+export function recordRawMdChunk(chunk: string): void {
+  rawMdRing.push(chunk)
+  if (rawMdRing.length > RAW_MD_RING_LIMIT) rawMdRing.shift()
+}
+
+export function clearRawMdRing(): void {
+  rawMdRing.length = 0
+  lastIncidentDumpMs = 0
+}
+
+/**
+ * Persist a render incident (error + raw-chunk ring). Returns the file path,
+ * or null when throttled or unwritable. Never throws — this runs inside the
+ * render error path.
+ */
+export function dumpRenderIncident(err: unknown): string | null {
+  const now = Date.now()
+  if (now - lastIncidentDumpMs < INCIDENT_THROTTLE_MS) return null
+  lastIncidentDumpMs = now
+  try {
+    // Lazy imports keep chrome.ts presentation-pure on the happy path.
+    const { mkdirSync, writeFileSync } = require('node:fs') as typeof import('node:fs')
+    const { join } = require('node:path') as typeof import('node:path')
+    const { homedir } = require('node:os') as typeof import('node:os')
+    const home = process.env['OWLCODA_HOME'] ?? join(homedir(), '.owlcoda')
+    const dir = join(home, 'render-incidents')
+    mkdirSync(dir, { recursive: true })
+    const path = join(dir, `render-incident-${now}.json`)
+    const error = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err)
+    writeFileSync(path, JSON.stringify({ at: new Date(now).toISOString(), error, chunks: [...rawMdRing] }, null, 2))
+    return path
+  } catch {
+    return null
+  }
+}
+
 // ─── Full-output recall (/expand) ────────────────────────────────────────
 // Ring buffer of recent full tool outputs so collapse never loses data.
 // Interactive in-place expansion is future work (spec: C 方案); /expand

@@ -15,6 +15,7 @@ import { describe, it, expect } from 'vitest'
 import {
   detailLooksLikeToolPairingError,
   findOrphanToolUseIds,
+  reorderToolResultsFirst,
   stripOrphanToolUseBlocks,
   summarizeMessagesShape,
 } from '../../src/native/protocol/tool-pairing.js'
@@ -100,6 +101,43 @@ describe('stripOrphanToolUseBlocks', () => {
     const { messages: out, strippedIds } = stripOrphanToolUseBlocks(messages)
     expect(strippedIds).toEqual([])
     expect(out).toBe(messages)
+  })
+})
+
+describe('reorderToolResultsFirst', () => {
+  it('moves leading text behind tool_results in a user turn', () => {
+    const messages = [
+      { role: 'assistant', content: [toolUse('A')] },
+      { role: 'user', content: [text('queued'), toolResult('A')] },
+    ]
+    const { messages: out, reorderedCount } = reorderToolResultsFirst(messages)
+    expect(reorderedCount).toBe(1)
+    expect(out[1]!.content).toEqual([toolResult('A'), text('queued')])
+  })
+
+  it('is a zero-alloc no-op when results already lead (or no results present)', () => {
+    const messages = [
+      { role: 'user', content: [toolResult('A'), text('after')] },
+      { role: 'assistant', content: [text('a'), toolUse('B')] },
+      { role: 'user', content: [text('plain')] },
+    ]
+    const { messages: out, reorderedCount } = reorderToolResultsFirst(messages)
+    expect(reorderedCount).toBe(0)
+    expect(out).toBe(messages)
+  })
+
+  it('does not touch assistant turns that lead with text before tool_use', () => {
+    const messages = [{ role: 'assistant', content: [text('think'), toolUse('A')] }]
+    const { reorderedCount } = reorderToolResultsFirst(messages)
+    expect(reorderedCount).toBe(0)
+  })
+
+  it('handles multiple results with interleaved text', () => {
+    const messages = [
+      { role: 'user', content: [text('x'), toolResult('A'), text('y'), toolResult('B')] },
+    ]
+    const { messages: out } = reorderToolResultsFirst(messages)
+    expect(out[0]!.content).toEqual([toolResult('A'), toolResult('B'), text('x'), text('y')])
   })
 })
 
