@@ -50,8 +50,8 @@ const INTERNAL_STATE_TOOLS = new Set<string>([
   'EnterPlanMode', 'ExitPlanMode',
   // Session config mutation
   'Config',
-  // Inter-agent / team coordination — internal state, no fs/network
-  'SendMessage', 'TeamCreate', 'TeamDelete',
+  // Team coordination — internal state, no fs/network
+  'TeamCreate', 'TeamDelete',
   // MCP auth tokens — local credential store
   'McpAuth',
   // Workspace lifecycle — directory management for OwlCoda's own run state
@@ -68,7 +68,7 @@ const EXTERNAL_EFFECT_TOOLS = new Set<string>([
   // Subagent spawn (independent side-effect surface)
   'Task',
   // Future-scheduled side effects
-  'ScheduleCron', 'RemoteTrigger',
+  'RemoteTrigger',
   // Git worktree creation/exit touches sibling directories outside cwd
   'EnterWorktree', 'ExitWorktree',
 ])

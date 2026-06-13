@@ -412,14 +412,16 @@ describe('headless approval policy', () => {
     const taskState = ensureTaskExecutionState(conversation, cwd)
     expect(taskState.contract.scopeMode).toBe('explicit_paths')
 
-    for (const command of [
-      `cd ${cwd} && python tests/runtests.py model_fields.tests.GetFieldDisplayTests.test_inherited_choices_display`,
-      `cd ${cwd} && git diff --stat`,
+    for (const { command, reason } of [
+      { command: `cd ${cwd} && python tests/runtests.py model_fields.tests.GetFieldDisplayTests.test_inherited_choices_display`, reason: 'workspace-test-bash' as const },
+      // A read-only `git diff --stat` classifies as the broader always-allowed
+      // `safe-bash`; both labels mean the command auto-approves.
+      { command: `cd ${cwd} && git diff --stat`, reason: 'safe-bash' as const },
     ]) {
       const decision = decideHeadlessApproval('bash', true, { command }, taskState)
       expect(decision.allowed).toBe(true)
       if (decision.allowed) {
-        expect(decision.reason).toBe('workspace-test-bash')
+        expect(decision.reason).toBe(reason)
       }
     }
   })

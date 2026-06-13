@@ -25,6 +25,7 @@ describe('Agent Tool', () => {
   beforeEach(() => {
     delete process.env['OWLCODA_AGENT_ADAPTIVE_CONCURRENCY']
     delete process.env['OWLCODA_AGENT_MAX_CONCURRENCY']
+    delete process.env['OWLCODA_SUBAGENT_MODEL']
     __resetAdaptiveConcurrencyForTesting()
 
     createConversationMock.mockReset()
@@ -67,6 +68,94 @@ describe('Agent Tool', () => {
 
     expect(createConversationMock).toHaveBeenCalledWith(expect.objectContaining({
       model: 'switched-model',
+    }))
+  })
+
+  // 2026-06-13 dogfood (P0-8): a parent on a local model (mimo, backed by one
+  // proxy) fanned out 4 sub-agents; the proxy died and all 4 sub-agents +
+  // parent failed together because sub-agents had no way to run on a different
+  // model. Allow the parent LLM (input.model) and the operator
+  // (OWLCODA_SUBAGENT_MODEL) to give orchestration sub-agents their own model.
+  it('uses input.model to override the parent conversation model when provided', async () => {
+    const tool = createAgentTool({
+      apiBaseUrl: 'http://127.0.0.1:9999',
+      apiKey: 'test-key',
+      model: 'parent-model',
+      getModel: () => 'parent-model',
+      maxTokens: 2048,
+    })
+
+    await tool.execute({
+      description: 'Orchestrate work',
+      prompt: 'coordinate the batch',
+      model: 'orchestration-model',
+    })
+
+    expect(createConversationMock).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'orchestration-model',
+    }))
+  })
+
+  it('falls back to OWLCODA_SUBAGENT_MODEL when input.model is absent', async () => {
+    process.env['OWLCODA_SUBAGENT_MODEL'] = 'env-default-model'
+
+    const tool = createAgentTool({
+      apiBaseUrl: 'http://127.0.0.1:9999',
+      apiKey: 'test-key',
+      model: 'parent-model',
+      getModel: () => 'parent-model',
+      maxTokens: 2048,
+    })
+
+    await tool.execute({
+      description: 'Orchestrate work',
+      prompt: 'coordinate the batch',
+    })
+
+    expect(createConversationMock).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'env-default-model',
+    }))
+  })
+
+  it('prefers input.model over OWLCODA_SUBAGENT_MODEL', async () => {
+    process.env['OWLCODA_SUBAGENT_MODEL'] = 'env-default-model'
+
+    const tool = createAgentTool({
+      apiBaseUrl: 'http://127.0.0.1:9999',
+      apiKey: 'test-key',
+      model: 'parent-model',
+      getModel: () => 'parent-model',
+      maxTokens: 2048,
+    })
+
+    await tool.execute({
+      description: 'Orchestrate work',
+      prompt: 'coordinate the batch',
+      model: 'explicit-model',
+    })
+
+    expect(createConversationMock).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'explicit-model',
+    }))
+  })
+
+  it('ignores a blank input.model and falls back to the parent model', async () => {
+    const tool = createAgentTool({
+      apiBaseUrl: 'http://127.0.0.1:9999',
+      apiKey: 'test-key',
+      model: 'parent-model',
+      getModel: () => 'parent-model',
+      maxTokens: 2048,
+    })
+
+    await tool.execute({
+      description: 'Orchestrate work',
+      prompt: 'coordinate the batch',
+      model: '   ',
+    })
+
+    expect(createConversationMock).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'parent-model',
     }))
   })
 

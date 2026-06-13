@@ -39,13 +39,33 @@ export interface TaskVerifyInput {
 }
 
 // ---------------------------------------------------------------------------
+// Unsatisfiable-path heuristic
+// ---------------------------------------------------------------------------
+
+// A path segment that is an unresolved authoring placeholder: the task author
+// templated the verification spec and never substituted the real path, so the
+// check can never pass. Conservative tokens only — `xxx`(≥3), angle/curly
+// brackets, `path/to/`, or a literal PLACEHOLDER/TODO/TBD segment.
+const PLACEHOLDER_PATH_RE = /(?:^|[/_-])x{3,}(?:[/_.-]|$)|[<>]|\{\{|\}\}|(?:^|\/)path\/to\/|(?:^|[/_-])(?:PLACEHOLDER|TODO|TBD)(?:[/_.-]|$)/i
+
+function placeholderReason(p: string): string | null {
+  return PLACEHOLDER_PATH_RE.test(p)
+    ? `path looks like an unresolved placeholder ("${p}") — substitute the real path in the step's verification`
+    : null
+}
+
+// ---------------------------------------------------------------------------
 // Individual check runners
 // ---------------------------------------------------------------------------
 
 async function runFileExists(check: TaskVerificationCheck, now: string): Promise<TaskVerificationResult> {
   const p = check.path ?? ''
   if (!p) {
-    return { checkId: check.id, passed: false, detail: 'check.path is required for file_exists', checkedAt: now }
+    return { checkId: check.id, passed: false, unsatisfiable: true, detail: 'check.path is required for file_exists', checkedAt: now }
+  }
+  const placeholder = placeholderReason(p)
+  if (placeholder) {
+    return { checkId: check.id, passed: false, unsatisfiable: true, detail: placeholder, checkedAt: now }
   }
   try {
     const stat = fs.statSync(path.resolve(p))
@@ -59,13 +79,17 @@ async function runFileContains(check: TaskVerificationCheck, now: string): Promi
   const p = check.path ?? ''
   const pattern = check.pattern ?? ''
   if (!p || !pattern) {
-    return { checkId: check.id, passed: false, detail: 'check.path and check.pattern are required for file_contains', checkedAt: now }
+    return { checkId: check.id, passed: false, unsatisfiable: true, detail: 'check.path and check.pattern are required for file_contains', checkedAt: now }
+  }
+  const placeholder = placeholderReason(p)
+  if (placeholder) {
+    return { checkId: check.id, passed: false, unsatisfiable: true, detail: placeholder, checkedAt: now }
   }
   let re: RegExp
   try {
     re = new RegExp(pattern)
   } catch (err) {
-    return { checkId: check.id, passed: false, detail: `invalid regex pattern: ${String(err)}`, checkedAt: now }
+    return { checkId: check.id, passed: false, unsatisfiable: true, detail: `invalid regex pattern: ${String(err)}`, checkedAt: now }
   }
   try {
     const content = fs.readFileSync(path.resolve(p), 'utf-8')
@@ -86,7 +110,7 @@ async function runArtifactCount(check: TaskVerificationCheck, now: string): Prom
   const globPattern = check.glob ?? ''
   const min = check.min ?? 1
   if (!root || !globPattern) {
-    return { checkId: check.id, passed: false, detail: 'check.root and check.glob are required for artifact_count', checkedAt: now }
+    return { checkId: check.id, passed: false, unsatisfiable: true, detail: 'check.root and check.glob are required for artifact_count', checkedAt: now }
   }
 
   // Simple glob matching: support basic patterns like *.html or **/*.ts
@@ -147,15 +171,17 @@ function countMatchingFiles(root: string, globPattern: string): number {
 async function runCommand(check: TaskVerificationCheck, now: string): Promise<TaskVerificationResult> {
   const cmd = check.command ?? ''
   if (!cmd) {
-    return { checkId: check.id, passed: false, detail: 'check.command is required for command check', checkedAt: now }
+    return { checkId: check.id, passed: false, unsatisfiable: true, detail: 'check.command is required for command check', checkedAt: now }
   }
 
-  // Gate: must be safe_readonly
+  // Gate: must be safe_readonly. A refused command is unsatisfiable — it will
+  // be refused on every re-run; only an edit to the verification spec helps.
   const risk = classifyBashCommand(cmd)
   if (risk.level !== 'safe_readonly') {
     return {
       checkId: check.id,
       passed: false,
+      unsatisfiable: true,
       detail: `command refused by risk classifier: ${risk.level} (${risk.reasons[0] ?? 'unknown reason'}). Only safe_readonly commands are allowed for TaskVerify.`,
       checkedAt: now,
     }
@@ -207,6 +233,7 @@ async function runVerificationPack(check: TaskVerificationCheck, now: string): P
     return [{
       checkId: check.id,
       passed: false,
+      unsatisfiable: true,
       detail: `unknown verification pack: ${check.packId ?? '(missing packId)'}`,
       checkedAt: now,
     }]
@@ -216,6 +243,7 @@ async function runVerificationPack(check: TaskVerificationCheck, now: string): P
     return [{
       checkId: check.id,
       passed: false,
+      unsatisfiable: true,
       detail: 'check.deckPath is required for verification_pack/html_deck',
       checkedAt: now,
     }]
@@ -229,6 +257,7 @@ async function runVerificationPack(check: TaskVerificationCheck, now: string): P
     return [{
       checkId: check.id,
       passed: false,
+      unsatisfiable: true,
       detail: 'check.expectedSections must be a non-negative integer for verification_pack/html_deck',
       checkedAt: now,
     }]
@@ -274,6 +303,7 @@ async function runCheck(check: TaskVerificationCheck, now: string): Promise<Task
       return [{
         checkId: check.id,
         passed: false,
+        unsatisfiable: true,
         detail: `unknown check kind: ${(check as TaskVerificationCheck).kind}`,
         checkedAt: now,
       }]
@@ -310,7 +340,11 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
 
       const step = getTaskStep(taskId, stepId)
       if (!step) {
-        return { output: `Step "${stepId}" not found in task "${taskId}".`, isError: true }
+        const stepIds = (task.steps ?? []).map(s => s.id)
+        const hint = stepIds.length > 0
+          ? ` Available steps: ${stepIds.join(', ')}.`
+          : ' This task has no steps.'
+        return { output: `Step "${stepId}" not found in task "${taskId}".${hint}`, isError: true }
       }
 
       if (!step.verification || step.verification.length === 0) {
@@ -346,16 +380,34 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
         lines.push(`${icon} ${r.checkId}: ${r.detail ?? (r.passed ? 'passed' : 'failed')}`)
       }
 
+      // Unsatisfiable checks can never pass as authored — re-running TaskVerify
+      // is futile. Surface that plainly AND tag a failureCategory so the loop
+      // guard's same-class counter stops a model that keeps re-verifying a
+      // broken spec (2026-06-13 kimi-code dogfood: a placeholder-path / missing
+      // root+glob check was re-run 3-6× because TaskVerify always reported
+      // isError:false with no failure signal).
+      const unsatisfiable = results.filter(r => r.unsatisfiable)
+      const metadata: Record<string, unknown> = {
+        taskId,
+        stepId,
+        passed: overallPassed,
+        results,
+        writeBack,
+      }
+      if (unsatisfiable.length > 0) {
+        lines.push(
+          '',
+          `⚠ ${unsatisfiable.length} check(s) can never pass as written — re-running TaskVerify will not help.`,
+          'Fix the step\'s verification spec via TaskUpdate (correct the path/fields/command), then re-verify:',
+          ...unsatisfiable.map(r => `  · ${r.checkId}: ${r.detail ?? 'unsatisfiable'}`),
+        )
+        metadata['failureCategory'] = 'verify:unsatisfiable-spec'
+      }
+
       return {
         output: lines.join('\n'),
         isError: false,
-        metadata: {
-          taskId,
-          stepId,
-          passed: overallPassed,
-          results,
-          writeBack,
-        },
+        metadata,
       }
     },
   }

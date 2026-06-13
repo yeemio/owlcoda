@@ -79,7 +79,6 @@ import {
 } from "./session.js"
 import { createAgentTool, getRunningAgents } from "./tools/agent.js"
 import { listTasks } from "./tools/task-store.js"
-import { listCronJobs } from "./tools/schedule-cron.js"
 import { getOwlcodaConfigLabel, getOwlcodaConfigPath, getOwlcodaDirLabel } from "../paths.js"
 import { loadPermissions, addGlobalPermission, clearGlobalPermissions } from "./permissions.js"
 import { probeRuntimeSurface } from "../runtime-probe.js"
@@ -1343,6 +1342,7 @@ ${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|aut
         plan: 'Read-only: write/edit and mutating bash are refused until you switch back.',
         normal: 'Default gates: mutating tools prompt for approval.',
         auto: 'Low-risk edits and session state auto-approved; destructive/external actions still prompt.',
+        yolo: 'Full access: every tool auto-approved, including destructive/external. Hard denies (provenance/write-scope) still apply.',
       }
       console.log(dim(`  ${modeEffect[nextMode]}`))
       return true
@@ -1947,15 +1947,24 @@ ${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|aut
       }
       const a = arg.toLowerCase()
       const verbose = cmd === '/yolo'
+      // Single source of truth: with modes on, /yolo and /approve are shorthands
+      // for /mode yolo|normal. approveState.autoApprove is kept as a derived mirror
+      // so the TUI approval plumbing stays in sync. OWLCODA_MODES=0 → mirror only.
+      const applyFull = (full: boolean) => {
+        approveState.autoApprove = full
+        if (isModesEnabled()) {
+          ensureOperatingModeState(conversation, opts?.mode ?? 'normal').mode = full ? 'yolo' : 'normal'
+        }
+      }
       if (a === 'on' || a === 'yes' || a === 'true' || a === 'yolo') {
-        approveState.autoApprove = true
+        applyFull(true)
         if (verbose) {
           console.log(`${ansi.red}YOLO ON${ansi.reset} — every tool call runs without confirmation, including dangerous bash (rm -rf, sudo, curl|sh). The rail's red YOLO cell is your reminder. Use ${ansi.bold}/yolo off${ansi.reset} to restore the safety net.`)
         } else {
           console.log(`Auto-approve: ${ansi.green}ON${ansi.reset} — tool calls execute without confirmation.`)
         }
       } else if (a === 'off' || a === 'no' || a === 'false') {
-        approveState.autoApprove = false
+        applyFull(false)
         if (verbose) {
           console.log(`${ansi.yellow}YOLO OFF${ansi.reset} — dangerous tool calls will prompt again.`)
         } else {
@@ -1963,7 +1972,7 @@ ${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|aut
         }
       } else {
         // Toggle
-        approveState.autoApprove = !approveState.autoApprove
+        applyFull(!approveState.autoApprove)
         const onMark = verbose ? `${ansi.red}YOLO ON${ansi.reset}` : `${ansi.green}ON${ansi.reset}`
         const offMark = verbose ? `${ansi.yellow}YOLO OFF${ansi.reset}` : `${ansi.yellow}OFF${ansi.reset}`
         console.log(`${approveState.autoApprove ? onMark : offMark}`)
@@ -2305,13 +2314,22 @@ ${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|aut
     }
 
     case '/plan': {
-      if (isModesEnabled()) {
-        const state = ensureOperatingModeState(conversation, opts?.mode ?? 'normal')
-        console.log(`Plan mode status: ${state.mode === 'plan' ? ansi.green + 'active' + ansi.reset : 'inactive'}`)
-        console.log(dim('Use /mode plan to enter read-only plan mode; use /mode normal or /mode auto to leave it.'))
-      } else {
+      if (!isModesEnabled()) {
         console.log(dim('Plan mode is managed via EnterPlanMode / ExitPlanMode tools.'))
         console.log(dim('The model will use plan mode automatically when appropriate.'))
+        return true
+      }
+      // Functional shorthand into the single /mode axis: /plan enters read-only
+      // plan mode, /plan off|exit|normal leaves it. (Not a status-only shell.)
+      const state = ensureOperatingModeState(conversation, opts?.mode ?? 'normal')
+      const a = arg.toLowerCase()
+      if (a === 'off' || a === 'exit' || a === 'normal') {
+        state.mode = 'normal'
+        console.log(renderNotice('Left plan mode — operating mode set to normal.', 'success'))
+      } else {
+        state.mode = 'plan'
+        console.log(renderNotice('Plan mode active — read-only. Write/edit and mutating bash are refused.', 'success'))
+        console.log(dim('Use /plan off (or /mode normal|auto) to leave.'))
       }
       return true
     }
@@ -2320,6 +2338,10 @@ ${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|aut
       const mode = approveState?.autoApprove ? 'auto-approve' : 'ask-before-execute'
       const globalPermsDisplay = loadPermissions()
       console.log(`\n  ${ansi.bold}Permissions${ansi.reset}`)
+      if (isModesEnabled()) {
+        const opMode = conversation.options?.operatingModeState?.mode ?? 'normal'
+        console.log(`  Operating mode: ${ansi.cyan}${opMode}${ansi.reset} ${dim('(switch with /mode plan|normal|auto|yolo)')}`)
+      }
       console.log(`  Mode: ${mode === 'auto-approve' ? `${ansi.green}auto-approve${ansi.reset}` : `${ansi.yellow}ask-before-execute${ansi.reset}`}`)
       console.log(`  Toggle: /approve on|off`)
       if (globalPermsDisplay.size > 0) {
@@ -2883,9 +2905,8 @@ ${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|aut
     case '/tasks': {
       const agents = getRunningAgents()
       const tasks = listTasks()
-      const crons = listCronJobs()
-      if (agents.size === 0 && tasks.length === 0 && crons.length === 0) {
-        console.log(`${ansi.dim}No active tasks, running agents, or saved schedules.${ansi.reset}`)
+      if (agents.size === 0 && tasks.length === 0) {
+        console.log(`${ansi.dim}No active tasks or running agents.${ansi.reset}`)
         return true
       }
       const statusIcon = (s: string): string =>
@@ -2907,9 +2928,6 @@ ${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|aut
           lines.push(`    ${statusIcon(t.status)} ${t.subject} [${t.status}]${exit}`)
         }
         lines.push('')
-      }
-      if (crons.length > 0) {
-        lines.push(`  ${ansi.dim}${crons.length} saved cron job(s) (see ScheduleCron — not auto-executed)${ansi.reset}`)
       }
       console.log(lines.join('\n'))
       return true

@@ -511,7 +511,7 @@ Options:
   --config, -c <path>     Path to config file
   --endpoint <url>        Override default endpoint URL (legacy aliases: --router, -r)
   --model, -m <name>      Select model (platform ID, alias, or partial match)
-  --mode <mode>           Initial operating mode unless OWLCODA_MODES=0: plan | normal | auto
+  --mode <mode>           Initial operating mode unless OWLCODA_MODES=0: plan | normal | auto | yolo
   --daemon-only           Ensure proxy daemon only, don't open REPL
   -p, --prompt <text>     Prompt text for non-interactive run
   --json                  JSON output mode (non-interactive)

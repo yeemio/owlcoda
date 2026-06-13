@@ -95,6 +95,16 @@ export interface TaskVerificationResult {
   passed: boolean
   detail?: string
   checkedAt: string
+  /**
+   * True when the check can NEVER pass as authored, regardless of any work
+   * the model does (missing required fields, unknown kind, command refused
+   * by the risk classifier, invalid regex, placeholder path). Distinct from
+   * a well-formed check whose artifact is merely not present yet. Re-running
+   * TaskVerify on an unsatisfiable check is futile — the step's verification
+   * spec must be edited via TaskUpdate. TaskVerify tags repeated runs with a
+   * failureCategory so the loop guard stops the model.
+   */
+  unsatisfiable?: boolean
   metadata?: Record<string, unknown>
 }
 
@@ -247,7 +257,10 @@ export function updateTaskStep(
   if (!task.steps) return { ok: false, reason: `Task "${taskId}" has no steps.` }
 
   const step = task.steps.find(s => s.id === stepId)
-  if (!step) return { ok: false, reason: `Step "${stepId}" not found in task "${taskId}".` }
+  if (!step) {
+    const available = task.steps.map(s => s.id).join(', ')
+    return { ok: false, reason: `Step "${stepId}" not found in task "${taskId}". Available steps: ${available}.` }
+  }
 
   const newStatus = updates.status
 

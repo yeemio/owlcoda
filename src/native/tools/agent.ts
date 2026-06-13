@@ -45,6 +45,14 @@ export interface AgentInput {
   prompt: string
   /** Agent type: "general-purpose" or "Explore" */
   subagent_type?: string
+  /**
+   * Optional model id for the sub-agent. When omitted, the sub-agent uses
+   * the parent conversation's model (or the OWLCODA_SUBAGENT_MODEL operator
+   * default). Specifying a different model lets orchestration sub-agents run
+   * off a separate backend from a data-generation parent, so one backend
+   * outage does not fail the parent and every sibling at once (P0-8).
+   */
+  model?: string
   /** Optional iteration budget for long-running sub-agent work. */
   max_iterations?: number
   /**
@@ -560,7 +568,15 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
       const agentType = subagent_type ?? 'general-purpose'
       const agentId = `agent-${randomUUID().slice(0, 8)}`
       const isExplore = agentType.toLowerCase() === 'explore'
-      const activeModel = deps.getModel ? deps.getModel() : deps.model
+      // Model precedence: explicit per-call input.model > OWLCODA_SUBAGENT_MODEL
+      // operator default > parent conversation model. Blank/whitespace inputs
+      // fall through so a stray empty string never forces an invalid model.
+      const requestedModel = typeof input.model === 'string' && input.model.trim()
+        ? input.model.trim()
+        : undefined
+      const operatorDefaultModel = process.env['OWLCODA_SUBAGENT_MODEL']?.trim() || undefined
+      const parentModel = deps.getModel ? deps.getModel() : deps.model
+      const activeModel = requestedModel ?? operatorDefaultModel ?? parentModel
 
       // Create sub-agent dispatcher
       const subDispatcher = new ToolDispatcher()

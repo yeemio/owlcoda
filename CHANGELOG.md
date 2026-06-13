@@ -2,6 +2,39 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.4] — 2026-06-13
+
+Dogfood-driven harness fixes, operating-mode consolidation, and a sub-agent model override.
+
+### Added
+
+- Sub-agents can run on a different model than their parent: the `Agent` tool
+  takes an optional `model`, resolved as `input.model` > `OWLCODA_SUBAGENT_MODEL`
+  > parent — so an orchestration sub-agent need not share the parent's backend.
+- Admin "test connection" now shows the endpoint's real reported model version.
+
+### Changed
+
+- Unified the operating-mode surface: `/mode`, `/yolo`, `/approve`, and `/plan`
+  all write one shared mode state that the permission gate reads.
+- Removed three non-functional stub tools (`repl`, `schedule-cron`,
+  `send-message`).
+
+### Fixed
+
+- Tool dispatch is case-insensitive, so a model emitting `Bash` instead of the
+  canonical `bash` no longer fails with `unknown tool`.
+- A bare `cd` is classified as a safe read-only command instead of being gated.
+- Tightened bash risk classification so commands that execute code are not
+  mislabeled read-only: `python -m pytest … -v` (pytest's *verbose* flag, not a
+  version check) and `env VAR=val <cmd>` now classify by what they actually run.
+- `ReadMcpResource` recovers from common mistakes: it coerces parameter aliases,
+  lists the keys it received, and redirects a `file://` URI to `Read`.
+- The loop guard now catches cross-turn accumulation of the same failure class
+  (keyed by tool + failure category), and `TaskVerify` flags unsatisfiable
+  checks so the guard stops futile re-verification.
+- "Step not found" errors from the task tools now list the available step ids.
+
 ## [0.15.3] — 2026-06-12
 
 Interrupt-recovery and rendering hotfix.

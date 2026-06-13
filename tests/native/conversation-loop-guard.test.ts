@@ -2,13 +2,102 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ToolDispatcher } from '../../src/native/dispatch.js'
-import { addUserMessage, createConversation, runConversationLoop } from '../../src/native/conversation.js'
+import {
+  addUserMessage,
+  buildToolAttempt,
+  createConversation,
+  detectToolLoop,
+  recordCrossTurnFailureClass,
+  runConversationLoop,
+} from '../../src/native/conversation.js'
 import { buildToolDef } from '../../src/native/protocol/request.js'
 import { shouldScheduleRuntimeAutoRetry } from '../../src/native/repl-shared.js'
 import { ensureTaskExecutionState } from '../../src/native/task-state.js'
 import { recordReadAndBuildNudge } from '../../src/native/tools/read.js'
 import { createTask, resetTaskStore, updateTaskStep } from '../../src/native/tools/task-store.js'
 import { createTaskUpdateTool } from '../../src/native/tools/task-update.js'
+
+// 2026-06-13 kimi-code dogfood: ReadMcpResource failed ~8× with a different
+// uri each call (so signature/intentKey never repeated) spread across 46
+// iterations (so no 3 landed in the 24-attempt window). The windowed
+// detectors all missed it; tokens burned. The cross-turn ledger keys on
+// (tool, failureCategory) — the only signal that aggregates arg-varying
+// failures — and counts across the whole run, resetting when the tool
+// genuinely succeeds.
+describe('cross-turn failure-class accumulation (loop guard)', () => {
+  const NEXT = (uri: string) =>
+    buildToolAttempt('ReadMcpResource', { server_name: 'tools', uri }, false)
+
+  function failAttempt(uri: string) {
+    return buildToolAttempt(
+      'ReadMcpResource',
+      { server_name: 'tools', uri },
+      true,
+      { failureCategory: 'mcp:not-connected' },
+    )
+  }
+
+  it('stops re-entering a tool that has failed the same class 5× across turns', () => {
+    const ledger = new Map<string, number>()
+    // 5 failures, each a DIFFERENT uri, far apart (empty windowed attempts).
+    for (let i = 0; i < 5; i++) {
+      recordCrossTurnFailureClass(ledger, failAttempt(`mcp://resource-${i}`))
+    }
+    // Windowed attempts empty → only the cross-turn branch can fire.
+    const loopError = detectToolLoop([], NEXT('mcp://resource-6'), ledger)
+    expect(loopError).toBeTruthy()
+    expect(loopError).toMatch(/cumulative|across turns/i)
+    expect(loopError).toMatch(/ReadMcpResource/)
+  })
+
+  it('does not fire below the cumulative threshold', () => {
+    const ledger = new Map<string, number>()
+    for (let i = 0; i < 4; i++) {
+      recordCrossTurnFailureClass(ledger, failAttempt(`mcp://r-${i}`))
+    }
+    expect(detectToolLoop([], NEXT('mcp://r-5'), ledger)).toBeNull()
+  })
+
+  it('a genuine success of the tool resets its accumulated failure classes', () => {
+    const ledger = new Map<string, number>()
+    for (let i = 0; i < 4; i++) {
+      recordCrossTurnFailureClass(ledger, failAttempt(`mcp://r-${i}`))
+    }
+    // Clean success (no failureCategory) → progress → reset that tool.
+    recordCrossTurnFailureClass(
+      ledger,
+      buildToolAttempt('ReadMcpResource', { server_name: 'tools', uri: 'mcp://ok' }, false),
+    )
+    for (let i = 0; i < 4; i++) {
+      recordCrossTurnFailureClass(ledger, failAttempt(`mcp://s-${i}`))
+    }
+    // 4 (post-reset) < 5 → still no loop.
+    expect(detectToolLoop([], NEXT('mcp://s-5'), ledger)).toBeNull()
+  })
+
+  it('does not block a DIFFERENT tool when one tool is stuck', () => {
+    const ledger = new Map<string, number>()
+    for (let i = 0; i < 6; i++) {
+      recordCrossTurnFailureClass(ledger, failAttempt(`mcp://r-${i}`))
+    }
+    // Next attempt is a Read, not the stuck ReadMcpResource → allowed.
+    const next = buildToolAttempt('read', { path: '/tmp/x.ts' }, false)
+    expect(detectToolLoop([], next, ledger)).toBeNull()
+  })
+
+  it('a clean success of a DIFFERENT tool does not reset the stuck tool', () => {
+    const ledger = new Map<string, number>()
+    for (let i = 0; i < 5; i++) {
+      recordCrossTurnFailureClass(ledger, failAttempt(`mcp://r-${i}`))
+    }
+    recordCrossTurnFailureClass(
+      ledger,
+      buildToolAttempt('read', { path: '/tmp/x.ts' }, false),
+    )
+    // ReadMcpResource still at 5 → re-entering it still trips.
+    expect(detectToolLoop([], NEXT('mcp://r-6'), ledger)).toBeTruthy()
+  })
+})
 
 function toolUseResponse(
   toolName: string,

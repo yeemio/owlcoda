@@ -9,6 +9,11 @@ import {
 } from './provider-error.js'
 export type { ProviderKind } from './provider-kind.js'
 
+export interface ModelDescriptor {
+  id: string
+  displayName?: string
+}
+
 export interface ProviderProbeResult {
   ok: boolean
   status: number
@@ -24,6 +29,8 @@ export interface ProviderProbeResult {
   credentialSource?: 'env' | 'config' | 'unset'
   /** Raw response body snippet (truncated) when the probe failed at the HTTP layer. Omitted on success and on connection-level failures (no body to read). */
   bodySnippet?: string
+  /** The endpoint's real model, discovered best-effort via GET /models (its display_name when available). Distinct from backendModel, which is what the probe sent. Omitted when the endpoint exposes no usable /models list. */
+  resolvedModel?: ModelDescriptor
 }
 
 export type ProviderProbeMode = 'models' | 'chat' | 'messages'
@@ -397,8 +404,10 @@ export class ProviderProbe {
           ...(rawBody ? { bodySnippet: truncateBody(rawBody) } : {}),
         }
       }
+      let resolvedModel: ModelDescriptor | undefined
       if (usesModelListProbe(request)) {
-        const listedModels = extractModelIdsFromModelsResponse(rawBody)
+        const descriptors = extractModelDescriptors(rawBody)
+        const listedModels = descriptors.map(descriptor => descriptor.id)
         const backendModel = request.model.backendModel ?? request.model.id
         if (backendModel && listedModels.length > 0 && !listedModels.includes(backendModel)) {
           return {
@@ -422,6 +431,13 @@ export class ProviderProbe {
             ...(rawBody ? { bodySnippet: truncateBody(rawBody) } : {}),
           }
         }
+        resolvedModel = resolveModelDescriptor(descriptors, backendModel)
+      } else if (usesOpenAIChatProbe(request)) {
+        // A chat probe only proves the endpoint answers; it doesn't reveal which
+        // model actually served it. Single-model coding routes (e.g. Kimi) ignore
+        // the model field and only expose their true version via /models, so make
+        // a best-effort GET /models to surface the real model. Never fail on it.
+        resolvedModel = await this.tryResolveModelFromList(request)
       }
       return {
         ok: true,
@@ -430,6 +446,7 @@ export class ProviderProbe {
         detail: `${request.providerId} probe succeeded for ${breadcrumb.backendModel || request.model.id}`,
         ...breadcrumb,
         endpoint: url,
+        ...(resolvedModel ? { resolvedModel } : {}),
       }
     } catch (error) {
       const diagnostic = classifyProviderRequestError(error, {
@@ -446,6 +463,30 @@ export class ProviderProbe {
         ...breadcrumb,
         endpoint: url,
       }
+    }
+  }
+
+  /**
+   * Best-effort GET /models to discover the endpoint's real model. Returns
+   * undefined on any failure (no list, non-2xx, parse error, network/timeout) —
+   * this never affects the probe verdict, it only enriches a successful one.
+   */
+  private async tryResolveModelFromList(request: ProbeRequest): Promise<ModelDescriptor | undefined> {
+    if (!this.deps.fetch || !request.model.endpoint) return undefined
+    try {
+      const url = resolveModelsListUrl(request.model.endpoint)
+      const headers = new Headers(request.model.headers ?? {})
+      if (request.model.apiKey) headers.set('authorization', `Bearer ${request.model.apiKey}`)
+      const response = await this.deps.fetch(url, {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.timeout(MODELS_LIST_PROBE_TIMEOUT_MS),
+      })
+      if (!response.ok) return undefined
+      const descriptors = extractModelDescriptors(await response.text())
+      return resolveModelDescriptor(descriptors, request.model.backendModel ?? request.model.id)
+    } catch {
+      return undefined
     }
   }
 }
@@ -557,6 +598,28 @@ function resolveProbeTimeoutMs(timeoutMs: number | undefined): number {
 
 const PROBE_BODY_SNIPPET_MAX = 500
 
+// Best-effort /models discovery should not stall the Test-connection UI.
+const MODELS_LIST_PROBE_TIMEOUT_MS = 5_000
+
+/**
+ * Build the `/models` URL for an endpoint base, independent of resolveTargetUrl
+ * (which has provider-specific rewrites — notably the kimi branch always rewrites
+ * to /chat/completions). Strips a trailing chat/messages path so a configured
+ * generation endpoint still resolves to its sibling /models.
+ */
+function resolveModelsListUrl(endpoint: string): string {
+  const url = new URL(endpoint)
+  const base = url.pathname.replace(/\/+$/, '')
+  const stripped = base
+    .replace(/\/chat\/completions$/, '')
+    .replace(/\/v1\/messages$/, '')
+    .replace(/\/messages$/, '')
+  url.pathname = `${stripped}/models`
+  url.search = ''
+  url.hash = ''
+  return url.toString()
+}
+
 function truncateBody(raw: string): string {
   const trimmed = raw.trim()
   if (trimmed.length <= PROBE_BODY_SNIPPET_MAX) return trimmed
@@ -599,33 +662,62 @@ function usesModelListProbe(request: ProbeRequest): boolean {
   return path === 'models' || path.endsWith('/models')
 }
 
-function extractModelIdsFromModelsResponse(rawBody: string): string[] {
+export function extractModelDescriptors(rawBody: string): ModelDescriptor[] {
   if (!rawBody.trim()) return []
   try {
     const parsed = JSON.parse(rawBody) as unknown
-    const ids = new Set<string>()
-    collectModelIds(parsed, ids)
-    return [...ids]
+    const out = new Map<string, ModelDescriptor>()
+    collectModelDescriptors(parsed, out)
+    return [...out.values()]
   } catch {
     return []
   }
 }
 
-function collectModelIds(value: unknown, ids: Set<string>): void {
+function collectModelDescriptors(value: unknown, out: Map<string, ModelDescriptor>): void {
   if (!value || typeof value !== 'object') return
   if (Array.isArray(value)) {
-    for (const item of value) collectModelIds(item, ids)
+    for (const item of value) collectModelDescriptors(item, out)
     return
   }
 
   const record = value as Record<string, unknown>
-  if (typeof record.id === 'string' && record.id.trim()) {
-    ids.add(record.id)
+  if (typeof record.id === 'string' && record.id.trim() && !out.has(record.id)) {
+    const displayName = pickModelDisplayName(record)
+    out.set(record.id, displayName ? { id: record.id, displayName } : { id: record.id })
   }
   const nested = record.data ?? record.models
   if (Array.isArray(nested)) {
-    for (const item of nested) collectModelIds(item, ids)
+    for (const item of nested) collectModelDescriptors(item, out)
   }
+}
+
+function pickModelDisplayName(record: Record<string, unknown>): string | undefined {
+  for (const key of ['display_name', 'displayName', 'name']) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return undefined
+}
+
+/**
+ * Pick the real model from a /models descriptor list. A single-model endpoint
+ * (a coding route that ignores the model field) exposes exactly one model — that
+ * IS the answer, whatever the user typed. With several models, match the sent
+ * backendModel by id; if nothing matches confidently, return undefined rather
+ * than fabricate one.
+ */
+export function resolveModelDescriptor(
+  descriptors: ModelDescriptor[],
+  backendModel: string | undefined,
+): ModelDescriptor | undefined {
+  if (descriptors.length === 0) return undefined
+  if (descriptors.length === 1) return descriptors[0]
+  if (backendModel) {
+    const match = descriptors.find(descriptor => descriptor.id === backendModel)
+    if (match) return match
+  }
+  return undefined
 }
 
 function inferProviderTemplate(input: Pick<ConfiguredModel, 'endpoint' | 'headers'> & { provider?: string }): ProviderTemplate | undefined {

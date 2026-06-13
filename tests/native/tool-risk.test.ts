@@ -38,7 +38,6 @@ describe('classifyToolRisk — internal_state tools', () => {
     ['TaskStop', { taskId: '1' }],
     ['TaskVerify', { taskId: '1' }],
     ['Config', { key: 'x', value: 'y' }],
-    ['SendMessage', { to: 'agent2', body: 'hi' }],
     ['TeamCreate', { name: 't' }],
     ['TeamDelete', { name: 't' }],
     ['McpAuth', { server: 'x' }],
@@ -98,7 +97,6 @@ describe('classifyToolRisk — external_effect tools', () => {
     ['WebFetch', { url: 'https://x.com' }, 'external_effect'],
     ['WebSearch', { query: 'foo' }, 'external_effect'],
     ['Task', { description: 'd', prompt: 'p' }, 'external_effect'],
-    ['ScheduleCron', { schedule: '0 0 * * *', task: 'x' }, 'external_effect'],
     ['RemoteTrigger', { url: 'https://x.com/hook' }, 'external_effect'],
     ['EnterWorktree', { name: 'feature-x' }, 'external_effect'],
     ['ExitWorktree', {}, 'external_effect'],
@@ -169,11 +167,9 @@ describe('classifyToolRisk — exhaustive against ToolDispatcher registry', () =
     EnterWorktree: { name: 'f' },
     ExitWorktree: {},
     Config: { key: 'k', value: 'v' },
-    SendMessage: { to: 'a', body: 'b' },
     TeamCreate: { name: 't' },
     TeamDelete: { name: 't' },
     StructuredOutput: { schema: {} },
-    ScheduleCron: { schedule: '0 0 * * *', task: 'x' },
     RemoteTrigger: { url: 'https://x' },
     MCPTool: { server_name: 's', tool_name: 't', arguments: {} },
     ListMcpResources: {},
@@ -207,7 +203,7 @@ describe('classifyToolRisk — exhaustive against ToolDispatcher registry', () =
     // SAMPLE_ARGS and either to one of the explicit Sets in
     // classifyToolRisk or to DEFAULT_MUTATING_EXPLICIT_ACK.
     // Update the expected count when intentionally adding a tool.
-    expect(registered.length).toBe(45)
+    expect(registered.length).toBe(43)
   })
 
   it.each(registered.map((name) => [name]))(

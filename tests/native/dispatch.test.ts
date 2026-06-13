@@ -56,12 +56,10 @@ describe('Native Tool Dispatcher', () => {
     expect(names).toContain('TaskStop')
     expect(names).toContain('TaskOutput')
     expect(names).toContain('TaskVerify')
-    expect(names).toContain('SendMessage')
     expect(names).toContain('TeamCreate')
     expect(names).toContain('TeamDelete')
     expect(names).toContain('ToolSearch')
     expect(names).toContain('StructuredOutput')
-    expect(names).toContain('ScheduleCron')
     expect(names).toContain('RemoteTrigger')
     expect(names).toContain('MCPTool')
     expect(names).toContain('ListMcpResources')
@@ -77,7 +75,7 @@ describe('Native Tool Dispatcher', () => {
     expect(names).toContain('ProjectMap')
     expect(names).toContain('ArtifactVerify')
     expect(names).toContain('ProbePlan')
-    expect(names).toHaveLength(45)
+    expect(names).toHaveLength(43)
   })
 
   it('has() returns true for registered tools', () => {
@@ -89,8 +87,6 @@ describe('Native Tool Dispatcher', () => {
   it('getToolDescription returns honest stub-disclosure copy from tool factories', () => {
     const dispatcher = new ToolDispatcher()
     // Stub tools self-disclose in their factory description.
-    expect(dispatcher.getToolDescription('SendMessage')).toMatch(/no consumer/)
-    expect(dispatcher.getToolDescription('ScheduleCron')).toMatch(/NO cron daemon|will never fire/)
     expect(dispatcher.getToolDescription('McpAuth')).toMatch(/NOT validated/)
     expect(dispatcher.getToolDescription('StructuredOutput')).toMatch(/validates the data payload/)
     // Unregistered tool returns undefined.
@@ -162,6 +158,78 @@ describe('Native Tool Dispatcher', () => {
     const result = await dispatcher.executeTool(block)
     expect(result.result.isError).toBe(true)
     expect(result.result.output).toContain('unknown tool')
+  })
+
+  // 2026-06-13 dogfood (P2-12): a model intermittently emitted the tool name
+  // "Bash" (capitalized) while the registry only holds lowercase "bash", so a
+  // case-sensitive Map.get missed and returned `unknown tool "Bash"` for some
+  // calls in a session where other bash calls worked. Resolve tolerantly and
+  // normalize to the canonical registered name for downstream guards/telemetry.
+  it('resolves tool names case-insensitively when the model emits the wrong case', async () => {
+    const dispatcher = new ToolDispatcher()
+    const block: AnthropicToolUseBlock = {
+      type: 'tool_use',
+      id: 'call_case',
+      name: 'Bash',
+      input: { command: 'echo hi' },
+    }
+    const result = await dispatcher.executeTool(block)
+    expect(result.result.isError).toBe(false)
+    expect(result.result.output).toContain('hi')
+    // normalized to the canonical registered name, not the model's casing
+    expect(result.toolName).toBe('bash')
+  })
+
+  it('exposes has() and getToolDescription() case-insensitively', () => {
+    const dispatcher = new ToolDispatcher()
+    expect(dispatcher.has('Bash')).toBe(true)
+    expect(dispatcher.has('READ')).toBe(true)
+    expect(dispatcher.getToolDescription('Bash')).toBe(dispatcher.getToolDescription('bash'))
+  })
+
+  it('still reports unknown for a genuinely unregistered tool name', async () => {
+    const dispatcher = new ToolDispatcher()
+    const result = await dispatcher.executeTool({
+      type: 'tool_use',
+      id: 'call_frob',
+      name: 'Frobnicate',
+      input: {},
+    } as AnthropicToolUseBlock)
+    expect(result.result.isError).toBe(true)
+    expect(result.result.output).toContain('unknown tool "Frobnicate"')
+  })
+
+  // 2026-06-13 (P2-12 hardening): the case-insensitive resolver above is only
+  // safe while no two registered tool names collide once lowercased — otherwise
+  // resolveTool() would silently pick whichever was inserted into the Map first
+  // and dispatch to the WRONG tool. That is a far worse failure mode than a loud
+  // "unknown tool" error, so lock the invariant: a future clash (e.g. both "LSP"
+  // and "lsp", or dispatch adopting capitalized "Bash") must fail here loudly.
+  function caseInsensitiveCollisions(names: string[]): string[][] {
+    const byLower = new Map<string, string[]>()
+    for (const name of names) {
+      const lower = name.toLowerCase()
+      const bucket = byLower.get(lower) ?? []
+      bucket.push(name)
+      byLower.set(lower, bucket)
+    }
+    return [...byLower.values()].filter(bucket => bucket.length > 1)
+  }
+
+  it('registers no two default tool names that collide case-insensitively', () => {
+    const dispatcher = new ToolDispatcher()
+    expect(caseInsensitiveCollisions(dispatcher.getToolNames())).toEqual([])
+  })
+
+  it('case-insensitive collision detection is not vacuous (flags a real clash)', () => {
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'BASH',
+      description: 'deliberately collides with the lowercase bash tool',
+      async execute() { return { output: '', isError: false } },
+    })
+    const collisions = caseInsensitiveCollisions(dispatcher.getToolNames())
+    expect(collisions.some(bucket => bucket.includes('bash') && bucket.includes('BASH'))).toBe(true)
   })
 
   it('executeAll runs multiple blocks sequentially', async () => {

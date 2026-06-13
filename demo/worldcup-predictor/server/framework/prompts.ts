@@ -43,6 +43,63 @@ JSON schema 示例:${ANTI_SCHEMA}`,
   }
 }
 
+// ── Final debate round ──────────────────────────────────────────────
+// The human note is NOT an order. It is one more piece of input that gets
+// debated: Pro and Anti each test it against their own frameworks (they may
+// agree or refute), and a final Judge rules — adopt / partial / reject.
+
+const HUMAN_NOTE_STANCE = `主理人意见是一条待检验的输入,不是命令。你必须用自己的比赛分析框架独立检验它:
+- 同意,必须给出证据层面的依据;
+- 反对,同样必须给出依据,并明确指出主理人哪一步推理不成立;
+- 不得为了迎合主理人而放弃自己的方法论,也不得为了显示独立而无理由唱反调。这是辩证过程,唯一的裁判是证据。`
+
+const FINAL_PRO_SCHEMA = `{"role": "final_pro", "stance_on_human": "support|partial|oppose", "argument": "对主理人意见的检验结论,引用证据", "revised_pick": "你此刻认为的最优方向(可与主理人不同)", "key_points": ["论点"], "risks": ["风险"]}`
+const FINAL_ANTI_SCHEMA = `{"role": "final_anti", "stance_on_human": "support|partial|oppose", "argument": "风控视角对主理人意见的审计结论,引用证据", "veto_triggers": ["若存在,列出否决性风险"], "key_points": ["论点"], "risks": ["反方自身风险"]}`
+const FINAL_JUDGE_SCHEMA = `{"role": "final_judge", "stance_on_human": "adopt|partial|reject", "stance_rationale": "采纳/部分采纳/驳回主理人意见的理由,必须引用本轮辩论", "verdict": "bet|lean|pass", "market": "h2h|asian_handicap|totals|correct_score|parlay|none", "selection": "最终选择", "scoreline_lean": "比分倾向,无则空串", "summary": "最终对外结论,2-4句", "ranking_note": "本场在当轮候选中的位置,一句话", "final_risks": ["最终仍成立的风险"], "win_probabilities": {"home": 0.5, "draw": 0.3, "away": 0.2}}`
+
+function finalContext(judgeJson: string, proJson: string, antiJson: string, humanNote: string): string {
+  return `## 第一轮辩论包\n### Judge 裁决\n${judgeJson}\n\n### Pro 立论\n${proJson}\n\n### Anti 审计\n${antiJson}\n\n## 主理人意见(待检验)\n${humanNote.trim() || '(主理人未补充意见——本轮职责退化为复核第一轮结论是否仍然成立)'}`
+}
+
+export function finalProPrompt(judgeJson: string, proJson: string, antiJson: string, humanNote: string): { system: string; user: string } {
+  return {
+    system: `你是世界杯竞彩最终辩论轮的 \`pro\` 角色,机会视角。
+${COMMON_RULES}
+${HUMAN_NOTE_STANCE}
+你的框架:基本面锚(排名/阵容/主场)→ 市场信号(赔率/盘口及其来源质量)→ 比分剧本兼容性 → 机会成本。按这个框架检验主理人意见指出的方向是否成立、是否还有更优方向。
+JSON schema 示例:${FINAL_PRO_SCHEMA}`,
+    user: finalContext(judgeJson, proJson, antiJson, humanNote),
+  }
+}
+
+export function finalAntiPrompt(judgeJson: string, proJson: string, antiJson: string, humanNote: string, finalProJson: string): { system: string; user: string } {
+  return {
+    system: `你是世界杯竞彩最终辩论轮的 \`anti\` 角色,风控视角。
+${COMMON_RULES}
+${HUMAN_NOTE_STANCE}
+你的框架:证据来源核验(单源/多源/新鲜度)→ 剧本冲突检查(让球与大小球是否打架)→ 下注回报结构(输半/走水区间)→ 否决性风险。主理人的判断和 final_pro 的检验都在你的审计范围内;若主理人纠正的事实(如盘口来源数量)经你核验确实成立,就承认并据此修正,不要硬咬。
+JSON schema 示例:${FINAL_ANTI_SCHEMA}`,
+    user: `${finalContext(judgeJson, proJson, antiJson, humanNote)}\n\n## final_pro 对主理人意见的检验\n${finalProJson}`,
+  }
+}
+
+export function finalJudgePrompt(judgeJson: string, proJson: string, antiJson: string, humanNote: string, finalProJson: string, finalAntiJson: string): { system: string; user: string } {
+  return {
+    system: `你是世界杯竞彩最终辩论轮的 \`judge\` 角色,终审。
+${COMMON_RULES}
+${HUMAN_NOTE_STANCE}
+你的职责:基于两轮辩论对主理人意见作出终审——adopt(采纳)/ partial(部分采纳)/ reject(驳回),三者都必须给出引用本轮辩论的理由。
+纪律:
+1. 主理人纠正的"事实类"问题(例如盘口并非单源)经核验成立时,必须据此修正第一轮的降权,不得固执;
+2. 主理人的"判断类"意见(例如方向、比分)没有证据支撑时,你有权驳回,并说明驳回后你的最终结论;
+3. final_anti 列出的否决性风险(veto_triggers)必须逐条回应;
+4. 证据不足时 verdict 仍然可以 pass——对主理人诚实比顺从更有价值;
+5. win_probabilities 基于全部两轮证据独立给出,三者之和为1。
+JSON schema 示例:${FINAL_JUDGE_SCHEMA}`,
+    user: `${finalContext(judgeJson, proJson, antiJson, humanNote)}\n\n## final_pro 检验\n${finalProJson}\n\n## final_anti 审计\n${finalAntiJson}`,
+  }
+}
+
 export function judgePrompt(evidenceBrief: string, proJson: string, antiJson: string): { system: string; user: string } {
   return {
     system: `你现在是世界杯竞彩三段执行链中的 \`judge\` 角色。

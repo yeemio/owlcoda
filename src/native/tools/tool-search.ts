@@ -80,8 +80,7 @@ export function createToolSearchTool(deps: ToolSearchDeps = {}): NativeToolDef<T
       // Build the XML-like function block consumed by the native runtime.
       // Prefer the tool factory's authored description over the
       // `"Native ${name} tool"` placeholder so honest stub-disclosure copy
-      // (SendMessage queues with no consumer, ScheduleCron with no daemon,
-      // McpAuth with no token validation, …) reaches the LLM.
+      // (McpAuth with no token validation, …) reaches the LLM.
       const lines = matches.map(name => {
         const schema = NATIVE_TOOL_SCHEMAS[name]
         const description = deps.getToolDescription?.(name) ?? `Native ${name} tool`

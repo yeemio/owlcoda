@@ -110,11 +110,84 @@ describe('TaskVerify tool', () => {
     expect(r.output).toContain('not found')
   })
 
+  // 2026-06-13 dogfood (P2-11): list valid step ids so a model that invented a
+  // bad id can self-correct instead of dead-ending.
+  it('lists the available step ids when the requested step is missing', async () => {
+    createTask({
+      subject: 'X',
+      description: 'Y',
+      steps: [
+        { title: 'first', description: 'a' },
+        { title: 'second', description: 'b' },
+      ],
+    })
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-99' })
+    expect(r.isError).toBe(true)
+    expect(r.output).toContain('not found')
+    expect(r.output).toContain('step-1')
+    expect(r.output).toContain('step-2')
+  })
+
   it('returns success with empty results for step with no verification', async () => {
     createTask({ subject: 'X', description: 'Y', steps: [{ title: 'S', description: 'd' }] })
     const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
     expect(r.isError).toBe(false)
     expect(r.output).toContain('no verification checks')
+  })
+
+  // 2026-06-13 kimi-code dogfood: a TaskVerify whose check can NEVER pass as
+  // authored (placeholder path `xxx`, missing root/glob) was re-run 3-6×
+  // because TaskVerify returns isError:false and carries no failureCategory,
+  // so the loop guard counts it as a successful call. Mark such results
+  // `unsatisfiable` and tag failureCategory so the same-class loop guard
+  // stops the model and tells it to fix the spec, not re-verify.
+  describe('unsatisfiable-spec detection', () => {
+    it('flags artifact_count missing root/glob as unsatisfiable, not retryable', async () => {
+      makeTaskWithVerification([{ id: 'v1', kind: 'artifact_count', min: 1 }])
+      const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+      expect(r.metadata?.['failureCategory']).toBe('verify:unsatisfiable-spec')
+      expect(r.output).toMatch(/can never pass|cannot pass|fix the .*verification|TaskUpdate/i)
+      const results = r.metadata?.['results'] as Array<Record<string, unknown>>
+      expect(results[0]?.['unsatisfiable']).toBe(true)
+    })
+
+    it('flags a file_exists placeholder path (xxx) as unsatisfiable', async () => {
+      makeTaskWithVerification([
+        { id: 'v1', kind: 'file_exists', path: `${tmpDir}/D20260613-xxx-fs-watchdog.md` },
+      ])
+      const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+      expect(r.metadata?.['failureCategory']).toBe('verify:unsatisfiable-spec')
+      const results = r.metadata?.['results'] as Array<Record<string, unknown>>
+      expect(results[0]?.['unsatisfiable']).toBe(true)
+    })
+
+    it('flags a command refused by the risk classifier as unsatisfiable', async () => {
+      makeTaskWithVerification([{ id: 'v1', kind: 'command', command: 'swift build --product X' }])
+      const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+      expect(r.metadata?.['failureCategory']).toBe('verify:unsatisfiable-spec')
+      const results = r.metadata?.['results'] as Array<Record<string, unknown>>
+      expect(results[0]?.['unsatisfiable']).toBe(true)
+    })
+
+    it('does NOT flag a well-formed check whose artifact is merely missing (retryable)', async () => {
+      makeTaskWithVerification([
+        { id: 'v1', kind: 'file_exists', path: `${tmpDir}/will-exist-after-work.ts` },
+      ])
+      const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+      expect(r.metadata?.['failureCategory']).toBeUndefined()
+      const results = r.metadata?.['results'] as Array<Record<string, unknown>>
+      expect(results[0]?.['passed']).toBe(false)
+      expect(results[0]?.['unsatisfiable']).toBeUndefined()
+    })
+
+    it('does not set failureCategory when all checks pass', async () => {
+      const f = `${tmpDir}/real.ts`
+      fs.writeFileSync(f, 'export const x = 1\n')
+      makeTaskWithVerification([{ id: 'v1', kind: 'file_exists', path: f }])
+      const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+      expect(r.metadata?.['passed']).toBe(true)
+      expect(r.metadata?.['failureCategory']).toBeUndefined()
+    })
   })
 
   it('runs command checks expanded from Project Map verification profiles', async () => {

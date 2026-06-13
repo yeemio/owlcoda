@@ -391,9 +391,30 @@ function classifySafeRead(chunk: string): ChunkVerdict | null {
   // which used to fail-closed as `unknown` and blocked TaskCreate spawn.
   if (head === 'pwd' || head === 'whoami' || head === 'hostname' ||
       head === 'date' || head === 'true' || head === 'false' ||
-      head === 'uname' || head === 'env' || head === 'echo' || head === 'printf' ||
-      head === 'sleep') {
+      head === 'uname' || head === 'echo' || head === 'printf' ||
+      head === 'sleep' || head === 'cd') {
+    // `cd` mutates nothing (only the shell's working dir for the rest of the
+    // chunk). It used to fall through to `unknown`, which made TaskVerify
+    // `cd <repo> && <check>` and headless gating refuse the most trivially
+    // safe command. The worst-chunk splitter still catches `cd X && rm -rf`
+    // via the rm chunk.
     return { level: 'safe_readonly', reason: `${head} (read-only)` }
+  }
+
+  // `env` alone or with only VAR=val assignments dumps/sets the environment
+  // (read-only). But `env VAR=val <cmd>` RUNS <cmd>, so classify by the
+  // wrapped command rather than blanket-trusting `env` — otherwise
+  // `env PYTHONPATH=src python3 -m pytest` looks read-only. (Dangerous /
+  // needs-approval patterns already scanned the raw chunk upstream, so a
+  // wrapped `rm -rf` was caught before reaching here.)
+  if (head === 'env') {
+    let i = 1
+    while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]!)) i++
+    if (i >= tokens.length) {
+      return { level: 'safe_readonly', reason: 'env (read-only)' }
+    }
+    if (tokens[i]!.startsWith('-')) return null // env options we don't parse — fail closed
+    return classifySafeRead(tokens.slice(i).join(' '))
   }
 
   if (head === 'ls' || head === 'cat' || head === 'head' || head === 'tail' ||
@@ -430,9 +451,17 @@ function classifySafeRead(chunk: string): ChunkVerdict | null {
     return null
   }
 
-  if ((head === 'node' || head === 'tsc' || head === 'python' || head === 'python3' ||
-       head === 'go' || head === 'cargo' || head === 'rustc' || head === 'pip' || head === 'pip3') &&
+  // Version checks are read-only. `-v` means "version" only for `node`; for
+  // python/cargo/pip/rustc/... `-v` is the VERBOSE flag (e.g.
+  // `python -m pytest x.py -v` RUNS tests), so those accept only
+  // `-V` / `--version`.
+  if (head === 'node' &&
       (tokens.includes('--version') || tokens.includes('-v') || tokens.includes('-V'))) {
+    return { level: 'safe_readonly', reason: 'node --version' }
+  }
+  if ((head === 'tsc' || head === 'python' || head === 'python3' ||
+       head === 'go' || head === 'cargo' || head === 'rustc' || head === 'pip' || head === 'pip3') &&
+      (tokens.includes('--version') || tokens.includes('-V'))) {
     return { level: 'safe_readonly', reason: `${head} --version` }
   }
 

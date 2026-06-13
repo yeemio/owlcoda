@@ -131,6 +131,7 @@ export interface AnalysisArtifacts {
   evidenceBrief: string
   vision: string | null
   recon: string | null
+  reconSources: Array<{ title: string; url: string }>
   pro: unknown
   anti: unknown
   judge: unknown
@@ -159,6 +160,7 @@ export async function runAnalysis(
   const manifests: RoleManifestEntry[] = []
   // Stage 0a: owlcoda-agent web reconnaissance (optional, experimental).
   let reconText: string | null = null
+  let reconSources: Array<{ title: string; url: string }> = []
   if (req.webRecon && req.reconModel) {
     emit({ type: 'role_start', role: 'recon', model: req.reconModel })
     try {
@@ -169,6 +171,7 @@ export async function runAnalysis(
         kickoff: fixture.match_datetime_utc ?? 'TBD',
       })
       reconText = recon.text
+      reconSources = recon.sources
       const reconManifest: RoleManifestEntry = {
         role: 'recon',
         model: recon.model,
@@ -213,6 +216,7 @@ export async function runAnalysis(
       matchKey,
       evidenceBrief: brief,
       vision: vision?.text ?? null,
+      reconSources,
       recon: reconText,
       pro: pro.output ?? pro.raw,
       anti: anti.output ?? anti.raw,

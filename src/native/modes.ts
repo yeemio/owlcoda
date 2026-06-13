@@ -8,7 +8,7 @@ import { classifyBashCommand } from './bash-risk.js'
 import { classifyPowerShellCommand } from './powershell-risk.js'
 import type { RiskClass } from './protocol/task-permission-types.js'
 
-export type OperatingMode = 'plan' | 'normal' | 'auto'
+export type OperatingMode = 'plan' | 'normal' | 'auto' | 'yolo'
 
 export interface OperatingModeState {
   mode: OperatingMode
@@ -20,7 +20,7 @@ interface OperatingModeContainer {
   }
 }
 
-const OPERATING_MODES: OperatingMode[] = ['plan', 'normal', 'auto']
+const OPERATING_MODES: OperatingMode[] = ['plan', 'normal', 'auto', 'yolo']
 const FALSY = new Set(['0', 'false', 'no', 'off', ''])
 
 /** Default-on after cutover; explicit falsy values disable the mode surface. */
@@ -34,6 +34,16 @@ export function parseOperatingMode(raw: unknown): OperatingMode | null {
   if (typeof raw !== 'string') return null
   const value = raw.trim().toLowerCase()
   return (OPERATING_MODES as string[]).includes(value) ? value as OperatingMode : null
+}
+
+/** Shift+Tab cycle. `yolo` (full access) is deliberately NOT in the casual
+ *  cycle — it must be entered explicitly via /yolo or /mode yolo — so cycling
+ *  out of yolo lands on normal. */
+const MODE_CYCLE: OperatingMode[] = ['normal', 'auto', 'plan']
+export function cycleOperatingMode(current: OperatingMode): OperatingMode {
+  const i = MODE_CYCLE.indexOf(current)
+  if (i === -1) return 'normal'
+  return MODE_CYCLE[(i + 1) % MODE_CYCLE.length]!
 }
 
 export function resolveInitialMode(input: {
@@ -121,11 +131,13 @@ const AUTO_APPROVE_RISK = new Set<RiskClass>(['internal_state', 'mutating'])
 
 /**
  * Whether the operating mode should auto-grant an interactive approval prompt.
- * Only `auto` auto-approves, and only the low-risk tiers above. Pure: the four
- * upstream hard gates (mode / intent / provenance-deny / write-scope) have all
- * already run when this is consulted, so `auto` can never bypass deny,
- * provenance, write-scope, or headless policy — it only removes the prompt.
+ * `auto` auto-approves only the low-risk tiers above; `yolo` (full access)
+ * auto-approves every tier. Pure: the four upstream hard gates (mode / intent /
+ * provenance-deny / write-scope) have all already run when this is consulted, so
+ * neither `auto` nor `yolo` can bypass deny, provenance, write-scope, or
+ * headless policy — they only remove the prompt.
  */
 export function evaluateAutoApproval(mode: OperatingMode, riskClass: RiskClass): boolean {
+  if (mode === 'yolo') return true
   return mode === 'auto' && AUTO_APPROVE_RISK.has(riskClass)
 }

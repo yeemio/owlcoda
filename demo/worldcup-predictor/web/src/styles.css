@@ -253,6 +253,14 @@ body {
 }
 .thumb.add:hover { color: var(--owl); border-color: var(--owl); }
 
+/* final gate */
+.final-note {
+  width: 100%; min-height: 72px; background: var(--bg-2); color: var(--text);
+  border: 1px solid var(--glass-border); border-radius: 10px; padding: 10px; font-size: 13.5px;
+  resize: vertical; font-family: inherit;
+}
+.final-note:focus { outline: none; border-color: var(--owl); box-shadow: 0 0 10px rgba(124, 92, 255, 0.2); }
+
 /* inline role picker */
 .role-pick { display: flex; gap: 6px; margin-bottom: 8px; }
 .role-pick-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }

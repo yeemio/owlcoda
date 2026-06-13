@@ -154,6 +154,25 @@ export async function fetchRuns(matchId: string | number): Promise<Array<{ stamp
   const res = await fetch(`/api/runs/${matchId}`)
   return (await res.json()).runs ?? []
 }
+export async function fetchRunDetail(matchId: string | number, stamp: string): Promise<any> {
+  const res = await fetch(`/api/runs/${matchId}/${encodeURIComponent(stamp)}`)
+  return res.json()
+}
+export async function finalizeRun(body: {
+  matchId: string | number
+  stamp?: string
+  humanNote?: string
+  model: string
+  models?: { pro?: string; anti?: string; judge?: string }
+  owlcodaBaseUrl?: string
+}): Promise<{ ok?: boolean; stamp?: string; final?: any; final_pro?: any; final_anti?: any; error?: string; raw?: string }> {
+  const res = await fetch('/api/finalize', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return res.json()
+}
 
 // T5: turn raw upstream error JSON into a human sentence + raw detail.
 export function explainError(error: string): { headline: string; detail: string } {

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  cycleOperatingMode,
   ensureOperatingModeState,
   evaluateAutoApproval,
   evaluateModeGate,
@@ -37,10 +38,12 @@ describe('mode parsing and resolution', () => {
     expect(parseOperatingMode('plan')).toBe('plan')
     expect(parseOperatingMode('NORMAL')).toBe('normal')
     expect(parseOperatingMode(' auto ')).toBe('auto')
+    expect(parseOperatingMode('yolo')).toBe('yolo')
+    expect(parseOperatingMode('YOLO')).toBe('yolo')
   })
 
   it('rejects unknown modes', () => {
-    expect(parseOperatingMode('yolo')).toBeNull()
+    expect(parseOperatingMode('turbo')).toBeNull()
     expect(parseOperatingMode(undefined)).toBeNull()
   })
 
@@ -51,17 +54,17 @@ describe('mode parsing and resolution', () => {
   })
 
   it('ensures and initializes conversation-visible state by default', () => {
-    const target: { options?: { operatingModeState?: { mode: 'plan' | 'normal' | 'auto' } } } = {}
+    const target: { options?: { operatingModeState?: { mode: 'plan' | 'normal' | 'auto' | 'yolo' } } } = {}
     expect(ensureOperatingModeState(target, 'auto').mode).toBe('auto')
     expect(target.options?.operatingModeState?.mode).toBe('auto')
 
     delete process.env['OWLCODA_MODES']
-    const enabled: { options?: { operatingModeState?: { mode: 'plan' | 'normal' | 'auto' } } } = {}
+    const enabled: { options?: { operatingModeState?: { mode: 'plan' | 'normal' | 'auto' | 'yolo' } } } = {}
     initializeOperatingModeState(enabled, 'plan')
     expect(enabled.options?.operatingModeState?.mode).toBe('plan')
 
     process.env['OWLCODA_MODES'] = '0'
-    const disabled: { options?: { operatingModeState?: { mode: 'plan' | 'normal' | 'auto' } } } = {}
+    const disabled: { options?: { operatingModeState?: { mode: 'plan' | 'normal' | 'auto' | 'yolo' } } } = {}
     initializeOperatingModeState(disabled, 'plan')
     expect(disabled.options).toBeUndefined()
   })
@@ -87,7 +90,7 @@ describe('evaluateModeGate', () => {
     expect(evaluateModeGate('plan', 'grep', { pattern: 'x' })).toBeNull()
   })
 
-  it.each(['normal', 'auto'] as const)('%s never blocks (gate is additive)', (mode) => {
+  it.each(['normal', 'auto', 'yolo'] as const)('%s never blocks (gate is additive)', (mode) => {
     expect(evaluateModeGate(mode, 'write', {})).toBeNull()
     expect(evaluateModeGate(mode, 'bash', { command: 'rm -rf x' })).toBeNull()
   })
@@ -108,9 +111,27 @@ describe('evaluateAutoApproval', () => {
     expect(evaluateAutoApproval('auto', 'safe')).toBe(false)
   })
 
+  it('yolo auto-approves every tier (full-access: removes the prompt, hard gates still run upstream)', () => {
+    for (const rc of ['safe', 'internal_state', 'mutating', 'destructive', 'external_effect'] as const) {
+      expect(evaluateAutoApproval('yolo', rc)).toBe(true)
+    }
+  })
+
   it.each(['normal', 'plan'] as const)('%s never auto-approves any tier', (mode) => {
     for (const rc of ['safe', 'internal_state', 'mutating', 'destructive', 'external_effect'] as const) {
       expect(evaluateAutoApproval(mode, rc)).toBe(false)
     }
+  })
+})
+
+describe('cycleOperatingMode', () => {
+  it('cycles normal → auto → plan → normal (Shift+Tab)', () => {
+    expect(cycleOperatingMode('normal')).toBe('auto')
+    expect(cycleOperatingMode('auto')).toBe('plan')
+    expect(cycleOperatingMode('plan')).toBe('normal')
+  })
+
+  it('cycling out of yolo returns to normal (yolo needs explicit /yolo or /mode yolo)', () => {
+    expect(cycleOperatingMode('yolo')).toBe('normal')
   })
 })

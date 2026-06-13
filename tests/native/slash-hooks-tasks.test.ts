@@ -16,15 +16,10 @@ vi.mock('../../src/native/tools/task-store.js', async (orig) => ({
   ...(await orig<typeof import('../../src/native/tools/task-store.js')>()),
   listTasks: vi.fn(() => []),
 }))
-vi.mock('../../src/native/tools/schedule-cron.js', async (orig) => ({
-  ...(await orig<typeof import('../../src/native/tools/schedule-cron.js')>()),
-  listCronJobs: vi.fn(() => []),
-}))
 
 import { getLoadedPlugins } from '../../src/plugins/index.js'
 import { getRunningAgents } from '../../src/native/tools/agent.js'
 import { listTasks } from '../../src/native/tools/task-store.js'
-import { listCronJobs } from '../../src/native/tools/schedule-cron.js'
 
 let logSpy: ReturnType<typeof vi.spyOn>
 let usage: UsageTracker
@@ -34,7 +29,6 @@ beforeEach(() => {
   vi.mocked(getLoadedPlugins).mockReturnValue([])
   vi.mocked(getRunningAgents).mockReturnValue(new Map())
   vi.mocked(listTasks).mockReturnValue([])
-  vi.mocked(listCronJobs).mockReturnValue([])
 })
 afterEach(() => { logSpy.mockRestore() })
 function output(): string { return stripAnsi(logSpy.mock.calls.flat().join('\n')) }
@@ -65,26 +59,21 @@ describe('/hooks', () => {
 describe('/tasks', () => {
   it('shows an empty state and no stub when nothing is active', async () => {
     await handleSlashCommand('/tasks', convo(), usage)
-    expect(output()).toContain('No active tasks, running agents, or saved schedules')
+    expect(output()).toContain('No active tasks or running agents')
     expect(output()).not.toContain('not yet available')
   })
 
-  it('lists running agents, tasks, and a cron footer', async () => {
+  it('lists running agents and tasks', async () => {
     vi.mocked(getRunningAgents).mockReturnValue(
       new Map([['a1', { description: 'indexing repo', startTime: Date.now() - 5000 }]]),
     )
     vi.mocked(listTasks).mockReturnValue([
       { id: 't1', subject: 'Build feature', description: '', status: 'in_progress', blocks: [], blockedBy: [], createdAt: '', updatedAt: '' },
     ] as any)
-    vi.mocked(listCronJobs).mockReturnValue([
-      { id: 'c1', schedule: '0 9 * * *', command: 'echo hi', description: '', enabled: true, createdAt: '' },
-    ] as any)
     await handleSlashCommand('/tasks', convo(), usage)
     const out = output()
     expect(out).toContain('indexing repo')
     expect(out).toContain('Build feature')
-    expect(out).toContain('1 saved cron job')
-    expect(out).toContain('not auto-executed')
     expect(out).not.toContain('not yet available')
   })
 })

@@ -293,6 +293,8 @@ export interface ProviderProbeResult {
   backendModel: string
   /** Raw response body snippet (truncated) when the probe failed at the HTTP layer. Omitted on success and on connection-level failures. */
   bodySnippet?: string
+  /** The endpoint's real model, discovered best-effort via GET /models (its display_name when available). Distinct from backendModel, which is what was sent. Omitted when no usable /models list is exposed. */
+  resolvedModel?: { id: string; displayName?: string }
 }
 
 export interface MutationResponse {

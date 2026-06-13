@@ -3,12 +3,10 @@ import { describe, it, expect, vi } from 'vitest'
 // Mock the dispatch module
 vi.mock('../../src/native/dispatch.js', () => {
   const STUB_DESCRIPTIONS: Record<string, string> = {
-    SendMessage: '[stub] no consumer wired up',
-    ScheduleCron: '[stub] no scheduler thread',
     McpAuth: '[stub] tokens are NOT validated',
   }
   class MockDispatcher {
-    getToolNames() { return ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'SendMessage', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'ScheduleCron', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'REPL'] }
+    getToolNames() { return ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief'] }
     getToolDescription(name: string): string | undefined { return STUB_DESCRIPTIONS[name] }
   }
   return { ToolDispatcher: MockDispatcher }
@@ -59,9 +57,9 @@ describe('buildNativeToolDefs', () => {
     const dispatcher = new ToolDispatcher()
     const defs = buildNativeToolDefs(dispatcher)
 
-    expect(defs).toHaveLength(39)
+    expect(defs).toHaveLength(36)
     const names = defs.map((d: { name: string }) => d.name)
-    expect(names).toEqual(['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'SendMessage', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'ScheduleCron', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'REPL'])
+    expect(names).toEqual(['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief'])
   })
 
   it('each def has name, description, and input_schema', () => {
@@ -78,12 +76,6 @@ describe('buildNativeToolDefs', () => {
   it('honest stub disclosure from tool factory reaches the LLM (not the Native X placeholder)', () => {
     const dispatcher = new ToolDispatcher()
     const defs = buildNativeToolDefs(dispatcher)
-
-    const sendMessage = defs.find((d: { name: string }) => d.name === 'SendMessage')!
-    expect(sendMessage.description).toBe('[stub] no consumer wired up')
-
-    const scheduleCron = defs.find((d: { name: string }) => d.name === 'ScheduleCron')!
-    expect(scheduleCron.description).toBe('[stub] no scheduler thread')
 
     const mcpAuth = defs.find((d: { name: string }) => d.name === 'McpAuth')!
     expect(mcpAuth.description).toBe('[stub] tokens are NOT validated')

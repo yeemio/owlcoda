@@ -153,6 +153,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
       description: { type: 'string', description: 'A short (3-5 word) description of the task' },
       prompt: { type: 'string', description: 'The task for the agent to perform' },
       subagent_type: { type: 'string', description: 'Agent type: "general-purpose" (default) or "Explore" (read-only)' },
+      model: { type: 'string', description: 'Optional model id for the sub-agent. Defaults to the parent conversation model. Use a different model to isolate orchestration sub-agents from a data-generation backend (so one backend outage does not take down the whole fan-out).' },
       max_iterations: { type: 'number', description: 'Optional iteration budget for long-running sub-agent work. Defaults to 200 for general-purpose agents and 80 for Explore agents.' },
       expectedArtifacts: {
         type: 'array',
@@ -186,7 +187,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
         items: {
           type: 'object',
           properties: {
-            tool: { type: 'string', description: 'Tool name (e.g. "Bash")' },
+            tool: { type: 'string', description: 'Tool name (e.g. "bash")' },
             prompt: { type: 'string', description: 'Semantic description of the action' },
           },
           required: ['tool', 'prompt'],
@@ -401,15 +402,6 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
     },
     required: ['task_id'],
   },
-  SendMessage: {
-    type: 'object',
-    properties: {
-      to: { type: 'string', description: 'Recipient name, or "*" for broadcast' },
-      message: { description: 'Message content (string or object)' },
-      summary: { type: 'string', description: 'Optional summary of the message' },
-    },
-    required: ['to', 'message'],
-  },
   TeamCreate: {
     type: 'object',
     properties: {
@@ -440,34 +432,6 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
       data: { description: 'The structured data payload' },
     },
     required: ['data'],
-  },
-  REPL: {
-    type: 'object',
-    properties: {
-      operations: {
-        type: 'array',
-        description: 'Array of tool invocations to execute in order',
-        items: {
-          type: 'object',
-          properties: {
-            tool: { type: 'string', description: 'Tool name' },
-            input: { type: 'object', description: 'Tool input parameters' },
-          },
-          required: ['tool', 'input'],
-        },
-      },
-    },
-    required: ['operations'],
-  },
-  ScheduleCron: {
-    type: 'object',
-    properties: {
-      action: { type: 'string', enum: ['create', 'list', 'delete'], description: 'CRUD action' },
-      name: { type: 'string', description: 'Job name (for create/delete)' },
-      schedule: { type: 'string', description: 'Cron expression (for create)' },
-      command: { type: 'string', description: 'Shell command to run (for create)' },
-    },
-    required: ['action'],
   },
   RemoteTrigger: {
     type: 'object',

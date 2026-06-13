@@ -5,10 +5,11 @@ import {
   explainError,
   fetchCapabilities,
   fetchModels,
+  fetchRunDetail,
   fetchRuns,
   fetchShowcase,
   fetchTeams,
-  loadDecision,
+  finalizeRun,
   loadSettings,
   saveDecision,
   saveSettings,
@@ -42,7 +43,6 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
   const [running, setRunning] = useState(false)
   const [replay, setReplay] = useState(false)
   const [error, setError] = useState('')
-  const [decision, setDecision] = useState<string | null>(null)
   const [humanDecision, setHumanDecision] = useState<any>(null)
   const [inputs, setInputs] = useState({ recentForm: '', injuriesNews: '', oddsText: '', extraNotes: '' })
   const [images, setImages] = useState<Array<{ name: string; mediaType: string; base64: string }>>([])
@@ -53,6 +53,13 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
   const [caps, setCaps] = useState<Record<string, { vision: boolean | null }>>({})
   const [sources, setSources] = useState<Array<{ title: string; url: string }>>([])
   const [history, setHistory] = useState<Array<{ stamp: string; manifest: any; judge: any }>>([])
+  const [loadedStamp, setLoadedStamp] = useState<string | null>(null)
+  const [humanNote, setHumanNote] = useState('')
+  const [finalOutput, setFinalOutput] = useState<any>(null)
+  const [finalPro, setFinalPro] = useState<any>(null)
+  const [finalAnti, setFinalAnti] = useState<any>(null)
+  const [finalizing, setFinalizing] = useState(false)
+  const [finalError, setFinalError] = useState('')
 
   useEffect(() => {
     fetchTeams().then(setTeams).catch(() => {})
@@ -105,7 +112,13 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
     setFallbacks([])
     setError('')
     setReplay(false)
-    setDecision(fixture ? (loadDecision(fixture.match_id)?.decision ?? null) : null)
+    setLoadedStamp(null)
+    setHumanNote('')
+    setFinalOutput(null)
+    setFinalPro(null)
+    setFinalAnti(null)
+    setFinalError('')
+    setSources([])
   }, [fixture?.match_id])
 
   if (!fixture) return <div className="card">从「赛程」页选择一场比赛开始分析。</div>
@@ -156,6 +169,11 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
     setFallbacks([])
     setManifest(null)
     setSources([])
+    setLoadedStamp(null)
+    setFinalOutput(null)
+    setFinalPro(null)
+    setFinalAnti(null)
+    setFinalError('')
     setRoleStates(initialRoleStates())
     const roles = settings.singleModel
       ? { pro: settings.roles.pro, anti: settings.roles.pro, judge: settings.roles.pro }
@@ -224,9 +242,73 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
     setRunning(false)
   }
 
-  function decide(d: string) {
-    saveDecision(fixture!.match_id, d, roleStates.judge.output?.summary)
-    setDecision(d)
+  async function finalize() {
+    if (!fixture) return
+    setFinalizing(true)
+    setFinalError('')
+    try {
+      const res = await finalizeRun({
+        matchId: fixture.match_id,
+        stamp: loadedStamp ?? undefined,
+        humanNote,
+        model: settings.roles.judge.model || settings.roles.pro.model,
+        models: {
+          pro: settings.roles.pro.model,
+          anti: settings.roles.anti.model,
+          judge: settings.roles.judge.model,
+        },
+        owlcodaBaseUrl: settings.owlcodaBaseUrl,
+      })
+      if (res.final) {
+        setFinalOutput(res.final)
+        setFinalPro(res.final_pro ?? null)
+        setFinalAnti(res.final_anti ?? null)
+        saveDecision(fixture.match_id, res.final.selection ?? res.final.verdict, res.final.summary)
+      } else {
+        setFinalError(res.error ?? '收口失败')
+      }
+    } catch (err) {
+      setFinalError(String(err))
+    } finally {
+      setFinalizing(false)
+    }
+  }
+
+  async function loadRun(stamp: string) {
+    if (!fixture) return
+    const d = await fetchRunDetail(fixture.match_id, stamp)
+    if (d.error) return
+    setReplay(false)
+    setError('')
+    setFallbacks([])
+    setLoadedStamp(stamp)
+    setSources(Array.isArray(d.recon_sources) ? d.recon_sources : [])
+    setFinalOutput(d.final ?? null)
+    setFinalPro(d.final_pro ?? null)
+    setFinalAnti(d.final_anti ?? null)
+    setHumanNote(d.human_note ?? '')
+    const mk = (output: any, raw?: string | null): RoleState => ({
+      status: output || raw ? 'done' : 'idle',
+      model: '',
+      raw: raw ?? (output ? JSON.stringify(output) : ''),
+      output: typeof output === 'string' ? null : output,
+      charCount: 0,
+      startedAt: null,
+      durationMs: null,
+    })
+    const states = initialRoleStates()
+    states.pro = mk(d.pro)
+    states.anti = mk(d.anti)
+    states.judge = mk(d.judge)
+    states.vision = mk(null, d.vision_transcript)
+    states.recon = mk(null, d.recon_brief)
+    // models from manifest
+    for (const r of d.manifest?.roles ?? []) {
+      if (states[r.role as SeatRole]) states[r.role as SeatRole].model = r.model
+    }
+    setRoleStates(states)
+    setManifest(d.manifest ? { type: 'manifest', roles: d.manifest.roles, totalMs: d.manifest.total_ms ?? 0 } : null)
+    setDimensions([])
   }
 
   const judgeDone = roleStates.judge.status === 'done' && roleStates.judge.output
@@ -456,21 +538,27 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
         </div>
         {history.length > 0 && (
           <div className="card" style={{ marginTop: 10 }}>
-            <h3>历史分析存档({history.length} 次,data/runs/)</h3>
+            <h3>历史分析存档({history.length} 次,data/runs/,含全部原始资料)</h3>
+            {loadedStamp && (
+              <p className="hint" style={{ color: 'var(--cyan)' }}>
+                已加载 {loadedStamp} 的完整存档(证据包/侦查/转录/三方观点/收口)到上方界面。
+              </p>
+            )}
             {history.map((h) => (
-              <details key={h.stamp} style={{ marginBottom: 6 }}>
-                <summary className="hint" style={{ cursor: 'pointer' }}>
+              <div key={h.stamp} style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 6 }}>
+                <button
+                  className="btn ghost"
+                  style={{ fontSize: 12, padding: '4px 10px', flexShrink: 0 }}
+                  onClick={() => void loadRun(h.stamp)}
+                >
+                  {loadedStamp === h.stamp ? '已加载' : '加载'}
+                </button>
+                <span className="hint">
                   {h.stamp.replace(/T/, ' ').replace(/-(\d\d)-(\d\d\d)Z$/, ':$1')} —{' '}
                   {h.judge?.directional_pick ?? '?'} · 方向分 {h.judge?.directional_score ?? '?'} · {h.judge?.bet_grade ?? '?'}
                   {' '}({(h.manifest?.roles ?? []).map((r: any) => r.model).join(' / ')})
-                </summary>
-                <p className="hint" style={{ margin: '6px 0 0' }}>{h.judge?.summary}</p>
-                {h.judge?.win_probabilities && (
-                  <p className="hint" style={{ margin: '4px 0 0' }}>
-                    胜平负: {Math.round(h.judge.win_probabilities.home * 100)}% / {Math.round(h.judge.win_probabilities.draw * 100)}% / {Math.round(h.judge.win_probabilities.away * 100)}%
-                  </p>
-                )}
-              </details>
+                </span>
+              </div>
             ))}
           </div>
         )}
@@ -487,15 +575,67 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
           </div>
         )}
         {judgeDone && !replay && (
-          <div className="card" style={{ marginTop: 10 }}>
-            <h3>待你拍板(拍板前,辩论包不构成最终推荐)</h3>
-            {decision ? (
-              <p>已拍板: <b style={{ color: 'var(--owl)' }}>{decision}</b>(已存本地)</p>
-            ) : (
-              <div className="decision-row">
-                {['跟 Pro', '跟 Anti', '按 Judge', 'pass'].map((d) => (
-                  <button key={d} className="btn ghost" onClick={() => decide(d)}>{d}</button>
-                ))}
+          <div className="card" style={{ marginTop: 10, borderColor: 'var(--owl)' }}>
+            <h3>你的拍板(辩论包不是最终结论,这一步才是)</h3>
+            {!finalOutput && (
+              <>
+                <textarea
+                  className="final-note"
+                  value={humanNote}
+                  onChange={(e) => setHumanNote(e.target.value)}
+                  placeholder="补充你的判断(可留空)。例:亚盘并非单源,Judge 该降权点应上修;我看 -1.25,比分 2-0/3-0…"
+                />
+                <div style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                  <button className="btn" disabled={finalizing} onClick={() => void finalize()}>
+                    {finalizing ? '终辩进行中…(Pro 检验 → Anti 审计 → 终审)' : humanNote.trim() ? '把我的意见交给战队终辩' : '复核并收口'}
+                  </button>
+                  <span className="hint">你的意见会被当作待检验输入再辩一轮——模型可以反对你;终审给出采纳/部分采纳/驳回</span>
+                </div>
+                {finalError && <p className="hint" style={{ color: 'var(--anti)' }}>{finalError}</p>}
+              </>
+            )}
+            {finalOutput && (
+              <div>
+                {finalOutput.stance_on_human && (
+                  <p style={{ margin: '0 0 8px', fontSize: 14 }}>
+                    对主理人意见的终审: <b style={{ color: finalOutput.stance_on_human === 'adopt' ? 'var(--pro)' : finalOutput.stance_on_human === 'reject' ? 'var(--anti)' : 'var(--warn)' }}>
+                      {{ adopt: '采纳', partial: '部分采纳', reject: '驳回' }[finalOutput.stance_on_human as string] ?? finalOutput.stance_on_human}
+                    </b>
+                    {finalOutput.stance_rationale && <span className="hint" style={{ display: 'block', marginTop: 4 }}>{finalOutput.stance_rationale}</span>}
+                  </p>
+                )}
+                <div className="kv">
+                  <span>最终: <b style={{ color: 'var(--owl)' }}>{finalOutput.selection}</b></span>
+                  <span>verdict: <b>{finalOutput.verdict}</b></span>
+                  {finalOutput.scoreline_lean && <span>比分: <b>{finalOutput.scoreline_lean}</b></span>}
+                </div>
+                {finalOutput.win_probabilities && (
+                  <div className="kv">
+                    胜平负: <b>{Math.round(finalOutput.win_probabilities.home * 100)}%</b> /{' '}
+                    <b>{Math.round(finalOutput.win_probabilities.draw * 100)}%</b> /{' '}
+                    <b>{Math.round(finalOutput.win_probabilities.away * 100)}%</b>
+                  </div>
+                )}
+                <p style={{ fontSize: 13.5, lineHeight: 1.7, margin: '6px 0' }}>{finalOutput.summary}</p>
+                {finalOutput.ranking_note && <p className="hint" style={{ margin: '4px 0' }}>{finalOutput.ranking_note}</p>}
+                {finalPro && (
+                  <details style={{ margin: '6px 0' }}>
+                    <summary className="hint" style={{ cursor: 'pointer' }}>终辩 · Pro 检验({{ support: '支持', partial: '部分支持', oppose: '反对' }[finalPro.stance_on_human as string] ?? finalPro.stance_on_human ?? '—'})</summary>
+                    <p className="hint" style={{ margin: '6px 0 0' }}>{finalPro.argument}</p>
+                  </details>
+                )}
+                {finalAnti && (
+                  <details style={{ margin: '6px 0' }}>
+                    <summary className="hint" style={{ cursor: 'pointer' }}>终辩 · Anti 审计({{ support: '支持', partial: '部分支持', oppose: '反对' }[finalAnti.stance_on_human as string] ?? finalAnti.stance_on_human ?? '—'})</summary>
+                    <p className="hint" style={{ margin: '6px 0 0' }}>{finalAnti.argument}</p>
+                    {Array.isArray(finalAnti.veto_triggers) && finalAnti.veto_triggers.length > 0 && (
+                      <p className="hint" style={{ margin: '4px 0 0', color: 'var(--warn)' }}>否决性风险: {finalAnti.veto_triggers.join(';')}</p>
+                    )}
+                  </details>
+                )}
+                <button className="btn ghost" style={{ marginTop: 6, fontSize: 12, padding: '6px 10px' }} onClick={() => { setFinalOutput(null); setFinalError('') }}>
+                  重新终辩
+                </button>
               </div>
             )}
           </div>

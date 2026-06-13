@@ -33,15 +33,47 @@ export function createReadMcpResourceTool(
     description: 'Read a resource from a connected MCP server by URI.',
 
     async execute(input: ReadMcpResourceInput): Promise<ToolResult> {
-      const { server_name, uri } = input
+      // Be charitable about near-miss param names. Weak models routinely
+      // emit `server:` / `serverName:` instead of `server_name:` and then
+      // retry the identical wrong shape after a bare "server_name is
+      // required", burning a loop. Coerce the common aliases so the call
+      // just works; only error when no recognizable key is present, and
+      // then SAY what we received so the next attempt can self-correct.
+      const raw = (input ?? {}) as unknown as Record<string, unknown>
+      const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+      const server_name = str(raw['server_name']) || str(raw['serverName']) || str(raw['server'])
+      const uri = str(raw['uri']) || str(raw['url']) || str(raw['resource'])
 
-      if (!server_name) return { output: 'Error: server_name is required.', isError: true }
-      if (!uri) return { output: 'Error: uri is required.', isError: true }
+      if (!server_name) {
+        const keys = Object.keys(raw)
+        return {
+          output:
+            `Error: server_name is required (received key(s): ${keys.length ? keys.join(', ') : 'none'}). ` +
+            `Pass {"server_name": "<connected MCP server>", "uri": "<resource uri>"}.`,
+          isError: true,
+          metadata: { failureCategory: 'mcp:bad-params' },
+        }
+      }
+      if (!uri) return { output: 'Error: uri is required.', isError: true, metadata: { failureCategory: 'mcp:bad-params' } }
+
+      // file:// is a local-filesystem path, not an MCP resource. Models reach
+      // for ReadMcpResource here when they want a file; redirect to Read so
+      // they stop retrying against a server that will never serve it.
+      if (/^file:\/\//i.test(uri)) {
+        return {
+          output:
+            `Error: "${uri}" is a local file path, not an MCP resource. ` +
+            `Use the Read tool to read local files (Read accepts an absolute path).`,
+          isError: true,
+          metadata: { failureCategory: 'mcp:file-uri' },
+        }
+      }
 
       if (!provider.isConnected(server_name)) {
         return {
           output: `MCP server "${server_name}" is not connected.`,
           isError: true,
+          metadata: { failureCategory: 'mcp:not-connected' },
         }
       }
 
@@ -54,7 +86,7 @@ export function createReadMcpResourceTool(
         }
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
-        return { output: `Error reading resource: ${msg}`, isError: true }
+        return { output: `Error reading resource: ${msg}`, isError: true, metadata: { failureCategory: 'mcp:read-error' } }
       }
     },
   }

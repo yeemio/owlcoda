@@ -1191,7 +1191,7 @@ export interface ComposerRailOptions {
    * paints nothing, so the default rail is unchanged. Distinct from the
    * legacy derived `mode` prop above, which the state pulse already carries.
    */
-  readonly operatingMode?: 'plan' | 'normal' | 'auto'
+  readonly operatingMode?: 'plan' | 'normal' | 'auto' | 'yolo'
   readonly busy: boolean
   readonly queued: number
   readonly contextTokens: number
@@ -1280,8 +1280,10 @@ export function renderComposerRail(opts: ComposerRailOptions): string {
     cells.splice(1, 0, {
       kind: 'kv',
       label: 'mode',
-      value: opts.operatingMode,
-      valueColor: opts.operatingMode === 'auto' ? themeColor('warning') : themeColor('owl'),
+      value: opts.operatingMode === 'yolo' ? 'YOLO' : opts.operatingMode,
+      valueColor: opts.operatingMode === 'yolo' ? themeColor('error')
+        : opts.operatingMode === 'auto' ? themeColor('warning')
+        : themeColor('owl'),
     })
   }
   if (opts.contextMax > 0) {

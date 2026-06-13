@@ -40,6 +40,13 @@ const SAFE_READ_CASES: Case[] = [
   { input: 'git branch', level: 'safe_readonly' },
   { input: 'echo hello', level: 'safe_readonly' },
   { input: 'echo $PATH', level: 'safe_readonly' },
+  // `cd` mutates nothing; it used to fall through to `unknown`, which made
+  // TaskVerify command checks (`cd <repo> && <check>`) and headless gating
+  // refuse the most trivially safe command. The worst-chunk splitter still
+  // catches `cd X && rm -rf` via the rm chunk (covered in DANGEROUS_CASES).
+  { input: 'cd /Users/publicuser/AI/gitrep/owlrunkit', level: 'safe_readonly' },
+  { input: 'cd', level: 'safe_readonly' },
+  { input: 'cd ..', level: 'safe_readonly' },
   { input: 'whoami', level: 'safe_readonly' },
   { input: 'uname -a', level: 'safe_readonly' },
   { input: 'wc -l src/*.ts', level: 'safe_readonly' },
@@ -47,8 +54,18 @@ const SAFE_READ_CASES: Case[] = [
   { input: 'tail -50 dist/cli.js', level: 'safe_readonly' },
   { input: 'find . -name "*.ts"', level: 'safe_readonly' }, // no -exec/-delete
   { input: 'node --version', level: 'safe_readonly' },
+  { input: 'node -v', level: 'safe_readonly' }, // node uses -v for version
   { input: 'npm --version', level: 'safe_readonly' },
   { input: 'npm list', level: 'safe_readonly' },
+  // python/python3 use -V / --version for version (-v is verbose-import);
+  // a genuine version check carries no module/script argument.
+  { input: 'python --version', level: 'safe_readonly' },
+  { input: 'python3 --version', level: 'safe_readonly' },
+  { input: 'python -V', level: 'safe_readonly' },
+  // `env` alone or with only VAR=val assignments is a read-only dump/set;
+  // `env VAR=val <read-only-cmd>` classifies by the wrapped command.
+  { input: 'env', level: 'safe_readonly' },
+  { input: 'env FOO=1 cat README.md', level: 'safe_readonly' },
   { input: 'jq . package.json', level: 'safe_readonly' },
   { input: 'true', level: 'safe_readonly' },
   // sleep is side-effect-free and shows up in legitimate `sleep N; echo done`
@@ -130,6 +147,13 @@ const UNKNOWN_CASES: Case[] = [
   { input: 'some-custom-cli --do-thing', level: 'unknown' },
   { input: 'base64 -d <<< Zm9vCg==', level: 'unknown' },
   { input: 'docker run -it ubuntu', level: 'unknown' },
+  // `-v` is pytest's VERBOSE flag, not a version check — the command runs
+  // tests (executes code), so it must NOT be optimistically read-only.
+  { input: 'python -m pytest x.py -v', level: 'unknown' },
+  { input: 'python -m pytest testing/fixtures.py -x -v -k "show_fixture"', level: 'unknown' },
+  // `env VAR=val <cmd>` RUNS <cmd>; classify by the wrapped command, not by a
+  // blanket trust of `env`. Here the wrapped command is a test run.
+  { input: 'env PYTHONPATH=src python3 -m pytest x.py -q', level: 'unknown' },
 ]
 
 const COMPOUND_CASES: Case[] = [

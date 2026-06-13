@@ -47,6 +47,18 @@ export function TestConnectionPanel({ onTest, submitting, result, error, disable
                 <dd>{result.backendModel}</dd>
               </div>
             )}
+            {result.resolvedModel && (
+              <div>
+                <dt>{t('modelReal')}</dt>
+                <dd>
+                  {result.resolvedModel.displayName ?? result.resolvedModel.id}
+                  {result.resolvedModel.displayName &&
+                    result.resolvedModel.id !== result.resolvedModel.displayName && (
+                      <span className="tone-muted"> ({result.resolvedModel.id})</span>
+                    )}
+                </dd>
+              </div>
+            )}
             {result.endpoint && (
               <div>
                 <dt>{t('routeTested')}</dt>

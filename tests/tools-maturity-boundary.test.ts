@@ -97,16 +97,16 @@ describe('native tool maturity and registration boundary', () => {
     const advertisedNames = buildNativeToolDefs(dispatcher).map(def => def.name)
 
     expect(advertisedNames).toEqual(registeredNames)
-    expect(registeredNames).toHaveLength(45)
-    expect(schemaNames).toHaveLength(47)
+    expect(registeredNames).toHaveLength(43)
+    expect(schemaNames).toHaveLength(44)
 
     const schemaOnlyRows = rows
       .filter(row => !registeredNames.includes(row.name))
       .map(row => row.name)
 
-    expect(sorted(schemaOnlyRows)).toEqual(['Agent', 'REPL'])
-    expect(markdown).toContain('45 registered tool_defs')
-    expect(markdown).toContain('47 schema rows')
+    expect(sorted(schemaOnlyRows)).toEqual(['Agent'])
+    expect(markdown).toContain('43 registered tool_defs')
+    expect(markdown).toContain('44 schema rows')
   })
 
   it.skipIf(!HAS_TOOLS_DOC)('keeps docs summary counts aligned with the tool-by-tool table', async () => {
@@ -116,8 +116,8 @@ describe('native tool maturity and registration boundary', () => {
     expect(parseSummaryCounts(markdown)).toEqual(countRowsByMaturity(rows))
     expect(parseSummaryCounts(markdown)).toEqual({
       production: 13,
-      beta: 26,
-      stub: 3,
+      beta: 25,
+      stub: 1,
       experimental: 5,
     })
   })
@@ -145,7 +145,7 @@ describe('native tool maturity and registration boundary', () => {
       }
     }
 
-    for (const name of ['SendMessage', 'ScheduleCron', 'McpAuth', 'RemoteTrigger', 'LSP', 'REPL']) {
+    for (const name of ['McpAuth', 'RemoteTrigger', 'LSP']) {
       expect(rowsByName.get(name)?.maturity, `${name} is an ADR-007 stub/orphan boundary`).not.toBe('production')
     }
   })
@@ -156,8 +156,6 @@ describe('native tool maturity and registration boundary', () => {
     )
 
     const expectedDisclosures: Array<[string, RegExp]> = [
-      ['SendMessage', /no consumer wired up|not real inter-agent communication/i],
-      ['ScheduleCron', /no cron daemon|scheduler thread|will never fire/i],
       ['McpAuth', /not validated|rubber-stamps/i],
     ]
 

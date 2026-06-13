@@ -31,12 +31,10 @@ import { createTaskUpdateTool } from './tools/task-update.js'
 import { createTaskStopTool } from './tools/task-stop.js'
 import { createTaskOutputTool } from './tools/task-output.js'
 import { createTaskVerifyTool } from './tools/task-verify.js'
-import { createSendMessageTool } from './tools/send-message.js'
 import { createTeamCreateTool } from './tools/team-create.js'
 import { createTeamDeleteTool } from './tools/team-delete.js'
 import { createToolSearchTool } from './tools/tool-search.js'
 import { createStructuredOutputTool } from './tools/structured-output.js'
-import { createScheduleCronTool } from './tools/schedule-cron.js'
 import { createRemoteTriggerTool } from './tools/remote-trigger.js'
 import { createMCPTool } from './tools/mcp-tool.js'
 import { createListMcpResourcesTool } from './tools/list-mcp-resources.js'
@@ -96,9 +94,28 @@ export class ToolDispatcher {
     return [...this.tools.keys()]
   }
 
-  /** Check if a tool is registered. */
+  /**
+   * Resolve a tool by name, tolerating case differences in the
+   * model-emitted name. Some models intermittently emit a capitalized
+   * name (e.g. "Bash") while the registry holds the canonical lowercase
+   * "bash"; a case-sensitive lookup would mis-report it as an unknown
+   * tool. Exact match wins; a case-insensitive scan is the fallback.
+   * Tool count is small (~45) so the linear scan is negligible, and
+   * scanning live (rather than caching) stays correct after unregister().
+   */
+  private resolveTool(name: string): NativeToolDef<unknown> | undefined {
+    const exact = this.tools.get(name)
+    if (exact) return exact
+    const lower = name.toLowerCase()
+    for (const [key, tool] of this.tools) {
+      if (key.toLowerCase() === lower) return tool
+    }
+    return undefined
+  }
+
+  /** Check if a tool is registered (case-insensitive). */
   has(name: string): boolean {
-    return this.tools.has(name)
+    return this.resolveTool(name) !== undefined
   }
 
   /**
@@ -108,17 +125,16 @@ export class ToolDispatcher {
    * Wire-the-honest-text exists because `buildNativeToolDefs` and
    * `ToolSearch` previously hardcoded a `"Native ${name} tool"`
    * placeholder, which silently dropped honest stub-disclosure copy
-   * (e.g. SendMessage's "There is no consumer wired up to drain these
-   * queues" or McpAuth's "tokens are NOT validated"). The LLM never
+   * (e.g. McpAuth's "tokens are NOT validated"). The LLM never
    * saw what the maintainer wrote.
    */
   getToolDescription(name: string): string | undefined {
-    return this.tools.get(name)?.description
+    return this.resolveTool(name)?.description
   }
 
   /** Execute a single tool_use block. */
   async executeTool(block: AnthropicToolUseBlock, context?: ToolExecutionContext): Promise<ToolExecutionResult> {
-    const tool = this.tools.get(block.name)
+    const tool = this.resolveTool(block.name)
     if (!tool) {
       return {
         toolUseId: block.id,
@@ -131,16 +147,21 @@ export class ToolDispatcher {
       }
     }
 
+    // Normalize to the canonical registered name so the write guard,
+    // failure policy, telemetry, and run-workspace bookkeeping all key on
+    // the real tool regardless of the casing the model emitted.
+    const toolName = tool.name
+
     const start = Date.now()
     try {
-      const guardViolation = evaluateWriteGuard(block.name, block.input, context?.taskState)
+      const guardViolation = evaluateWriteGuard(toolName, block.input, context?.taskState)
       if (guardViolation) {
         if (context?.taskState) {
           markTaskWriteScopeBlocked(context.taskState, guardViolation.message, guardViolation.attemptedPath)
         }
         return {
           toolUseId: block.id,
-          toolName: block.name,
+          toolName,
           result: {
             output: guardViolation.message,
             isError: true,
@@ -155,28 +176,28 @@ export class ToolDispatcher {
       }
 
       const rawResult = await tool.execute(block.input, context)
-      const result = applyToolFailurePolicy(block.name, block.input, rawResult)
-      await recordBashArtifactProgress(context?.taskState, block.name, block.input, start)
+      const result = applyToolFailurePolicy(toolName, block.input, rawResult)
+      await recordBashArtifactProgress(context?.taskState, toolName, block.input, start)
       if (!result.isError) {
-        recordWriteSuccess(context?.taskState, block.name, block.input, result.metadata)
-        recordToolExecutionProgress(context?.taskState, block.name, block.input, result.metadata)
-        await ensureRunWorkspaceForStructuredTask(context?.taskState, block.name, block.input, result.metadata)
+        recordWriteSuccess(context?.taskState, toolName, block.input, result.metadata)
+        recordToolExecutionProgress(context?.taskState, toolName, block.input, result.metadata)
+        await ensureRunWorkspaceForStructuredTask(context?.taskState, toolName, block.input, result.metadata)
 
         // B2: Mirror TodoWrite todos → plan.json when a RunWorkspace exists.
         const runWorkspaceB2 = context?.taskState?.run.runWorkspace
-        if (block.name === 'TodoWrite' && runWorkspaceB2) {
+        if (toolName === 'TodoWrite' && runWorkspaceB2) {
           await mirrorTodosToRunWorkspace(block.input, runWorkspaceB2.runDir).catch(() => {})
         }
 
         // B3: Append write/edit/NotebookEdit artifacts within outputRoot → artifacts.json.
         const runWorkspaceB3 = context?.taskState?.run.runWorkspace
-        if (runWorkspaceB3 && (block.name === 'write' || block.name === 'edit' || block.name === 'NotebookEdit')) {
-          await recordWriteArtifact(block.name, result.metadata, runWorkspaceB3.runDir, runWorkspaceB3.outputRoot).catch(() => {})
+        if (runWorkspaceB3 && (toolName === 'write' || toolName === 'edit' || toolName === 'NotebookEdit')) {
+          await recordWriteArtifact(toolName, result.metadata, runWorkspaceB3.runDir, runWorkspaceB3.outputRoot).catch(() => {})
         }
       }
       return {
         toolUseId: block.id,
-        toolName: block.name,
+        toolName,
         result,
         durationMs: Date.now() - start,
       }
@@ -184,7 +205,7 @@ export class ToolDispatcher {
       const msg = err instanceof Error ? err.message : String(err)
       return {
         toolUseId: block.id,
-        toolName: block.name,
+        toolName,
         result: { output: `Error: ${msg}`, isError: true },
         durationMs: Date.now() - start,
       }
@@ -240,14 +261,12 @@ export class ToolDispatcher {
     this.register(createTaskStopTool())
     this.register(createTaskOutputTool())
     this.register(createTaskVerifyTool())
-    this.register(createSendMessageTool())
     this.register(createTeamCreateTool())
     this.register(createTeamDeleteTool())
     this.register(createToolSearchTool({
       getToolDescription: (name) => this.getToolDescription(name),
     }))
     this.register(createStructuredOutputTool())
-    this.register(createScheduleCronTool())
     this.register(createRemoteTriggerTool())
     this.register(createMCPTool(this.mcpManager))
     this.register(createListMcpResourcesTool(this.mcpManager))

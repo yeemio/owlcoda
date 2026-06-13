@@ -371,6 +371,17 @@ const ARTIFACT_PROGRESS_REPAIR_ITER_WINDOW = 3
 const PRODUCTION_GATE_ITER_THRESHOLD = 5
 const PRODUCTION_GATE_DISTINCT_FILES = 3
 const TOOL_LOOP_GUARD_WINDOW = 24
+
+// Cross-turn failure-class ceiling. The windowed detectors only see the last
+// TOOL_LOOP_GUARD_WINDOW attempts, so failures spread thinly across a long
+// session (each with a different arg, interspersed with successful tools)
+// slide out of the window before any 3 coincide. This counts (tool,
+// failureCategory) cumulatively over the whole run — resetting when the tool
+// genuinely succeeds — and is deliberately higher than the windowed same-class
+// threshold (3) to stay conservative against a tool that legitimately hits the
+// same no-progress class a few times across distinct, separately-resolved
+// problems.
+const CROSS_TURN_FAILURE_CLASS_LIMIT = 5
 const TOOL_OUTPUT_MAX_CHARS = 20_000 // truncate individual tool outputs beyond this
 const TOOL_DISPLAY_OUTPUT_MAX_CHARS = 8_000 // callback/display copy should be smaller than model retention
 const TOOL_ONLY_NUDGE_THRESHOLD = 3
@@ -812,6 +823,10 @@ export async function runConversationLoop(
   // of the same key triggers hard terminate at the dispatcher level,
   // before either tool execution or loop-guard dedupe runs.
   const schemaFailCounts = new Map<string, number>()
+  // 2026-06-13: cumulative (tool, failureCategory) failure counts across the
+  // whole run — the cross-turn loop-guard ledger. Persisted across turns like
+  // schemaFailCounts; reset per-tool on a genuine success of that tool.
+  const crossTurnFailureClasses = new Map<string, number>()
   // 0.13.63 (D): rolling window of assistant text-output sizes (in
   // chars) for the most recent iterations. When the last 3 in a row
   // each exceed OUTPUT_BLOAT_CHARS, fire `[Runtime output-bloat check]`
@@ -2062,6 +2077,9 @@ export async function runConversationLoop(
       // 0.13.62 (B): schema-failure dedup map; second-strike same
       // (tool, missingFields) hard-terminates at dispatcher level.
       schemaFailCounts,
+      // 2026-06-13: cross-turn failure-class ledger for the windowed loop
+      // guard's blind spot (failures spread beyond the 24-attempt window).
+      crossTurnFailureClasses,
     )
 
     // 4a. Probe-coverage tracking (0.13.51; 0.13.54: pass tool outcome
@@ -4989,6 +5007,7 @@ async function executeTools(
   conversationForGuard?: Conversation,
   interceptedIntents?: Set<string>,
   schemaFailCounts?: Map<string, number>,
+  crossTurnFailureClasses?: Map<string, number>,
 ): Promise<{ results: ToolExecutionResult[]; loopError?: string; terminalError?: string }> {
   const results: ToolExecutionResult[] = []
   const userIntent = latestUserText ? inferUserIntent(latestUserText) : 'neutral'
@@ -5022,7 +5041,7 @@ async function executeTools(
     }
 
     const nextAttempt = buildToolAttempt(block.name, block.input)
-    const loopError = isToolLoopGuardEnabled() ? detectToolLoop(attempts, nextAttempt) : null
+    const loopError = isToolLoopGuardEnabled() ? detectToolLoop(attempts, nextAttempt, crossTurnFailureClasses) : null
     if (loopError) {
       const mode = getLoopInterceptMode()
       const alreadyIntercepted = interceptedIntents?.has(nextAttempt.intentKey) === true
@@ -5517,11 +5536,15 @@ async function executeTools(
         rawFailureCategory.length > 0
           ? rawFailureCategory
           : undefined
-      recordToolAttempt(attempts, {
+      const completedAttempt = {
         ...nextAttempt,
         isError: result.result.isError,
         failureCategory,
-      })
+      }
+      recordToolAttempt(attempts, completedAttempt)
+      if (crossTurnFailureClasses) {
+        recordCrossTurnFailureClass(crossTurnFailureClasses, completedAttempt)
+      }
     }
     callbacks?.onToolEnd?.(
       block.name,
@@ -5563,7 +5586,7 @@ function canonicalizeToolEvidencePath(pathToCheck: string): string {
   }
 }
 
-function buildToolAttempt(
+export function buildToolAttempt(
   name: string,
   input: Record<string, unknown>,
   isError = false,
@@ -5609,11 +5632,57 @@ function recordToolAttempt(attempts: ToolAttemptSignature[], attempt: ToolAttemp
   }
 }
 
-function detectToolLoop(
+/**
+ * Update the cross-turn failure-class ledger from a completed attempt.
+ *
+ * - A clean success (no failure class) of a tool counts as progress: clear
+ *   ALL of that tool's accumulated failure classes so a later, distinct
+ *   problem on the same tool starts from zero.
+ * - A classified failure increments its (tool, failureCategory) counter.
+ *
+ * Keyed on failureCategory — the only signal that aggregates failures whose
+ * args vary (a model retrying the same broken call with a different path/uri
+ * never repeats signature or intentKey, but the tool-asserted failure class
+ * stays constant).
+ */
+export function recordCrossTurnFailureClass(
+  ledger: Map<string, number>,
+  attempt: ToolAttemptSignature,
+): void {
+  if (!attempt.isError && !attempt.failureCategory) {
+    const prefix = `${attempt.name}:`
+    for (const key of [...ledger.keys()]) {
+      if (key.startsWith(prefix)) ledger.delete(key)
+    }
+    return
+  }
+  if (attempt.isError && attempt.failureCategory) {
+    const key = `${attempt.name}:${attempt.failureCategory}`
+    ledger.set(key, (ledger.get(key) ?? 0) + 1)
+  }
+}
+
+export function detectToolLoop(
   attempts: ToolAttemptSignature[],
   next: ToolAttemptSignature,
+  crossTurnFailureClasses?: Map<string, number>,
 ): string | null {
   const recent = attempts.slice(-TOOL_LOOP_GUARD_WINDOW)
+
+  // Cross-turn failure-class ceiling. Catches a tool that keeps failing the
+  // same class across a long session — interspersed with other (successful)
+  // tools and with a varying arg each time — so it never trips the windowed
+  // detectors. Only blocks RE-ENTERING the stuck tool: a pivot to a different
+  // tool is allowed, and a genuine success of the tool has already reset its
+  // counters (see recordCrossTurnFailureClass).
+  if (crossTurnFailureClasses) {
+    const prefix = `${next.name}:`
+    for (const [key, count] of crossTurnFailureClasses) {
+      if (count >= CROSS_TURN_FAILURE_CLASS_LIMIT && key.startsWith(prefix)) {
+        return `task stuck in tool loop: ${count} cumulative ${key} failures across turns — re-running ${next.name} will not help`
+      }
+    }
+  }
 
   // Progress-signal v2: bash remains exempt from intent/category heuristics,
   // but exact call-level failure dedup is allowed. This matches the real

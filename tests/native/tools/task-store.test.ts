@@ -166,6 +166,20 @@ describe('TaskStore — Steps (Slice 1)', () => {
     expect(getTaskStep(task.id, 'step-99')).toBeUndefined()
   })
 
+  // 2026-06-13 dogfood (P2-11): a model lost track of which step ids belonged
+  // to a task and kept calling TaskUpdate/TaskVerify with invented ids
+  // (step-5 on a 3-step task). The "not found" error named the bad id but not
+  // the valid ones, giving the model nothing to self-correct from. List them.
+  it('lists the available step ids when updateTaskStep targets a missing step', () => {
+    const task = makeTaskWithSteps()
+    const r = updateTaskStep(task.id, 'step-5', { status: 'in_progress' })
+    expect(r.ok).toBe(false)
+    expect(r.ok === false && r.reason).toContain('not found')
+    expect(r.ok === false && r.reason).toContain('step-1')
+    expect(r.ok === false && r.reason).toContain('step-2')
+    expect(r.ok === false && r.reason).toContain('step-3')
+  })
+
   it('getCurrentOrNextStep returns in_progress first', () => {
     const task = makeTaskWithSteps()
     updateTaskStep(task.id, 'step-2', { status: 'in_progress' })
