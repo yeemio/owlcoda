@@ -16,6 +16,42 @@
 
 <p>All notable changes to OwlCoda public releases are documented here.</p>
 
+<h2>[0.15.4] — 2026-06-13</h2>
+
+<p>Dogfood-driven harness fixes, operating-mode consolidation, and a sub-agent model override.</p>
+
+<h3>Added</h3>
+
+<ul>
+<li>Sub-agents can run on a different model than their parent: the <code>Agent</code> tool</li>
+<p>  takes an optional <code>model</code>, resolved as <code>input.model</code> &gt; <code>OWLCODA_SUBAGENT_MODEL</code></p>
+<p>  &gt; parent — so an orchestration sub-agent need not share the parent's backend.</p>
+<li>Admin "test connection" now shows the endpoint's real reported model version.</li>
+</ul>
+<h3>Changed</h3>
+
+<ul>
+<li>Unified the operating-mode surface: <code>/mode</code>, <code>/yolo</code>, <code>/approve</code>, and <code>/plan</code></li>
+<p>  all write one shared mode state that the permission gate reads.</p>
+<li>Removed three non-functional stub tools (<code>repl</code>, <code>schedule-cron</code>,</li>
+<p>  <code>send-message</code>).</p>
+</ul>
+<h3>Fixed</h3>
+
+<ul>
+<li>Tool dispatch is case-insensitive, so a model emitting <code>Bash</code> instead of the</li>
+<p>  canonical <code>bash</code> no longer fails with <code>unknown tool</code>.</p>
+<li>A bare <code>cd</code> is classified as a safe read-only command instead of being gated.</li>
+<li>Tightened bash risk classification so commands that execute code are not</li>
+<p>  mislabeled read-only: <code>python -m pytest … -v</code> (pytest's *verbose* flag, not a</p>
+<p>  version check) and <code>env VAR=val &lt;cmd&gt;</code> now classify by what they actually run.</p>
+<li><code>ReadMcpResource</code> recovers from common mistakes: it coerces parameter aliases,</li>
+<p>  lists the keys it received, and redirects a <code>file://</code> URI to <code>Read</code>.</p>
+<li>The loop guard now catches cross-turn accumulation of the same failure class</li>
+<p>  (keyed by tool + failure category), and <code>TaskVerify</code> flags unsatisfiable</p>
+<p>  checks so the guard stops futile re-verification.</p>
+<li>"Step not found" errors from the task tools now list the available step ids.</li>
+</ul>
 <h2>[0.15.3] — 2026-06-12</h2>
 
 <p>Interrupt-recovery and rendering hotfix.</p>
@@ -117,4 +153,4 @@
 <h2>Older Releases</h2>
 
 <p>Historical package versions remain under the license terms that accompanied those versions when they were published.</p>
-</div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>本地优先 AI 编码工作台</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/zh/docs/install" data-astro-cid-sz7xmlte>文档</a></li> <li data-astro-cid-sz7xmlte><a href="/architect/" data-astro-cid-sz7xmlte>架构看板</a></li> <li data-astro-cid-sz7xmlte><a href="/zh/changelog" data-astro-cid-sz7xmlte>更新日志</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.15.3</li> <li class="pill" data-astro-cid-sz7xmlte>GPL 源码</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>本地诊断</li> </ul> </div> </footer>  </body></html>
+</div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>本地优先 AI 编码工作台</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/zh/docs/install" data-astro-cid-sz7xmlte>文档</a></li> <li data-astro-cid-sz7xmlte><a href="/architect/" data-astro-cid-sz7xmlte>架构看板</a></li> <li data-astro-cid-sz7xmlte><a href="/zh/changelog" data-astro-cid-sz7xmlte>更新日志</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.15.4</li> <li class="pill" data-astro-cid-sz7xmlte>GPL 源码</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>本地诊断</li> </ul> </div> </footer>  </body></html>
