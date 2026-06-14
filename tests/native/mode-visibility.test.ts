@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderComposerRail } from '../../src/native/tui/message.js'
-import { SLASH_COMMANDS_REQUIRING_ARGS } from '../../src/native/repl-shared.js'
+import { buildSlashPickerItems, SLASH_COMMANDS_REQUIRING_ARGS } from '../../src/native/repl-shared.js'
 import { stripAnsi } from '../../src/native/tui/colors.js'
 
 const base = {
@@ -47,5 +47,18 @@ describe('composer rail operating-mode cell', () => {
 describe('/mode picker prefill', () => {
   it('/mode requires an argument (picker prefills instead of executing)', () => {
     expect(SLASH_COMMANDS_REQUIRING_ARGS.has('/mode')).toBe(true)
+  })
+})
+
+// /plan is no longer a status-only shell — it functionally enters read-only
+// plan mode (and /plan off leaves). The picker hint still said "Plan mode
+// status", which mislabels what selecting it does.
+describe('/plan picker hint reflects the functional command', () => {
+  it('describes entering plan mode, not just showing status', () => {
+    const plan = buildSlashPickerItems().find((i) => i.value === '/plan')
+    expect(plan).toBeDefined()
+    const desc = (plan?.description ?? '').toLowerCase()
+    expect(desc).not.toContain('status')
+    expect(desc).toContain('plan')
   })
 })

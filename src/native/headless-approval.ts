@@ -67,6 +67,7 @@ import { classifyBashCommand, type BashRiskClassification, type BashRiskLevel } 
 import { classifyDeliverableContract } from './deliverable-contract.js'
 import { evaluateWriteGuard } from './task-state.js'
 import type { TaskExecutionState } from './protocol/types.js'
+import { canonicalToolName } from './tool-defs.js'
 
 export type HeadlessApprovalDecision =
   | { allowed: true; reason: 'safe-tool' }
@@ -135,12 +136,16 @@ export function buildHeadlessApprovalCallback(
  * `--auto-approve`. Other tools ignore `input`.
  */
 export function decideHeadlessApproval(
-  toolName: string,
+  rawToolName: string,
   autoApprove: boolean,
   input?: Record<string, unknown>,
   taskState?: TaskExecutionState,
   toolPolicy?: HeadlessToolFilterPolicy,
 ): HeadlessApprovalDecision {
+  // Canonicalize FIRST: a wrong-case "Bash" must not slip past
+  // UNSAFE_HEADLESS_TOOLS into the safe-tool auto-allow (it would run rm -rf
+  // unattended). This also feeds the denylist filter the canonical name.
+  const toolName = canonicalToolName(rawToolName)
   const filterDecision = decideHeadlessToolFilter(toolName, toolPolicy)
   if (filterDecision) return filterDecision
 

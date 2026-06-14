@@ -63,5 +63,16 @@ owlcoda serve
 - 证据不足时框架输出 pass/watch,不硬推方向
 - 本 demo 不构成任何投注建议
 
+## 每日自动复盘(self-grading loop)
+
+比赛结束后,owlcoda 智能体自动抓取真实赛果(人一键确认),对照已归档的
+数学基线 / 三角辩论终判 / 人工决策算一张确定性四维记分卡(方向命中、概率
+校准 Brier、让球穿盘/EV、CLV),并在「战绩」页累计展示。
+
+- 触发:进程内每日定时(默认 BJT 10:00,`REVIEW_DAILY_AT` 可配)
+- 手动:`npm run review -- --date=YYYY-MM-DD`,或 `POST /api/review/run?date=`
+- 诚实:抓不到赛果标 unsupported(绝不编造);无收盘线 CLV 标 n/a
+- FIFA 赛后体能/技战术数据回填为 Phase 2,见 docs/2026-06-14-daily-auto-review-design.md
+
 ---
 Powered by [OwlCoda](../../README.md) · Your models. Your tools. Your data.

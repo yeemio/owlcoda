@@ -10,6 +10,17 @@ const COMMON_RULES = `严禁编造已经查询、已经确认、已经抓取但�
 必须区分事实和推断;证据不足时允许给出 pass。
 只返回一个 JSON 对象,不要 Markdown,不要代码块,不要额外解释。`
 
+// Distilled euro-odds reading core (from the adversarially-verified
+// betting-master framework; full version in docs/betting-framework-synthesis.md).
+// Shared by all roles — only the rules that genuinely change judgment.
+const ODDS_CORE = `## 欧赔读盘核心(全角色共享)
+1. 先剥水再用概率:1/赔率 之和>1,直接当概率会系统性高估每一腿。证据里若已给"市场净概率 P_market"就用它,没有就声明无市场端。
+2. edge 与 EV 是两套坐标,符号可不一致,铁律不可混用:edge=P_model−P_market(相对公平价偏离,诊断用,必要非充分);EV=P_model×赔率−1(打过这家水位的真实下注期望)。**正式价值门槛是 EV>0,不是 edge>0**;二者背离时以 EV 为准,标注"公平价有 value 但被水位吃掉"。
+3. 确定性基线 P_model 是统计先验、不是真理:它不知道伤停/阵容/战意/赔率。可以用证据推翻它,但推翻必须给依据,不能只因"感觉"。
+4. 热门偏差(FLB):冷门(赔率>4)市场常系统性高估→别见冷门就反手推;重热门(赔率<1.5)别因"是热门"就回避,一切看 EV。
+5. 欧赔/亚盘/大小球必须自洽(同一进球分布的三个投影):让球盘必配比分剧本(如 -1.25 配 2-0/3-0),三者"对不上"就是定价矛盾。
+6. 数据来源三层标注、同表可区分:math(剥水/EV,数学算的)、model(P_model,模型判断的)、user(用户输入/截图赔率,单源声明)。单源赔率不是共识,证据等级要降。`
+
 const PRO_SCHEMA = `{"role": "pro", "verdict": "bet|lean|pass", "market": "h2h|asian_handicap|totals|correct_score|parlay|none", "selection": "free text", "confidence": "low|medium|high", "summary": "一句话总结", "facts": ["仅列事实"], "core_points": ["支持下注的最强论点"], "risks": ["该立场也必须承认的风险"], "data_quality": "complete|partial|weak", "market_coverage": ["实际有证据的市场"], "data_gaps": ["缺失或老化的数据"]}`
 
 const ANTI_SCHEMA = `{"role": "anti", "verdict": "bet|lean|pass", "market": "h2h|asian_handicap|totals|correct_score|parlay|none", "selection": "free text", "confidence": "low|medium|high", "summary": "一句话总结", "facts": ["仅列事实"], "core_points": ["反对/风控的最强论点"], "counter_to_pro": ["逐条反驳 Pro 的具体论点"], "risks": ["反方立场自身的风险"], "data_quality": "complete|partial|weak", "market_coverage": ["实际有证据的市场"], "data_gaps": ["缺失或老化的数据"]}`
@@ -25,6 +36,8 @@ Pro 的结论只是候选,不是最终买入裁决;必须主动列出该候选�
 全市场必须检查,但只能把有证据的市场写进 market_coverage。
 没有用户提供的赔率证据时,market_coverage 不得包含任何赔率市场,verdict 倾向只能基于画像与用户补充证据,并在 data_gaps 中声明赔率缺失。
 推荐让球盘方向时,必须同时声明配套的比分剧本(例:-1.25 配 2-0/3-0),并自查它与大小球信号是否互相打架。
+${ODDS_CORE}
+Pro 专项:用 edge/EV 论价值而不只论方向——只在 EV>0 且 value 超过模型误差带时才称"价值候选";"大热门很稳"不是价值论据(方向稳≠有价值)。引用叙事/近期表现时必须同时给出非叙事的基线证据。
 JSON schema 示例:${PRO_SCHEMA}`,
     user: `以下是本场比赛的全部可用证据,必须以此为准:\n\n${evidenceBrief}`,
   }
@@ -38,6 +51,8 @@ ${COMMON_RULES}
 必须逐条反驳 Pro 的具体论点(counter_to_pro),不允许泛泛而谈。
 重点审计两类硬伤:① Pro 是否把多源盘口误标为单源(或反之);② Pro 的让球剧本与大小球剧本是否互相打架(强队早进球→比赛打开→小球失效)。
 同时必须诚实列出反方立场自身的风险。
+${ODDS_CORE}
+Anti 专项武器:① 单源脆弱性——单源赔率只反映该机构定价倾向、无跨源中位数抵消,默认降一档可信度,bet 上限锁 lean;② FLB 双向——冷门正 edge 默认疑为水位假象、要额外证据;③ 用稳健下界判价值:EV_low≈(P_model−σ)×赔率−1,EV_low≤0 即否决(赛季初 σ 取大)。Pro 若靠单一高赔 outlier 论"上行空间",拦截。
 JSON schema 示例:${ANTI_SCHEMA}`,
     user: `以下是本场比赛的全部可用证据:\n\n${evidenceBrief}\n\n## Pro 的立论(待你审计)\n${proJson}`,
   }
@@ -129,8 +144,15 @@ directional_score_rationale 必须解释分数如何被证据质量扣分,而不
 5. 慢热剧本:揭幕战/首战慢热、弱队低位死守的路径必须纳入 anti_direction_case 评估。
 6. 候选排序:存在多个候选方向时,summary 末尾给出优先级排序(例:主队-1.25 lean > 主队胜 > pass)。
 
+${ODDS_CORE}
+Judge 价值判定(有赔率时必须执行):有赔率必先用净概率算 edge/EV,价值通过的主判据是 EV>0(更严的看 EV_low>0),不是 edge>0、不是方向强。任一概率端(P_model/P_market)缺失或为 inferred,最高只能给"边缘",不得给"通过"。
+
+## 确定性基线锚(本场已提供 P_model)
+证据里的"确定性统计基线"是可复现的数学先验,不是真理。你的 win_probabilities 应以它为锚,只在有新鲜证据(伤停/阵容/赔率/战意)时偏离,并在 directional_score_rationale 说明偏离多少、依据什么。无新鲜证据时不要大幅偏离基线。
+失真区门控:若本场属于基线已知失真区(跨洲对阵 Elo 不可比 / 淘汰赛低进球均值偏移 / 东道主增益 / 末轮战意默契球轮换 / 基线置信度为 partial 或 inferred),基线只能作校验、不能作硬锚;此时允许更大偏离,但必须在 rationale 标注"基线可信度下调,原因 X"。
+
 ## 预测卡片(demo 扩展,必须输出)
-win_probabilities: 主胜/平/客胜概率,三者之和必须为1,基于证据而非愿望;证据弱时概率应趋向保守。
+win_probabilities: 主胜/平/客胜概率,三者之和必须为1,以确定性基线为锚、按证据修正,证据弱时贴近基线。
 top_scorelines: 最可能的2个比分及概率;证据不足时给低概率并在 final_risks 声明这是低置信推断。
 JSON schema 示例:${JUDGE_SCHEMA}`,
     user: `以下是本场比赛的全部可用证据:\n\n${evidenceBrief}\n\n## Pro 立论\n${proJson}\n\n## Anti 审计\n${antiJson}`,

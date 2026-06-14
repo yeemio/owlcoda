@@ -87,7 +87,9 @@ describe('runAnalysis end-to-end against mock owlcoda', () => {
     await runAnalysis(req, fixture, team, null, (e) => events.push(e))
 
     const types = events.map((e) => e.type)
-    expect(types[0]).toBe('run_start')
+    expect(types[0]).toBe('baseline') // deterministic prior emitted first
+    expect(types).toContain('run_start')
+    expect(types.indexOf('run_start')).toBeLessThan(types.indexOf('role_start'))
     expect(types).toContain('token_delta')
     expect(types.filter((t) => t === 'role_done')).toHaveLength(3)
     expect(types[types.length - 1]).toBe('done')

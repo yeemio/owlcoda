@@ -5,6 +5,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs'
 import { getOwlcodaDir } from '../paths.js'
+import { canonicalToolName } from './tool-defs.js'
 import { join } from 'node:path'
 
 interface PermissionsData {
@@ -22,7 +23,9 @@ export function loadPermissions(): Set<string> {
     const p = getPermissionsPath()
     if (!existsSync(p)) return new Set()
     const raw = JSON.parse(readFileSync(p, 'utf-8')) as PermissionsData
-    return new Set(raw.globalApprove ?? [])
+    // Canonicalize on load so the gate (which canonicalizes the lookup name)
+    // matches, and legacy wrong-case entries (e.g. "Bash") heal automatically.
+    return new Set((raw.globalApprove ?? []).map(canonicalToolName))
   } catch {
     return new Set()
   }
@@ -45,7 +48,9 @@ export function savePermissions(approved: Set<string>): void {
 /** Add a tool to persistent permissions. */
 export function addGlobalPermission(toolName: string): void {
   const perms = loadPermissions()
-  perms.add(toolName)
+  // Store the canonical name so a wrong-case "Always" grant actually matches the
+  // canonicalized read side in tui-approval (and shows correctly in /permissions).
+  perms.add(canonicalToolName(toolName))
   savePermissions(perms)
 }
 

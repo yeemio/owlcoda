@@ -70,7 +70,7 @@ import { discoverBackends } from "../backends/discovery.js"
 import { warmupModels, formatWarmupResults } from "../warmup.js"
 import { recommendModel, formatRecommendation, type Intent } from "../model-recommender.js"
 import { loadConfig, resolveModelContextCapability, resolveModelContextWindow } from "../config.js"
-import { ensureOperatingModeState, isModesEnabled, parseOperatingMode, type OperatingMode } from "./modes.js"
+import { ensureOperatingModeState, isModesEnabled, OPERATING_MODES, parseOperatingMode, type OperatingMode } from "./modes.js"
 import {
   branchSession, listBranches,
   addSessionTag, removeSessionTag, getSessionTags, findSessionsByTag,
@@ -458,6 +458,25 @@ export function parseApiError(raw: string): string {
   return raw.length > 200 ? raw.slice(0, 200) + '…' : raw
 }
 
+/**
+ * Single writer for the operating mode at runtime. `operatingModeState.mode` is
+ * the source of truth; `approveState.autoApprove` is a mirror read by the
+ * approval gate (`tui-approval` short-circuits on it) and the rail's YOLO cell.
+ * Every runtime mode-write (/mode, /plan, /yolo, /approve) goes through here so
+ * the two can't desync. The reported bug: /yolo set the mirror but /mode/​/plan
+ * wrote only the mode, leaving autoApprove stuck open — so the user could never
+ * switch back out of yolo (gate kept auto-approving, rail stayed red).
+ */
+function setOperatingModeSynced(
+  conversation: Conversation,
+  approveState: ApproveState | undefined,
+  nextMode: OperatingMode,
+  opts?: ReplOptions,
+): void {
+  ensureOperatingModeState(conversation, opts?.mode ?? 'normal').mode = nextMode
+  if (approveState) approveState.autoApprove = nextMode === 'yolo'
+}
+
 /** Handle slash commands. Returns true if handled. */
 export async function handleSlashCommand(input: string, conversation: Conversation, usage: UsageTracker, opts?: ReplOptions, approveState?: ApproveState, dispatcher?: ToolDispatcher, statusBar?: PersistentStatusBar, toolCollector?: ToolResultCollector, rl?: readline.Interface, mcpManager?: MCPManager, thinkingState?: ThinkingState, output?: SlashCommandOutput, hooks: SlashCommandHooks = {}): Promise<boolean> {
   const parts = input.split(/\s+/)
@@ -523,8 +542,7 @@ export async function handleSlashCommand(input: string, conversation: Conversati
     /permissions      Show permission settings
     /settings         Show settings panel
     /memory           Show memory/context files
-${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|auto)\n' : ''}    /plan             Plan mode info
-    /vim              Toggle vim keybindings
+${isModesEnabled() ? `    /mode [mode]      Show or switch mode (${OPERATING_MODES.join('|')})\n    /plan             Enter read-only plan mode\n` : ''}    /vim              Toggle vim keybindings
     /editor           Open $EDITOR for multi-line input
     /add-dir <path>   Add a working directory
     /login [model key] Manage cloud API keys
@@ -1322,18 +1340,18 @@ ${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|aut
       const state = ensureOperatingModeState(conversation, opts?.mode ?? 'normal')
       if (!arg) {
         console.log(`Operating mode: ${ansi.cyan}${state.mode}${ansi.reset}`)
-        console.log(dim('Use /mode plan, /mode normal, or /mode auto to switch this session.'))
+        console.log(dim(`Use /mode <${OPERATING_MODES.join('|')}> to switch this session.`))
         return true
       }
 
       const nextMode = parseOperatingMode(arg)
       if (!nextMode) {
-        console.log(formatError(`Invalid mode "${arg}". Expected plan, normal, or auto.`))
+        console.log(formatError(`Invalid mode "${arg}". Expected ${OPERATING_MODES.join(', ')}.`))
         return true
       }
 
       const previous = state.mode
-      state.mode = nextMode
+      setOperatingModeSynced(conversation, approveState, nextMode, opts)
       console.log(renderNotice(`Operating mode set to ${nextMode} (was ${previous}).`, 'success'))
       // Say what the mode DOES — in a read-only session plan/normal/auto
       // are behaviorally indistinguishable, so without this line (and the
@@ -1951,9 +1969,10 @@ ${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|aut
       // for /mode yolo|normal. approveState.autoApprove is kept as a derived mirror
       // so the TUI approval plumbing stays in sync. OWLCODA_MODES=0 → mirror only.
       const applyFull = (full: boolean) => {
-        approveState.autoApprove = full
         if (isModesEnabled()) {
-          ensureOperatingModeState(conversation, opts?.mode ?? 'normal').mode = full ? 'yolo' : 'normal'
+          setOperatingModeSynced(conversation, approveState, full ? 'yolo' : 'normal', opts)
+        } else {
+          approveState.autoApprove = full
         }
       }
       if (a === 'on' || a === 'yes' || a === 'true' || a === 'yolo') {
@@ -2321,13 +2340,12 @@ ${isModesEnabled() ? '    /mode [mode]      Show or switch mode (plan|normal|aut
       }
       // Functional shorthand into the single /mode axis: /plan enters read-only
       // plan mode, /plan off|exit|normal leaves it. (Not a status-only shell.)
-      const state = ensureOperatingModeState(conversation, opts?.mode ?? 'normal')
       const a = arg.toLowerCase()
       if (a === 'off' || a === 'exit' || a === 'normal') {
-        state.mode = 'normal'
+        setOperatingModeSynced(conversation, approveState, 'normal', opts)
         console.log(renderNotice('Left plan mode — operating mode set to normal.', 'success'))
       } else {
-        state.mode = 'plan'
+        setOperatingModeSynced(conversation, approveState, 'plan', opts)
         console.log(renderNotice('Plan mode active — read-only. Write/edit and mutating bash are refused.', 'success'))
         console.log(dim('Use /plan off (or /mode normal|auto) to leave.'))
       }

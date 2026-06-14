@@ -11,7 +11,8 @@
     "web": "vite --config web/vite.config.ts",
     "build": "vite build --config web/vite.config.ts",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "review": "tsx server/review/cli.ts"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

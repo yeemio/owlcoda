@@ -2,6 +2,42 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.5] — 2026-06-14
+
+Safety release: closes the gates through which a code-executing command could run
+without the approval the active operating mode promised.
+
+### Security
+
+- **HIGH — unattended headless `--mode yolo` ran dangerous bash without the
+  deny-gate.** In headless runs, mode auto-approve was overriding the headless
+  safety deny-gate, so a destructive command could execute with no human present.
+  The deny-gate now survives mode auto-approve: dangerous bash is blocked even
+  under `--mode yolo`, while read-only and workspace-test commands still pass.
+- **Task sub-agents no longer bypass the approval gate by delegation.** A parent
+  could hand a dangerous command to a spawned sub-agent, which ran with no
+  approval callback at all. Dangerous bash in a sub-agent is now gated like the
+  parent's, closing the delegation bypass.
+- **Wrong-case tool names no longer slip past the risk and mode gates.** A model
+  emitting `Bash` (instead of canonical `bash`) sidestepped the destructive-
+  command gate. Tool names are now canonicalized in the risk, mode, headless,
+  write-scope, intent, and TUI gates, and in the persistent "Always allow" store
+  (a wrong-case grant previously never stuck).
+
+### Fixed
+
+- Startup `--mode yolo` no longer desyncs the auto-approve mirror, and `/mode`
+  and `/plan` clear that mirror so you can switch back out of yolo.
+- `/mode` copy advertises `yolo`, and the `/plan` hint is accurate and gated on
+  whether modes are enabled.
+
+### Notes
+
+- Ships the `worldcup-predictor` daily auto-review (self-grading loop) v1 demo to
+  the public source mirror. The demo lives under `demo/` and is excluded from the
+  npm package; the runtime change in this npm release is the safety hardening
+  above.
+
 ## [0.15.4] — 2026-06-13
 
 Dogfood-driven harness fixes, operating-mode consolidation, and a sub-agent model override.

@@ -6,7 +6,9 @@ import {
   evaluateModeGate,
   initializeOperatingModeState,
   isModesEnabled,
+  OPERATING_MODES,
   parseOperatingMode,
+  resolveInitialAutoApprove,
   resolveInitialMode,
 } from '../../src/native/modes.js'
 
@@ -124,6 +126,40 @@ describe('evaluateAutoApproval', () => {
   })
 })
 
+describe('OPERATING_MODES (single source for help/error copy)', () => {
+  it('is the complete, ordered set of modes', () => {
+    // The /mode help text, the invalid-mode error, and parseOperatingMode all
+    // derive from this list — so a new mode can never silently drop out of the
+    // user-facing copy. yolo MUST be present (it was omitted from the strings).
+    expect(OPERATING_MODES).toEqual(['plan', 'normal', 'auto', 'yolo'])
+  })
+})
+
+describe('resolveInitialAutoApprove (startup mode↔autoApprove sync)', () => {
+  // Bug: starting the REPL with `--mode yolo` set operatingModeState.mode=yolo
+  // but left approveStateRef.autoApprove=false (it was env-only), so yolo was
+  // dead at startup — same desync class as /mode/​/plan not mirroring before
+  // setOperatingModeSynced. The mirror must agree with the initial mode.
+  it('starting in yolo auto-approves even without the env var', () => {
+    expect(resolveInitialAutoApprove('yolo', undefined)).toBe(true)
+  })
+
+  it('non-yolo startup modes do not auto-approve on their own', () => {
+    expect(resolveInitialAutoApprove('plan', undefined)).toBe(false)
+    expect(resolveInitialAutoApprove('normal', undefined)).toBe(false)
+    expect(resolveInitialAutoApprove('auto', undefined)).toBe(false)
+    expect(resolveInitialAutoApprove(undefined, undefined)).toBe(false)
+  })
+
+  it('still honors the supervised-run env escape hatch for non-yolo modes', () => {
+    for (const v of ['1', 'true', 'yes', 'on', 'yolo', 'YOLO', ' On ']) {
+      expect(resolveInitialAutoApprove('normal', v)).toBe(true)
+    }
+    expect(resolveInitialAutoApprove('normal', '0')).toBe(false)
+    expect(resolveInitialAutoApprove('normal', 'nope')).toBe(false)
+  })
+})
+
 describe('cycleOperatingMode', () => {
   it('cycles normal → auto → plan → normal (Shift+Tab)', () => {
     expect(cycleOperatingMode('normal')).toBe('auto')
@@ -133,5 +169,15 @@ describe('cycleOperatingMode', () => {
 
   it('cycling out of yolo returns to normal (yolo needs explicit /yolo or /mode yolo)', () => {
     expect(cycleOperatingMode('yolo')).toBe('normal')
+  })
+})
+
+describe('evaluateModeGate — wrong-case tool names (P2-12 safety sibling)', () => {
+  it('plan mode refuses a wrong-case mutating bash just like the canonical name', () => {
+    expect(evaluateModeGate('plan', 'bash', { command: 'rm -rf /tmp/x' })).not.toBeNull()
+    expect(evaluateModeGate('plan', 'Bash', { command: 'rm -rf /tmp/x' })).not.toBeNull()
+  })
+  it('plan mode refuses a wrong-case Write', () => {
+    expect(evaluateModeGate('plan', 'Write', { file_path: '/tmp/x', content: 'y' })).not.toBeNull()
   })
 })

@@ -6,7 +6,13 @@ vi.mock('../../src/native/conversation.js', () => ({
   runConversationLoop: vi.fn(async () => ({ conversation: { turns: [] }, finalText: '', iterations: 0 })),
   resolveDefaultMaxOutputTokens: vi.fn(() => 32_768),
 }))
-vi.mock('../../src/native/tool-defs.js', () => ({ buildNativeToolDefs: () => [] }))
+// Spread the real module so exports the headless approval gate needs (e.g.
+// canonicalToolName) aren't stripped — a bare factory was a latent runtime
+// throw waiting for any code path that reaches the gate. Mirrors headless.test.ts.
+vi.mock('../../src/native/tool-defs.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/native/tool-defs.js')>()),
+  buildNativeToolDefs: () => [],
+}))
 vi.mock('../../src/native/session.js', async (orig) => ({
   ...(await orig() as object),
   loadSession: vi.fn(() => null),

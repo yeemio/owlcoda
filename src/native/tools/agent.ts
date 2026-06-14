@@ -21,7 +21,8 @@ import {
   type ConversationCallbacks,
 } from '../conversation.js'
 import { ToolDispatcher } from '../dispatch.js'
-import { buildNativeToolDefs } from '../tool-defs.js'
+import { buildNativeToolDefs, canonicalToolName } from '../tool-defs.js'
+import { classifyBashCommand } from '../bash-risk.js'
 import { buildSystemPrompt } from '../system-prompt.js'
 import { classifyTaskContract } from '../task-contract.js'
 import type { TaskPathScope } from '../protocol/types.js'
@@ -498,6 +499,49 @@ function resolveAgentMaxIterations(input: AgentInput, isExplore: boolean): numbe
   return isExplore ? DEFAULT_EXPLORE_AGENT_MAX_ITERATIONS : DEFAULT_GENERAL_AGENT_MAX_ITERATIONS
 }
 
+/** Hard-deny the catastrophic command class (rm -rf, sudo, curl|sh, force-push)
+ *  for a sub-agent that has no live approval surface. Non-dangerous work —
+ *  writes, safe bash, reads — proceeds, since the parent already approved the
+ *  Agent spawn and these are the sub-agent's job. Mirrors the dangerous-tier
+ *  carve-out that decideTuiToolApproval / the headless deny-gate already apply. */
+function denyDangerousSubAgentTool(
+  toolName: string,
+  input: Record<string, unknown>,
+): Promise<boolean> {
+  const canon = canonicalToolName(toolName)
+  const cmd = input?.['command']
+  if ((canon === 'bash' || canon === 'TaskCreate') && typeof cmd === 'string' && cmd.length > 0) {
+    if (classifyBashCommand(cmd).level === 'dangerous') return Promise.resolve(false)
+  }
+  return Promise.resolve(true)
+}
+
+/**
+ * Resolve the approval-related callbacks for a spawned sub-agent. The per-tool
+ * approval/deny path in executeTools only runs when onToolApproval is present;
+ * the sub-agent loop previously omitted it entirely, so a delegated `rm -rf`
+ * ran ungated — bypassing the gate the parent applies to a direct call.
+ *
+ * When the host provides an approval surface (forwarded via deps.callbacks),
+ * inherit it (and its `unattended` posture, so interactive yolo still suppresses
+ * the prompt). When it doesn't — the current interactive-REPL reality, where the
+ * Agent tool is registered outside the component and runs without a live prompt —
+ * install a hard deny-gate (unattended) for the dangerous class only.
+ */
+export function resolveSubAgentApproval(
+  host: ConversationCallbacks | undefined,
+): Pick<ConversationCallbacks, 'onToolApproval' | 'onTaskScopeApproval' | 'onUserQuestion' | 'unattended'> {
+  if (host?.onToolApproval) {
+    return {
+      onToolApproval: host.onToolApproval,
+      onTaskScopeApproval: host.onTaskScopeApproval,
+      onUserQuestion: host.onUserQuestion,
+      unattended: host.unattended,
+    }
+  }
+  return { onToolApproval: denyDangerousSubAgentTool, unattended: true }
+}
+
 export interface AgentToolDeps {
   /** API base URL for sub-agent requests */
   apiBaseUrl: string
@@ -644,6 +688,9 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
           deps.callbacks?.onNotice?.(msg)
         },
         onError: (err) => deps.callbacks?.onError?.(`${label} ${err}`),
+        // Sub-agents must not run the catastrophic class ungated: inherit the
+        // host approval surface when present, else hard-deny dangerous bash.
+        ...resolveSubAgentApproval(deps.callbacks),
       }
 
       const loopOpts: ConversationLoopOptions = {

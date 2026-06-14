@@ -1085,7 +1085,7 @@ const SLASH_PICKER_HINTS: Record<string, string> = {
   '/rewind': 'Remove last N turn pairs',
   '/context': 'Show context window usage',
   '/mode': 'Switch operating mode',
-  '/plan': 'Plan mode status',
+  '/plan': 'Enter read-only plan mode',
   '/permissions': 'Show tool permissions',
   '/diff': 'Show git diff',
   '/memory': 'Show OWLCODA.md memory',

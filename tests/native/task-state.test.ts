@@ -1423,6 +1423,11 @@ describe('evaluateIntentGuard', () => {
     expect(evaluateIntentGuard('NotebookEdit', 'analysis')).not.toBeNull()
   })
 
+  it('blocks wrong-case Write/Edit when intent is analysis (P2-12 safety sibling)', () => {
+    expect(evaluateIntentGuard('Write', 'analysis')).not.toBeNull()
+    expect(evaluateIntentGuard('EDIT', 'analysis')).not.toBeNull()
+  })
+
   it('does not block bash/read/glob when intent is analysis', () => {
     expect(evaluateIntentGuard('bash', 'analysis')).toBeNull()
     expect(evaluateIntentGuard('read', 'analysis')).toBeNull()

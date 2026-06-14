@@ -140,13 +140,13 @@ import {
   markTaskBlocked,
   shouldTreatTaskRunStatusAsFailure,
 } from './task-state.js'
-import { buildNativeToolDefs } from './tool-defs.js'
+import { buildNativeToolDefs, canonicalToolName } from './tool-defs.js'
 import { createAgentTool } from './tools/agent.js'
 import { createConfigTool } from './tools/config.js'
 import { createEnterPlanModeTool, type PlanModeState } from './tools/enter-plan-mode.js'
 import { createExitPlanModeTool } from './tools/exit-plan-mode.js'
 import { createProbePlanTool } from './tools/probe-plan.js'
-import { ensureOperatingModeState, initializeOperatingModeState, isModesEnabled } from './modes.js'
+import { ensureOperatingModeState, initializeOperatingModeState, isModesEnabled, resolveInitialAutoApprove } from './modes.js'
 import {
   ToolResultCollector,
   formatFooterOnlyToolEnd,
@@ -305,17 +305,6 @@ export function getLiveApproveState(): { autoApprove: boolean; autoDeny?: boolea
 // format + eligibility check). We don't persist the full diagnostic across
 // restarts — just the attempt counter — because the original provider
 // diagnostic is stale by the time the user resumes anyway.
-/**
- * Resolve the initial `autoApprove` state for a new REPL session.
- * Safe-by-default: destructive tools prompt. Opt out via env var for
- * supervised runs (CI, scripted agents, trusted workflows).
- * Accepted "enable" forms: 1 / true / yes / on / yolo (case-insensitive).
- */
-function resolveDefaultAutoApprove(): boolean {
-  const raw = (process.env['OWLCODA_AUTO_APPROVE'] ?? '').trim().toLowerCase()
-  return raw === '1' || raw === 'true' || raw === 'yes' || raw === 'on' || raw === 'yolo'
-}
-
 function resolveReplRuntimeAutoRetryLimit(): number {
   const raw = (process.env['OWLCODA_REPL_RUNTIME_AUTO_RETRY_LIMIT'] ?? '').trim().toLowerCase()
   if (!raw) return DEFAULT_REPL_RUNTIME_AUTO_RETRY_LIMIT
@@ -837,7 +826,9 @@ function NativeReplApp({
   // (read-only ops like read / glob / grep) always auto-pass regardless
   // of this flag, so normal exploration stays friction-free.
   const approveStateRef = useRef<ApproveState>({
-    autoApprove: resolveDefaultAutoApprove(),
+    // Reconcile the mirror with the initial mode: `--mode yolo` must auto-approve
+    // from the first turn, not just after the user re-toggles it (startup desync).
+    autoApprove: resolveInitialAutoApprove(opts.mode, process.env['OWLCODA_AUTO_APPROVE']),
   })
   const pendingSlashSideEffectRef = useRef<SlashCommandSideEffect | null>(null)
   // Stable ref that always points to the current handleSubmit. Used by
@@ -1414,6 +1405,10 @@ function NativeReplApp({
   const handlePermissionDecision = useCallback((decision: 'allow' | 'deny' | 'always' | 'all') => {
     if (!permissionPrompt) return
     const toolDisplay = permissionPrompt.toolName
+    // Persist/compare under the canonical name so a wrong-case "Bash" [A]lways
+    // grant matches the canonicalized read side (decideTuiToolApproval) in the
+    // same session — not only after a disk reload via loadPermissions.
+    const canonName = canonicalToolName(permissionPrompt.toolName)
 
     // Demote `[A] Always` and `[A] All` to `[Y] Allow once` when the
     // current prompt is for a dangerous bash/TaskCreate command. The
@@ -1428,7 +1423,7 @@ function NativeReplApp({
     // hit Always thinking that's the "make it stop asking" option).
     let effectiveDecision: 'allow' | 'deny' | 'always' | 'all' = decision
     if ((decision === 'always' || decision === 'all')
-        && (permissionPrompt.toolName === 'bash' || permissionPrompt.toolName === 'TaskCreate')) {
+        && (canonName === 'bash' || canonName === 'TaskCreate')) {
       const cmd = permissionPrompt.input?.['command']
       if (typeof cmd === 'string' && cmd.length > 0) {
         const verdict = classifyBashCommand(cmd)
@@ -1441,8 +1436,8 @@ function NativeReplApp({
     if (permissionPrompt.toolName === 'TaskContract') {
       permissionPrompt.resolve(effectiveDecision !== 'deny')
     } else if (effectiveDecision === 'always') {
-      perToolApproveRef.current.add(permissionPrompt.toolName)
-      addGlobalPermission(permissionPrompt.toolName)
+      perToolApproveRef.current.add(canonName)
+      addGlobalPermission(canonName)
       permissionPrompt.resolve(true)
     } else if (effectiveDecision === 'all') {
       batchApproveAllRef.current = true

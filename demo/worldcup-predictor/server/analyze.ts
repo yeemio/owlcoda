@@ -3,6 +3,8 @@ import { runWebRecon } from './recon.js'
 import { buildEvidence, type Fixture, type TeamProfile } from './framework/evidence.js'
 import { proPrompt, antiPrompt, judgePrompt } from './framework/prompts.js'
 import { extractJson } from './framework/parse.js'
+import { computeBaseline, type BaselineResult, type TeamStrength } from './baseline.js'
+import { devig, valueReads, extractH2HOdds } from './odds.js'
 import type {
   AnalyzeEvent,
   AnalyzeRequest,
@@ -135,6 +137,8 @@ export interface AnalysisArtifacts {
   pro: unknown
   anti: unknown
   judge: unknown
+  baseline: BaselineResult
+  values: unknown
   manifests: RoleManifestEntry[]
   totalMs: number
 }
@@ -150,6 +154,37 @@ export async function runAnalysis(
   const started = Date.now()
   let { brief, dimensions } = buildEvidence(fixture, home, away, req.inputs)
   const matchKey = `${fixture.home_team}::${fixture.away_team}::${fixture.match_datetime_utc ?? 'TBD'}`
+
+  // Stage 0: deterministic statistical baseline (math, reproducible). This is
+  // a prior the debate adjusts, not a prediction — computed before any model runs.
+  const venueCountry: string | null = (fixture as any).wc26?.stadium?.country ?? null
+  const homeStr: TeamStrength | null = (home as any)?.strength ?? null
+  const awayStr: TeamStrength | null = (away as any)?.strength ?? null
+  const homeOnSoil = venueCountry ? venueCountry === fixture.home_team : homeStr?.isHost === true
+  const awayOnSoil = venueCountry ? venueCountry === fixture.away_team : awayStr?.isHost === true
+  const baseline: BaselineResult = computeBaseline(homeStr, awayStr, homeOnSoil, awayOnSoil)
+  emit({ type: 'baseline', baseline })
+
+  // If the user supplied clean 1X2 odds, de-vig them and compute edge/EV vs the
+  // baseline (math layer). Otherwise leave value reasoning to the models.
+  const parsedOdds = extractH2HOdds(req.inputs.oddsText)
+  const dv = parsedOdds ? devig(parsedOdds, 'auto') : null
+  const values = dv ? valueReads(baseline.win_probabilities, dv.probabilities, parsedOdds!) : null
+
+  const wp = baseline.win_probabilities
+  brief += `\n\n## 确定性统计基线(数学层 · 可复现 · 辩论前先验,非真理)\n` +
+    `- 方法:Poisson + Dixon-Coles(移植 qqyule MIT 模型),输入=Elo+近12月进球+主场;置信度 ${baseline.confidence}\n` +
+    `- 胜平负先验:主胜 ${(wp.home * 100).toFixed(1)}% / 平 ${(wp.draw * 100).toFixed(1)}% / 客胜 ${(wp.away * 100).toFixed(1)}%(home_xg=${baseline.home_xg}, away_xg=${baseline.away_xg})\n` +
+    `- 最可能比分:${baseline.top_scorelines.map((s) => `${s.score}(${(s.probability * 100).toFixed(1)}%)`).join('、') || '—'}\n` +
+    `- 它不知道:伤停/阵容/赔率/战意/交锋/天气。把它当统计先验,用证据修正,不要当成最终概率。`
+  if (dv && values) {
+    brief += `\n\n## 市场净概率与价值(数学层 · 用户提供赔率,${dv.method} 剥水,${dv.parameterName}=${dv.parameter})\n` +
+      `- 用户赔率(单源,未交叉):主 ${parsedOdds![0]} / 平 ${parsedOdds![1]} / 客 ${parsedOdds![2]}\n` +
+      `- 市场净概率 P_market:${dv.probabilities.map((p) => (p * 100).toFixed(1) + '%').join(' / ')}\n` +
+      `- edge=P_model−P_market 与 EV=P_model×赔率−1(铁律:edge>0 必要非充分,真正下注门槛是 EV>0):\n` +
+      values.map((v) => `  · ${v.outcome}: edge ${v.edge >= 0 ? '+' : ''}${(v.edge * 100).toFixed(1)}pt, EV ${v.ev >= 0 ? '+' : ''}${(v.ev * 100).toFixed(1)}%`).join('\n')
+  }
+
   emit({
     type: 'run_start',
     matchKey,
@@ -197,35 +232,44 @@ export async function runAnalysis(
   } else if ((req.inputs.images?.length ?? 0) > 0) {
     brief += '\n\n## 图片证据声明\n用户上传了图片,但未配置可用的多模态识别模型,图片内容未被读取。该缺口必须表述为"图片不可读",不得表述为"用户未提供"。'
   }
-  try {
-    const pro = await runRole('pro', proPrompt(brief), req, emit)
-    manifests.push(pro.manifest)
-    const proJson = pro.output ? JSON.stringify(pro.output, null, 1) : pro.raw
-
-    const anti = await runRole('anti', antiPrompt(brief, proJson), req, emit)
-    manifests.push(anti.manifest)
-    const antiJson = anti.output ? JSON.stringify(anti.output, null, 1) : anti.raw
-
-    const judge = await runRole('judge', judgePrompt(brief, proJson, antiJson), req, emit)
-    manifests.push(judge.manifest)
-
-    const totalMs = Date.now() - started
-    emit({ type: 'manifest', roles: manifests, totalMs })
-    emit({ type: 'done' })
+  // Archive whatever exists, even on partial failure — the deterministic
+  // baseline and any completed role outputs are worth keeping for replay.
+  let pro: RoleRunResult | null = null
+  let anti: RoleRunResult | null = null
+  let judge: RoleRunResult | null = null
+  const persist = () =>
     onArtifacts?.({
       matchKey,
       evidenceBrief: brief,
       vision: vision?.text ?? null,
       reconSources,
       recon: reconText,
-      pro: pro.output ?? pro.raw,
-      anti: anti.output ?? anti.raw,
-      judge: judge.output ?? judge.raw,
+      pro: pro ? (pro.output ?? pro.raw) : null,
+      anti: anti ? (anti.output ?? anti.raw) : null,
+      judge: judge ? (judge.output ?? judge.raw) : null,
+      baseline,
+      values,
       manifests,
-      totalMs,
+      totalMs: Date.now() - started,
     })
+  try {
+    pro = await runRole('pro', proPrompt(brief), req, emit)
+    manifests.push(pro.manifest)
+    const proJson = pro.output ? JSON.stringify(pro.output, null, 1) : pro.raw
+
+    anti = await runRole('anti', antiPrompt(brief, proJson), req, emit)
+    manifests.push(anti.manifest)
+    const antiJson = anti.output ? JSON.stringify(anti.output, null, 1) : anti.raw
+
+    judge = await runRole('judge', judgePrompt(brief, proJson, antiJson), req, emit)
+    manifests.push(judge.manifest)
+
+    emit({ type: 'manifest', roles: manifests, totalMs: Date.now() - started })
+    emit({ type: 'done' })
+    persist()
   } catch (err) {
     if (manifests.length > 0) emit({ type: 'manifest', roles: manifests, totalMs: Date.now() - started })
     emit({ type: 'error', error: err instanceof Error ? err.message : String(err) })
+    persist() // keep baseline + completed roles for the archive
   }
 }

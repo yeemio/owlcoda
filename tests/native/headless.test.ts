@@ -24,8 +24,13 @@ vi.mock('../../src/native/conversation.js', () => ({
   resolveDefaultMaxOutputTokens: vi.fn(() => 32_768),
 }))
 
-// Mock the tool-defs module
-vi.mock('../../src/native/tool-defs.js', () => ({
+// Mock the tool-defs module — override buildNativeToolDefs to a tiny tool set,
+// but spread the real module so other exports stay intact. headless-approval's
+// gate calls canonicalToolName(tool-defs); stripping it (the old `() => ({...})`
+// factory) made that call hit `undefined` once the wrong-case safety sweep wired
+// it in.
+vi.mock('../../src/native/tool-defs.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/native/tool-defs.js')>()),
   buildNativeToolDefs: () => [
     { name: 'bash', description: 'Native bash tool', input_schema: {} },
     { name: 'read', description: 'Native read tool', input_schema: {} },

@@ -27,6 +27,7 @@
  */
 
 import { classifyBashCommand, type BashRiskClassification } from './bash-risk.js'
+import { canonicalToolName } from './tool-defs.js'
 
 export interface TuiApprovalInputs {
   /** Tool name from the conversation block. */
@@ -49,11 +50,14 @@ export type TuiApprovalDecision =
   | { action: 'prompt'; reason: 'no-consent' | 'dangerous-override'; bashRisk?: BashRiskClassification }
 
 export function decideTuiToolApproval(opts: TuiApprovalInputs): TuiApprovalDecision {
+  // Canonicalize so a wrong-case "Bash" still triggers the dangerous-command
+  // detection and matches safe/persistent-allow lanes by canonical name.
+  const toolName = canonicalToolName(opts.toolName)
   // Detect a dangerous bash-like command BEFORE the persistent allow check
   // so we can override that one specific lane. Other consent lanes are
   // explicit/fresh and stay in force.
   let bashRisk: BashRiskClassification | undefined
-  if (opts.toolName === 'bash' || opts.toolName === 'TaskCreate') {
+  if (toolName === 'bash' || toolName === 'TaskCreate') {
     const cmd = opts.input?.['command']
     if (typeof cmd === 'string' && cmd.length > 0) {
       bashRisk = classifyBashCommand(cmd)
@@ -63,12 +67,12 @@ export function decideTuiToolApproval(opts: TuiApprovalInputs): TuiApprovalDecis
 
   if (opts.autoApprove) return { action: 'allow', reason: 'auto-approve' }
   if (opts.batchApproveAll) return { action: 'allow', reason: 'batch-all' }
-  if (opts.safeTools.has(opts.toolName)) return { action: 'allow', reason: 'safe-tool' }
-  if (opts.perToolApprove.has(opts.toolName) && !dangerousCommand) {
+  if (opts.safeTools.has(toolName)) return { action: 'allow', reason: 'safe-tool' }
+  if (opts.perToolApprove.has(toolName) && !dangerousCommand) {
     return { action: 'allow', reason: 'persistent-allow' }
   }
 
-  if (dangerousCommand && opts.perToolApprove.has(opts.toolName)) {
+  if (dangerousCommand && opts.perToolApprove.has(toolName)) {
     return { action: 'prompt', reason: 'dangerous-override', bashRisk }
   }
   return { action: 'prompt', reason: 'no-consent', ...(bashRisk ? { bashRisk } : {}) }

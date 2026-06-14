@@ -47,6 +47,27 @@ describe('Persistent Permissions', () => {
     expect(perms.has('edit')).toBe(true)
   })
 
+  // The TUI approval gate canonicalizes the tool name on read (tui-approval.ts),
+  // but the store side wrote the raw model-emitted name. A wrong-case "Bash"
+  // (the exact case dispatch is case-insensitive for) was persisted as "Bash"
+  // and never matched the canonical "bash" lookup — so an [A]lways grant on a
+  // wrong-case name never stuck and /permissions listed an unmatchable entry.
+  it('addGlobalPermission canonicalizes a wrong-case tool name to match the canonicalized read side', () => {
+    addGlobalPermission('Bash')
+    const perms = loadPermissions()
+    expect(perms.has('bash')).toBe(true)
+    expect(perms.has('Bash')).toBe(false)
+  })
+
+  it('loadPermissions heals a legacy wrong-case entry persisted before canonicalization', () => {
+    savePermissions(new Set(['Bash', 'Edit']))
+    const perms = loadPermissions()
+    expect(perms.has('bash')).toBe(true)
+    expect(perms.has('edit')).toBe(true)
+    expect(perms.has('Bash')).toBe(false)
+    expect(perms.has('Edit')).toBe(false)
+  })
+
   it('removeGlobalPermission removes and returns true', () => {
     addGlobalPermission('bash')
     addGlobalPermission('edit')

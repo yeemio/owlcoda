@@ -128,6 +128,98 @@ export type AnalyzeEvent =
   | { type: 'role_done'; role: SeatRole; output: ProOutput | AntiOutput | JudgeOutput | null; raw: string; manifest: RoleManifestEntry }
   | { type: 'role_error'; role: SeatRole; error: string }
   | { type: 'recon_sources'; sources: Array<{ title: string; url: string }> }
+  | { type: 'baseline'; baseline: unknown }
   | { type: 'manifest'; roles: RoleManifestEntry[]; totalMs: number }
   | { type: 'done' }
   | { type: 'error'; error: string }
+
+// ---- daily review (复盘) types ----
+
+export type Outcome = 'home' | 'draw' | 'away'
+export type ResultStatus = 'pending' | 'final' | 'unsupported'
+export type HandicapVerdict = 'cover' | 'half_win' | 'push' | 'half_loss' | 'loss'
+
+export interface MatchResult {
+  match_id: number | string
+  match_key: string
+  home_team: string
+  away_team: string
+  home_goals: number | null
+  away_goals: number | null
+  outcome: Outcome | null
+  status: ResultStatus
+  scorers?: Array<{ team: 'home' | 'away'; player: string; minute?: number }>
+  source_urls: string[]
+  fetched_by: 'owlcoda_agent' | 'human'
+  confidence: SourceStatus
+  proposed_at: string
+  confirmed_at?: string
+  confirmed_by?: 'human'
+}
+
+export interface DecisionLog {
+  match_id: number | string
+  stamp: string
+  decision: string
+  human_note?: string
+  final_judge_ref?: string
+  at: string
+}
+
+export interface LayerScore {
+  directional_pick: Outcome | 'none'
+  hit: boolean | null
+  p_actual: number | null
+  brier: number | null
+}
+
+export interface BettingRead {
+  outcome: string
+  market: string
+  selection: string
+  flagged_edge: number | null
+  flagged_ev: number | null
+  won: boolean | 'push'
+  realized_ev: number
+}
+
+export interface HandicapSettlement {
+  line: number
+  side: 'home' | 'away'
+  margin: number
+  verdict: HandicapVerdict
+  realized_ev: number
+}
+
+export interface ReviewScorecard {
+  match_id: number | string
+  stamp: string
+  reviewed_at: string
+  result: { home_goals: number; away_goals: number; outcome: Outcome; scoreline: string }
+  layers: {
+    baseline: LayerScore
+    judge: LayerScore
+    human: LayerScore | { status: 'n/a' }
+  }
+  attribution: { debate_vs_baseline: number | null; human_vs_judge: number | null }
+  calibration: {
+    baseline_brier: number | null
+    judge_brier: number | null
+    scoreline_hit_baseline: boolean
+    scoreline_hit_judge: boolean
+  }
+  betting: { reads: BettingRead[]; handicap_lean?: HandicapSettlement }
+  clv: { status: 'computed' | 'n/a'; value?: number; note?: string }
+  narrative?: string
+  confidence: SourceStatus
+}
+
+export interface ReviewAggregate {
+  n_matches: number
+  updated_at: string
+  directional_hit_rate: { baseline: number; judge: number; human: number }
+  mean_brier: { baseline: number; judge: number }
+  realized_roi: number
+  cover_rate: number
+  calibration_bins: Array<{ p_lo: number; p_hi: number; predicted: number; observed: number; n: number }>
+}

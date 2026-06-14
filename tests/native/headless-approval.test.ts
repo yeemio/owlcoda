@@ -607,3 +607,13 @@ describe('headless approval policy', () => {
     })
   })
 })
+
+describe('decideHeadlessApproval — wrong-case tool names (P2-12 safety sibling)', () => {
+  it('denies a wrong-case "Bash" dangerous command just like canonical "bash" (no safe-tool bypass)', () => {
+    expect(decideHeadlessApproval('bash', false, { command: 'rm -rf /tmp/x' }).allowed).toBe(false)
+    // The bug: "Bash" was not in UNSAFE_HEADLESS_TOOLS, so it returned
+    // { allowed: true, reason: 'safe-tool' } — auto-running rm -rf unattended.
+    expect(decideHeadlessApproval('Bash', false, { command: 'rm -rf /tmp/x' }).allowed).toBe(false)
+    expect(decideHeadlessApproval('BASH', true, { command: 'sudo rm -rf /' }).allowed).toBe(false)
+  })
+})

@@ -28,6 +28,7 @@ const dict: Record<string, { zh: string; en: string }> = {
   navMatch: { zh: '比赛分析', en: 'Analysis' },
   navTeams: { zh: '球队画像', en: 'Teams' },
   navSettings: { zh: '设置', en: 'Settings' },
+  navReviews: { zh: '战绩', en: 'Results' },
   localBadge: { zh: '🔒 全程本地 · 数据不出你的电脑', en: '🔒 Fully local · your data stays home' },
   footer: {
     zh: '你的模型,你的工具,你的数据。分析框架移植自 hermes-football 三角辩论体系;所有结论均为辩论包,非投注建议。',

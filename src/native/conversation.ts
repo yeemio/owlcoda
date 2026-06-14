@@ -657,6 +657,16 @@ export interface ConversationCallbacks {
    */
   onToolApproval?: (toolName: string, input: Record<string, unknown>) => Promise<boolean>
   /**
+   * True for unattended (headless) runs. In that case `onToolApproval` is a
+   * hard DENY-GATE (the UNSAFE_HEADLESS_TOOLS denylist), not an interactive
+   * prompt — so it must be consulted even when the operating mode (auto/yolo)
+   * would auto-approve. Mode auto-approve may suppress a human PROMPT, never a
+   * deny-gate. Interactive surfaces (TUI) leave this unset so yolo still removes
+   * their prompt. See the modes.ts invariant: yolo removes prompts, never the
+   * headless policy.
+   */
+  unattended?: boolean
+  /**
    * Called when a tool write is inside the workspace but outside the current
    * task-contract write scope. This is separate from generic tool approval:
    * auto-approving Write should not silently broaden the task contract.
@@ -5359,7 +5369,14 @@ async function executeTools(
     const modeRiskClass = classifyToolRisk(block.name, block.input as Record<string, unknown>)
     const autoApproveByMode = evaluateAutoApproval(mode, modeRiskClass)
 
-    if (callbacks?.onToolApproval && needsApproval && !autoApproveByMode) {
+    // In an unattended (headless) run the approval callback is a hard DENY-GATE
+    // (UNSAFE_HEADLESS_TOOLS), not a prompt — so it must run even when the mode
+    // auto-approves. Otherwise `--mode yolo` lets dangerous bash execute
+    // unattended because autoApproveByMode skips the only place the denylist
+    // fires. Mode auto-approve may suppress an interactive PROMPT, never a deny.
+    const approvalIsHardGate = callbacks?.unattended === true
+
+    if (callbacks?.onToolApproval && needsApproval && (!autoApproveByMode || approvalIsHardGate)) {
       if (proposedToolCall && taskState) {
         recordPermissionRequested(proposedToolCall)
         recordPermissionPhaseEvent(taskState, taskState.run.lifetimeIterations ?? 0, 'permission_requested', block.name)
@@ -5384,7 +5401,9 @@ async function executeTools(
       }
       if (proposedToolCall && taskState) {
         recordPermissionGranted(proposedToolCall, {
-          mode: 'user_prompt',
+          // Honest label: a hard-gate consult that the mode would otherwise have
+          // auto-approved is an auto_approve, not a human user_prompt.
+          mode: autoApproveByMode ? 'auto_approve' : 'user_prompt',
           iteration: taskState.run.lifetimeIterations ?? 0,
         })
         recordPermissionPhaseEvent(taskState, taskState.run.lifetimeIterations ?? 0, 'permission_granted', block.name)

@@ -7,6 +7,7 @@
 import { classifyBashCommand } from './bash-risk.js'
 import { classifyPowerShellCommand } from './powershell-risk.js'
 import type { RiskClass } from './protocol/task-permission-types.js'
+import { canonicalToolName } from './tool-defs.js'
 
 export type OperatingMode = 'plan' | 'normal' | 'auto' | 'yolo'
 
@@ -20,8 +21,35 @@ interface OperatingModeContainer {
   }
 }
 
-const OPERATING_MODES: OperatingMode[] = ['plan', 'normal', 'auto', 'yolo']
+/** The complete mode set, in cycle/menu order. Exported so user-facing copy
+ *  (the /mode help line, the invalid-mode error) derives from one source and
+ *  can't drop a mode — yolo was missing from those strings while being a fully
+ *  valid mode. parseOperatingMode validates against this same list. */
+export const OPERATING_MODES: OperatingMode[] = ['plan', 'normal', 'auto', 'yolo']
 const FALSY = new Set(['0', 'false', 'no', 'off', ''])
+
+/** "Enable" forms for the supervised-run env escape hatch (OWLCODA_AUTO_APPROVE). */
+const AUTO_APPROVE_ENV_TRUTHY = new Set(['1', 'true', 'yes', 'on', 'yolo'])
+
+/**
+ * Resolve the initial `autoApprove` mirror for a fresh REPL session. Two
+ * independent enable sources, OR'd:
+ *   - an explicit `--mode yolo` start — the operating mode is the source of
+ *     truth, and yolo means "auto-approve everything", so the mirror must agree
+ *     (same invariant setOperatingModeSynced enforces at runtime); and
+ *   - the supervised-run env escape hatch OWLCODA_AUTO_APPROVE (1/true/yes/on/yolo).
+ *
+ * Keeping both here means startup can't desync the mode and its mirror the way
+ * `/mode`/`/plan` did before the convergence fix — starting in yolo with the
+ * mirror left false made yolo dead until the user re-toggled it.
+ */
+export function resolveInitialAutoApprove(
+  initialMode: OperatingMode | undefined,
+  autoApproveEnv: string | undefined,
+): boolean {
+  if (initialMode === 'yolo') return true
+  return AUTO_APPROVE_ENV_TRUTHY.has((autoApproveEnv ?? '').trim().toLowerCase())
+}
 
 /** Default-on after cutover; explicit falsy values disable the mode surface. */
 export function isModesEnabled(): boolean {
@@ -85,7 +113,10 @@ export interface ModeGateViolation {
   reason: string
 }
 
-function toolMutates(toolName: string, toolInput?: Record<string, unknown>): boolean {
+function toolMutates(rawToolName: string, toolInput?: Record<string, unknown>): boolean {
+  // Canonicalize: a wrong-case "Bash" must still be recognized as mutating so
+  // read-only plan mode actually refuses it (P2-12 safety sibling).
+  const toolName = canonicalToolName(rawToolName)
   if (ALWAYS_MUTATING_TOOLS.has(toolName)) return true
   const cmd = toolInput?.['command']
   if (BASH_COMMAND_TOOLS.has(toolName)) {

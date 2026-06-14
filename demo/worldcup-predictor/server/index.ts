@@ -11,10 +11,24 @@ import { finalProPrompt, finalAntiPrompt, finalJudgePrompt } from './framework/p
 import { extractJson } from './framework/parse.js'
 import { runAnalysis, type AnalysisArtifacts } from './analyze.js'
 import { schedule, showcases, teamByName, teams, teamsMeta } from './data.js'
-import type { AnalyzeRequest } from './framework/types.js'
+import type { AnalyzeRequest, MatchResult } from './framework/types.js'
+import {
+  writeResult, readResult, confirmResult,
+  writeDecision, readDecision, writeReview, readReview,
+  appendDaily, updateAggregate, readAggregate,
+} from './review/store.js'
+import { runResultFetch } from './review/result.js'
+import { computeScorecard, type ScorecardInput } from './review/scorecard.js'
+import { narrateScorecard } from './review/narrator.js'
+import { runDailyReview, type DailyDeps } from './review/daily.js'
+import { startDailyScheduler } from './review/scheduler.js'
 
 const DEFAULT_OWLCODA = 'http://127.0.0.1:8019'
 const runsDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'runs')
+const dataDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data')
+const REVIEW_MODEL = process.env.REVIEW_MODEL ?? 'deepseek-v3.2'
+const RESULT_MODEL = process.env.RESULT_MODEL ?? 'deepseek-v3.2'
+const REVIEW_DAILY_AT = process.env.REVIEW_DAILY_AT ?? '10:00'
 
 // Archive every real analysis for replay/comparison (mirrors the hermes
 // task-directory layout). Scout evidence is the point: it must persist.
@@ -27,6 +41,7 @@ function archiveRun(matchId: string, a: AnalysisArtifacts) {
   const dir = path.join(runsDir, String(matchId), stamp)
   mkdirSync(dir, { recursive: true })
   if (a.reconSources.length > 0) writeFileSync(path.join(dir, 'recon_sources.json'), JSON.stringify(a.reconSources, null, 2))
+  writeFileSync(path.join(dir, 'baseline.json'), JSON.stringify({ baseline: a.baseline, values: a.values }, null, 2))
   writeFileSync(path.join(dir, 'evidence_brief.md'), a.evidenceBrief)
   if (a.vision != null) writeFileSync(path.join(dir, 'vision_transcript.md'), a.vision)
   if (a.recon != null) writeFileSync(path.join(dir, 'recon_brief.md'), a.recon)
@@ -37,6 +52,78 @@ function archiveRun(matchId: string, a: AnalysisArtifacts) {
     path.join(dir, 'run_manifest.json'),
     JSON.stringify({ match_key: a.matchKey, archived_at: stamp, total_ms: a.totalMs, roles: a.manifests }, null, 2),
   )
+}
+
+// Reads a single archived run, computes scorecard (optionally narrates), writes review + daily + aggregate.
+async function gradeOne(matchId: string, stamp: string, result: MatchResult, opts?: { baseUrl?: string; narrate?: boolean }): Promise<ScorecardInput | null> {
+  const fixture = schedule.fixtures.find((f) => String(f.match_id) === String(matchId))
+  if (!fixture || result.home_goals == null || result.away_goals == null || result.outcome == null) return null
+  const dir = path.join(runsDir, matchId, stamp)
+  const readJson = (f: string) => (existsSync(path.join(dir, f)) ? JSON.parse(readFileSync(path.join(dir, f), 'utf8')) : null)
+  const input: ScorecardInput = {
+    matchId,
+    stamp,
+    homeTeam: fixture.home_team,
+    awayTeam: fixture.away_team,
+    reviewedAt: new Date().toISOString(),
+    baselineFile: readJson('baseline.json'),
+    judge: readJson('final.json') ?? readJson('judge.json'),
+    decision: readDecision(dataDir, matchId, stamp),
+    result: { home_goals: result.home_goals, away_goals: result.away_goals, outcome: result.outcome },
+  }
+  const sc = computeScorecard(input)
+  if (opts?.narrate) {
+    try {
+      sc.narrative = await narrateScorecard({
+        baseUrl: opts.baseUrl ?? DEFAULT_OWLCODA, model: REVIEW_MODEL,
+        scorecard: sc, homeTeam: fixture.home_team, awayTeam: fixture.away_team,
+      })
+    } catch (err) { console.error('[review] narrate failed:', err) }
+  }
+  writeReview(dataDir, sc)
+  appendDaily(dataDir, stamp.slice(0, 10), sc)
+  updateAggregate(dataDir, sc)
+  return input
+}
+
+function buildDailyDeps(): DailyDeps {
+  return {
+    now: new Date(),
+    fixtures: schedule.fixtures.map((f) => ({ match_id: f.match_id, home_team: f.home_team, away_team: f.away_team, match_datetime_utc: f.match_datetime_utc })),
+    listRunStamps: (matchId) => {
+      const dir = path.join(runsDir, String(matchId))
+      return existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort().reverse() : []
+    },
+    loadRunForReview: (matchId, stamp) => {
+      const dir = path.join(runsDir, String(matchId), stamp)
+      const readJson = (f: string) => (existsSync(path.join(dir, f)) ? JSON.parse(readFileSync(path.join(dir, f), 'utf8')) : null)
+      const baselineFile = readJson('baseline.json')
+      if (!baselineFile) return null
+      return { baselineFile, judge: readJson('final.json') ?? readJson('judge.json'), decision: readDecision(dataDir, matchId, stamp) }
+    },
+    loadResult: (matchId) => {
+      const r = readResult(dataDir, matchId)
+      return r ? { status: r.status, home_goals: r.home_goals, away_goals: r.away_goals, outcome: r.outcome } : null
+    },
+    hasReview: (matchId, stamp) => readReview(dataDir, matchId, stamp) != null,
+    writeReviewArtifacts: (input) => {
+      const sc = computeScorecard(input)
+      writeReview(dataDir, sc)
+      appendDaily(dataDir, input.stamp.slice(0, 10), sc)
+      updateAggregate(dataDir, sc)
+    },
+    proposeResult: async (f) => {
+      try {
+        const p = await runResultFetch({ model: RESULT_MODEL, homeTeam: f.home_team, awayTeam: f.away_team, kickoff: f.match_datetime_utc ?? '' })
+        writeResult(dataDir, {
+          match_id: f.match_id, match_key: `${f.home_team}::${f.away_team}::${f.match_datetime_utc ?? ''}`,
+          home_team: f.home_team, away_team: f.away_team,
+          home_goals: p.home_goals, away_goals: p.away_goals, outcome: p.outcome, status: p.status,
+          source_urls: p.source_urls, fetched_by: 'owlcoda_agent', confidence: p.confidence, proposed_at: new Date().toISOString(),
+        })
+      } catch (err) { console.error('[review] proposeResult failed:', err) }
+    },
+  }
 }
 
 const app = new Hono()
@@ -131,6 +218,7 @@ app.get('/api/runs/:matchId/:stamp', (c) => {
     vision_transcript: readText('vision_transcript.md'),
     recon_brief: readText('recon_brief.md'),
     recon_sources: readJson('recon_sources.json') ?? [],
+    baseline: readJson('baseline.json'),
     pro: readJson('pro.json'),
     anti: readJson('anti.json'),
     judge: readJson('judge.json'),
@@ -190,7 +278,9 @@ app.post('/api/finalize', async (c) => {
 app.get('/api/runs/:matchId', (c) => {
   const dir = path.join(runsDir, c.req.param('matchId'))
   if (!existsSync(dir)) return c.json({ runs: [] })
-  const runs = readdirSync(dir)
+  const runs = readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name)
     .sort()
     .reverse()
     .map((stamp) => {
@@ -205,10 +295,79 @@ app.get('/api/runs/:matchId', (c) => {
   return c.json({ runs })
 })
 
+// Persist a human decision to disk (server-side; localStorage remains the immediate-state store)
+app.post('/api/decision', async (c) => {
+  const b = (await c.req.json()) as { matchId: string | number; stamp: string; decision: string; humanNote?: string; finalJudgeRef?: string }
+  if (!b.matchId || !b.stamp || !b.decision) return c.json({ error: 'matchId, stamp, decision required' }, 400)
+  writeDecision(dataDir, { match_id: b.matchId, stamp: b.stamp, decision: b.decision, human_note: b.humanNote, final_judge_ref: b.finalJudgeRef, at: new Date().toISOString() })
+  return c.json({ ok: true })
+})
+
+// owlcoda agent fetches the match result → writes a pending proposal
+app.post('/api/review/result/:matchId', async (c) => {
+  const matchId = c.req.param('matchId')
+  const fixture = schedule.fixtures.find((f) => String(f.match_id) === matchId)
+  if (!fixture) return c.json({ error: 'fixture not found' }, 404)
+  try {
+    const p = await runResultFetch({ model: RESULT_MODEL, homeTeam: fixture.home_team, awayTeam: fixture.away_team, kickoff: fixture.match_datetime_utc ?? '' })
+    const r: MatchResult = {
+      match_id: matchId, match_key: `${fixture.home_team}::${fixture.away_team}::${fixture.match_datetime_utc ?? ''}`,
+      home_team: fixture.home_team, away_team: fixture.away_team,
+      home_goals: p.home_goals, away_goals: p.away_goals, outcome: p.outcome, status: p.status,
+      source_urls: p.source_urls, fetched_by: 'owlcoda_agent', confidence: p.confidence, proposed_at: new Date().toISOString(),
+    }
+    writeResult(dataDir, r)
+    return c.json({ ok: true, result: r })
+  } catch (err) {
+    return c.json({ ok: false, error: String(err) }, 502)
+  }
+})
+
+// Human one-click confirm → lock result + immediately grade the latest prediction
+app.post('/api/review/result/:matchId/confirm', async (c) => {
+  const matchId = c.req.param('matchId')
+  const body = (await c.req.json().catch(() => ({}))) as { homeGoals?: number; awayGoals?: number; narrate?: boolean; owlcodaBaseUrl?: string }
+  const existing = readResult(dataDir, matchId)
+  if (!existing) return c.json({ error: 'no proposal to confirm; fetch first' }, 400)
+  if (typeof body.homeGoals === 'number' && typeof body.awayGoals === 'number') {
+    writeResult(dataDir, { ...existing, home_goals: body.homeGoals, away_goals: body.awayGoals, outcome: body.homeGoals > body.awayGoals ? 'home' : body.homeGoals < body.awayGoals ? 'away' : 'draw', fetched_by: 'human' })
+  }
+  const confirmed = confirmResult(dataDir, matchId, new Date().toISOString())
+  if (!confirmed) return c.json({ error: 'confirm failed' }, 500)
+  const dir = path.join(runsDir, matchId)
+  const stamp = existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort().reverse()[0] : null
+  let graded = false
+  if (stamp) { graded = (await gradeOne(matchId, stamp, confirmed, { narrate: body.narrate, baseUrl: body.owlcodaBaseUrl })) != null }
+  return c.json({ ok: true, result: confirmed, graded })
+})
+
+// Get single-match scorecard
+app.get('/api/review/:matchId/:stamp', (c) => {
+  const sc = readReview(dataDir, c.req.param('matchId'), c.req.param('stamp'))
+  return sc ? c.json(sc) : c.json({ error: 'not found' }, 404)
+})
+
+// Get cumulative aggregate
+app.get('/api/reviews/aggregate', (c) => c.json(readAggregate(dataDir) ?? { n_matches: 0 }))
+
+// Manually trigger a daily review run
+app.post('/api/review/run', async (c) => {
+  const date = c.req.query('date') ?? new Date().toISOString().slice(0, 10)
+  const out = await runDailyReview(date, buildDailyDeps())
+  return c.json({ ok: true, date, ...out })
+})
+
 const port = Number(process.env.PORT ?? 8030)
 serve({ fetch: app.fetch, port }, () => {
   console.log(`[worldcup-predictor] server listening on http://127.0.0.1:${port}`)
   console.log(`[worldcup-predictor] expecting owlcoda proxy at ${DEFAULT_OWLCODA} (override per-request with ?base=)`)
+  startDailyScheduler({
+    hhmm: REVIEW_DAILY_AT,
+    tzOffsetMin: 480, // BJT
+    buildDeps: () => buildDailyDeps(),
+    dateOf: (d) => new Date(d.getTime() + 480 * 60_000).toISOString().slice(0, 10),
+  })
+  console.log(`[review] daily auto-review armed for ${REVIEW_DAILY_AT} BJT`)
 })
 
 export { app }

@@ -707,3 +707,24 @@ export function buildNativeToolDefs(dispatcher: ToolDispatcher) {
       return buildToolDef(name, description, NATIVE_TOOL_SCHEMAS[name]!)
     })
 }
+
+let _canonicalByLower: Map<string, string> | null = null
+/**
+ * Resolve a possibly-miscased tool name to its canonical registered form
+ * (e.g. "Bash" → "bash", "WEBFETCH" → "WebFetch"); returns the input unchanged
+ * when no schema matches. Models intermittently emit the wrong case (P2-12);
+ * dispatch already normalizes at execution, but the risk/mode SAFETY gates
+ * classify the raw name — so wrong-case bash was being downgraded from
+ * `destructive` to `mutating` and auto-approved. Every classifier that gates on
+ * the tool name must canonicalize through here. Lazy map so there is no
+ * module-init/import-order hazard. No collisions: the registered names are
+ * unique once lowercased (locked by dispatch.test.ts).
+ */
+export function canonicalToolName(name: string): string {
+  if (!_canonicalByLower) {
+    _canonicalByLower = new Map(
+      Object.keys(NATIVE_TOOL_SCHEMAS).map((k) => [k.toLowerCase(), k]),
+    )
+  }
+  return _canonicalByLower.get(name.toLowerCase()) ?? name
+}

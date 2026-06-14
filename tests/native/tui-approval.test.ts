@@ -143,3 +143,25 @@ describe('decideTuiToolApproval', () => {
     expect(d).toMatchObject({ action: 'allow', reason: 'auto-approve' })
   })
 })
+
+describe('decideTuiToolApproval — wrong-case tool names (P2-12 safety sibling)', () => {
+  it('a persistent allow of "bash" now consistently covers wrong-case "Bash" (non-dangerous)', () => {
+    const d = decideTuiToolApproval({
+      ...baseOpts,
+      perToolApprove: new Set(['bash']),
+      toolName: 'Bash',
+      input: { command: 'ls /tmp' },
+    })
+    expect(d).toMatchObject({ action: 'allow', reason: 'persistent-allow' })
+  })
+
+  it('a dangerous wrong-case "Bash" still overrides the persistent-allow lane (prompts)', () => {
+    const d = decideTuiToolApproval({
+      ...baseOpts,
+      perToolApprove: new Set(['bash']),
+      toolName: 'Bash',
+      input: { command: 'rm -rf /' },
+    })
+    expect(d.action).toBe('prompt')
+  })
+})

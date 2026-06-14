@@ -119,11 +119,18 @@ export function saveSettings(s: Settings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(s))
 }
 
-export function saveDecision(matchId: string | number, decision: string, judgeSummary?: string) {
+export function saveDecision(matchId: string | number, decision: string, judgeSummary?: string, stamp?: string, humanNote?: string) {
   const key = 'wc26.decisions'
   const all = JSON.parse(localStorage.getItem(key) ?? '{}')
   all[String(matchId)] = { decision, judgeSummary, at: new Date().toISOString() }
   localStorage.setItem(key, JSON.stringify(all))
+  // 服务端落盘(复盘需要它来评人层);失败不阻塞 UI
+  if (stamp) {
+    fetch('/api/decision', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ matchId, stamp, decision, humanNote }),
+    }).catch(() => {})
+  }
 }
 export function loadDecision(matchId: string | number): { decision: string; at: string } | null {
   const all = JSON.parse(localStorage.getItem('wc26.decisions') ?? '{}')
@@ -253,4 +260,36 @@ export async function streamAnalyze(body: AnalyzeBody, onEvent: (e: any) => void
       }
     }
   }
+}
+
+export interface ReviewScorecardClient {
+  match_id: number | string
+  stamp: string
+  result: { home_goals: number; away_goals: number; outcome: string; scoreline: string }
+  layers: any
+  attribution: { debate_vs_baseline: number | null; human_vs_judge: number | null }
+  calibration: any
+  betting: any
+  clv: { status: string; value?: number; note?: string }
+  narrative?: string
+  confidence: string
+}
+
+export async function proposeResult(matchId: string | number): Promise<{ ok: boolean; result?: any; error?: string }> {
+  const res = await fetch(`/api/review/result/${matchId}`, { method: 'POST' })
+  return res.json()
+}
+export async function confirmResult(matchId: string | number, body: { homeGoals?: number; awayGoals?: number; narrate?: boolean }): Promise<{ ok: boolean; result?: any; graded?: boolean; error?: string }> {
+  const res = await fetch(`/api/review/result/${matchId}/confirm`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  })
+  return res.json()
+}
+export async function fetchReview(matchId: string | number, stamp: string): Promise<ReviewScorecardClient | { error: string }> {
+  const res = await fetch(`/api/review/${matchId}/${encodeURIComponent(stamp)}`)
+  return res.json()
+}
+export async function fetchReviewAggregate(): Promise<any> {
+  const res = await fetch('/api/reviews/aggregate')
+  return res.json()
 }

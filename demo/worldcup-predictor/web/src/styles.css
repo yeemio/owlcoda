@@ -253,6 +253,36 @@ body {
 }
 .thumb.add:hover { color: var(--owl); border-color: var(--owl); }
 
+/* ghost floor: deterministic baseline painted on the prob bar */
+.ghost-stake {
+  position: absolute; top: 0; bottom: 0; width: 0;
+  border-left: 2px dashed rgba(255, 255, 255, 0.75); pointer-events: none; z-index: 2;
+}
+.ghost-ring {
+  position: absolute; top: -4px; left: -4.5px; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--bg); border: 1.5px solid #fff; box-shadow: 0 0 5px rgba(255, 255, 255, 0.5);
+}
+.ghost-flush {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 11px; color: rgba(255, 255, 255, 0.85); z-index: 3; pointer-events: none;
+}
+.baseline-cap { font-size: 11.5px; color: var(--text-dim); margin: 7px 0 4px; }
+.ghost-swatch {
+  display: inline-block; width: 14px; border-top: 2px dashed rgba(255, 255, 255, 0.75);
+  vertical-align: middle; margin-right: 5px;
+}
+.conf-tag {
+  font-size: 10px; color: var(--owl); border: 1px solid rgba(124, 92, 255, 0.4);
+  border-radius: 5px; padding: 0 5px; margin-left: 6px;
+}
+.delta-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.delta-pill {
+  font-size: 11.5px; padding: 1px 9px; border-radius: 999px; font-variant-numeric: tabular-nums;
+  border: 1px solid var(--glass-border); color: var(--text-dim); background: var(--bg-2);
+}
+.delta-pill.up { color: var(--cyan); border-color: rgba(45, 214, 193, 0.45); }
+.delta-pill.down { color: var(--warn); border-color: rgba(255, 180, 84, 0.45); }
+
 /* final gate */
 .final-note {
   width: 100%; min-height: 72px; background: var(--bg-2); color: var(--text);

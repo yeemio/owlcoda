@@ -20,6 +20,7 @@ import {
   extractPathsFromUserMessage,
 } from './write-provenance.js'
 import { loadResolvedPermissions } from './permission-rules.js'
+import { canonicalToolName } from './tool-defs.js'
 import type { ProvenanceLedgerData, ProvenanceRecord, UserPathExtraction } from './protocol/write-provenance-types.js'
 import type { ResolvedPermissions } from './protocol/permission-rule-types.js'
 
@@ -346,11 +347,13 @@ export function shouldTreatTaskRunStatusAsFailure(
 }
 
 export function evaluateWriteGuard(
-  toolName: string,
+  rawToolName: string,
   input: Record<string, unknown>,
   taskState?: TaskExecutionState,
 ): WriteGuardViolation | null {
   if (!taskState) return null
+  // Wrong-case "Write"/"Bash" must still be path-extracted and scope-checked.
+  const toolName = canonicalToolName(rawToolName)
   const attemptedPaths = extractWriteTargetPaths(toolName, input, taskState.contract.cwd)
   if (attemptedPaths.length === 0) return null
 
@@ -1163,7 +1166,7 @@ export interface IntentGuardViolation {
 const BASH_LIKE_TOOLS = new Set(['bash', 'TaskCreate'])
 
 export function evaluateIntentGuard(
-  toolName: string,
+  rawToolName: string,
   intent: UserIntent,
   toolInput?: Record<string, unknown>,
   probeMatcher?: (toolName: string, input: Record<string, unknown>) =>
@@ -1171,6 +1174,8 @@ export function evaluateIntentGuard(
     | null,
   hasActiveProbePlan?: boolean,
 ): IntentGuardViolation | null {
+  // Wrong-case "Write"/"Bash" must still hit the analysis-intent guard.
+  const toolName = canonicalToolName(rawToolName)
   // Probe-consent override (checked first so registered probes pass
   // even in ProbePlan-allowlist mode): if the call matches an
   // unsatisfied registered probe, the user already consented to this

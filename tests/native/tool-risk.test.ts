@@ -243,3 +243,14 @@ describe('classifyToolRisk — exhaustive against ToolDispatcher registry', () =
     },
   )
 })
+
+describe('classifyToolRisk — wrong-case tool names (P2-12 safety sibling)', () => {
+  it('classifies "Bash" the same as "bash" so destructive commands are not downgraded', () => {
+    expect(classifyToolRisk('bash', { command: 'rm -rf /tmp/x' })).toBe('destructive')
+    expect(classifyToolRisk('Bash', { command: 'rm -rf /tmp/x' })).toBe('destructive')
+  })
+  it('classifies a wrong-case external write the same (not downgraded to mutating)', () => {
+    expect(classifyToolRisk('write', { file_path: '/etc/passwd', content: 'x' })).toBe('external_effect')
+    expect(classifyToolRisk('Write', { file_path: '/etc/passwd', content: 'x' })).toBe('external_effect')
+  })
+})

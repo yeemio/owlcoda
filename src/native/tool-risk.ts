@@ -17,6 +17,7 @@ import { isAbsolute, resolve as resolvePath, relative } from 'node:path'
 
 import type { RiskClass } from './protocol/task-permission-types.js'
 import { classifyBashCommand } from './bash-risk.js'
+import { canonicalToolName } from './tool-defs.js'
 
 const SAFE_TOOLS = new Set<string>([
   // Read-only fs / state-inspection
@@ -97,9 +98,14 @@ function riskFromBashCommand(command: unknown): RiskClass {
 }
 
 export function classifyToolRisk(
-  toolName: string,
+  rawToolName: string,
   args: Record<string, unknown>,
 ): RiskClass {
+  // Canonicalize first: models intermittently emit the wrong case (e.g. "Bash").
+  // Without this, "Bash" skips the bash/file/external branches and falls to the
+  // `mutating` fail-safe — which `auto` mode auto-approves — so a wrong-case
+  // `rm -rf` would bypass the destructive gate. See canonicalToolName.
+  const toolName = canonicalToolName(rawToolName)
   if (SAFE_TOOLS.has(toolName)) return 'safe'
   if (INTERNAL_STATE_TOOLS.has(toolName)) return 'internal_state'
 

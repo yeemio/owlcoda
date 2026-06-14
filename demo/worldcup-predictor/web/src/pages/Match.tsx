@@ -14,15 +14,20 @@ import {
   saveDecision,
   saveSettings,
   streamAnalyze,
+  proposeResult,
+  confirmResult,
+  fetchReview,
   type Fixture,
   type Role,
   type SeatRole,
   type Settings,
   type TeamProfile,
+  type ReviewScorecardClient,
 } from '../api'
 import { EnginePanel } from '../components/EnginePanel'
 import { RoleColumn } from '../components/RoleColumn'
 import { PredictionCard } from '../components/PredictionCard'
+import { ReviewCard } from '../components/ReviewCard'
 import { initialRoleStates, type DimensionStatus, type RoleState } from '../components/debateTypes'
 
 async function fileToBase64(file: File): Promise<{ name: string; mediaType: string; base64: string }> {
@@ -52,6 +57,7 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
   const [models, setModels] = useState<Array<{ id: string; display_name?: string }>>([])
   const [caps, setCaps] = useState<Record<string, { vision: boolean | null }>>({})
   const [sources, setSources] = useState<Array<{ title: string; url: string }>>([])
+  const [baseline, setBaseline] = useState<any>(null)
   const [history, setHistory] = useState<Array<{ stamp: string; manifest: any; judge: any }>>([])
   const [loadedStamp, setLoadedStamp] = useState<string | null>(null)
   const [humanNote, setHumanNote] = useState('')
@@ -60,6 +66,13 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
   const [finalAnti, setFinalAnti] = useState<any>(null)
   const [finalizing, setFinalizing] = useState(false)
   const [finalError, setFinalError] = useState('')
+  const [review, setReview] = useState<ReviewScorecardClient | null>(null)
+  const [proposed, setProposed] = useState<any>(null)
+  const [proposing, setProposing] = useState(false)
+  const [proposeError, setProposeError] = useState('')
+  const [confirming, setConfirming] = useState(false)
+  const [confirmError, setConfirmError] = useState('')
+  const [reviewGoals, setReviewGoals] = useState<{ home: string; away: string }>({ home: '', away: '' })
 
   useEffect(() => {
     fetchTeams().then(setTeams).catch(() => {})
@@ -82,6 +95,16 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
   useEffect(() => {
     if (fixture) fetchRuns(fixture.match_id).then(setHistory).catch(() => setHistory([]))
   }, [fixture?.match_id, running])
+
+  // Fetch review scorecard whenever we have a stamp (from finalize or loadRun).
+  useEffect(() => {
+    if (!fixture) return
+    const stamp = loadedStamp
+    if (!stamp) { setReview(null); return }
+    fetchReview(fixture.match_id, stamp).then((r) => {
+      if ('error' in r) { setReview(null) } else { setReview(r) }
+    }).catch(() => setReview(null))
+  }, [fixture?.match_id, loadedStamp])
 
   function capBadge(id: string): string {
     const v = caps[id]?.vision
@@ -119,6 +142,12 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
     setFinalAnti(null)
     setFinalError('')
     setSources([])
+    setBaseline(null)
+    setReview(null)
+    setProposed(null)
+    setProposeError('')
+    setConfirmError('')
+    setReviewGoals({ home: '', away: '' })
   }, [fixture?.match_id])
 
   if (!fixture) return <div className="card">从「赛程」页选择一场比赛开始分析。</div>
@@ -152,6 +181,8 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
       }))
     } else if (e.type === 'role_error') {
       setRoleStates((s) => ({ ...s, [e.role]: { ...s[e.role as SeatRole], status: 'error' } }))
+    } else if (e.type === 'baseline') {
+      setBaseline(e.baseline ?? null)
     } else if (e.type === 'recon_sources') {
       setSources(e.sources ?? [])
     } else if (e.type === 'manifest') {
@@ -169,6 +200,7 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
     setFallbacks([])
     setManifest(null)
     setSources([])
+    setBaseline(null)
     setLoadedStamp(null)
     setFinalOutput(null)
     setFinalPro(null)
@@ -211,6 +243,9 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
     setError('')
     setFallbacks([])
     setManifest(null)
+    setBaseline(null)
+    setSources([])
+    setFinalOutput(null)
     setRoleStates(initialRoleStates())
     const pkg = await fetchShowcase(fixture.showcase_id)
     setHumanDecision(pkg.human_decision ?? null)
@@ -263,7 +298,9 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
         setFinalOutput(res.final)
         setFinalPro(res.final_pro ?? null)
         setFinalAnti(res.final_anti ?? null)
-        saveDecision(fixture.match_id, res.final.selection ?? res.final.verdict, res.final.summary)
+        const stamp = res.stamp ?? loadedStamp ?? undefined
+        saveDecision(fixture.match_id, res.final.selection ?? res.final.verdict, res.final.summary, stamp, humanNote || undefined)
+        if (res.stamp && !loadedStamp) setLoadedStamp(res.stamp)
       } else {
         setFinalError(res.error ?? '收口失败')
       }
@@ -283,6 +320,7 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
     setFallbacks([])
     setLoadedStamp(stamp)
     setSources(Array.isArray(d.recon_sources) ? d.recon_sources : [])
+    setBaseline(d.baseline?.baseline ?? null)
     setFinalOutput(d.final ?? null)
     setFinalPro(d.final_pro ?? null)
     setFinalAnti(d.final_anti ?? null)
@@ -516,7 +554,7 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
         {/* verdict first: the prediction is the headline, the debate is the receipts */}
         {judgeDone && (
           <div style={{ marginBottom: 10 }}>
-            <PredictionCard judge={roleStates.judge.output} home={fixture.home_team} away={fixture.away_team} />
+            <PredictionCard judge={roleStates.judge.output} baseline={baseline} home={fixture.home_team} away={fixture.away_team} result={review ? { outcome: review.result.outcome, scoreline: review.result.scoreline } : undefined} />
           </div>
         )}
         {sources.length > 0 && (
@@ -577,6 +615,11 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
         {judgeDone && !replay && (
           <div className="card" style={{ marginTop: 10, borderColor: 'var(--owl)' }}>
             <h3>你的拍板(辩论包不是最终结论,这一步才是)</h3>
+            {baseline?.win_probabilities && roleStates.judge.output?.win_probabilities && (
+              <p className="hint" style={{ margin: '0 0 8px' }}>
+                主胜口径:Judge <b style={{ color: 'var(--judge)' }}>{Math.round(roleStates.judge.output.win_probabilities.home * 100)}%</b> ↔ 数学基线地板 <b style={{ color: 'var(--owl)' }}>{Math.round(baseline.win_probabilities.home * 100)}%</b> · 你在落在哪一侧
+              </p>
+            )}
             {!finalOutput && (
               <>
                 <textarea
@@ -641,6 +684,101 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
           </div>
         )}
       </div>
+
+      {/* review panel — shown when a stamp is available */}
+      {(loadedStamp) && (
+        <div className="card" style={{ marginTop: 10, borderColor: 'var(--cyan)' }}>
+          <h3>赛后复盘(owlcoda 评分)</h3>
+          {!proposed && !review && (
+            <>
+              <p className="hint" style={{ margin: '0 0 8px' }}>比赛结束后,让 owlcoda 自动抓取赛果并对本次预测打分。</p>
+              {proposeError && <p className="hint" style={{ color: 'var(--anti)', margin: '0 0 6px' }}>{proposeError}</p>}
+              <button className="btn" disabled={proposing} onClick={() => {
+                setProposeError('')
+                setProposing(true)
+                proposeResult(fixture.match_id).then((r) => {
+                  if (r.ok && r.result) {
+                    setProposed(r.result)
+                    setReviewGoals({
+                      home: String(r.result.home_goals ?? ''),
+                      away: String(r.result.away_goals ?? ''),
+                    })
+                  } else {
+                    // unsupported or error — allow manual entry
+                    setProposed({ status: 'unsupported', source_urls: [] })
+                    setReviewGoals({ home: '', away: '' })
+                    setProposeError(r.error ?? 'owlcoda 未能自动找到可靠赛果,请手动填写。')
+                  }
+                }).catch((e) => {
+                  setProposeError(String(e))
+                }).finally(() => setProposing(false))
+              }}>
+                {proposing ? '抓取中…' : 'owlcoda 抓赛果'}
+              </button>
+            </>
+          )}
+          {proposed && !review && (
+            <div>
+              {proposed.status === 'unsupported'
+                ? <p className="hint" style={{ margin: '0 0 8px', color: 'var(--warn)' }}>owlcoda 未能找到可靠赛果,请手动填写比分。</p>
+                : <p className="hint" style={{ margin: '0 0 8px' }}>owlcoda 抓取到以下赛果,可核对后修正再确认:</p>
+              }
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+                <label style={{ fontSize: 13 }}>{fixture.home_team}</label>
+                <input
+                  type="number" min={0} max={99}
+                  value={reviewGoals.home}
+                  onChange={(e) => setReviewGoals((g) => ({ ...g, home: e.target.value }))}
+                  style={{ width: 56, padding: '4px 6px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg2)', color: 'inherit', fontSize: 15, textAlign: 'center' }}
+                />
+                <span style={{ fontSize: 13 }}>–</span>
+                <input
+                  type="number" min={0} max={99}
+                  value={reviewGoals.away}
+                  onChange={(e) => setReviewGoals((g) => ({ ...g, away: e.target.value }))}
+                  style={{ width: 56, padding: '4px 6px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg2)', color: 'inherit', fontSize: 15, textAlign: 'center' }}
+                />
+                <label style={{ fontSize: 13 }}>{fixture.away_team}</label>
+              </div>
+              {proposed.source_urls?.length > 0 && (
+                <div style={{ marginBottom: 8 }}>
+                  <span className="hint">来源:</span>{' '}
+                  {proposed.source_urls.map((url: string, i: number) => (
+                    <a key={i} href={url} target="_blank" rel="noreferrer" style={{ color: 'var(--cyan)', marginRight: 8, fontSize: 12 }}>{url}</a>
+                  ))}
+                </div>
+              )}
+              {confirmError && <p className="hint" style={{ color: 'var(--anti)', margin: '0 0 6px' }}>{confirmError}</p>}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn" disabled={confirming || reviewGoals.home === '' || reviewGoals.away === ''} onClick={() => {
+                  setConfirmError('')
+                  setConfirming(true)
+                  const homeGoals = parseInt(reviewGoals.home, 10)
+                  const awayGoals = parseInt(reviewGoals.away, 10)
+                  confirmResult(fixture.match_id, { homeGoals, awayGoals, narrate: true }).then((r) => {
+                    if (r.ok) {
+                      return fetchReview(fixture.match_id, loadedStamp!).then((sc) => {
+                        if ('error' in sc) { setConfirmError('复盘评分未就绪,稍后可刷新页面查看。') }
+                        else { setReview(sc) }
+                      })
+                    } else {
+                      setConfirmError(r.error ?? '确认失败')
+                    }
+                  }).catch((e) => setConfirmError(String(e))).finally(() => setConfirming(false))
+                }}>
+                  {confirming ? '复盘中…' : '确认赛果并复盘'}
+                </button>
+                <button className="btn ghost" style={{ fontSize: 12, padding: '6px 10px' }} onClick={() => { setProposed(null); setProposeError(''); setConfirmError('') }}>
+                  重新抓取
+                </button>
+              </div>
+            </div>
+          )}
+          {review && (
+            <ReviewCard sc={review} home={fixture.home_team} away={fixture.away_team} />
+          )}
+        </div>
+      )}
 
       {/* right: engine panel */}
       <EnginePanel

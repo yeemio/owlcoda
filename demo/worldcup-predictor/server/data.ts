@@ -6,6 +6,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import type { Fixture, TeamProfile } from './framework/evidence.js'
+import { deriveStrength, type TeamStrength } from './baseline.js'
 
 const dataDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data')
 
@@ -35,6 +36,9 @@ export interface RichTeamProfile extends TeamProfile {
   official_news_lead_summary?: string
   official_head_coach?: string
   host_country?: boolean
+  // numeric strength for the deterministic baseline (parsed from raw VM,
+  // because the flattened elo/form fields above are display strings)
+  strength?: TeamStrength
   official_squad_26?: Array<{
     number?: number
     position_group?: string
@@ -113,6 +117,7 @@ export const teams: RichTeamProfile[] = localTeams.teams.map((local) => {
     official_head_coach: flatCoach(vm.official_head_coach) ?? local.coach,
     host_country: vm.host_country,
     coach: flatCoach(vm.official_head_coach) ?? local.coach,
+    strength: deriveStrength(vm) ?? undefined,
     official_squad_26: vm.official_squad_26,
     squad: vm.official_squad_26 ?? local.squad,
   }

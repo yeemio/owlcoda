@@ -3,10 +3,11 @@ import { FixturesPage } from './pages/Fixtures'
 import { MatchPage } from './pages/Match'
 import { TeamsPage } from './pages/Teams'
 import { SettingsPage } from './pages/Settings'
+import { Reviews } from './pages/Reviews'
 import { setLang, useLang, useT } from './i18n'
 import type { Fixture } from './api'
 
-type Tab = 'fixtures' | 'match' | 'teams' | 'settings'
+type Tab = 'fixtures' | 'match' | 'teams' | 'reviews' | 'settings'
 
 export function App() {
   const [tab, setTab] = useState<Tab>('fixtures')
@@ -26,6 +27,7 @@ export function App() {
               ['fixtures', t('navFixtures')],
               ['match', t('navMatch')],
               ['teams', t('navTeams')],
+              ['reviews', t('navReviews')],
               ['settings', t('navSettings')],
             ] as Array<[Tab, string]>
           ).map(([key, label]) => (
@@ -51,6 +53,7 @@ export function App() {
         )}
         {tab === 'match' && <MatchPage fixture={activeFixture} />}
         {tab === 'teams' && <TeamsPage />}
+        {tab === 'reviews' && <Reviews />}
         {tab === 'settings' && <SettingsPage />}
       </main>
 

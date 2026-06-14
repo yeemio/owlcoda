@@ -374,6 +374,11 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
         } satisfies ConversationCallbacks & { _flush: () => void }
       })()
 
+  // Mark this as an unattended run so the conversation loop treats onToolApproval
+  // (the UNSAFE_HEADLESS_TOOLS deny-gate) as a hard gate that fires regardless of
+  // operating mode — `--mode yolo` must not skip the dangerous-bash denylist.
+  callbacks.unattended = true
+
   const headlessConfig = loadConfig()
   const loopOpts: ConversationLoopOptions = {
     apiBaseUrl: opts.apiBaseUrl,
