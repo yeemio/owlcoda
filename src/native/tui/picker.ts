@@ -125,6 +125,64 @@ export function fuzzyMatch(query: string, target: string): number {
 }
 
 /**
+ * Score a query against a single command/item NAME (not its description).
+ * Lower = tighter. Returns -1 when the query isn't even a subsequence of the
+ * name. Tiers, from best to worst:
+ *   - exact        → 0
+ *   - prefix       → ~1   (shorter names rank first)
+ *   - substring    → ~100 (earlier position ranks first)
+ *   - subsequence  → ~1000 (scattered letters)
+ * A leading "/" on either side is ignored so a user typing "mode" matches
+ * "/mode". This is the heart of the picker fix: matching the NAME — instead of
+ * the old "name + description" haystack — stops every command whose description
+ * happens to contain the query letters from flooding the results.
+ */
+export function nameMatchScore(query: string, label: string): number {
+  const bq = query.trim().toLowerCase().replace(/^\//, '')
+  if (!bq) return 0
+  const name = stripAnsi(label).toLowerCase().replace(/^\//, '')
+  if (name === bq) return 0
+  if (name.startsWith(bq)) return 1 + (name.length - bq.length) / 1000
+  const idx = name.indexOf(bq)
+  if (idx >= 0) return 100 + idx + (name.length - bq.length) / 1000
+  const sub = fuzzyMatch(bq, name)
+  if (sub >= 0) return 1000 + sub
+  return -1
+}
+
+/**
+ * Filter + rank picker items for a query. Matches the item NAME first (tiered
+ * via nameMatchScore). Only when NOT A SINGLE item matched by name does it fall
+ * back to searching the descriptive text (description/meta/tag) — so a semantic
+ * query ("authentication" → /login) still resolves, but a name match never gets
+ * buried under, or padded out by, stray description subsequence hits. Empty
+ * query returns every item unchanged.
+ */
+export function filterPickerItems<T>(
+  items: PickerItem<T>[],
+  query: string,
+): PickerItem<T>[] {
+  if (!query.trim()) return [...items]
+
+  const byName = items
+    .map((item) => ({ item, score: nameMatchScore(query, item.label) }))
+    .filter((entry) => entry.score >= 0)
+    .sort((a, b) => a.score - b.score)
+  if (byName.length > 0) return byName.map((entry) => entry.item)
+
+  return items
+    .map((item) => {
+      const rest = [item.description, item.meta, item.tag]
+        .filter(Boolean)
+        .join(' ')
+      return { item, score: rest ? fuzzyMatch(query, rest) : -1 }
+    })
+    .filter((entry) => entry.score >= 0)
+    .sort((a, b) => a.score - b.score)
+    .map((entry) => entry.item)
+}
+
+/**
  * Highlight matched characters in a label.
  * Returns the label with matched chars in theme accent color.
  */
@@ -268,15 +326,7 @@ export async function showPicker<T>(
     source: PickerItem<T>[],
     q: string,
   ): PickerItem<T>[] {
-    if (!q) return [...source]
-    return source
-      .map((item) => ({
-        item,
-        score: fuzzyMatch(q, stripAnsi(item.label) + (item.description ?? '')),
-      }))
-      .filter((x) => x.score >= 0)
-      .sort((a, b) => a.score - b.score)
-      .map((x) => x.item)
+    return filterPickerItems(source, q)
   }
 
   function clampFocus(): void {

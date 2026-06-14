@@ -6,8 +6,9 @@ import {
   writeResult, readResult, confirmResult,
   writeDecision, readDecision, writeReview, readReview,
   updateAggregate, readAggregate, appendDaily,
+  writeFifaReport, readFifaReport, updateTeamTactics, readTeamTactics,
 } from '../server/review/store.js'
-import type { ReviewScorecard } from '../server/framework/types.js'
+import type { ReviewScorecard, FifaMatchReport } from '../server/framework/types.js'
 
 let root: string
 beforeEach(() => { root = mkdtempSync(path.join(tmpdir(), 'wc-review-')) })
@@ -92,5 +93,41 @@ describe('appendDaily + null-hit aggregate', () => {
     const agg = readAggregate(root)!
     expect(agg.n_matches).toBe(2)
     expect(agg.directional_hit_rate.baseline).toBe(1) // SC2's null excluded, only SC's hit=1 counts
+  })
+})
+
+const FIFA: FifaMatchReport = {
+  match_id: 12, home_team: 'Mexico', away_team: 'South Africa',
+  source_pdf_url: 'https://x/PMSR-M01.pdf', extracted_by: 'pdftotext', confidence: 'supported',
+  contested_possession_pct: 6.8,
+  home: { possession_pct: 57.1, goals: 2, xg: 1.78, attempts: 16, attempts_on_target: 4, passes: 547, passes_complete: 495, pass_completion_pct: 90, completed_line_breaks: 105, defensive_line_breaks: 10, receptions_final_third: 117, crosses: 13, ball_progressions: 23, defensive_pressures: 170, direct_pressures: 26, forced_turnovers: 31, second_balls: 56, total_distance_km: 107.3, low_speed_sprint_km: 5.3, phases: { in_possession: { build_up_unopposed: 47, build_up_opposed: 13, progression: 16, final_third: 11, long_ball: 3, attacking_transition: 10, counter_attack: 1, set_piece: 5 }, out_of_possession: { high_press: 9, mid_press: 3, low_press: 0, high_block: 7, mid_block: 25, low_block: 11, recovery: 5, defensive_transition: 12, counter_press: 8 } } },
+  away: { possession_pct: 36.1, goals: 0, xg: 0.1, attempts: 3, attempts_on_target: 2, passes: 351, passes_complete: 290, pass_completion_pct: 83, completed_line_breaks: 57, defensive_line_breaks: 3, receptions_final_third: 36, crosses: 8, ball_progressions: 8, defensive_pressures: 306, direct_pressures: 45, forced_turnovers: 32, second_balls: 45, total_distance_km: 97.1, low_speed_sprint_km: 5.1, phases: { in_possession: { build_up_unopposed: 43, build_up_opposed: 13, progression: 14, final_third: 7, long_ball: 6, attacking_transition: 12, counter_attack: 2, set_piece: 5 }, out_of_possession: { high_press: 6, mid_press: 3, low_press: 1, high_block: 5, mid_block: 30, low_block: 14, recovery: 2, defensive_transition: 10, counter_press: 7 } } },
+  proposed_at: 'now',
+}
+
+describe('fifa report + team tactics store', () => {
+  it('round-trips a fifa report', () => {
+    writeFifaReport(root, FIFA)
+    expect(readFifaReport(root, 12)?.home.xg).toBeCloseTo(1.78, 5)
+  })
+  it('updates per-team rolling tactics (home + away sides), idempotent', () => {
+    updateTeamTactics(root, FIFA)
+    updateTeamTactics(root, FIFA) // same match_id -> no double count
+    const mex = readTeamTactics(root, 'Mexico')!
+    expect(mex.matches).toBe(1)
+    expect(mex.avg.possession_pct).toBeCloseTo(57.1, 5)
+    expect(mex.avg.xg_for).toBeCloseTo(1.78, 5)
+    expect(mex.avg.xg_against).toBeCloseTo(0.1, 5)
+    const rsa = readTeamTactics(root, 'South Africa')!
+    expect(rsa.avg.xg_for).toBeCloseTo(0.1, 5)
+    expect(rsa.avg.mid_block).toBeCloseTo(30, 5)
+    expect(rsa.matches).toBe(1)
+    expect(rsa.avg.xg_against).toBeCloseTo(1.78, 5)
+  })
+  it('readTeamTactics strips internal _seen/_samples fields', () => {
+    updateTeamTactics(root, FIFA)
+    const mex = readTeamTactics(root, 'Mexico')! as any
+    expect('_seen' in mex).toBe(false)
+    expect('_samples' in mex).toBe(false)
   })
 })

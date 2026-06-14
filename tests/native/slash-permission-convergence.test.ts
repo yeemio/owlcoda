@@ -143,13 +143,18 @@ describe('/help advertises plan mode only when modes are enabled', () => {
     return out
   }
 
-  it('does NOT advertise plan mode when OWLCODA_MODES=0', async () => {
+  // /plan is demoted to a /mode alias, so /help advertises the modes through the
+  // gated /mode line ("Approval mode (plan|normal|auto|yolo)…") instead of a
+  // standalone /plan entry.
+  it('does NOT advertise the /mode line when OWLCODA_MODES=0', async () => {
     process.env['OWLCODA_MODES'] = '0'
-    expect(await helpOutput()).not.toContain('Enter read-only plan mode')
+    expect(await helpOutput()).not.toContain('Approval mode')
   })
 
-  it('advertises plan mode when modes are enabled', async () => {
+  it('advertises the modes (incl. plan) through /mode when modes are enabled', async () => {
     process.env['OWLCODA_MODES'] = '1'
-    expect(await helpOutput()).toContain('Enter read-only plan mode')
+    const out = await helpOutput()
+    expect(out).toContain('Approval mode')
+    expect(out).toContain('plan')
   })
 })

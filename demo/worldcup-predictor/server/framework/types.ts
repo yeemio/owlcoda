@@ -223,3 +223,61 @@ export interface ReviewAggregate {
   cover_rate: number
   calibration_bins: Array<{ p_lo: number; p_hi: number; predicted: number; observed: number; n: number }>
 }
+
+// ---- FIFA post-match report (Phase 2) types ----
+
+export interface FifaPhases {
+  in_possession: {
+    build_up_unopposed: number; build_up_opposed: number; progression: number; final_third: number
+    long_ball: number; attacking_transition: number; counter_attack: number; set_piece: number
+  }
+  out_of_possession: {
+    high_press: number; mid_press: number; low_press: number; high_block: number; mid_block: number
+    low_block: number; recovery: number; defensive_transition: number; counter_press: number
+  }
+}
+
+export interface FifaTeamStats {
+  possession_pct: number
+  goals: number
+  xg: number
+  attempts: number; attempts_on_target: number
+  passes: number; passes_complete: number
+  pass_completion_pct: number
+  completed_line_breaks: number
+  defensive_line_breaks: number
+  receptions_final_third: number
+  crosses: number
+  ball_progressions: number
+  defensive_pressures: number; direct_pressures: number
+  forced_turnovers: number
+  second_balls: number
+  total_distance_km: number
+  low_speed_sprint_km: number
+  phases: FifaPhases
+}
+
+export interface FifaMatchReport {
+  match_id: number | string
+  home_team: string
+  away_team: string
+  source_pdf_url: string
+  extracted_by: 'pdftotext' | 'human'
+  confidence: SourceStatus
+  contested_possession_pct: number
+  home: FifaTeamStats
+  away: FifaTeamStats
+  proposed_at: string
+  confirmed_at?: string
+}
+
+export interface TeamTactics {
+  team: string
+  matches: number
+  updated_at: string
+  // observed-style rolling averages (fills VM pack todo tactical fields)
+  avg: {
+    possession_pct: number; pass_completion_pct: number; total_distance_km: number
+    xg_for: number; xg_against: number; high_press: number; mid_block: number; counter_press: number
+  }
+}

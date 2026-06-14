@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import path from 'node:path'
-import type { MatchResult, DecisionLog, ReviewScorecard, ReviewAggregate } from '../framework/types.js'
+import type { MatchResult, DecisionLog, ReviewScorecard, ReviewAggregate, FifaMatchReport, TeamTactics, FifaTeamStats } from '../framework/types.js'
 
 const runDir = (root: string, matchId: number | string, stamp?: string) =>
   stamp ? path.join(root, 'runs', String(matchId), stamp) : path.join(root, 'runs', String(matchId))
@@ -110,6 +110,78 @@ function blankAgg(): AggState {
 
 function mean(xs: number[]): number {
   return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0
+}
+
+// ---- FIFA report store ----
+
+export function writeFifaReport(root: string, r: FifaMatchReport) {
+  writeJson(path.join(runDir(root, r.match_id), 'fifa.json'), r)
+}
+
+export function readFifaReport(root: string, matchId: number | string): FifaMatchReport | null {
+  return readJson<FifaMatchReport>(path.join(runDir(root, matchId), 'fifa.json'))
+}
+
+// ---- Team tactics store (rolling per-team averages, idempotent by match_id) ----
+
+const tacticsDir = (root: string) => path.join(root, 'team_tactics')
+
+interface TacticsSample {
+  possession_pct: number; pass_completion_pct: number; total_distance_km: number
+  xg_for: number; xg_against: number; high_press: number; mid_block: number; counter_press: number
+}
+
+interface TacticsState extends TeamTactics {
+  _seen: string[]
+  _samples: TacticsSample[]
+}
+
+function pushTactics(root: string, team: string, matchKey: string, own: FifaTeamStats, opp: FifaTeamStats) {
+  const file = path.join(tacticsDir(root), `${team}.json`)
+  const st: TacticsState = readJson<TacticsState>(file) ?? {
+    team, matches: 0, updated_at: '',
+    avg: { possession_pct: 0, pass_completion_pct: 0, total_distance_km: 0, xg_for: 0, xg_against: 0, high_press: 0, mid_block: 0, counter_press: 0 },
+    _seen: [], _samples: [],
+  }
+  if (st._seen.includes(matchKey)) return
+  st._seen.push(matchKey)
+  st._samples.push({
+    possession_pct: own.possession_pct,
+    pass_completion_pct: own.pass_completion_pct,
+    total_distance_km: own.total_distance_km,
+    xg_for: own.xg,
+    xg_against: opp.xg,
+    high_press: own.phases.out_of_possession.high_press,
+    mid_block: own.phases.out_of_possession.mid_block,
+    counter_press: own.phases.out_of_possession.counter_press,
+  })
+  const avg = (k: keyof TacticsSample) => st._samples.reduce((a, s) => a + s[k], 0) / st._samples.length
+  st.matches = st._samples.length
+  st.avg = {
+    possession_pct: avg('possession_pct'),
+    pass_completion_pct: avg('pass_completion_pct'),
+    total_distance_km: avg('total_distance_km'),
+    xg_for: avg('xg_for'),
+    xg_against: avg('xg_against'),
+    high_press: avg('high_press'),
+    mid_block: avg('mid_block'),
+    counter_press: avg('counter_press'),
+  }
+  st.updated_at = new Date().toISOString()
+  writeJson(file, st)
+}
+
+export function updateTeamTactics(root: string, r: FifaMatchReport) {
+  const key = String(r.match_id)
+  pushTactics(root, r.home_team, key, r.home, r.away)
+  pushTactics(root, r.away_team, key, r.away, r.home)
+}
+
+export function readTeamTactics(root: string, team: string): TeamTactics | null {
+  const st = readJson<TacticsState>(path.join(tacticsDir(root), `${team}.json`))
+  if (!st) return null
+  const { _seen, _samples, ...pub } = st
+  return pub
 }
 
 function recompute(st: AggState) {

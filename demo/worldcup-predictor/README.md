@@ -74,5 +74,13 @@ owlcoda serve
 - 诚实:抓不到赛果标 unsupported(绝不编造);无收盘线 CLV 标 n/a
 - FIFA 赛后体能/技战术数据回填为 Phase 2,见 docs/2026-06-14-daily-auto-review-design.md
 
+### FIFA 赛后数据回填(Phase 2)
+
+赛后 24–48h FIFA Training Centre 发布队级体能/技战术报告(PDF)。把报告链接贴进比赛页"抓 FIFA 报告",owlcoda/服务端下载并用 `pdftotext -layout` 确定性解析关键数据(p3)+战术阶段(p4),人确认后入库:给该场复盘加体能/技战术深度层,并滚动球队战术画像(`data/team_tactics/`)。
+
+- 前置:`brew install poppler`(提供 `pdftotext`)
+- 解析确定性、可单测;抓不到/未装 poppler → 诚实降级,不编造
+- 报告链接形如 `…/2026/PMSR-M01 MEX V RSA.pdf`(匹配号 + FIFA 三字码)
+
 ---
 Powered by [OwlCoda](../../README.md) · Your models. Your tools. Your data.

@@ -17,6 +17,9 @@ import {
   proposeResult,
   confirmResult,
   fetchReview,
+  proposeFifa,
+  confirmFifa,
+  fetchFifa,
   type Fixture,
   type Role,
   type SeatRole,
@@ -73,6 +76,13 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
   const [confirming, setConfirming] = useState(false)
   const [confirmError, setConfirmError] = useState('')
   const [reviewGoals, setReviewGoals] = useState<{ home: string; away: string }>({ home: '', away: '' })
+  const [fifa, setFifa] = useState<any>(null)
+  const [fifaUrl, setFifaUrl] = useState('')
+  const [fifaProposed, setFifaProposed] = useState<any>(null)
+  const [fifaFetching, setFifaFetching] = useState(false)
+  const [fifaFetchError, setFifaFetchError] = useState('')
+  const [fifaConfirming, setFifaConfirming] = useState(false)
+  const [fifaConfirmError, setFifaConfirmError] = useState('')
 
   useEffect(() => {
     fetchTeams().then(setTeams).catch(() => {})
@@ -104,6 +114,10 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
     fetchReview(fixture.match_id, stamp).then((r) => {
       if ('error' in r) { setReview(null) } else { setReview(r) }
     }).catch(() => setReview(null))
+    // Pre-fill FIFA report if one already exists for this match.
+    fetchFifa(fixture.match_id).then((r) => {
+      if (r && !r.error) { setFifa(r) } else { setFifa(null) }
+    }).catch(() => setFifa(null))
   }, [fixture?.match_id, loadedStamp])
 
   function capBadge(id: string): string {
@@ -148,6 +162,13 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
     setProposeError('')
     setConfirmError('')
     setReviewGoals({ home: '', away: '' })
+    setFifa(null)
+    setFifaUrl('')
+    setFifaProposed(null)
+    setFifaFetching(false)
+    setFifaFetchError('')
+    setFifaConfirming(false)
+    setFifaConfirmError('')
   }, [fixture?.match_id])
 
   if (!fixture) return <div className="card">从「赛程」页选择一场比赛开始分析。</div>
@@ -775,8 +796,111 @@ export function MatchPage({ fixture }: { fixture: Fixture | null }) {
             </div>
           )}
           {review && (
-            <ReviewCard sc={review} home={fixture.home_team} away={fixture.away_team} />
+            <ReviewCard sc={review} home={fixture.home_team} away={fixture.away_team} fifa={fifa} />
           )}
+          {/* FIFA 赛后数据回填(Phase 2) */}
+          <div style={{ marginTop: 12, borderTop: '1px solid var(--border,#333)', paddingTop: 10 }}>
+            <h4 style={{ margin: '0 0 6px', fontSize: 13, color: 'var(--cyan)' }}>FIFA 赛后体能/技战术数据</h4>
+            {!fifaProposed && !fifa && (
+              <>
+                <p className="hint" style={{ margin: '0 0 6px' }}>粘贴 FIFA Training Centre 的赛后报告 PDF 链接,owlcoda 下载后确定性解析并入库。</p>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+                  <input
+                    type="text"
+                    value={fifaUrl}
+                    onChange={(e) => setFifaUrl(e.target.value)}
+                    placeholder="https://www.fifatrainingcentre.com/…/PMSR-M01 MEX V RSA.pdf"
+                    style={{ flex: 1, padding: '4px 8px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--bg2)', color: 'inherit', fontSize: 12 }}
+                  />
+                  <button
+                    className="btn"
+                    style={{ fontSize: 12, padding: '5px 12px', whiteSpace: 'nowrap' }}
+                    disabled={fifaFetching || !fifaUrl.trim()}
+                    onClick={() => {
+                      setFifaFetchError('')
+                      setFifaFetching(true)
+                      proposeFifa(fixture.match_id, fifaUrl.trim()).then((r) => {
+                        if (r.ok && r.report) {
+                          setFifaProposed(r.report)
+                        } else {
+                          setFifaFetchError(r.error ?? '解析失败,请检查 URL 或确认 poppler 已安装。')
+                        }
+                      }).catch((e) => setFifaFetchError(String(e))).finally(() => setFifaFetching(false))
+                    }}
+                  >
+                    {fifaFetching ? '抓取中…' : '抓 FIFA 报告'}
+                  </button>
+                </div>
+                {fifaFetchError && <p className="hint" style={{ color: 'var(--anti)', margin: '0 0 4px' }}>{fifaFetchError}</p>}
+              </>
+            )}
+            {fifaProposed && !fifa && (
+              <div>
+                <p className="hint" style={{ margin: '0 0 6px' }}>解析完成,请核对后确认入库:</p>
+                <div className="kv" style={{ fontSize: 13 }}>
+                  <span>控球 <b>{fifaProposed.home?.possession_pct}%</b> / {fifaProposed.away?.possession_pct}%</span>
+                  <span>xG <b>{fifaProposed.home?.xg}</b> / {fifaProposed.away?.xg}</span>
+                  <span>跑动 <b>{fifaProposed.home?.total_distance_km}km</b> / {fifaProposed.away?.total_distance_km}km</span>
+                </div>
+                {fifaProposed.source_pdf_url && (
+                  <a href={fifaProposed.source_pdf_url} target="_blank" rel="noreferrer" className="hint" style={{ color: 'var(--cyan)', fontSize: 11, display: 'block', marginBottom: 6 }}>
+                    来源: {fifaProposed.source_pdf_url}
+                  </a>
+                )}
+                {fifaConfirmError && <p className="hint" style={{ color: 'var(--anti)', margin: '0 0 4px' }}>{fifaConfirmError}</p>}
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    className="btn"
+                    style={{ fontSize: 12, padding: '5px 12px' }}
+                    disabled={fifaConfirming}
+                    onClick={() => {
+                      setFifaConfirmError('')
+                      setFifaConfirming(true)
+                      confirmFifa(fixture.match_id).then((r) => {
+                        if (r.ok) {
+                          return fetchFifa(fixture.match_id).then((rep) => {
+                            if (rep && !rep.error) { setFifa(rep); setFifaProposed(null) }
+                            else { setFifaConfirmError('确认成功但读取报告失败,请刷新页面。') }
+                          })
+                        } else {
+                          setFifaConfirmError(r.error ?? '确认失败')
+                        }
+                      }).catch((e) => setFifaConfirmError(String(e))).finally(() => setFifaConfirming(false))
+                    }}
+                  >
+                    {fifaConfirming ? '入库中…' : '确认并入库'}
+                  </button>
+                  <button
+                    className="btn ghost"
+                    style={{ fontSize: 12, padding: '5px 10px' }}
+                    onClick={() => { setFifaProposed(null); setFifaFetchError(''); setFifaUrl('') }}
+                  >
+                    重新抓取
+                  </button>
+                </div>
+              </div>
+            )}
+            {fifa && (
+              <div>
+                <p className="hint" style={{ margin: '0 0 4px', color: 'var(--pro)' }}>
+                  ✓ FIFA 数据已入库{fifa.confirmed_at ? `(${new Date(fifa.confirmed_at).toLocaleString('zh-CN')})` : ''}
+                  {' · '}置信度: {fifa.confidence}
+                </p>
+                <div className="kv" style={{ fontSize: 13 }}>
+                  <span>控球 {fifa.home?.possession_pct}% / {fifa.away?.possession_pct}%</span>
+                  <span>xG {fifa.home?.xg} / {fifa.away?.xg}</span>
+                  <span>跑动 {fifa.home?.total_distance_km}km / {fifa.away?.total_distance_km}km</span>
+                </div>
+                <button
+                  className="btn ghost"
+                  style={{ fontSize: 11, padding: '3px 8px', marginTop: 4 }}
+                  onClick={() => { setFifa(null); setFifaProposed(null); setFifaUrl('') }}
+                >
+                  重新抓取
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

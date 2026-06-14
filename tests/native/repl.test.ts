@@ -862,10 +862,11 @@ describe('slashCompleter', () => {
     expect(hits).toContain('/compress')
   })
 
-  it('matches /reset- to /reset-circuits and /reset-budgets', () => {
-    const [hits] = slashCompleter('/reset-')
-    expect(hits).toContain('/reset-circuits')
-    expect(hits).toContain('/reset-budgets')
+  it('matches /reset to the single /reset command (the -circuits/-budgets twins were folded in)', () => {
+    const [hits] = slashCompleter('/reset')
+    expect(hits).toContain('/reset')
+    expect(hits).not.toContain('/reset-circuits')
+    expect(hits).not.toContain('/reset-budgets')
   })
 
   it('matches /ed to /editor', () => {
@@ -1562,7 +1563,7 @@ describe('failed continuation submit handling', () => {
   })
 })
 
-describe('/reset-circuits and /reset-budgets', () => {
+describe('/reset-circuits and /reset-budgets (folded into /reset)', () => {
   let logSpy: ReturnType<typeof vi.spyOn>
   let errorSpy: ReturnType<typeof vi.spyOn>
   let usage: UsageTracker
@@ -1579,18 +1580,25 @@ describe('/reset-circuits and /reset-budgets', () => {
     vi.restoreAllMocks()
   })
 
-  it('/reset-circuits returns true and confirms reset', async () => {
+  it('/reset circuits resets and confirms', async () => {
     const conv = makeConv()
-    expect(await handleSlashCommand('/reset-circuits', conv, usage)).toBe(true)
-    const output = logSpy.mock.calls[0]?.[0] as string
-    expect(output).toContain('circuit breakers reset')
+    expect(await handleSlashCommand('/reset circuits', conv, usage)).toBe(true)
+    const output = logSpy.mock.calls.flat().join('\n')
+    expect(output).toContain('circuit breakers')
   })
 
-  it('/reset-budgets returns true and confirms reset', async () => {
+  it('/reset budgets resets and confirms', async () => {
     const conv = makeConv()
-    expect(await handleSlashCommand('/reset-budgets', conv, usage)).toBe(true)
-    const output = logSpy.mock.calls[0]?.[0] as string
+    expect(await handleSlashCommand('/reset budgets', conv, usage)).toBe(true)
+    const output = logSpy.mock.calls.flat().join('\n')
     expect(output).toContain('error budget')
+  })
+
+  it('the old /reset-circuits name redirects to /reset', async () => {
+    const conv = makeConv()
+    expect(await handleSlashCommand('/reset-circuits', conv, usage)).toBe(true)
+    const output = logSpy.mock.calls.flat().join('\n')
+    expect(output).toContain('/reset circuits')
   })
 
   it('/verbose toggles tool result collapsing', async () => {

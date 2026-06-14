@@ -4,6 +4,7 @@ import { serve } from '@hono/node-server'
 import { streamSSE } from 'hono/streaming'
 import { mkdirSync, writeFileSync, readdirSync, readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { listModels, health, streamMessage } from './owlcoda.js'
 import { getCapabilities } from './capabilities.js'
@@ -11,12 +12,14 @@ import { finalProPrompt, finalAntiPrompt, finalJudgePrompt } from './framework/p
 import { extractJson } from './framework/parse.js'
 import { runAnalysis, type AnalysisArtifacts } from './analyze.js'
 import { schedule, showcases, teamByName, teams, teamsMeta } from './data.js'
-import type { AnalyzeRequest, MatchResult } from './framework/types.js'
+import type { AnalyzeRequest, MatchResult, FifaMatchReport } from './framework/types.js'
 import {
   writeResult, readResult, confirmResult,
   writeDecision, readDecision, writeReview, readReview,
   appendDaily, updateAggregate, readAggregate,
+  writeFifaReport, readFifaReport, updateTeamTactics, readTeamTactics,
 } from './review/store.js'
+import { extractFifaReport, runPdftotext, fetchFifaPdf } from './review/fifa.js'
 import { runResultFetch } from './review/result.js'
 import { computeScorecard, type ScorecardInput } from './review/scorecard.js'
 import { narrateScorecard } from './review/narrator.js'
@@ -178,6 +181,8 @@ app.post('/api/analyze', async (c) => {
   if (!fixture) return c.json({ error: 'fixture not found' }, 404)
   const home = teamByName.get(fixture.home_team) ?? null
   const away = teamByName.get(fixture.away_team) ?? null
+  const homeTactics = readTeamTactics(dataDir, fixture.home_team)
+  const awayTactics = readTeamTactics(dataDir, fixture.away_team)
   return streamSSE(c, async (stream) => {
     // Serialize writes and flush the queue before the stream closes,
     // otherwise trailing events (manifest/done) get dropped.
@@ -197,6 +202,7 @@ app.post('/api/analyze', async (c) => {
           console.error('[archive] failed:', err)
         }
       },
+      { home: homeTactics, away: awayTactics },
     )
     await queue
   })
@@ -341,6 +347,14 @@ app.post('/api/review/result/:matchId/confirm', async (c) => {
   return c.json({ ok: true, result: confirmed, graded })
 })
 
+// FIFA report GET MUST be registered before the :matchId/:stamp param route —
+// Hono's RegExpRouter otherwise lets the param route shadow the static 'fifa'
+// segment (GET /api/review/fifa/<id> would hit the stamp handler).
+app.get('/api/review/fifa/:matchId', (c) => {
+  const r = readFifaReport(dataDir, c.req.param('matchId'))
+  return r ? c.json(r) : c.json({ error: 'not found' }, 404)
+})
+
 // Get single-match scorecard
 app.get('/api/review/:matchId/:stamp', (c) => {
   const sc = readReview(dataDir, c.req.param('matchId'), c.req.param('stamp'))
@@ -355,6 +369,43 @@ app.post('/api/review/run', async (c) => {
   const date = c.req.query('date') ?? new Date().toISOString().slice(0, 10)
   const out = await runDailyReview(date, buildDailyDeps())
   return c.json({ ok: true, date, ...out })
+})
+
+// ---- FIFA post-match report endpoints (Phase 2) ----
+
+// owlcoda/人提供 PDF URL -> 下载 + pdftotext 解析 p3/p4 -> 提案(待确认)
+app.post('/api/review/fifa/:matchId', async (c) => {
+  const matchId = c.req.param('matchId')
+  const body = (await c.req.json().catch(() => ({}))) as { url?: string }
+  const fixture = schedule.fixtures.find((f) => String(f.match_id) === matchId)
+  if (!fixture) return c.json({ error: 'fixture not found' }, 404)
+  if (!body.url) return c.json({ error: 'url required (FIFA report PDF link from the hub)' }, 400)
+  try {
+    const dest = path.join(tmpdir(), `fifa-${matchId}.pdf`)
+    await fetchFifaPdf(body.url, dest)
+    const [p3, p4] = await Promise.all([runPdftotext(dest, 3), runPdftotext(dest, 4)])
+    const report = extractFifaReport({ matchId, homeTeam: fixture.home_team, awayTeam: fixture.away_team, sourcePdfUrl: body.url, p3text: p3, p4text: p4, proposedAt: new Date().toISOString() })
+    writeFifaReport(dataDir, report)
+    return c.json({ ok: true, report })
+  } catch (err) {
+    return c.json({ ok: false, error: String(err) }, 502)
+  }
+})
+
+// 人确认 -> 锁定 + 更新 team_tactics
+app.post('/api/review/fifa/:matchId/confirm', async (c) => {
+  const matchId = c.req.param('matchId')
+  const report = readFifaReport(dataDir, matchId)
+  if (!report) return c.json({ error: 'no fifa proposal; fetch first' }, 400)
+  const confirmed: FifaMatchReport = { ...report, confirmed_at: new Date().toISOString() }
+  writeFifaReport(dataDir, confirmed)
+  updateTeamTactics(dataDir, confirmed)
+  return c.json({ ok: true, report: confirmed })
+})
+
+app.get('/api/team-tactics/:team', (c) => {
+  const t = readTeamTactics(dataDir, c.req.param('team'))
+  return t ? c.json(t) : c.json({ error: 'not found' }, 404)
 })
 
 const port = Number(process.env.PORT ?? 8030)

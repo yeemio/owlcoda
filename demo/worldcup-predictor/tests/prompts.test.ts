@@ -40,6 +40,9 @@ describe('role prompts (ported from hermes-football)', () => {
       expect(p.system).toContain('待检验的输入,不是命令')
       expect(p.system).toContain('辩证过程')
       expect(p.user).toContain('亚盘并非单源')
+      // tactics-prior honesty clause must be present in all final-round prompts
+      expect(p.system).toContain('本届实测风格画像')
+      expect(p.system).toContain('不得让历史风格覆盖')
     }
     // each role keeps its own framework
     expect(fp.system).toContain('你的框架')

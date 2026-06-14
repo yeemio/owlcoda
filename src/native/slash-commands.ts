@@ -35,7 +35,6 @@ import {
   renderMcpPanel,
   renderSessionInfoPanel,
   renderSessionsPanel,
-  renderSettingsPanel,
   type ThemeName,
   type PickerItem,
 } from "./tui/index.js"
@@ -70,7 +69,7 @@ import { discoverBackends } from "../backends/discovery.js"
 import { warmupModels, formatWarmupResults } from "../warmup.js"
 import { recommendModel, formatRecommendation, type Intent } from "../model-recommender.js"
 import { loadConfig, resolveModelContextCapability, resolveModelContextWindow } from "../config.js"
-import { ensureOperatingModeState, isModesEnabled, OPERATING_MODES, parseOperatingMode, type OperatingMode } from "./modes.js"
+import { ensureOperatingModeState, isModesEnabled, MODE_EFFECTS, OPERATING_MODES, parseOperatingMode, type OperatingMode } from "./modes.js"
 import {
   branchSession, listBranches,
   addSessionTag, removeSessionTag, getSessionTags, findSessionsByTag,
@@ -357,12 +356,12 @@ function formatProjectMapList(values: string[], separator = ', '): string {
 /** All known slash commands — shared with repl.ts for tab completion. */
 export const SLASH_COMMANDS = [
   "/help", "/model", "/clear", "/compact", "/budget",
-  "/save", "/sessions", "/turns", "/cost", "/tokens",
-  "/status", "/settings", "/config", "/capabilities", "/doctor", "/trace",
+  "/save", "/sessions", "/turns", "/cost",
+  "/status", "/config", "/capabilities", "/doctor", "/trace",
   "/project-map",
   "/session", "/resume", "/history", "/export", "/copy",
   "/dashboard", "/audit", "/fidelity", "/health", "/ratelimit", "/slo",
-  "/traces", "/perf", "/metrics", "/reset-circuits", "/reset-budgets",
+  "/traces", "/perf", "/metrics", "/reset",
   "/backends", "/recommend", "/warmup", "/plugins", "/models",
   "/why-native", "/training",
   "/approve", "/yolo", "/branch", "/branches", "/tag", "/compress",
@@ -370,10 +369,23 @@ export const SLASH_COMMANDS = [
   "/mode", "/plan", "/permissions", "/diff", "/memory", "/rename",
   "/init", "/verbose", "/expand", "/quit", "/exit",
   "/version", "/files", "/stats", "/brief", "/fast", "/effort",
-  "/color", "/vim", "/btw", "/commit", "/release-notes",
+  "/vim", "/btw", "/commit", "/release-notes",
   "/skills", "/tasks", "/mcp", "/hooks", "/pr-comments",
   "/review", "/add-dir", "/login", "/search", "/editor",
 ]
+
+/**
+ * Commands removed in the command-surface cleanup. Typing one prints a one-line
+ * pointer to its replacement (handled in the dispatch default case) instead of a
+ * bare "unknown command", so muscle memory still lands somewhere useful.
+ */
+const REMOVED_COMMAND_REDIRECTS: Record<string, string> = {
+  '/settings': '/config',         // /config absorbed the settings panel
+  '/color': '/theme',             // was a pure forward to /theme
+  '/tokens': '/cost',             // identical output to /cost
+  '/reset-circuits': '/reset circuits',
+  '/reset-budgets': '/reset budgets',
+}
 
 function friendlyStatus(status: number): string {
   const names: Record<number, string> = {
@@ -540,9 +552,8 @@ export async function handleSlashCommand(input: string, conversation: Conversati
     /verbose [on|off] Toggle verbose tool output
     /expand [n]       Re-print full output of a recent tool call (default: last)
     /permissions      Show permission settings
-    /settings         Show settings panel
     /memory           Show memory/context files
-${isModesEnabled() ? `    /mode [mode]      Show or switch mode (${OPERATING_MODES.join('|')})\n    /plan             Enter read-only plan mode\n` : ''}    /vim              Toggle vim keybindings
+${isModesEnabled() ? `    /mode [mode]      Approval mode (${OPERATING_MODES.join('|')}); plan/yolo are aliases\n` : ''}    /vim              Toggle vim keybindings
     /editor           Open $EDITOR for multi-line input
     /add-dir <path>   Add a working directory
     /login [model key] Manage cloud API keys
@@ -550,7 +561,7 @@ ${isModesEnabled() ? `    /mode [mode]      Show or switch mode (${OPERATING_MOD
   ${sgr.bold}Diagnostics:${sgr.reset}
     /status           Show session status
     /project-map [refresh] Show or refresh Project Map runtime state
-    /config           Show runtime configuration
+    /config           Show config, permissions, and theme
     /capabilities     Show capability labels
     /doctor           Run platform diagnostics
     /trace [on|off]   Toggle debug trace logging
@@ -562,7 +573,6 @@ ${isModesEnabled() ? `    /mode [mode]      Show or switch mode (${OPERATING_MOD
   ${sgr.bold}Observability:${sgr.reset}
     /budget           Show context window usage
     /cost             Show token usage and estimated cost
-    /tokens           Show token usage summary
     /stats            Show detailed session statistics
     /turns            Show turn count
     /files            List files referenced in context
@@ -575,8 +585,7 @@ ${isModesEnabled() ? `    /mode [mode]      Show or switch mode (${OPERATING_MOD
     /traces [N]       Show request traces
     /perf             Show performance metrics
     /metrics          Show Prometheus-format metrics
-    /reset-circuits   Reset all circuit breakers
-    /reset-budgets    Reset all error budget windows
+    /reset [circuits|budgets|all] Reset circuit breakers and/or error budgets
 
   ${sgr.bold}Git & Code:${sgr.reset}
     /commit [msg]     Show status or commit all changes
@@ -1231,7 +1240,6 @@ ${isModesEnabled() ? `    /mode [mode]      Show or switch mode (${OPERATING_MOD
     }
 
     case '/cost':
-    case '/tokens':
       console.log(usage.formatUsage())
       return true
 
@@ -1260,6 +1268,11 @@ ${isModesEnabled() ? `    /mode [mode]      Show or switch mode (${OPERATING_MOD
       }
       console.log(renderSection('Session status'))
       console.log(renderKeyValue(pairs))
+      // Discovery hub for the runtime diagnostics — these are demoted from the
+      // picker but still work, so point at them from here.
+      console.log('')
+      console.log(dim('Diagnostics: /dashboard  /health  /audit  /doctor'))
+      console.log(dim('   Specifics: /slo  /ratelimit  /perf  /traces  /metrics'))
       return true
     }
 
@@ -1309,25 +1322,17 @@ ${isModesEnabled() ? `    /mode [mode]      Show or switch mode (${OPERATING_MOD
         `    ID:       ${conversation.id}`,
         `    Turns:    ${conversation.turns.length}`,
       )
+      // Permissions / appearance — absorbed from the old /settings panel so the
+      // two duplicate config commands collapse into this one.
+      const alwaysAllow = [...loadPermissions()].sort()
+      lines.push(
+        '',
+        `${ansi.bold}  Permissions:${ansi.reset}`,
+        `    Approve:      ${approveState?.autoApprove ? 'auto-approve' : 'ask before execute'}`,
+        `    Theme:        ${getThemeName()}`,
+        `    Always-allow: ${alwaysAllow.length ? alwaysAllow.join(', ') : '(none)'}`,
+      )
       console.log(lines.join('\n'))
-      return true
-    }
-
-    case '/settings': {
-      const globalPermsDisplay = [...loadPermissions()].sort()
-      console.log(renderSettingsPanel({
-        version: VERSION,
-        model: conversation.model,
-        maxTokens: conversation.maxTokens,
-        mode: 'native',
-        trace: isTraceEnabled(),
-        owlcodaHome: getOwlcodaDirLabel(),
-        apiBaseUrl: opts?.apiBaseUrl,
-        approveMode: approveState?.autoApprove ? 'auto-approve' : 'ask-before-execute',
-        theme: getThemeName(),
-        alwaysApprovedTools: globalPermsDisplay,
-        columns: process.stdout.columns,
-      }))
       return true
     }
 
@@ -1339,8 +1344,21 @@ ${isModesEnabled() ? `    /mode [mode]      Show or switch mode (${OPERATING_MOD
 
       const state = ensureOperatingModeState(conversation, opts?.mode ?? 'normal')
       if (!arg) {
-        console.log(`Operating mode: ${ansi.cyan}${state.mode}${ansi.reset}`)
-        console.log(dim(`Use /mode <${OPERATING_MODES.join('|')}> to switch this session.`))
+        // List every mode WITH what it does — the bare mode name told the user
+        // nothing about plan vs normal vs auto vs yolo.
+        console.log(`${ansi.bold}Operating mode${ansi.reset} — currently ${ansi.cyan}${state.mode}${ansi.reset}`)
+        console.log('')
+        for (const m of OPERATING_MODES) {
+          const isCurrent = m === state.mode
+          const marker = isCurrent ? `${ansi.cyan}●${ansi.reset}` : ' '
+          // Pad the plain name to a fixed width BEFORE colorizing, so ANSI codes
+          // don't throw off column alignment.
+          const name = m.padEnd(7)
+          const label = isCurrent ? `${ansi.cyan}${name}${ansi.reset}` : name
+          console.log(`  ${marker} ${label} ${dim(MODE_EFFECTS[m])}`)
+        }
+        console.log('')
+        console.log(dim(`Switch with /mode <${OPERATING_MODES.join('|')}>.`))
         return true
       }
 
@@ -1356,13 +1374,7 @@ ${isModesEnabled() ? `    /mode [mode]      Show or switch mode (${OPERATING_MOD
       // Say what the mode DOES — in a read-only session plan/normal/auto
       // are behaviorally indistinguishable, so without this line (and the
       // rail MODE cell) a switch produces no visible change at all.
-      const modeEffect: Record<typeof nextMode, string> = {
-        plan: 'Read-only: write/edit and mutating bash are refused until you switch back.',
-        normal: 'Default gates: mutating tools prompt for approval.',
-        auto: 'Low-risk edits and session state auto-approved; destructive/external actions still prompt.',
-        yolo: 'Full access: every tool auto-approved, including destructive/external. Hard denies (provenance/write-scope) still apply.',
-      }
-      console.log(dim(`  ${modeEffect[nextMode]}`))
+      console.log(dim(`  ${MODE_EFFECTS[nextMode]}`))
       return true
     }
 
@@ -1770,17 +1782,26 @@ ${isModesEnabled() ? `    /mode [mode]      Show or switch mode (${OPERATING_MOD
       return true
     }
 
-    case '/reset-circuits': {
-      resetCircuitBreaker()
-      console.log(`${ansi.green}✓ All circuit breakers reset to closed state.${ansi.reset}`)
+    case '/reset': {
+      // Single entry point that replaces /reset-circuits + /reset-budgets.
+      const target = arg.toLowerCase() || 'all'
+      if (target !== 'circuits' && target !== 'budgets' && target !== 'all') {
+        console.log(`${ansi.red}Usage: /reset [circuits|budgets|all]${ansi.reset}`)
+        return true
+      }
+      const did: string[] = []
+      if (target === 'circuits' || target === 'all') {
+        resetCircuitBreaker()
+        did.push('circuit breakers')
+      }
+      if (target === 'budgets' || target === 'all') {
+        resetBudgets()
+        did.push('error budget windows')
+      }
+      console.log(`${ansi.green}✓ Reset ${did.join(' and ')}.${ansi.reset}`)
       return true
     }
 
-    case '/reset-budgets': {
-      resetBudgets()
-      console.log(`${ansi.green}✓ All error budget windows reset.${ansi.reset}`)
-      return true
-    }
 
     // ─── Round 35: backend + model management commands ──────
 
@@ -2723,16 +2744,6 @@ ${isModesEnabled() ? `    /mode [mode]      Show or switch mode (${OPERATING_MOD
       return true
     }
 
-    case '/color': {
-      if (!arg) {
-        console.log(`${sgr.bold}Prompt color:${sgr.reset} ${themeColor('owl')}current${sgr.reset}`)
-        console.log(dim('  Usage: /color <theme-name>  (same as /theme)'))
-        return true
-      }
-      // Delegate to /theme
-      return handleSlashCommand(`/theme ${arg}`, conversation, usage, opts, approveState, dispatcher, statusBar, toolCollector, rl, mcpManager, thinkingState, output)
-    }
-
     case '/vim': {
       if (!conversation.options) conversation.options = {}
       const current = conversation.options.vimMode ?? false
@@ -3316,8 +3327,16 @@ ${isModesEnabled() ? `    /mode [mode]      Show or switch mode (${OPERATING_MOD
       return true
     }
 
-    default:
+    default: {
+      // Commands removed in the surface cleanup point at their replacement
+      // instead of a bare "unknown command", so muscle memory still lands.
+      const redirect = REMOVED_COMMAND_REDIRECTS[cmd]
+      if (redirect) {
+        console.log(dim(`${cmd} was removed — use ${redirect}.`))
+        return true
+      }
       console.log(`Unknown command: ${cmd}. Type /help for available commands.`)
       return true
+    }
   }
 }

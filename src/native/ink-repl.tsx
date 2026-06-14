@@ -146,7 +146,7 @@ import { createConfigTool } from './tools/config.js'
 import { createEnterPlanModeTool, type PlanModeState } from './tools/enter-plan-mode.js'
 import { createExitPlanModeTool } from './tools/exit-plan-mode.js'
 import { createProbePlanTool } from './tools/probe-plan.js'
-import { ensureOperatingModeState, initializeOperatingModeState, isModesEnabled, resolveInitialAutoApprove } from './modes.js'
+import { ensureOperatingModeState, initializeOperatingModeState, isModesEnabled, MODE_SUMMARIES, resolveInitialAutoApprove, resolveModeCycleKey } from './modes.js'
 import {
   ToolResultCollector,
   formatFooterOnlyToolEnd,
@@ -2642,6 +2642,23 @@ function NativeReplApp({
         return
       }
       return
+    }
+
+    // Shift+Tab cycles the operating mode (normal → auto → plan → normal), like
+    // external coding-assistant. yolo is excluded from the casual cycle (enter it explicitly).
+    // useTextInput treats tab as a no-op, so there's no double-handling.
+    if (isModesEnabled()) {
+      const nextMode = resolveModeCycleKey(
+        key,
+        conversation.options?.operatingModeState?.mode ?? 'normal',
+      )
+      if (nextMode) {
+        ensureOperatingModeState(conversation, opts.mode ?? 'normal').mode = nextMode
+        approveStateRef.current.autoApprove = nextMode === 'yolo' // keep the mirror synced
+        setUiVersion((value) => value + 1)
+        setFooterNotice(dim(`Mode → ${nextMode} (${MODE_SUMMARIES[nextMode]})`))
+        return
+      }
     }
 
     const interruptsInInput = countInterruptsInInput(input, key)

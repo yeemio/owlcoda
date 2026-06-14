@@ -15,7 +15,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { Box, Text, useInput } from '../ink.js'
 
 import { themeToInkHex } from './ink-theme.js'
-import { fuzzyMatch, type PickerItem } from './tui/picker.js'
+import { filterPickerItems, type PickerItem } from './tui/picker.js'
 import { stripAnsi } from './tui/colors.js'
 import { padRight, truncate } from './tui/text.js'
 
@@ -67,22 +67,7 @@ export function InkPicker<T>({
     setScrollOffset(0)
   }, [initialQuery])
 
-  const filtered = useMemo(() => {
-    if (!query.trim()) return items
-    const haystackOf = (item: PickerItem<T>): string => {
-      const parts: string[] = [stripAnsi(item.label)]
-      if (item.description) parts.push(item.description)
-      if (item.meta) parts.push(item.meta)
-      if (item.tag) parts.push(item.tag)
-      if (item.shortcut) parts.push(item.shortcut)
-      return parts.join(' ')
-    }
-    return items
-      .map((item) => ({ item, score: fuzzyMatch(query, haystackOf(item)) }))
-      .filter((entry) => entry.score >= 0)
-      .sort((left, right) => left.score - right.score)
-      .map((entry) => entry.item)
-  }, [items, query])
+  const filtered = useMemo(() => filterPickerItems(items, query), [items, query])
 
   useEffect(() => {
     const bounded = Math.max(0, Math.min(focusIndex, Math.max(0, filtered.length - 1)))

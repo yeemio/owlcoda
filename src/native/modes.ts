@@ -26,6 +26,28 @@ interface OperatingModeContainer {
  *  can't drop a mode — yolo was missing from those strings while being a fully
  *  valid mode. parseOperatingMode validates against this same list. */
 export const OPERATING_MODES: OperatingMode[] = ['plan', 'normal', 'auto', 'yolo']
+
+/**
+ * What each operating mode actually DOES — the single source of truth for every
+ * surface that explains the modes (the `/mode` command output, help, the picker
+ * hint). Full sentences for the command output. Keep in sync with the gate
+ * behaviour in evaluateModeGate / evaluateAutoApproval below.
+ */
+export const MODE_EFFECTS: Record<OperatingMode, string> = {
+  plan: 'Read-only: write/edit and mutating bash are refused until you switch back.',
+  normal: 'Default gates: mutating tools prompt for approval.',
+  auto: 'Low-risk edits and session state auto-approved; destructive/external actions still prompt.',
+  yolo: 'Full access: every tool auto-approved, including destructive/external. Hard denies (provenance/write-scope) still apply.',
+}
+
+/** Two-or-three-word gloss of each mode, for compact one-line contexts. */
+export const MODE_SUMMARIES: Record<OperatingMode, string> = {
+  plan: 'read-only',
+  normal: 'confirm changes',
+  auto: 'auto low-risk',
+  yolo: 'auto everything',
+}
+
 const FALSY = new Set(['0', 'false', 'no', 'off', ''])
 
 /** "Enable" forms for the supervised-run env escape hatch (OWLCODA_AUTO_APPROVE). */
@@ -72,6 +94,21 @@ export function cycleOperatingMode(current: OperatingMode): OperatingMode {
   const i = MODE_CYCLE.indexOf(current)
   if (i === -1) return 'normal'
   return MODE_CYCLE[(i + 1) % MODE_CYCLE.length]!
+}
+
+/**
+ * Decide whether a keypress is the Shift+Tab mode-cycle and, if so, what the
+ * next mode is. Returns null for any other key (so the caller leaves it for the
+ * composer). Pure, so the ink-repl wiring has a unit-test seam — the only part
+ * that needs a real terminal is whether the terminal emits backtab at all, and
+ * parse-keypress already maps "\x1b[Z" → { tab: true, shift: true }.
+ */
+export function resolveModeCycleKey(
+  key: { tab?: boolean; shift?: boolean },
+  current: OperatingMode,
+): OperatingMode | null {
+  if (!(key.tab && key.shift)) return null
+  return cycleOperatingMode(current)
 }
 
 export function resolveInitialMode(input: {

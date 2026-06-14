@@ -1040,11 +1040,9 @@ const SLASH_PICKER_HINTS: Record<string, string> = {
   '/sessions': 'List saved sessions',
   '/turns': 'Show turn count',
   '/cost': 'Token usage breakdown',
-  '/tokens': 'Token usage (alias for /cost)',
   '/status': 'Session info and runtime state',
   '/project-map': 'Project Map status and refresh',
-  '/settings': 'Open settings panel',
-  '/config': 'Show runtime configuration',
+  '/config': 'Config, permissions, theme',
   '/capabilities': 'List supported features',
   '/doctor': 'Run environment diagnostics',
   '/trace': 'Toggle debug trace logging',
@@ -1062,8 +1060,7 @@ const SLASH_PICKER_HINTS: Record<string, string> = {
   '/traces': 'View recent timing waterfalls',
   '/perf': 'Performance metrics',
   '/metrics': 'Prometheus-format metrics',
-  '/reset-circuits': 'Reset circuit breakers',
-  '/reset-budgets': 'Reset error budgets',
+  '/reset': 'Reset circuit breakers / error budgets',
   '/backends': 'Discover local backends',
   '/recommend': 'Model recommendation by intent',
   '/warmup': 'Warm up model backends',
@@ -1084,9 +1081,9 @@ const SLASH_PICKER_HINTS: Record<string, string> = {
   '/retry': 'Resend last message',
   '/rewind': 'Remove last N turn pairs',
   '/context': 'Show context window usage',
-  '/mode': 'Switch operating mode',
+  '/mode': 'Approval mode: plan/normal/auto/yolo',
   '/plan': 'Enter read-only plan mode',
-  '/permissions': 'Show tool permissions',
+  '/permissions': 'Tool permission rules and status',
   '/diff': 'Show git diff',
   '/memory': 'Show OWLCODA.md memory',
   '/rename': 'Rename current session',
@@ -1101,7 +1098,6 @@ const SLASH_PICKER_HINTS: Record<string, string> = {
   '/brief': 'Toggle brief response mode',
   '/fast': 'Toggle fast mode',
   '/effort': 'Set effort level (low/medium/high)',
-  '/color': 'Color mode settings',
   '/vim': 'Toggle vim keybindings',
   '/btw': 'Inject context note',
   '/commit': 'Generate commit message',
@@ -1144,18 +1140,45 @@ export const SLASH_COMMANDS_REQUIRING_ARGS = new Set([
 const SLASH_PICKER_SHORTCUTS: Record<string, string> = {
   '/help':     '?',
   '/clear':    '⌃L',
-  '/settings': '⌃,',
   '/quit':     '⌃D',
   '/exit':     '⌃D',
 }
 
+/**
+ * Redundant commands kept working (still dispatch + autocomplete) but DEMOTED
+ * out of the picker so the visible surface isn't cluttered with twins and
+ * now-merged aliases. Each maps to the primary command it folds into. Muscle
+ * memory is preserved — typing the old name still works — the alias just no
+ * longer pads the picker. (Distinct from REMOVED_COMMAND_REDIRECTS in
+ * slash-commands.ts, which is for commands whose handler was actually deleted.)
+ */
+export const SLASH_PICKER_HIDDEN: Record<string, string> = {
+  '/plan': '/mode plan',        // now just an operating-mode alias
+  '/yolo': '/mode yolo',        // now just an operating-mode alias
+  '/approve': '/mode',          // now just an operating-mode alias
+  '/themes': '/theme',          // identical twin
+  '/stats': '/status',          // overlaps the /status overview
+  '/session': '/status',        // singular twin; /sessions lists saved ones
+  '/turns': '/status',          // turn count is part of /status
+  '/compress': '/compact',      // same compaction, different name
+  '/why-native': '/help',       // hand-written explainer with drifting numbers
+  // Observability slices of the /dashboard hub — still work, reachable from the
+  // /status diagnostics footer.
+  '/slo': '/dashboard',
+  '/ratelimit': '/dashboard',
+  '/perf': '/dashboard',
+  '/traces': '/dashboard',
+}
+
 export function buildSlashPickerItems(): PickerItem<string>[] {
-  return SLASH_COMMANDS.map((command) => ({
-    label: command,
-    description: SLASH_PICKER_HINTS[command] ?? 'Command',
-    value: command,
-    shortcut: SLASH_PICKER_SHORTCUTS[command] ?? '',
-  }))
+  return SLASH_COMMANDS
+    .filter((command) => !(command in SLASH_PICKER_HIDDEN))
+    .map((command) => ({
+      label: command,
+      description: SLASH_PICKER_HINTS[command] ?? 'Command',
+      value: command,
+      shortcut: SLASH_PICKER_SHORTCUTS[command] ?? '',
+    }))
 }
 
 /**

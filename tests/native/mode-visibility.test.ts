@@ -50,15 +50,20 @@ describe('/mode picker prefill', () => {
   })
 })
 
-// /plan is no longer a status-only shell — it functionally enters read-only
-// plan mode (and /plan off leaves). The picker hint still said "Plan mode
-// status", which mislabels what selecting it does.
-describe('/plan picker hint reflects the functional command', () => {
-  it('describes entering plan mode, not just showing status', () => {
-    const plan = buildSlashPickerItems().find((i) => i.value === '/plan')
-    expect(plan).toBeDefined()
-    const desc = (plan?.description ?? '').toLowerCase()
-    expect(desc).not.toContain('status')
+// /plan is now a demoted alias of `/mode plan` — it still works if typed, but
+// the picker no longer lists it (one permission axis = /mode). The promoted
+// /mode entry is the one that must surface plan, and its hint must name the
+// modes (it used to be the bare, useless "Switch operating mode").
+describe('the permission surface is /mode, with /plan demoted to an alias', () => {
+  it('does not list /plan in the picker (it folded into /mode)', () => {
+    expect(buildSlashPickerItems().find((i) => i.value === '/plan')).toBeUndefined()
+  })
+
+  it('the /mode picker hint names the available modes, including plan', () => {
+    const mode = buildSlashPickerItems().find((i) => i.value === '/mode')
+    expect(mode).toBeDefined()
+    const desc = (mode?.description ?? '').toLowerCase()
     expect(desc).toContain('plan')
+    expect(desc).toContain('yolo')
   })
 })

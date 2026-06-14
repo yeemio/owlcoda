@@ -10,6 +10,7 @@ import {
   parseOperatingMode,
   resolveInitialAutoApprove,
   resolveInitialMode,
+  resolveModeCycleKey,
 } from '../../src/native/modes.js'
 
 describe('isModesEnabled', () => {
@@ -169,6 +170,20 @@ describe('cycleOperatingMode', () => {
 
   it('cycling out of yolo returns to normal (yolo needs explicit /yolo or /mode yolo)', () => {
     expect(cycleOperatingMode('yolo')).toBe('normal')
+  })
+})
+
+describe('resolveModeCycleKey (Shift+Tab wiring seam)', () => {
+  it('returns the next mode only for Shift+Tab', () => {
+    expect(resolveModeCycleKey({ tab: true, shift: true }, 'normal')).toBe('auto')
+    expect(resolveModeCycleKey({ tab: true, shift: true }, 'auto')).toBe('plan')
+    expect(resolveModeCycleKey({ tab: true, shift: true }, 'plan')).toBe('normal')
+  })
+
+  it('ignores plain Tab and any non-backtab key (leaves it for the composer)', () => {
+    expect(resolveModeCycleKey({ tab: true, shift: false }, 'normal')).toBeNull()
+    expect(resolveModeCycleKey({ tab: false, shift: true }, 'normal')).toBeNull()
+    expect(resolveModeCycleKey({}, 'normal')).toBeNull()
   })
 })
 

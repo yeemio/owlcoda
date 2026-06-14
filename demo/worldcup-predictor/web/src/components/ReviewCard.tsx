@@ -9,7 +9,7 @@ function hitTag(hit: boolean | null) {
   return <span className={`delta-pill ${hit ? 'up' : 'down'}`}>{hit ? '命中' : '未中'}</span>
 }
 
-export function ReviewCard({ sc, home, away }: { sc: ReviewScorecardClient; home: string; away: string }) {
+export function ReviewCard({ sc, home, away, fifa }: { sc: ReviewScorecardClient; home: string; away: string; fifa?: any }) {
   const L = sc.layers
   const layerRow = (name: string, layer: any) => {
     if (layer?.status === 'n/a') return (<div className="kv"><span>{name}</span><span className="conf-tag">n/a(未落盘)</span></div>)
@@ -54,6 +54,27 @@ export function ReviewCard({ sc, home, away }: { sc: ReviewScorecardClient; home
         </div>
       )}
       <div className="kv"><span>CLV</span><span className="conf-tag">{sc.clv.status === 'n/a' ? `n/a · ${sc.clv.note ?? ''}` : (sc.clv.value ?? 0).toFixed(3)}</span></div>
+      {fifa && fifa.home && fifa.away && (
+        <div className="kv" style={{ flexDirection: 'column', alignItems: 'flex-start', borderTop: '1px solid var(--border,#333)', marginTop: 8, paddingTop: 8 }}>
+          <span className="hint">赛后实测(FIFA) · {home} vs {away}</span>
+          <div>
+            控球 <b>{fifa.home.possession_pct}%</b> / {fifa.away.possession_pct}%
+            {' · '}xG <b>{fifa.home.xg}</b> / {fifa.away.xg}
+            {' · '}跑动 <b>{fifa.home.total_distance_km}km</b> / {fifa.away.total_distance_km}km
+          </div>
+          <div>
+            传球成功 {fifa.home.pass_completion_pct}% / {fifa.away.pass_completion_pct}%
+            {' · '}高位逼抢 {fifa.home.phases?.out_of_possession?.high_press ?? '—'}% / {fifa.away.phases?.out_of_possession?.high_press ?? '—'}%
+            {' · '}中场封锁 {fifa.home.phases?.out_of_possession?.mid_block ?? '—'}% / {fifa.away.phases?.out_of_possession?.mid_block ?? '—'}%
+            {' · '}反抢 {fifa.home.phases?.out_of_possession?.counter_press ?? '—'}% / {fifa.away.phases?.out_of_possession?.counter_press ?? '—'}%
+          </div>
+          {fifa.source_pdf_url && (
+            <a href={fifa.source_pdf_url} target="_blank" rel="noreferrer" className="hint" style={{ color: 'var(--cyan)', fontSize: 11 }}>
+              FIFA 报告来源 PDF
+            </a>
+          )}
+        </div>
+      )}
       {sc.narrative && <p className="hint" style={{ margin: '6px 0 0' }}>{sc.narrative}</p>}
     </div>
   )

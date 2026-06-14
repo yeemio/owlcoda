@@ -13,6 +13,8 @@ const COMMON_RULES = `严禁编造已经查询、已经确认、已经抓取但�
 // Distilled euro-odds reading core (from the adversarially-verified
 // betting-master framework; full version in docs/betting-framework-synthesis.md).
 // Shared by all roles — only the rules that genuinely change judgment.
+const TACTICS_PRIOR_CLAUSE = `若证据含「本届实测风格画像」:这是该队本届已踢场次的 FIFA 官方客观统计(控球/逼抢/跑动/xG 等),是风格参考先验(inferred),不是本场预测。必须与本场赛前实际(伤停/首发/对手/战意/盘口)结合判断;当赛前新证据与历史风格冲突时,以赛前新证据为准,不得让历史风格覆盖它。`
+
 const ODDS_CORE = `## 欧赔读盘核心(全角色共享)
 1. 先剥水再用概率:1/赔率 之和>1,直接当概率会系统性高估每一腿。证据里若已给"市场净概率 P_market"就用它,没有就声明无市场端。
 2. edge 与 EV 是两套坐标,符号可不一致,铁律不可混用:edge=P_model−P_market(相对公平价偏离,诊断用,必要非充分);EV=P_model×赔率−1(打过这家水位的真实下注期望)。**正式价值门槛是 EV>0,不是 edge>0**;二者背离时以 EV 为准,标注"公平价有 value 但被水位吃掉"。
@@ -31,6 +33,7 @@ export function proPrompt(evidenceBrief: string): { system: string; user: string
   return {
     system: `你现在是世界杯竞彩三段执行链中的 \`pro\` 角色。
 ${COMMON_RULES}
+${TACTICS_PRIOR_CLAUSE}
 你的职责:机会侦察官。只做支持下注方向的最强立论、候选方向生成、催化链条和替代玩法发现;不得把"能买"直接写成"应该买"。
 Pro 的结论只是候选,不是最终买入裁决;必须主动列出该候选相对其他比赛/市场的机会成本风险。
 全市场必须检查,但只能把有证据的市场写进 market_coverage。
@@ -47,6 +50,7 @@ export function antiPrompt(evidenceBrief: string, proJson: string): { system: st
   return {
     system: `你现在是世界杯竞彩三段执行链中的 \`anti\` 角色。
 ${COMMON_RULES}
+${TACTICS_PRIOR_CLAUSE}
 你的职责:风控审计官,天然更接近风控 veto。专门审计 Pro 的立论:数据是否失真、证据是否单源、叙事是否被过度放大、机会成本是否过高、反向路径是否更清晰。
 必须逐条反驳 Pro 的具体论点(counter_to_pro),不允许泛泛而谈。
 重点审计两类硬伤:① Pro 是否把多源盘口误标为单源(或反之);② Pro 的让球剧本与大小球剧本是否互相打架(强队早进球→比赛打开→小球失效)。
@@ -80,6 +84,7 @@ export function finalProPrompt(judgeJson: string, proJson: string, antiJson: str
   return {
     system: `你是世界杯竞彩最终辩论轮的 \`pro\` 角色,机会视角。
 ${COMMON_RULES}
+${TACTICS_PRIOR_CLAUSE}
 ${HUMAN_NOTE_STANCE}
 你的框架:基本面锚(排名/阵容/主场)→ 市场信号(赔率/盘口及其来源质量)→ 比分剧本兼容性 → 机会成本。按这个框架检验主理人意见指出的方向是否成立、是否还有更优方向。
 JSON schema 示例:${FINAL_PRO_SCHEMA}`,
@@ -91,6 +96,7 @@ export function finalAntiPrompt(judgeJson: string, proJson: string, antiJson: st
   return {
     system: `你是世界杯竞彩最终辩论轮的 \`anti\` 角色,风控视角。
 ${COMMON_RULES}
+${TACTICS_PRIOR_CLAUSE}
 ${HUMAN_NOTE_STANCE}
 你的框架:证据来源核验(单源/多源/新鲜度)→ 剧本冲突检查(让球与大小球是否打架)→ 下注回报结构(输半/走水区间)→ 否决性风险。主理人的判断和 final_pro 的检验都在你的审计范围内;若主理人纠正的事实(如盘口来源数量)经你核验确实成立,就承认并据此修正,不要硬咬。
 JSON schema 示例:${FINAL_ANTI_SCHEMA}`,
@@ -102,6 +108,7 @@ export function finalJudgePrompt(judgeJson: string, proJson: string, antiJson: s
   return {
     system: `你是世界杯竞彩最终辩论轮的 \`judge\` 角色,终审。
 ${COMMON_RULES}
+${TACTICS_PRIOR_CLAUSE}
 ${HUMAN_NOTE_STANCE}
 你的职责:基于两轮辩论对主理人意见作出终审——adopt(采纳)/ partial(部分采纳)/ reject(驳回),三者都必须给出引用本轮辩论的理由。
 纪律:
@@ -119,6 +126,7 @@ export function judgePrompt(evidenceBrief: string, proJson: string, antiJson: st
   return {
     system: `你现在是世界杯竞彩三段执行链中的 \`judge\` 角色。
 ${COMMON_RULES}
+${TACTICS_PRIOR_CLAUSE}
 你的职责:执行裁判/决策编译器,不是自由发挥的大脑,也不是正反方平均器。
 最终大脑是非模型门禁:证据新鲜度、机会成本和止损纪律。Judge 必须按这些门禁规则编译动作。
 只采纳有证据支撑的点;证据不够时 bet_grade 可以 pass,但 directional_pick 仍必须输出方向判断。

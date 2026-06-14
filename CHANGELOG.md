@@ -2,6 +2,39 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.6] — 2026-06-14
+
+Command-surface refinement release: fewer, clearer slash commands and keyboard
+mode switching.
+
+### Added
+
+- **Shift+Tab cycles the operating mode** (`normal → auto → plan`; `yolo` stays
+  explicit), with the mode rail updating live as you cycle.
+
+### Changed
+
+- Consolidated the slash-command surface. `/config` now absorbs everything
+  `/settings` showed (approval mode, theme, persistent always-allow), and five
+  pure-duplicate commands were removed: `/settings`, `/color`, `/tokens`,
+  `/reset-circuits`, `/reset-budgets`. The old names still work — they print a
+  friendly "use X instead" redirect rather than erroring.
+- `/reset` now combines both former reset commands, and observability output
+  folds into `/status`. `/mode` with no arguments explains every mode.
+
+### Fixed
+
+- Slash-command fuzzy search matches the command **name** first, so typing a few
+  letters of a command finds it instead of being buried under description
+  matches.
+
+### Notes
+
+- Ships FIFA Phase 2 for the `worldcup-predictor` demo to the public source
+  mirror: deterministic post-match data backfill that feeds an honest tactical
+  prior into the pre-match brief (combines with, never overrides, pre-match
+  evidence). The demo lives under `demo/` and is excluded from the npm package.
+
 ## [0.15.5] — 2026-06-14
 
 Safety release: closes the gates through which a code-executing command could run

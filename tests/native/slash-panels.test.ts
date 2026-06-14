@@ -21,12 +21,19 @@ describe('slash command panels', () => {
     return stripAnsi(logSpy.mock.calls.flat().join('\n'))
   }
 
-  it('/settings renders the settings panel and is read-only', async () => {
+  it('/config shows config + the permissions/theme absorbed from the old /settings', async () => {
     const conversation = createConversation({ system: 'test', model: 'minimax-m27' })
-    await handleSlashCommand('/settings', conversation, usage, { apiBaseUrl: 'http://127.0.0.1:9999' } as any)
-    expect(output()).toContain('OC /settings')
-    expect(output()).toContain('minimax-m27')
-    expect(output()).toContain('/theme')
+    await handleSlashCommand('/config', conversation, usage, { apiBaseUrl: 'http://127.0.0.1:9999' } as any, { autoApprove: false })
+    const out = output()
+    expect(out).toContain('minimax-m27')
+    expect(out).toContain('Permissions')
+    expect(out).toContain('Theme')
+  })
+
+  it('the old /settings name redirects to /config', async () => {
+    const conversation = createConversation({ system: 'test', model: 'minimax-m27' })
+    await handleSlashCommand('/settings', conversation, usage)
+    expect(output()).toContain('/config')
   })
 
   it('/mcp renders empty-state panel when no manager is configured', async () => {

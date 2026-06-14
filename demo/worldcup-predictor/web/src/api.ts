@@ -293,3 +293,16 @@ export async function fetchReviewAggregate(): Promise<any> {
   const res = await fetch('/api/reviews/aggregate')
   return res.json()
 }
+
+export async function proposeFifa(matchId: string | number, url: string): Promise<{ ok: boolean; report?: any; error?: string }> {
+  const res = await fetch(`/api/review/fifa/${matchId}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url }) })
+  return res.json()
+}
+export async function confirmFifa(matchId: string | number): Promise<{ ok: boolean; report?: any; error?: string }> {
+  const res = await fetch(`/api/review/fifa/${matchId}/confirm`, { method: 'POST' })
+  return res.json()
+}
+export async function fetchFifa(matchId: string | number): Promise<any> {
+  const res = await fetch(`/api/review/fifa/${matchId}`)
+  return res.json()
+}

@@ -1,4 +1,4 @@
-import type { DimensionStatus, UserEvidenceInputs } from './types.js'
+import type { DimensionStatus, TeamTactics, UserEvidenceInputs } from './types.js'
 
 interface SquadPlayer {
   number?: number
@@ -59,6 +59,16 @@ function compactJson(value: unknown, max = 700): string {
   return s.length > max ? `${s.slice(0, max)}…` : s
 }
 
+function tacticsBlock(label: string, t: TeamTactics | null): string | null {
+  if (!t || t.matches < 1) return null
+  const a = t.avg
+  return [
+    `### ${label}(本届已踢 ${t.matches} 场 · 实测风格 · inferred)`,
+    `- 控球 ${a.possession_pct.toFixed(1)}% | 传球成功 ${a.pass_completion_pct.toFixed(1)}% | 场均跑动 ${a.total_distance_km.toFixed(1)}km`,
+    `- xG 制造 ${a.xg_for.toFixed(2)} / 被造 ${a.xg_against.toFixed(2)} | 高位逼抢 ${a.high_press.toFixed(0)}% | 中场封锁 ${a.mid_block.toFixed(0)}% | 反抢 ${a.counter_press.toFixed(0)}%`,
+  ].join('\n')
+}
+
 function teamBlock(label: string, profile: TeamProfile | null): string {
   if (!profile) return `### ${label}\n- 画像缺失(unsupported)\n`
   const p = profile as TeamProfile & Record<string, unknown>
@@ -84,7 +94,12 @@ export function buildEvidence(
   home: TeamProfile | null,
   away: TeamProfile | null,
   inputs: UserEvidenceInputs,
+  priors?: { home: TeamTactics | null; away: TeamTactics | null },
 ): { brief: string; dimensions: DimensionStatus[] } {
+  const homeBlock = tacticsBlock(fixture.home_team, priors?.home ?? null)
+  const awayBlock = tacticsBlock(fixture.away_team, priors?.away ?? null)
+  const hasPriorsData = homeBlock !== null || awayBlock !== null
+
   const dimensions: DimensionStatus[] = [
     { dimension: '比赛背景(阶段/场馆/时间)', source: '内置官方赛程快照', status: 'supported' },
     { dimension: '双方阵容/教练/分组', source: '内置 FIFA 官方 48 队画像', status: home && away ? 'supported' : 'partial' },
@@ -108,6 +123,9 @@ export function buildEvidence(
     },
     { dimension: '历史交锋', source: '模型先验知识,未经证据验证', status: 'best_effort' },
   ]
+  if (hasPriorsData) {
+    dimensions.push({ dimension: '本届实测风格(FIFA回填)', source: 'FIFA 官方赛后数据(已踢场次)', status: 'inferred' })
+  }
 
   const lines: string[] = [
     `# Debate Evidence | ${fixture.home_team} vs ${fixture.away_team}`,
@@ -125,6 +143,13 @@ export function buildEvidence(
     '',
     teamBlock('away_team', away),
     '',
+    ...(hasPriorsData ? [
+      '## 本届实测风格画像(FIFA 赛后数据回填 · 参考先验,非本场预测)',
+      '> 来自该队本届已踢场次的 FIFA 官方赛后统计,是客观风格参考(inferred);必须结合本场赛前实际(伤停/首发/对手/战意/盘口)综合判断,不得用历史风格覆盖赛前新证据。',
+      ...(homeBlock ? [homeBlock] : []),
+      ...(awayBlock ? [awayBlock] : []),
+      '',
+    ] : []),
     '## 用户补充证据',
     inputs.recentForm ? `### 近期状态\n${inputs.recentForm}` : '### 近期状态\n(用户未提供,该维度 unsupported)',
     inputs.injuriesNews ? `### 伤停与新闻\n${inputs.injuriesNews}` : '### 伤停与新闻\n(用户未提供,该维度 unsupported)',

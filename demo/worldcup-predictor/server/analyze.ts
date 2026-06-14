@@ -13,6 +13,7 @@ import type {
   ProOutput,
   Role,
   RoleManifestEntry,
+  TeamTactics,
 } from './framework/types.js'
 
 // Dedicated multimodal stage: transcribe uploaded images into structured
@@ -150,9 +151,10 @@ export async function runAnalysis(
   away: TeamProfile | null,
   emit: (e: AnalyzeEvent) => void,
   onArtifacts?: (a: AnalysisArtifacts) => void,
+  priors?: { home: TeamTactics | null; away: TeamTactics | null },
 ): Promise<void> {
   const started = Date.now()
-  let { brief, dimensions } = buildEvidence(fixture, home, away, req.inputs)
+  let { brief, dimensions } = buildEvidence(fixture, home, away, req.inputs, priors)
   const matchKey = `${fixture.home_team}::${fixture.away_team}::${fixture.match_datetime_utc ?? 'TBD'}`
 
   // Stage 0: deterministic statistical baseline (math, reproducible). This is

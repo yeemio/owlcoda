@@ -3,6 +3,7 @@ import React from 'react'
 import { PassThrough } from 'stream'
 import { renderSync } from '../../src/ink/root.js'
 import { InkPicker } from '../../src/native/ink-picker.js'
+import { buildSlashPickerItems } from '../../src/native/repl-shared.js'
 
 function makeMockStdout(): NodeJS.WriteStream {
   const stream = new PassThrough() as unknown as NodeJS.WriteStream
@@ -91,6 +92,34 @@ describe('<InkPicker>', () => {
       const plain = expandCursorAdvance(emit)
       expect(plain).toContain('› /')
       expect(plain).toContain('↵ run')
+    } finally {
+      unmount()
+    }
+  })
+
+  it('drives the real slash command list through the name-first filter', async () => {
+    // Real component + real ~85-command list + a live initial query. Before the
+    // fix, "mode" matched 14 commands (the actual /mode buried at position 3
+    // behind /model, /models, and description-only hits like /recommend).
+    const { emit, unmount } = await mountAndCollect(
+      React.createElement(InkPicker, {
+        title: 'slash commands',
+        items: buildSlashPickerItems(),
+        initialQuery: 'mode',
+        onSelect: () => {},
+        onCancel: () => {},
+      }),
+    )
+    try {
+      const plain = expandCursorAdvance(emit)
+      expect(plain).toContain('/mode')
+      // description-only pollution is gone
+      expect(plain).not.toContain('/recommend')
+      expect(plain).not.toContain('/warmup')
+      // a small match count, not a flood
+      const m = plain.match(/(\d+)\/\d+ matches/)
+      expect(m).not.toBeNull()
+      expect(Number(m![1])).toBeLessThanOrEqual(5)
     } finally {
       unmount()
     }
