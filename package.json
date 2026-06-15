@@ -1,6 +1,6 @@
 {
   "name": "owlcoda",
-  "version": "0.15.6",
+  "version": "0.15.7",
   "description": "OwlCoda — independent local-first AI coding platform with a native REPL, 42+ tools, and local model routing.",
   "license": "GPL-3.0-or-later",
   "author": "yeemio <yeemio@gmail.com>",
@@ -51,6 +51,7 @@
     "owlcoda": "dist/cli.js"
   },
   "scripts": {
+    "prebuild": "rm -rf dist",
     "build": "tsc && npm --prefix admin ci && npm --prefix admin run build && node scripts/postbuild.mjs",
     "dev": "node --import tsx src/cli.ts",
     "smoke": "bash scripts/smoke-test.sh",

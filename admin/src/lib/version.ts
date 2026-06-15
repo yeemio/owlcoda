@@ -6,4 +6,4 @@
  * literal equals the root `package.json#version` on every CI run, so a forgotten
  * bump can't silently ship a stale version label to Admin users.
  */
-export const ADMIN_DISPLAY_VERSION = '0.15.6'
+export const ADMIN_DISPLAY_VERSION = '0.15.7'

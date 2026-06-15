@@ -2,6 +2,20 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.7] — 2026-06-14
+
+Packaging-hygiene release. No runtime change from 0.15.6.
+
+### Fixed
+
+- The published tarball is now built from a clean `dist/`. A `prebuild` step
+  removes `dist/` before every build, so compiled output whose source has been
+  deleted can no longer linger. This removes six stale dead-code files from the
+  removed stub tools (`repl`, `schedule-cron`, `send-message`) that had been
+  shipping — unregistered and unreachable — since 0.15.5. 0.15.6 remains
+  published but carries those phantom files; 0.15.7 supersedes it with a clean
+  tree.
+
 ## [0.15.6] — 2026-06-14
 
 Command-surface refinement release: fewer, clearer slash commands and keyboard
