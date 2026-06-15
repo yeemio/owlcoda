@@ -16,6 +16,58 @@
 
 <p>All notable changes to OwlCoda public releases are documented here.</p>
 
+<h2>[0.15.7] — 2026-06-14</h2>
+
+<p>Packaging-hygiene release. No runtime change from 0.15.6.</p>
+
+<h3>Fixed</h3>
+
+<ul>
+<li>The published tarball is now built from a clean <code>dist/</code>. A <code>prebuild</code> step</li>
+<p>  removes <code>dist/</code> before every build, so compiled output whose source has been</p>
+<p>  deleted can no longer linger. This removes six stale dead-code files from the</p>
+<p>  removed stub tools (<code>repl</code>, <code>schedule-cron</code>, <code>send-message</code>) that had been</p>
+<p>  shipping — unregistered and unreachable — since 0.15.5. 0.15.6 remains</p>
+<p>  published but carries those phantom files; 0.15.7 supersedes it with a clean</p>
+<p>  tree.</p>
+</ul>
+<h2>[0.15.6] — 2026-06-14</h2>
+
+<p>Command-surface refinement release: fewer, clearer slash commands and keyboard</p>
+<p>mode switching.</p>
+
+<h3>Added</h3>
+
+<ul>
+<li>**Shift+Tab cycles the operating mode** (<code>normal → auto → plan</code>; <code>yolo</code> stays</li>
+<p>  explicit), with the mode rail updating live as you cycle.</p>
+</ul>
+<h3>Changed</h3>
+
+<ul>
+<li>Consolidated the slash-command surface. <code>/config</code> now absorbs everything</li>
+<p>  <code>/settings</code> showed (approval mode, theme, persistent always-allow), and five</p>
+<p>  pure-duplicate commands were removed: <code>/settings</code>, <code>/color</code>, <code>/tokens</code>,</p>
+<p>  <code>/reset-circuits</code>, <code>/reset-budgets</code>. The old names still work — they print a</p>
+<p>  friendly "use X instead" redirect rather than erroring.</p>
+<li><code>/reset</code> now combines both former reset commands, and observability output</li>
+<p>  folds into <code>/status</code>. <code>/mode</code> with no arguments explains every mode.</p>
+</ul>
+<h3>Fixed</h3>
+
+<ul>
+<li>Slash-command fuzzy search matches the command **name** first, so typing a few</li>
+<p>  letters of a command finds it instead of being buried under description</p>
+<p>  matches.</p>
+</ul>
+<h3>Notes</h3>
+
+<ul>
+<li>Ships FIFA Phase 2 for the <code>worldcup-predictor</code> demo to the public source</li>
+<p>  mirror: deterministic post-match data backfill that feeds an honest tactical</p>
+<p>  prior into the pre-match brief (combines with, never overrides, pre-match</p>
+<p>  evidence). The demo lives under <code>demo/</code> and is excluded from the npm package.</p>
+</ul>
 <h2>[0.15.5] — 2026-06-14</h2>
 
 <p>Safety release: closes the gates through which a code-executing command could run</p>
@@ -192,4 +244,4 @@
 <h2>Older Releases</h2>
 
 <p>Historical package versions remain under the license terms that accompanied those versions when they were published.</p>
-</div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>本地优先 AI 编码工作台</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/zh/docs/install" data-astro-cid-sz7xmlte>文档</a></li> <li data-astro-cid-sz7xmlte><a href="/architect/" data-astro-cid-sz7xmlte>架构看板</a></li> <li data-astro-cid-sz7xmlte><a href="/zh/changelog" data-astro-cid-sz7xmlte>更新日志</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.15.5</li> <li class="pill" data-astro-cid-sz7xmlte>GPL 源码</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>本地诊断</li> </ul> </div> </footer>  </body></html>
+</div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>本地优先 AI 编码工作台</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/zh/docs/install" data-astro-cid-sz7xmlte>文档</a></li> <li data-astro-cid-sz7xmlte><a href="/architect/" data-astro-cid-sz7xmlte>架构看板</a></li> <li data-astro-cid-sz7xmlte><a href="/zh/changelog" data-astro-cid-sz7xmlte>更新日志</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.15.7</li> <li class="pill" data-astro-cid-sz7xmlte>GPL 源码</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>本地诊断</li> </ul> </div> </footer>  </body></html>
