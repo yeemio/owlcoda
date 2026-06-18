@@ -337,6 +337,49 @@ describe('run: real CLI subprocess integration', () => {
     expect(json.text).toContain('Hello from fake router')
   }, CLI_SUBPROCESS_TEST_TIMEOUT_MS)
 
+  it('run --allow-tool Agent exposes the Agent tool schema to the model', async () => {
+    const runtimeDir = makeRuntimeDir()
+    const routerPort = await getFreePort()
+    const proxyPort = await getFreePort()
+    let sawAgentTool = false
+    let toolNames: Array<string | undefined> = []
+
+    await startFakeRouter(routerPort, (_req, body) => {
+      const parsed = JSON.parse(body)
+      const tools = Array.isArray(parsed.tools) ? parsed.tools : []
+      toolNames = tools.map((tool: { name?: string; function?: { name?: string } }) =>
+        tool.name ?? tool.function?.name,
+      )
+      sawAgentTool = tools.some((tool: { name?: string; function?: { name?: string } }) =>
+        tool.name === 'Agent' || tool.function?.name === 'Agent',
+      )
+      return {
+        id: 'fake-agent-schema',
+        object: 'chat.completion',
+        model: parsed.model,
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'Agent schema visible' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      }
+    })
+    const configPath = makeConfig(runtimeDir, proxyPort, `http://127.0.0.1:${routerPort}`)
+
+    const result = await runCli(
+      ['run', '--prompt', 'delegate work', '--json', '--allow-tool', 'Agent', '--config', configPath],
+      runtimeDir,
+    )
+
+    expect(result.code).toBe(0)
+    expect(sawAgentTool).toBe(true)
+    expect(toolNames).toContain('Agent')
+    const json = JSON.parse(result.stdout.trim())
+    expect(json.text).toContain('Agent schema visible')
+    expect(json.approval_tool_allowlist).toEqual(['Agent'])
+  }, CLI_SUBPROCESS_TEST_TIMEOUT_MS)
+
   it('run creates a session file on disk', async () => {
     const runtimeDir = makeRuntimeDir()
     const routerPort = await getFreePort()
@@ -408,6 +451,78 @@ describe('run: real CLI subprocess integration', () => {
     expect(finalSession.turns[2].role).toBe('user')
     expect(finalSession.turns[2].content[0].text).toBe('second turn')
     expect(finalSession.turns[3].role).toBe('assistant')
+  }, CLI_SUBPROCESS_TEST_TIMEOUT_MS)
+
+  it('run --resume injects a persisted runtime recovery ledger', async () => {
+    const runtimeDir = makeRuntimeDir()
+    const routerPort = await getFreePort()
+    const proxyPort = await getFreePort()
+    const sessionsDir = join(runtimeDir, 'sessions')
+    mkdirSync(sessionsDir, { recursive: true })
+    writeFileSync(join(sessionsDir, 'ses-ledger-1.json'), JSON.stringify({
+      version: 1,
+      id: 'ses-ledger-1',
+      model: 'test-backend',
+      system: 'fixture-system',
+      maxTokens: 4096,
+      turns: [
+        { role: 'user', content: [{ type: 'text', text: 'start blocked work' }], timestamp: Date.now() - 1 },
+        { role: 'assistant', content: [{ type: 'text', text: 'Blocked report from prior run' }], timestamp: Date.now() },
+      ],
+      createdAt: Date.now() - 10,
+      updatedAt: Date.now(),
+      title: 'ledger session',
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-17T00:00:01.000Z',
+        checkpoints: [{
+          id: 'blocked_task_checkpoint-1',
+          kind: 'blocked_task_checkpoint',
+          generatedAt: '2026-06-17T00:00:01.000Z',
+          conversationId: 'ses-ledger-1',
+          payload: {
+            schema_version: 1,
+            kind: 'blocked_task_checkpoint',
+            generated_at: '2026-06-17T00:00:01.000Z',
+            blocked_task: {
+              task_id: 'task-1',
+              step_id: 'prove-ledger',
+              inspect_command: 'TaskGet taskId=task-1',
+            },
+          },
+          inspectCommands: ['TaskGet taskId=task-1'],
+        }],
+      },
+    }, null, 2))
+
+    let requestText = ''
+    await startFakeRouter(routerPort, (_req, body) => {
+      const parsed = JSON.parse(body)
+      requestText = JSON.stringify(parsed.messages).replace(/\\"/g, '"')
+      return {
+        id: 'fake-ledger-resume',
+        object: 'chat.completion',
+        model: parsed.model,
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'Recovered using ledger' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      }
+    })
+    const configPath = makeConfig(runtimeDir, proxyPort, `http://127.0.0.1:${routerPort}`)
+
+    const result = await runCli(
+      ['run', '--resume', 'ses-ledger-1', '--prompt', 'continue', '--json', '--config', configPath],
+      runtimeDir,
+    )
+
+    expect(result.code).toBe(0)
+    expect(requestText).toContain('[Runtime recovery ledger]')
+    expect(requestText).toContain('"kind": "runtime_recovery_ledger"')
+    expect(requestText).toContain('"kind": "blocked_task_checkpoint"')
+    expect(requestText).toContain('"TaskGet taskId=task-1"')
   }, CLI_SUBPROCESS_TEST_TIMEOUT_MS)
 
   it('run --resume last with --json when no prior session starts fresh', async () => {

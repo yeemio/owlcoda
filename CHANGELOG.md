@@ -2,6 +2,30 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.8] — 2026-06-18
+
+Long-run reliability release.
+
+### Added
+
+- Added runtime recovery ledger surfaces and inspection tools so long-running
+  sessions can expose unresolved checkpoints instead of losing recovery context.
+- Added long-task lifecycle tracking and tools for inspecting, waiting on, and
+  replacing managed long tasks.
+- Added runtime event persistence into saved sessions so recovery context can
+  survive resume paths.
+
+### Changed
+
+- Hardened TaskVerify, TaskUpdate, completion, finalization, and headless/TUI
+  gates around long-run degradation and recovery states.
+- Updated root and Admin dependencies to keep release-candidate audits clean.
+
+### Notes
+
+- The npm package remains the public install surface and is paired with public
+  GPL source tag `v0.15.8`.
+
 ## [0.15.7] — 2026-06-14
 
 Packaging-hygiene release. No runtime change from 0.15.6.

@@ -6,7 +6,7 @@
  * Dangerous bash/TaskCreate commands defeat ONLY the persistent lane.
  */
 import { describe, it, expect } from 'vitest'
-import { decideTuiToolApproval } from '../../src/native/tui-approval.js'
+import { decideTuiTaskScopeApproval, decideTuiToolApproval } from '../../src/native/tui-approval.js'
 
 const SAFE_TOOLS = new Set(['read', 'glob', 'grep', 'ListMcpResources', 'ReadMcpResource', 'ToolSearch', 'TodoRead'])
 
@@ -163,5 +163,23 @@ describe('decideTuiToolApproval — wrong-case tool names (P2-12 safety sibling)
       input: { command: 'rm -rf /' },
     })
     expect(d.action).toBe('prompt')
+  })
+})
+
+describe('decideTuiTaskScopeApproval', () => {
+  it('does not let yolo auto-expand the TaskContract write scope', () => {
+    const d = decideTuiTaskScopeApproval({
+      autoApprove: true,
+      batchApproveAll: false,
+    })
+    expect(d).toEqual({ action: 'prompt', reason: 'write-scope-hard-gate' })
+  })
+
+  it('lets a fresh batch-all prompt decision cover TaskContract scope expansion for this turn', () => {
+    const d = decideTuiTaskScopeApproval({
+      autoApprove: false,
+      batchApproveAll: true,
+    })
+    expect(d).toEqual({ action: 'allow', reason: 'batch-all' })
   })
 })

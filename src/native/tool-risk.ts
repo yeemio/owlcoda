@@ -38,6 +38,12 @@ const SAFE_TOOLS = new Set<string>([
   'StructuredOutput',
   // Sleep has no observable side effect (time pass only)
   'Sleep',
+  // Agent lifecycle inspection is read-only over in-process history.
+  'AgentRunList', 'AgentRunGet',
+  // Long-task lifecycle inspection is read-only over runtime-owned snapshots.
+  'LongTaskList', 'LongTaskGet', 'LongTaskAwait',
+  // Runtime recovery ledger inspection is read-only over conversation state.
+  'RuntimeRecoveryList', 'RuntimeRecoveryGet',
 ])
 
 const INTERNAL_STATE_TOOLS = new Set<string>([
@@ -113,6 +119,11 @@ export function classifyToolRisk(
     return riskFromBashCommand(args['command'])
   }
   if (toolName === 'TaskCreate') {
+    const cmd = args['command']
+    if (typeof cmd !== 'string' || cmd.trim() === '') return 'internal_state'
+    return riskFromBashCommand(cmd)
+  }
+  if (toolName === 'LongTaskReplace') {
     const cmd = args['command']
     if (typeof cmd !== 'string' || cmd.trim() === '') return 'internal_state'
     return riskFromBashCommand(cmd)

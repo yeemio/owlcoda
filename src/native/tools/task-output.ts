@@ -10,7 +10,19 @@
  */
 
 import type { NativeToolDef, ToolResult } from './types.js'
-import { getTask, getCurrentOrNextStep, taskHasOpenRequiredSteps, type Task, type TaskStep } from './task-store.js'
+import {
+  buildLongTaskLifecycleVerdict,
+  formatLongTaskLifecycleVerdictLine,
+  formatLongTaskWaitPolicyLine,
+} from '../long-task-lifecycle.js'
+import {
+  getTask,
+  getCurrentOrNextStep,
+  hasRunningProcess,
+  taskHasOpenRequiredSteps,
+  type Task,
+  type TaskStep,
+} from './task-store.js'
 
 export interface TaskOutputInput {
   task_id: string
@@ -27,6 +39,26 @@ const STEP_ICON: Record<string, string> = {
   failed: '✗',
   blocked: '!',
   cancelled: '-',
+}
+
+function normalizeTaskId(value: string): string {
+  return value.startsWith('task:') ? value.slice('task:'.length) : value
+}
+
+function prependAliasResolution(output: string, requestedTaskId: string, resolvedTaskId: string): string {
+  if (requestedTaskId === resolvedTaskId) return output
+  return [
+    `Resolved task_id alias: ${requestedTaskId} -> ${resolvedTaskId}`,
+    output,
+  ].join('\n')
+}
+
+function aliasResolutionMetadata(requestedTaskId: string, resolvedTaskId: string): Record<string, unknown> {
+  if (requestedTaskId === resolvedTaskId) return {}
+  return {
+    requested_task_id: requestedTaskId,
+    resolved_task_id: resolvedTaskId,
+  }
 }
 
 function formatStepLine(step: TaskStep): string {
@@ -90,6 +122,10 @@ function formatTaskOutput(task: Task): string {
   // Pure-todo tasks (no command) keep the original output shape.
   if (task.command !== undefined) {
     lines.push(`Command: ${task.command}`)
+    const lifecycleLine = formatLongTaskLifecycleVerdictLine(task.longTaskSnapshot)
+    if (lifecycleLine) lines.push(lifecycleLine)
+    const waitPolicyLine = formatLongTaskWaitPolicyLine(task.longTaskSnapshot)
+    if (waitPolicyLine) lines.push(waitPolicyLine)
     if (task.exitCode !== undefined) lines.push(`ExitCode: ${task.exitCode}`)
     if (task.error) lines.push(`Error: ${task.error}`)
     if (task.stdout && task.stdout.length > 0) {
@@ -138,7 +174,15 @@ function buildTaskMeta(task: Task): Record<string, unknown> {
       verification: nextStep.verification,
     } : null
   }
+  if (task.longTaskSnapshot) {
+    base.longTaskSnapshot = task.longTaskSnapshot
+  }
   return base
+}
+
+function taskLifecycleMetadata(task: Task): Record<string, unknown> {
+  const verdict = buildLongTaskLifecycleVerdict(task.longTaskSnapshot)
+  return verdict ? { long_task_lifecycle: verdict } : {}
 }
 
 export function createTaskOutputTool(): NativeToolDef<TaskOutputInput> {
@@ -149,6 +193,7 @@ export function createTaskOutputTool(): NativeToolDef<TaskOutputInput> {
       'For structured task plans (created with steps), returns the execution board with step statuses ' +
       'and the next step to execute — block=true returns immediately for structured plans (no background producer). ' +
       'For command-backed tasks, returns captured stdout/stderr/exitCode. ' +
+      'If a command-backed task was restored without a live process handle, block=true returns an incomplete snapshot immediately. ' +
       'For pure-TODO tasks (no command), block=true only resolves if TaskUpdate changes status to completed/cancelled. ' +
       'Metadata includes nextStep with expected artifacts and verification for structured plans.',
     maturity: 'beta' as const,
@@ -160,21 +205,52 @@ export function createTaskOutputTool(): NativeToolDef<TaskOutputInput> {
         return { output: 'Error: task_id is required.', isError: true }
       }
 
-      const task = getTask(task_id)
+      const resolvedTaskId = normalizeTaskId(task_id)
+      const aliasMetadata = aliasResolutionMetadata(task_id, resolvedTaskId)
+      const task = getTask(resolvedTaskId)
       if (!task) {
-        return { output: `Task "${task_id}" not found.`, isError: true }
+        return {
+          output: prependAliasResolution(`Task "${task_id}" not found.`, task_id, resolvedTaskId),
+          isError: true,
+          metadata: aliasMetadata,
+        }
       }
 
       // Structured plan: block=true returns immediately — there is no background producer
       const isStructuredPlan = task.steps !== undefined
       const isTerminal = task.status === 'completed' || task.status === 'cancelled'
+      const isDetachedCommand = task.command !== undefined
+        && task.status === 'in_progress'
+        && !hasRunningProcess(task.id)
+
+      if (block && isDetachedCommand) {
+        return {
+          output: prependAliasResolution([
+            formatTaskOutput(task),
+            '',
+            'Runtime note: this command-backed task is in_progress, but OwlCoda has no live process handle in this process. It cannot be waited on; inspect captured output and rerun or replace the command if needed.',
+          ].join('\n'), task_id, resolvedTaskId),
+          isError: false,
+          metadata: {
+            ...aliasMetadata,
+            retrieval_status: 'incomplete',
+            ...taskLifecycleMetadata(task),
+            task: {
+              ...buildTaskMeta(task),
+              ...commandMetadata(task),
+            },
+          },
+        }
+      }
 
       if (isTerminal || !block || isStructuredPlan) {
         return {
-          output: formatTaskOutput(task),
+          output: prependAliasResolution(formatTaskOutput(task), task_id, resolvedTaskId),
           isError: false,
           metadata: {
+            ...aliasMetadata,
             retrieval_status: 'success',
+            ...taskLifecycleMetadata(task),
             task: {
               ...buildTaskMeta(task),
               ...(!isStructuredPlan ? commandMetadata(task) : {}),
@@ -189,16 +265,22 @@ export function createTaskOutputTool(): NativeToolDef<TaskOutputInput> {
 
       while (Date.now() < deadline) {
         await new Promise(r => setTimeout(r, pollInterval))
-        const current = getTask(task_id)
+        const current = getTask(resolvedTaskId)
         if (!current) {
-          return { output: `Task "${task_id}" was deleted while waiting.`, isError: true }
+          return {
+            output: prependAliasResolution(`Task "${task_id}" was deleted while waiting.`, task_id, resolvedTaskId),
+            isError: true,
+            metadata: aliasMetadata,
+          }
         }
         if (current.status === 'completed' || current.status === 'cancelled') {
           return {
-            output: formatTaskOutput(current),
+            output: prependAliasResolution(formatTaskOutput(current), task_id, resolvedTaskId),
             isError: false,
             metadata: {
+              ...aliasMetadata,
               retrieval_status: 'success',
+              ...taskLifecycleMetadata(current),
               task: {
                 ...buildTaskMeta(current),
                 ...commandMetadata(current),
@@ -209,12 +291,20 @@ export function createTaskOutputTool(): NativeToolDef<TaskOutputInput> {
       }
 
       // Timeout — return current state
-      const final = getTask(task_id)
+      const final = getTask(resolvedTaskId)
       return {
-        output: `Timeout waiting for task ${task_id} (${timeout}ms). Current status: ${final?.status ?? 'unknown'}`,
+        output: prependAliasResolution(final
+          ? [
+              `Timeout waiting for task ${resolvedTaskId} (${timeout}ms). Current status: ${final.status}`,
+              '',
+              formatTaskOutput(final),
+            ].join('\n')
+          : `Timeout waiting for task ${resolvedTaskId} (${timeout}ms). Current status: unknown`, task_id, resolvedTaskId),
         isError: false,
         metadata: {
+          ...aliasMetadata,
           retrieval_status: 'timeout',
+          ...(final ? taskLifecycleMetadata(final) : {}),
           task: final ? buildTaskMeta(final) : null,
         },
       }

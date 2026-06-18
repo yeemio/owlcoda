@@ -7,10 +7,10 @@
  * Design contract (locked after user review of /tmp/owl-bounded-compact-design.md):
  *
  *   1. Bounded input — compactor never sees raw oversized conversation.
- *      buildCompactionRequest() composes a 7-segment prompt capped at
+ *      buildCompactionRequest() composes an 8-segment prompt capped at
  *      `compactionInputMaxTokens` (default 8000). Sections are dropped
- *      in priority order when over cap; system + latest_user_goal are
- *      load-bearing and never dropped.
+ *      in priority order when over cap; system + latest_user_goal +
+ *      task_contract_anchor are load-bearing and never dropped.
  *
  *   2. ONE attempt per trigger — tryCompact() does NOT retry. Failure
  *      → fallback to truncation. Callers (threshold / hard_limit /
@@ -52,10 +52,11 @@ import type {
   AnthropicToolUseBlock,
 } from '../types.js'
 import { recordGateEvent, type GateEvent } from './gate-telemetry.js'
-import type { CompactionLogEntry, Conversation, ConversationTurn } from './protocol/types.js'
+import type { CompactionLogEntry, Conversation, ConversationTurn, TaskPathScope } from './protocol/types.js'
+import { appendContextReplacementCheckpoint } from './runtime-recovery-ledger.js'
 import { estimateTokens } from './usage.js'
 
-// ─── 7-section bounded input shape ─────────────────────────────────────
+// ─── 8-section bounded input shape ─────────────────────────────────────
 
 /** Default token budget for the compactor's INPUT. The compactor itself
  *  emits ≤ 1500 max_tokens. Total compactor round-trip token cost is
@@ -68,10 +69,13 @@ export const DEFAULT_COMPACTION_INPUT_MAX_TOKENS = 8000
  *  reference is stable. */
 const RECENT_TURNS_VERBATIM_COUNT = 4
 
-/** Per-section token caps. Sum to 7800; leave 200 for prompt scaffold. */
+/** Per-section token caps. The final request is still bounded by
+ *  DEFAULT_COMPACTION_INPUT_MAX_TOKENS; lower-priority sections are pruned
+ *  when this independent set of caps would exceed the total budget. */
 const SECTION_CAPS = {
   system: 2000,
   latestUserGoal: 1500,
+  taskContractAnchor: 1500,
   recentTurnsVerbatim: 2500,
   toolCallSummary: 1000,
   errorEvidence: 500,
@@ -276,7 +280,7 @@ function looksLikePath(s: string): boolean {
   return true
 }
 
-// ─── 7-section request builder ─────────────────────────────────────────
+// ─── 8-section request builder ─────────────────────────────────────────
 
 export interface CompactionRequest {
   prompt: string
@@ -318,16 +322,21 @@ export function buildCompactionRequest(
     ?? '(no recent user goal found)'
   const latestUserGoal = capWithHashMarker(goalRaw, SECTION_CAPS.latestUserGoal, 'goal')
 
-  // Section 3 — recent turns verbatim.
+  // Section 3 — task contract anchor. This is the runtime spine that keeps
+  // the original task, path contract, and current guard state visible even
+  // when the recent tail is only approvals, interruptions, or status checks.
+  const taskContractAnchor = buildTaskContractAnchor(conv)
+
+  // Section 4 — recent turns verbatim.
   const recentVerbatim = serializeTurnsForCompactor(keptTurns, SECTION_CAPS.recentTurnsVerbatim)
 
-  // Section 4 — tool call summary (dropped only).
+  // Section 5 — tool call summary (dropped only).
   const toolCallSummary = extractToolCallSummary(droppedTurns)
 
-  // Section 5 — error evidence (dropped only).
+  // Section 6 — error evidence (dropped only).
   const errorEvidence = extractErrorEvidence(droppedTurns)
 
-  // Section 6 — file paths (dropped only).
+  // Section 7 — file paths (dropped only).
   const filePaths = extractFilePaths(droppedTurns)
   const filePathsBlock = filePaths.join('\n')
 
@@ -338,6 +347,7 @@ export function buildCompactionRequest(
   let prompt = composeCompactorPrompt({
     systemSection,
     latestUserGoal,
+    taskContractAnchor,
     recentVerbatim,
     toolCallSummary,
     errorEvidence,
@@ -349,6 +359,7 @@ export function buildCompactionRequest(
     prompt = composeCompactorPrompt({
       systemSection,
       latestUserGoal,
+      taskContractAnchor,
       recentVerbatim,
       toolCallSummary,
       errorEvidence,
@@ -361,6 +372,7 @@ export function buildCompactionRequest(
     prompt = composeCompactorPrompt({
       systemSection,
       latestUserGoal,
+      taskContractAnchor,
       recentVerbatim,
       toolCallSummary: halved,
       errorEvidence,
@@ -377,6 +389,7 @@ export function buildCompactionRequest(
     prompt = composeCompactorPrompt({
       systemSection,
       latestUserGoal,
+      taskContractAnchor,
       recentVerbatim: recentHalved,
       toolCallSummary: '(omitted to fit input budget)',
       errorEvidence,
@@ -384,8 +397,80 @@ export function buildCompactionRequest(
     })
     estimated = estimateTokens(prompt)
   }
+  if (estimated > totalCap) {
+    prompt = composeCompactorPrompt({
+      systemSection,
+      latestUserGoal,
+      taskContractAnchor,
+      recentVerbatim: '(omitted to fit input budget; recent turns remain preserved verbatim after compaction)',
+      toolCallSummary: '(omitted to fit input budget)',
+      errorEvidence: '(omitted to fit input budget)',
+      filePathsBlock: '(omitted to fit input budget)',
+    })
+    estimated = estimateTokens(prompt)
+  }
 
   return { prompt, estimatedTokens: estimated, droppedTurns, keptTurns }
+}
+
+function buildTaskContractAnchor(conv: Conversation): string {
+  const taskState = conv.options?.taskState
+  if (!taskState) return '(none)'
+
+  const lines: string[] = [
+    `objective: ${oneLine(taskState.contract.objective || taskState.contract.sourceText || '(unknown)', 900)}`,
+    `source_hash: ${taskState.contract.sourceTurnHash}`,
+    `cwd: ${taskState.contract.cwd}`,
+    `scope: ${taskState.contract.scopeMode}; confidence=${taskState.contract.confidence}`,
+    `run_status: ${taskState.run.status}; iterations=${taskState.run.iterations}; lifetime=${taskState.run.lifetimeIterations ?? 0}`,
+  ]
+
+  if (taskState.contract.dominantGap) {
+    lines.push(`dominant_gap: ${oneLine(taskState.contract.dominantGap, 400)}`)
+  }
+  if (taskState.run.currentFocus) {
+    lines.push(`current_focus: ${oneLine(taskState.run.currentFocus, 400)}`)
+  }
+  if (taskState.run.lastGuardReason) {
+    lines.push(`last_guard_reason: ${oneLine(taskState.run.lastGuardReason, 700)}`)
+  }
+
+  lines.push('allowed_write_paths:')
+  lines.push(formatTaskPathScopes(taskState.contract.allowedWritePaths, 12))
+  lines.push('pending_write_approval:')
+  lines.push(formatStringList(taskState.run.pendingWriteApproval?.attemptedPaths ?? [], 12))
+  lines.push('touched_paths:')
+  lines.push(formatStringList(taskState.contract.touchedPaths, 12))
+
+  const source = taskState.contract.sourceText || taskState.contract.objective
+  if (source.trim()) {
+    lines.push('source_text:')
+    lines.push(source.trim())
+  }
+
+  return capWithHashMarker(lines.join('\n'), SECTION_CAPS.taskContractAnchor, 'task_contract_anchor')
+}
+
+function formatTaskPathScopes(scopes: readonly TaskPathScope[], maxItems: number): string {
+  if (scopes.length === 0) return '(none)'
+  const lines = scopes.slice(0, maxItems).map((scope) =>
+    `- ${scope.path} (${scope.kind}; ${scope.origin})`,
+  )
+  if (scopes.length > maxItems) lines.push(`- ... ${scopes.length - maxItems} more`)
+  return lines.join('\n')
+}
+
+function formatStringList(items: readonly string[], maxItems: number): string {
+  if (items.length === 0) return '(none)'
+  const lines = items.slice(0, maxItems).map((item) => `- ${item}`)
+  if (items.length > maxItems) lines.push(`- ... ${items.length - maxItems} more`)
+  return lines.join('\n')
+}
+
+function oneLine(text: string, maxChars: number): string {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= maxChars) return normalized
+  return `${normalized.slice(0, maxChars)}...`
 }
 
 /** Truncate `text` to `maxTokens`-equivalent chars, append a hash marker
@@ -403,6 +488,7 @@ function capWithHashMarker(text: string, maxTokens: number, label: string): stri
 interface ComposeArgs {
   systemSection: string
   latestUserGoal: string
+  taskContractAnchor: string
   recentVerbatim: string
   toolCallSummary: string
   errorEvidence: string
@@ -415,6 +501,9 @@ ${args.systemSection}
 
 [latest_user_goal]
 ${args.latestUserGoal}
+
+[task_contract_anchor]
+${args.taskContractAnchor || '(none)'}
 
 [recent_turns_verbatim]
 ${args.recentVerbatim}
@@ -580,6 +669,7 @@ const COMPACTION_MAX_OUTPUT_TOKENS = 1500
 const COMPACTOR_SYSTEM_PROMPT = `You are a conversation compressor for an in-progress coding session.
 Output a structured summary preserving essential context for continuing the conversation.
 Be factual and dense. Skip pleasantries and meta-commentary.
+Treat [task_contract_anchor], when present, as authoritative over later recovery replies, approvals, interruptions, or status-check questions.
 
 Required output structure (use these exact section headers):
 
@@ -745,18 +835,19 @@ export async function tryCompact(
 ): Promise<CompactResult> {
   const before = conv.turns.length
   const beforeTokens = estimateConvTokensSafe(conv)
+  const inputHistory = snapshotTurns(conv.turns)
 
   // Hard rule: heap-pressure NEVER calls LLM. Allocating buffers / Promise
   // chains for an LLM round-trip while V8 heap is at 75% risks OOM.
   if (opts.reason === 'heap_pressure') {
     truncateInPlace(conv, opts.truncationKeepCount)
-    return finishWithTruncation(conv, opts.reason, 'heap_pressure_skip_llm', before, beforeTokens)
+    return finishWithTruncation(conv, opts.reason, 'heap_pressure_skip_llm', before, beforeTokens, undefined, inputHistory)
   }
 
   // No LLM transport configured (apiBaseUrl missing) → straight truncation.
   if (!opts.apiBaseUrl) {
     truncateInPlace(conv, opts.truncationKeepCount)
-    return finishWithTruncation(conv, opts.reason, 'no_llm_opts', before, beforeTokens)
+    return finishWithTruncation(conv, opts.reason, 'no_llm_opts', before, beforeTokens, undefined, inputHistory)
   }
 
   // 3-strike disable: if this session has hit MAX_CONSECUTIVE_... LLM
@@ -764,7 +855,7 @@ export async function tryCompact(
   const failureCount = conv.options?.llmCompactFailureCount ?? 0
   if (failureCount >= MAX_CONSECUTIVE_LLM_COMPACT_FAILURES) {
     truncateInPlace(conv, opts.truncationKeepCount)
-    return finishWithTruncation(conv, opts.reason, 'llm_compact_disabled_3strikes', before, beforeTokens)
+    return finishWithTruncation(conv, opts.reason, 'llm_compact_disabled_3strikes', before, beforeTokens, undefined, inputHistory)
   }
 
   // Build bounded compactor input. Returns null when conversation is
@@ -811,6 +902,7 @@ export async function tryCompact(
       ms: llmResult.ms,
       at: Date.now(),
     })
+    installContextReplacementCheckpoint(conv, inputHistory, opts.reason)
     recordCompactionFidelityTelemetry(request.droppedTurns, llmResult.summary, opts.fidelityTelemetry)
     const afterTokens = estimateConvTokensSafe(conv)
     return {
@@ -828,7 +920,7 @@ export async function tryCompact(
   if (!conv.options) conv.options = {}
   conv.options.llmCompactFailureCount = failureCount + 1
   truncateInPlace(conv, opts.truncationKeepCount)
-  return finishWithTruncation(conv, opts.reason, 'llm_compact_failed', before, beforeTokens, llmResult.ms)
+  return finishWithTruncation(conv, opts.reason, 'llm_compact_failed', before, beforeTokens, llmResult.ms, inputHistory)
 }
 
 function recordCompactionFidelityTelemetry(
@@ -844,7 +936,35 @@ function recordCompactionFidelityTelemetry(
 function truncateInPlace(conv: Conversation, keepCount: number): void {
   const tail = Math.max(2, keepCount)
   if (conv.turns.length <= tail) return
-  conv.turns = conv.turns.slice(-tail)
+  const tailTurns = conv.turns.slice(-tail)
+  const anchorTurn = buildTaskContractAnchorTurn(conv)
+  conv.turns = anchorTurn && !turnsContainTaskAnchor(tailTurns)
+    ? [anchorTurn, ...tailTurns]
+    : tailTurns
+}
+
+const TASK_CONTRACT_ANCHOR_TURN_PREFIX = '[Task contract anchor preserved across compaction]'
+
+function buildTaskContractAnchorTurn(conv: Conversation): ConversationTurn | null {
+  if (!conv.options?.taskState) return null
+  const anchor = buildTaskContractAnchor(conv)
+  if (anchor === '(none)') return null
+  return {
+    role: 'user',
+    content: [{
+      type: 'text',
+      text: `${TASK_CONTRACT_ANCHOR_TURN_PREFIX}\n\n${anchor}`,
+    }],
+    timestamp: Date.now(),
+  }
+}
+
+function turnsContainTaskAnchor(turns: readonly ConversationTurn[]): boolean {
+  return turns.some((turn) =>
+    turn.content.some((block) =>
+      block.type === 'text' && block.text.startsWith(TASK_CONTRACT_ANCHOR_TURN_PREFIX),
+    ),
+  )
 }
 
 function finishWithTruncation(
@@ -854,6 +974,7 @@ function finishWithTruncation(
   before: number,
   beforeTokens: number,
   llmMs?: number,
+  inputHistory?: ConversationTurn[],
 ): CompactResult {
   appendCompactionLog(conv, {
     reason,
@@ -862,6 +983,9 @@ function finishWithTruncation(
     ms: llmMs,
     at: Date.now(),
   })
+  if (inputHistory && before !== conv.turns.length) {
+    installContextReplacementCheckpoint(conv, inputHistory, reason)
+  }
   return {
     method: 'truncation',
     reason,
@@ -872,6 +996,24 @@ function finishWithTruncation(
     afterTokens: estimateConvTokensSafe(conv),
     llmMs,
   }
+}
+
+function installContextReplacementCheckpoint(
+  conv: Conversation,
+  inputHistory: ConversationTurn[],
+  reason: CompactReason,
+): void {
+  appendContextReplacementCheckpoint(conv, {
+    inputHistory,
+    replacementHistory: snapshotTurns(conv.turns),
+    reason,
+    windowId: reason,
+    sourceTurnId: `turn-${inputHistory.length}`,
+  })
+}
+
+function snapshotTurns(turns: readonly ConversationTurn[]): ConversationTurn[] {
+  return JSON.parse(JSON.stringify(turns)) as ConversationTurn[]
 }
 
 function appendCompactionLog(conv: Conversation, entry: CompactionLogEntry): void {

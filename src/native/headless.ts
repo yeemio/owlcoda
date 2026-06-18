@@ -22,14 +22,16 @@ import { formatToolStart, formatToolEnd, formatError, ansi } from './display.js'
 import { StreamingMarkdownRenderer } from './markdown.js'
 import { saveSession, loadSession, listSessions } from './session.js'
 import type { SessionFile } from './session.js'
+import { restoreTaskStore } from './tools/task-store.js'
 import { loadConfig, resolveModelContextWindow } from '../config.js'
 import type { ToolProgressEvent } from './tools/index.js'
-import type { TaskRunStatus } from './protocol/types.js'
+import type { Conversation, TaskRunStatus } from './protocol/types.js'
 import { getTodos } from './tools/todo-write.js'
 import { isProjectMapEnabled } from './project-map.js'
 import { evaluateProjectMapDogfoodAcceptance } from './project-map-acceptance.js'
 import { createEnterPlanModeTool, type PlanModeState } from './tools/enter-plan-mode.js'
 import { createExitPlanModeTool } from './tools/exit-plan-mode.js'
+import { createAgentTool, restoreAgentRunHistory } from './tools/agent.js'
 import {
   buildHeadlessApprovalCallback,
   describeApprovalPolicy,
@@ -49,11 +51,17 @@ interface HeadlessToolCallLog {
   tool: string
   input: Record<string, unknown>
   output: string
+  metadata?: Record<string, unknown>
 }
 
 interface SerializedHeadlessToolCall extends HeadlessToolCallLog {
   output_truncated?: boolean
   output_original_chars?: number
+}
+
+interface SerializedRuntimeIntercept {
+  kind: 'post_recovery_overrun' | 'long_task_wait_policy'
+  message: string
 }
 
 interface HeadlessProjectMapRuntimeEvidence {
@@ -130,6 +138,8 @@ export interface HeadlessResult {
   projectMapRuntime?: HeadlessProjectMapRuntimeEvidence
   /** Project Map dogfood acceptance verdict emitted for JSON dogfood acceptance. */
   projectMapAcceptance?: HeadlessProjectMapAcceptanceEvidence
+  /** Runtime synthetic intercepts that did not execute as normal tools. */
+  runtimeIntercepts?: SerializedRuntimeIntercept[]
 }
 
 /** Outcome of resolving a `--resume` request, before any I/O side effects. */
@@ -165,6 +175,19 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
   const autoApprove = opts.autoApprove === true
   const allowTools = normalizeHeadlessToolList(opts.allowTools)
   const denyTools = normalizeHeadlessToolList(opts.denyTools)
+  let callbacks: ConversationCallbacks = {}
+  let conversation: Conversation | null = null
+  if (shouldExposeHeadlessAgentTool(allowTools, denyTools)) {
+    dispatcher.register(createAgentTool({
+      apiBaseUrl: opts.apiBaseUrl,
+      apiKey: opts.apiKey,
+      model: opts.model,
+      getModel: () => conversation?.model ?? opts.model,
+      getContextWindow: () => resolveModelContextWindow(loadConfig(), conversation?.model ?? opts.model),
+      maxTokens: opts.maxTokens ?? resolveDefaultMaxOutputTokens(),
+      callbacks: createHeadlessAgentCallbackForwarder(() => callbacks),
+    }))
+  }
   const toolDefs = filterHeadlessToolDefs(buildNativeToolDefs(dispatcher), allowTools, denyTools)
   const approvalPolicy = describeApprovalPolicy(autoApprove)
   const systemPrompt = appendHeadlessPolicyContext(
@@ -175,7 +198,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
   // Resolve resume session
   let resumed = false
   let resolvedSessionId: string | undefined
-  let conversation = createConversation({
+  conversation = createConversation({
     system: systemPrompt,
     model: opts.model,
     maxTokens: opts.maxTokens ?? resolveDefaultMaxOutputTokens(),
@@ -225,6 +248,17 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     )
     conversation.maxTokens = loaded.maxTokens ?? conversation.maxTokens
     conversation.turns = [...loaded.turns]
+    conversation.options = {
+      ...conversation.options,
+      ...(loaded.pendingRetry ? { pendingRetry: loaded.pendingRetry } : {}),
+      ...(loaded.taskState ? { taskState: loaded.taskState } : {}),
+      ...(loaded.runtimeRecoveryLedger ? { runtimeRecoveryLedger: loaded.runtimeRecoveryLedger } : {}),
+      ...(loaded.runtimeEventLog ? { runtimeEventLog: loaded.runtimeEventLog } : {}),
+    }
+    if (loaded.taskStore) {
+      restoreTaskStore(loaded.taskStore)
+    }
+    restoreAgentRunHistory(loaded.agentRunStore, loaded.runtimeRecoveryLedger, loaded.id)
     resolvedSessionId = loaded.id
     resumed = true
   }
@@ -285,7 +319,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     return ''
   }
 
-  const callbacks: ConversationCallbacks = opts.json
+  callbacks = opts.json
     ? {
         onToolApproval,
         onUserQuestion,
@@ -295,9 +329,13 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
         onToolProgress(name, event) {
           writeHeadlessProgressSentinel(name, event)
         },
-        onToolEnd(_name, result) {
+        onToolEnd(_name, result, _isError, _durationMs, metadata) {
           if (toolCallLog.length > 0) {
-            toolCallLog[toolCallLog.length - 1]!.output = result
+            const entry = toolCallLog[toolCallLog.length - 1]!
+            entry.output = result
+            if (metadata && Object.keys(metadata).length > 0) {
+              entry.metadata = metadata
+            }
           }
         },
         onNotice(message) {
@@ -318,9 +356,13 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
             toolCallLog.push({ tool: name, input, output: '' })
             process.stderr.write(formatToolStart(name, input) + '\n')
           },
-          onToolEnd(name: string, result: string, isError: boolean, durationMs: number) {
+          onToolEnd(name: string, result: string, isError: boolean, durationMs: number, metadata?: Record<string, unknown>) {
             if (toolCallLog.length > 0) {
-              toolCallLog[toolCallLog.length - 1]!.output = result
+              const entry = toolCallLog[toolCallLog.length - 1]!
+              entry.output = result
+              if (metadata && Object.keys(metadata).length > 0) {
+                entry.metadata = metadata
+              }
             }
             process.stderr.write(formatToolEnd(name, result, isError, durationMs) + '\n')
           },
@@ -352,9 +394,13 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
             }
             process.stderr.write(formatToolStart(name, input) + '\n')
           },
-          onToolEnd(name: string, result: string, isError: boolean, durationMs: number) {
+          onToolEnd(name: string, result: string, isError: boolean, durationMs: number, metadata?: Record<string, unknown>) {
             if (toolCallLog.length > 0) {
-              toolCallLog[toolCallLog.length - 1]!.output = result
+              const entry = toolCallLog[toolCallLog.length - 1]!
+              entry.output = result
+              if (metadata && Object.keys(metadata).length > 0) {
+                entry.metadata = metadata
+              }
             }
             process.stderr.write(formatToolEnd(name, result, isError, durationMs) + '\n')
           },
@@ -444,6 +490,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
           approvalDecisions,
           prompt: opts.prompt,
         })
+        const runtimeIntercepts = serializeRuntimeIntercepts(noticeLog)
 
         // Save session after completion
         try {
@@ -478,6 +525,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
             approval_tool_allowlist: allowTools,
             approval_tool_denylist: denyTools,
             approval_denials: serializeDenials(approvalDecisions),
+            ...(runtimeIntercepts.length > 0 ? { runtime_intercepts: runtimeIntercepts } : {}),
             ...(projectMapRuntime ? { project_map_runtime: projectMapRuntime } : {}),
             ...(projectMapAcceptance ? { project_map_acceptance: projectMapAcceptance } : {}),
           })
@@ -510,6 +558,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
           taskGuardReason,
           projectMapRuntime,
           projectMapAcceptance,
+          runtimeIntercepts,
         }
       }
 
@@ -530,6 +579,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
           ? `${runtimeFailure.message} Runtime resume retries exhausted (${runtimeRetries}/${formatRuntimeRetryLimit(maxRuntimeRetries)}). Session preserved: ${sessionId}`
           : runtimeFailure.message
         if (opts.json) {
+          const runtimeIntercepts = serializeRuntimeIntercepts(noticeLog)
           const output = JSON.stringify({
             text: '',
             model: conversation.model,
@@ -545,6 +595,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
             approval_tool_allowlist: allowTools,
             approval_tool_denylist: denyTools,
             approval_denials: serializeDenials(approvalDecisions),
+            ...(runtimeIntercepts.length > 0 ? { runtime_intercepts: runtimeIntercepts } : {}),
           })
           await writeStdoutLine(output)
         } else {
@@ -583,6 +634,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     try { saveSession(conversation) } catch { /* non-fatal */ }
 
     if (opts.json) {
+      const runtimeIntercepts = serializeRuntimeIntercepts(noticeLog)
       const output = JSON.stringify({
         text: '',
         model: conversation.model,
@@ -595,6 +647,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
         approval_tool_allowlist: allowTools,
         approval_tool_denylist: denyTools,
         approval_denials: serializeDenials(approvalDecisions),
+        ...(runtimeIntercepts.length > 0 ? { runtime_intercepts: runtimeIntercepts } : {}),
       })
       await writeStdoutLine(output)
     } else {
@@ -655,6 +708,41 @@ function appendHeadlessPolicyContext(systemPrompt: string, policyContext: string
   const markerIndex = systemPrompt.indexOf(HEADLESS_POLICY_CONTEXT_MARKER)
   const base = markerIndex >= 0 ? systemPrompt.slice(0, markerIndex).trimEnd() : systemPrompt.trimEnd()
   return `${base}\n\n${policyContext}`
+}
+
+function shouldExposeHeadlessAgentTool(
+  allowTools: readonly string[],
+  denyTools: readonly string[],
+): boolean {
+  return allowTools.includes('Agent') && !denyTools.includes('Agent')
+}
+
+function createHeadlessAgentCallbackForwarder(
+  getCallbacks: () => ConversationCallbacks,
+): ConversationCallbacks {
+  return {
+    onText: (text) => getCallbacks().onText?.(text),
+    onToolStart: (toolName, input) => getCallbacks().onToolStart?.(toolName, input),
+    onToolEnd: (toolName, result, isError, durationMs, metadata) =>
+      getCallbacks().onToolEnd?.(toolName, result, isError, durationMs, metadata),
+    onToolProgress: (toolName, event) => getCallbacks().onToolProgress?.(toolName, event),
+    onResponse: (response) => getCallbacks().onResponse?.(response),
+    onError: (error) => getCallbacks().onError?.(error),
+    onNotice: (message) => getCallbacks().onNotice?.(message),
+    onUsage: (tokens) => getCallbacks().onUsage?.(tokens),
+    onRetry: (info) => getCallbacks().onRetry?.(info),
+    onToolApproval: (toolName, input) =>
+      getCallbacks().onToolApproval?.(toolName, input) ?? Promise.resolve(false),
+    onTaskScopeApproval: (request) =>
+      getCallbacks().onTaskScopeApproval?.(request) ?? Promise.resolve(false),
+    onUserQuestion: (toolName, question, opts) =>
+      getCallbacks().onUserQuestion?.(toolName, question, opts) ?? Promise.resolve(''),
+    onThinking: (event, text) => getCallbacks().onThinking?.(event, text),
+    onAutoCompact: (info) => getCallbacks().onAutoCompact?.(info),
+    get unattended() {
+      return getCallbacks().unattended
+    },
+  }
 }
 
 function filterHeadlessToolDefs<T extends { name: string }>(
@@ -906,6 +994,19 @@ function serializeToolCalls(calls: HeadlessToolCallLog[]): SerializedHeadlessToo
       output_original_chars: call.output.length,
     }
   })
+}
+
+function serializeRuntimeIntercepts(notices: string[]): SerializedRuntimeIntercept[] {
+  return notices
+    .flatMap((message): SerializedRuntimeIntercept[] => {
+      if (message.startsWith('[post-recovery-overrun]')) {
+        return [{ kind: 'post_recovery_overrun', message }]
+      }
+      if (message.startsWith('[long-task-wait-policy]')) {
+        return [{ kind: 'long_task_wait_policy', message }]
+      }
+      return []
+    })
 }
 
 function serializeDenials(records: HeadlessApprovalRecord[]): Array<{ toolName: string; reason: string; bashRiskLevel?: string; bashRiskReasons?: string[] }> {

@@ -12,9 +12,21 @@ import type {
   Conversation,
   ConversationTurn,
   PendingRetryState,
+  RuntimeEventLog,
+  RuntimeRecoveryLedger,
   TaskExecutionState,
 } from './protocol/types.js'
 import { sanitizeConversationTurns } from './protocol/request.js'
+import {
+  restoreTaskStore,
+  snapshotTaskStore,
+  type TaskStoreSnapshot,
+} from './tools/task-store.js'
+import {
+  restoreAgentRunHistory,
+  snapshotAgentRunHistory,
+  type AgentRunHistorySnapshot,
+} from './tools/agent.js'
 
 function getDefaultSessionsDir(): string {
   const home = process.env['OWLCODA_HOME']
@@ -40,6 +52,10 @@ export interface SessionFile {
   branchName?: string
   pendingRetry?: PendingRetryState
   taskState?: TaskExecutionState
+  runtimeRecoveryLedger?: RuntimeRecoveryLedger
+  runtimeEventLog?: RuntimeEventLog
+  taskStore?: TaskStoreSnapshot
+  agentRunStore?: AgentRunHistorySnapshot
 }
 
 /** Ensure sessions directory exists. Returns true on success. */
@@ -100,6 +116,13 @@ export function saveSession(conversation: Conversation, title?: string): string 
     cwd: process.cwd(),
     pendingRetry: conversation.options?.pendingRetry,
     taskState: conversation.options?.taskState,
+    runtimeRecoveryLedger: conversation.options?.runtimeRecoveryLedger,
+    runtimeEventLog: conversation.options?.runtimeEventLog,
+    taskStore: snapshotTaskStore(conversation.id),
+  }
+  const agentRunStore = snapshotAgentRunHistory(conversation.id)
+  if (agentRunStore.records.length > 0) {
+    session.agentRunStore = agentRunStore
   }
 
   const filePath = sessionPath(conversation.id)
@@ -166,6 +189,22 @@ export function restoreConversation(
       taskState: session.taskState,
     }
   }
+  if (session.runtimeRecoveryLedger) {
+    conversation.options = {
+      ...conversation.options,
+      runtimeRecoveryLedger: session.runtimeRecoveryLedger,
+    }
+  }
+  if (session.runtimeEventLog) {
+    conversation.options = {
+      ...conversation.options,
+      runtimeEventLog: session.runtimeEventLog,
+    }
+  }
+  if (session.taskStore) {
+    restoreTaskStore(session.taskStore)
+  }
+  restoreAgentRunHistory(session.agentRunStore, session.runtimeRecoveryLedger, session.id)
   return conversation
 }
 

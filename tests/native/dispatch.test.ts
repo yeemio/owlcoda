@@ -29,7 +29,7 @@ describe('Native Tool Dispatcher', () => {
     }
   })
 
-  it('registers all 45 default tools', () => {
+  it('registers all 51 default tools', () => {
     const dispatcher = new ToolDispatcher()
     const names = dispatcher.getToolNames()
     expect(names).toContain('bash')
@@ -43,6 +43,14 @@ describe('Native Tool Dispatcher', () => {
     expect(names).toContain('TodoWrite')
     expect(names).toContain('AskUserQuestion')
     expect(names).toContain('Sleep')
+    expect(names).toContain('LongTaskList')
+    expect(names).toContain('LongTaskGet')
+    expect(names).toContain('LongTaskAwait')
+    expect(names).toContain('LongTaskReplace')
+    expect(names).toContain('AgentRunList')
+    expect(names).toContain('AgentRunGet')
+    expect(names).toContain('RuntimeRecoveryList')
+    expect(names).toContain('RuntimeRecoveryGet')
     expect(names).toContain('EnterPlanMode')
     expect(names).toContain('ExitPlanMode')
     expect(names).toContain('Config')
@@ -75,7 +83,7 @@ describe('Native Tool Dispatcher', () => {
     expect(names).toContain('ProjectMap')
     expect(names).toContain('ArtifactVerify')
     expect(names).toContain('ProbePlan')
-    expect(names).toHaveLength(43)
+    expect(names).toHaveLength(51)
   })
 
   it('has() returns true for registered tools', () => {

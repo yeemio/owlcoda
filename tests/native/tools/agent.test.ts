@@ -16,7 +16,15 @@ vi.mock('../../../src/native/conversation.js', () => ({
   runConversationLoop: runConversationLoopMock,
 }))
 
-import { createAgentTool, __getAgentSemaphoreStateForTesting } from '../../../src/native/tools/agent.js'
+import {
+  createAgentTool,
+  createAgentRunGetTool,
+  createAgentRunListTool,
+  restoreAgentRunHistory,
+  snapshotAgentRunHistory,
+  __getAgentSemaphoreStateForTesting,
+  __resetAgentRunHistoryForTesting,
+} from '../../../src/native/tools/agent.js'
 import {
   __resetAdaptiveConcurrencyForTesting,
 } from '../../../src/native/adaptive-concurrency.js'
@@ -27,6 +35,7 @@ describe('Agent Tool', () => {
     delete process.env['OWLCODA_AGENT_MAX_CONCURRENCY']
     delete process.env['OWLCODA_SUBAGENT_MODEL']
     __resetAdaptiveConcurrencyForTesting()
+    __resetAgentRunHistoryForTesting()
 
     createConversationMock.mockReset()
     addUserMessageMock.mockReset()
@@ -319,6 +328,58 @@ describe('Agent Tool', () => {
     }
   })
 
+  it('honors per-call max_runtime_ms for known long-running sub-agent work', async () => {
+    const prevIdle = process.env['OWLCODA_AGENT_IDLE_TIMEOUT_MS']
+    const prevMax = process.env['OWLCODA_AGENT_MAX_RUNTIME_MS']
+    process.env['OWLCODA_AGENT_IDLE_TIMEOUT_MS'] = '0'
+    process.env['OWLCODA_AGENT_MAX_RUNTIME_MS'] = '0'
+    try {
+      runConversationLoopMock.mockImplementation(async (_conversation, _dispatcher, opts) => {
+        const aborted = await new Promise<boolean>((resolve) => {
+          if (opts.signal?.aborted) {
+            resolve(true)
+            return
+          }
+          const timer = setTimeout(() => resolve(false), 800)
+          opts.signal?.addEventListener('abort', () => {
+            clearTimeout(timer)
+            resolve(true)
+          }, { once: true })
+        })
+        return {
+          finalText: aborted ? '' : 'completed without watchdog',
+          iterations: 2,
+          stopReason: aborted ? 'tool_use' : 'end_turn',
+          usage: { inputTokens: 1, outputTokens: 1 },
+          runtimeFailure: null,
+        }
+      })
+
+      const tool = createAgentTool({
+        apiBaseUrl: 'http://127.0.0.1:9999',
+        apiKey: 'test-key',
+        model: 'mimo-v25-pro',
+        maxTokens: 2048,
+      })
+
+      const result = await tool.execute({
+        description: 'Long writer',
+        prompt: 'Write the long report.',
+        max_runtime_ms: 1,
+      } as any)
+
+      expect(result.isError).toBe(true)
+      expect(result.output).toContain('reason: watchdog_timeout')
+      expect(result.metadata?.['timeoutKind']).toBe('max')
+      expect(result.metadata?.['maxRuntimeMs']).toBe(1)
+    } finally {
+      if (prevIdle === undefined) delete process.env['OWLCODA_AGENT_IDLE_TIMEOUT_MS']
+      else process.env['OWLCODA_AGENT_IDLE_TIMEOUT_MS'] = prevIdle
+      if (prevMax === undefined) delete process.env['OWLCODA_AGENT_MAX_RUNTIME_MS']
+      else process.env['OWLCODA_AGENT_MAX_RUNTIME_MS'] = prevMax
+    }
+  })
+
   it('treats runtimeFailure abort kind as cancellation without routing wrap', async () => {
     runConversationLoopMock.mockResolvedValue({
       finalText: '',
@@ -354,6 +415,15 @@ describe('Agent Tool', () => {
     expect(result.metadata?.['cancelled']).toBe(true)
     expect(result.metadata?.['subAgentIsolatedFailure']).toBe(true)
     expect(result.metadata?.['failureCategory']).toBe('agent:aborted')
+
+    const agentId = String(result.metadata?.['agentId'])
+    const get = await createAgentRunGetTool().execute({ agentId })
+    expect(get.isError).toBe(false)
+    expect(get.metadata?.['record']).toMatchObject({
+      agentId,
+      status: 'cancelled',
+      failureCategory: 'agent:aborted',
+    })
   })
 
   it('treats silent max_iterations as incomplete instead of successful fallback work', async () => {
@@ -387,6 +457,16 @@ describe('Agent Tool', () => {
     expect(result.metadata?.['subAgentIsolatedFailure']).toBe(true)
     expect(result.metadata?.['completion_status']).toBe('failed')
     expect(result.metadata?.['failureCategory']).toBe('agent:max_iterations')
+
+    const agentId = String(result.metadata?.['agentId'])
+    const get = await createAgentRunGetTool().execute({ agentId })
+    expect(get.isError).toBe(false)
+    expect(get.output).toContain('failureCategory=agent:max_iterations')
+    expect(get.metadata?.['record']).toMatchObject({
+      agentId,
+      status: 'failed',
+      failureCategory: 'agent:max_iterations',
+    })
   })
 
   it('treats write-required sub-agent completion with no touched paths as incomplete', async () => {
@@ -471,6 +551,264 @@ describe('Agent Tool', () => {
 
     expect(result.isError).toBe(false)
     expect(result.output).toContain('Deck written')
+  })
+
+  it('records successful Agent runs for later read-only inspection', async () => {
+    runConversationLoopMock.mockImplementation(async (conversation) => {
+      conversation.options = {
+        taskState: makeTaskState({
+          objective: 'Write the deck to /tmp/owlcoda-agent-output.html',
+          sourceText: 'Write the deck to /tmp/owlcoda-agent-output.html',
+          touchedPaths: ['/tmp/owlcoda-agent-output.html'],
+          allowedWritePaths: [
+            { path: '/tmp/owlcoda-agent-output.html', kind: 'file', origin: 'user-external' },
+          ],
+        }),
+      }
+      return {
+        finalText: 'Deck written to /tmp/owlcoda-agent-output.html.',
+        iterations: 6,
+        stopReason: 'end_turn',
+        usage: { inputTokens: 10, outputTokens: 20 },
+        runtimeFailure: null,
+      }
+    })
+
+    const tool = createAgentTool({
+      apiBaseUrl: 'http://127.0.0.1:9999',
+      apiKey: 'test-key',
+      model: 'mimo-v25-pro',
+      maxTokens: 2048,
+    })
+
+    const result = await tool.execute({
+      description: 'Build deck',
+      prompt: 'Write the deck to /tmp/owlcoda-agent-output.html',
+      parentTaskId: 'task-1',
+      parentStepId: 'step-2',
+    })
+    const agentId = String(result.metadata?.['agentId'])
+
+    const list = await createAgentRunListTool().execute({})
+    expect(list.isError).toBe(false)
+    expect(list.output).toContain(agentId)
+    expect(list.output).toContain('success')
+    expect(list.output).toContain('Build deck')
+
+    const get = await createAgentRunGetTool().execute({ agentId })
+    expect(get.isError).toBe(false)
+    expect(get.output).toContain('status=success')
+    expect(get.output).toContain('parent=task-1/step-2')
+    expect(get.output).toContain('/tmp/owlcoda-agent-output.html')
+    expect(get.output).toContain('Deck written')
+    expect(get.metadata?.['record']).toMatchObject({
+      agentId,
+      status: 'success',
+      parentTaskId: 'task-1',
+      parentStepId: 'step-2',
+      touchedPaths: ['/tmp/owlcoda-agent-output.html'],
+    })
+  })
+
+  it('snapshots and restores conversation-scoped Agent run records', async () => {
+    runConversationLoopMock.mockImplementation(async (conversation) => {
+      conversation.options = {
+        taskState: makeTaskState({
+          objective: 'Write /tmp/owlcoda-agent-output.html',
+          sourceText: 'Write /tmp/owlcoda-agent-output.html',
+          touchedPaths: ['/tmp/owlcoda-agent-output.html'],
+          allowedWritePaths: [
+            { path: '/tmp/owlcoda-agent-output.html', kind: 'file', origin: 'user-external' },
+          ],
+        }),
+      }
+      return {
+        finalText: 'Deck written to /tmp/owlcoda-agent-output.html.',
+        iterations: 6,
+        stopReason: 'end_turn',
+        usage: { inputTokens: 10, outputTokens: 20 },
+        runtimeFailure: null,
+      }
+    })
+
+    const tool = createAgentTool({
+      apiBaseUrl: 'http://127.0.0.1:9999',
+      apiKey: 'test-key',
+      model: 'mimo-v25-pro',
+      maxTokens: 2048,
+    })
+
+    const result = await tool.execute({
+      description: 'Build deck',
+      prompt: 'Write /tmp/owlcoda-agent-output.html',
+      parentTaskId: 'task-1',
+      parentStepId: 'step-2',
+    }, { conversationId: 'parent-conversation' })
+    const agentId = String(result.metadata?.['agentId'])
+
+    const snapshot = snapshotAgentRunHistory('parent-conversation')
+    expect(snapshot.records.map((record) => record.agentId)).toContain(agentId)
+
+    __resetAgentRunHistoryForTesting()
+    const missing = await createAgentRunGetTool().execute({ agentId })
+    expect(missing.isError).toBe(true)
+
+    restoreAgentRunHistory(snapshot)
+
+    const restored = await createAgentRunGetTool().execute({ agentId })
+    expect(restored.isError).toBe(false)
+    expect(restored.output).toContain('status=success')
+    expect(restored.output).toContain('parent=task-1/step-2')
+    expect(restored.output).toContain('/tmp/owlcoda-agent-output.html')
+    expect(restored.metadata?.['record']).toMatchObject({
+      agentId,
+      conversationId: 'parent-conversation',
+      status: 'success',
+      parentTaskId: 'task-1',
+      parentStepId: 'step-2',
+      touchedPaths: ['/tmp/owlcoda-agent-output.html'],
+    })
+  })
+
+  it('exposes a lost-handle lifecycle verdict for restored running Agent runs', async () => {
+    restoreAgentRunHistory({
+      schemaVersion: 1,
+      records: [{
+        agentId: 'agent-running-before-resume',
+        description: 'Slow resumed child audit',
+        agentType: 'general-purpose',
+        model: 'mimo-v2.5-pro',
+        status: 'running',
+        startedAt: '2026-06-18T00:00:00.000Z',
+        updatedAt: '2026-06-18T00:05:00.000Z',
+        conversationId: 'conv-agent-lost-handle',
+        parentTaskId: 'task-7',
+        parentStepId: 'step-2',
+        expectedArtifacts: [],
+        touchedPaths: [],
+      }],
+    })
+
+    const result = await createAgentRunGetTool().execute({ agentId: 'agent-running-before-resume' })
+
+    expect(result.isError).toBe(false)
+    expect(result.output).toContain('status=incomplete')
+    expect(result.output).toContain('timeoutKind=agent_run_handle_missing_after_resume')
+    expect(result.output).toContain('Lifecycle: status=incomplete supervision_state=lost_handle can_wait=false terminal=false next_action=retry_or_report_incomplete')
+    expect(result.output).toContain('WaitPolicy: strategy=replace_or_retry recommended_wait_ms=0 max_wait_ms=0 stop_polling=true')
+    expect(result.metadata?.['long_task_lifecycle']).toMatchObject({
+      schema_version: 1,
+      long_task_id: 'agent:agent-running-before-resume',
+      source: 'agent',
+      status: 'incomplete',
+      supervision_state: 'lost_handle',
+      terminal: false,
+      can_wait: false,
+      inspect_command: 'AgentRunGet agentId=agent-running-before-resume',
+      next_action: 'retry_or_report_incomplete',
+      wait_policy: expect.objectContaining({
+        strategy: 'replace_or_retry',
+        stop_polling: true,
+      }),
+    })
+  })
+
+  it('records watchdog-timeout Agent runs with last progress for later inspection', async () => {
+    const prevIdle = process.env['OWLCODA_AGENT_IDLE_TIMEOUT_MS']
+    const prevMax = process.env['OWLCODA_AGENT_MAX_RUNTIME_MS']
+    process.env['OWLCODA_AGENT_IDLE_TIMEOUT_MS'] = '1'
+    process.env['OWLCODA_AGENT_MAX_RUNTIME_MS'] = '0'
+    try {
+      runConversationLoopMock.mockImplementation(async (conversation, _dispatcher, opts) => {
+        conversation.options = {
+          taskState: makeTaskState({
+            objective: 'Write /tmp/watchdog-result.md',
+            sourceText: 'Write /tmp/watchdog-result.md',
+            touchedPaths: [],
+            allowedWritePaths: [{ path: '/tmp/watchdog-result.md', kind: 'file', origin: 'user-external' }],
+          }),
+        }
+        opts.callbacks?.onToolStart?.('bash', { command: 'sleep 999' })
+        await new Promise<void>((resolve) => {
+          if (opts.signal?.aborted) {
+            resolve()
+            return
+          }
+          opts.signal?.addEventListener('abort', () => resolve(), { once: true })
+        })
+        return {
+          finalText: '',
+          iterations: 3,
+          stopReason: 'tool_use',
+          usage: { inputTokens: 4, outputTokens: 2 },
+          runtimeFailure: null,
+        }
+      })
+
+      const tool = createAgentTool({
+        apiBaseUrl: 'http://127.0.0.1:9999',
+        apiKey: 'test-key',
+        model: 'mimo-v25-pro',
+        maxTokens: 2048,
+      })
+
+      const result = await tool.execute({
+        description: 'Slow writer',
+        prompt: 'Write /tmp/watchdog-result.md',
+        parentTaskId: 'task-9',
+        parentStepId: 'step-4',
+      })
+      const agentId = String(result.metadata?.['agentId'])
+      expect(result.metadata?.['longTaskSnapshot']).toMatchObject({
+        longTaskId: `agent:${agentId}`,
+        source: 'agent',
+        status: 'timeout',
+        agentId,
+        objective: 'Slow writer',
+        parentTaskId: 'task-9',
+        parentStepId: 'step-4',
+      })
+      expect((result.metadata?.['longTaskSnapshot'] as any).promptSnippet).toContain('/tmp/watchdog-result.md')
+      expect((result.metadata?.['longTaskSnapshot'] as any).inspectCommand).toContain('AgentRunGet')
+      expect((result.metadata?.['longTaskSnapshot'] as any).resumeCommand).toBeUndefined()
+
+      const get = await createAgentRunGetTool().execute({ agentId })
+      expect(get.isError).toBe(false)
+      expect(get.output).toContain('status=failed')
+      expect(get.output).toContain('failureCategory=agent:watchdog_timeout')
+      expect(get.output).toContain('timeoutKind=idle')
+      expect(get.output).toContain('lastProgress=tool_start:bash')
+      expect(get.metadata?.['record']).toMatchObject({
+        agentId,
+        status: 'failed',
+        failureCategory: 'agent:watchdog_timeout',
+        timeoutKind: 'idle',
+        parentTaskId: 'task-9',
+        parentStepId: 'step-4',
+      })
+      expect((get.metadata?.['record'] as any).longTaskSnapshot).toMatchObject({
+        longTaskId: `agent:${agentId}`,
+        source: 'agent',
+        status: 'timeout',
+      })
+      expect((get.metadata?.['record'] as any).longTaskSnapshot.resumeCommand).toBeUndefined()
+    } finally {
+      if (prevIdle === undefined) delete process.env['OWLCODA_AGENT_IDLE_TIMEOUT_MS']
+      else process.env['OWLCODA_AGENT_IDLE_TIMEOUT_MS'] = prevIdle
+      if (prevMax === undefined) delete process.env['OWLCODA_AGENT_MAX_RUNTIME_MS']
+      else process.env['OWLCODA_AGENT_MAX_RUNTIME_MS'] = prevMax
+    }
+  })
+
+  it('returns useful errors when AgentRunGet cannot find a record', async () => {
+    const missingId = await createAgentRunGetTool().execute({ agentId: '' })
+    expect(missingId.isError).toBe(true)
+    expect(missingId.output).toContain('agentId is required')
+
+    const notFound = await createAgentRunGetTool().execute({ agentId: 'agent-missing' })
+    expect(notFound.isError).toBe(true)
+    expect(notFound.output).toContain('Agent run "agent-missing" not found')
+    expect(notFound.metadata).toMatchObject({ agentId: 'agent-missing' })
   })
 
   it('does not require touched paths for text-deliverable sub-agent work', async () => {
@@ -659,7 +997,7 @@ describe('Agent Tool', () => {
   it('uses 80 iterations as the default Explore sub-agent budget', async () => {
     // Explore agents are read-only and used for fast scoped lookups —
     // their natural budget is smaller than the general-purpose 200,
-    // matching the upstream external coding-assistant Explore preset and the cmux
+    // matching the upstream Claude Code Explore preset and the cmux
     // 0.13.20 evidence (live run reported "80 iterations,
     // stop_reason=max_iterations" for an Explore call).
     const tool = createAgentTool({

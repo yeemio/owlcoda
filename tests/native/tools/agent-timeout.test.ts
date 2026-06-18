@@ -111,6 +111,30 @@ describe('resolveAgentTimeoutPolicy', () => {
     expect(p.idleTimeoutMs).toBe(0)
     expect(p.maxRuntimeMs).toBe(60_000)
   })
+
+  it('uses positive per-call overrides over env defaults', () => {
+    const p = resolveAgentTimeoutPolicy({
+      OWLCODA_AGENT_IDLE_TIMEOUT_MS: '0',
+      OWLCODA_AGENT_MAX_RUNTIME_MS: '0',
+    }, {
+      idleTimeoutMs: 15_000,
+      maxRuntimeMs: 120_000,
+    })
+    expect(p.idleTimeoutMs).toBe(15_000)
+    expect(p.maxRuntimeMs).toBe(120_000)
+  })
+
+  it('ignores zero or invalid per-call overrides so calls cannot disable watchdog axes', () => {
+    const p = resolveAgentTimeoutPolicy({
+      OWLCODA_AGENT_IDLE_TIMEOUT_MS: '10',
+      OWLCODA_AGENT_MAX_RUNTIME_MS: '20',
+    }, {
+      idleTimeoutMs: 0,
+      maxRuntimeMs: -5,
+    })
+    expect(p.idleTimeoutMs).toBe(10)
+    expect(p.maxRuntimeMs).toBe(20)
+  })
 })
 
 describe('createAgentWatchdog — idle timeout', () => {

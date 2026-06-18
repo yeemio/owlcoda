@@ -45,6 +45,68 @@ export interface PendingRetryState {
   attemptCount: number
 }
 
+export type RuntimeRecoveryCheckpointKind =
+  | 'long_task_checkpoint'
+  | 'blocked_task_checkpoint'
+  | 'child_run_synthesis_checkpoint'
+  | 'long_task_synthesis_checkpoint'
+  | 'long_task_replacement_checkpoint'
+  | 'context_replacement_checkpoint'
+  | 'verification_repair_checkpoint'
+
+export type RuntimeRecoveryCheckpointDisposition =
+  | 'active'
+  | 'acknowledged'
+  | 'resolved'
+  | 'superseded'
+
+export interface RuntimeRecoveryCheckpointRecord {
+  id: string
+  kind: RuntimeRecoveryCheckpointKind
+  generatedAt: string
+  conversationId: string
+  disposition?: RuntimeRecoveryCheckpointDisposition
+  dispositionUpdatedAt?: string
+  dispositionReason?: string
+  payload: Record<string, unknown>
+  inspectCommands: string[]
+}
+
+export interface RuntimeRecoveryLedger {
+  schemaVersion: 1
+  updatedAt: string
+  lastPromptedAt?: string
+  checkpoints: RuntimeRecoveryCheckpointRecord[]
+}
+
+export type RuntimeEventKind =
+  | 'turn_started'
+  | 'item_started'
+  | 'item_completed'
+  | 'checkpoint_installed'
+  | 'checkpoint_resolved'
+  | 'turn_completed'
+
+export interface RuntimeEventRecord {
+  id: string
+  seq: number
+  kind: RuntimeEventKind
+  at: string
+  conversationId: string
+  turnId?: string
+  itemId?: string
+  checkpointId?: string
+  checkpointKind?: RuntimeRecoveryCheckpointKind
+  payload?: Record<string, unknown>
+}
+
+export interface RuntimeEventLog {
+  schemaVersion: 1
+  updatedAt: string
+  nextSeq: number
+  events: RuntimeEventRecord[]
+}
+
 export type TaskPathScopeKind = 'file' | 'directory'
 export type TaskPathScopeOrigin = 'explicit' | 'parent_directory' | 'derived_test' | 'touched' | 'user_approved' | 'user-external' | 'external_reference' | 'run_workspace'
 export type TaskRunStatus = 'open' | 'blocked' | 'waiting_user' | 'drifted' | 'completed'
@@ -214,6 +276,10 @@ export interface ConversationOptions {
   pendingRetry?: PendingRetryState
   /** Persistent task contract + runtime state for long-running execution. */
   taskState?: TaskExecutionState
+  /** Durable runtime recovery checkpoints for resume-safe long-task state. */
+  runtimeRecoveryLedger?: RuntimeRecoveryLedger
+  /** Minimal runtime truth event stream used by checkpoint reconstruction. */
+  runtimeEventLog?: RuntimeEventLog
   /**
    * Active probe plans registered via the `ProbePlan` tool (0.13.51).
    * The conversation loop scans tool executions to mark each probe

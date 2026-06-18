@@ -366,11 +366,27 @@ describe('log.render staticCommit handling', () => {
     const diff = log.render(prev, next)
     const ansi = diff.filter((p): p is Extract<typeof p, { type: 'stdout' }> => p.type === 'stdout')
       .map(p => p.content).join('')
-    // Each line followed by \x1b[K before the \n (or at end for the last).
-    expect(ansi).toContain('alpha\x1b[K\n')
-    expect(ansi).toContain('beta\x1b[K\n')
+    // Each line followed by \x1b[K before the CRLF (or at end for the last).
+    expect(ansi).toContain('alpha\x1b[K\r\n')
+    expect(ansi).toContain('beta\x1b[K\r\n')
     // Last line has its \x1b[K terminator too (before the extra \n below).
     expect(ansi).toContain('gamma\x1b[K')
+  })
+
+  it('separates static commit rows with CRLF so raw terminals return to column zero', () => {
+    const log = newLog()
+    const prev = makeFrame({ rows: 5, cols: 40 })
+    const next = makeFrame({
+      rows: 5,
+      cols: 40,
+      staticCommit: { text: 'alpha\nbeta\ngamma', rowCount: 3 },
+    })
+    const diff = log.render(prev, next)
+    const ansi = diff.filter((p): p is Extract<typeof p, { type: 'stdout' }> => p.type === 'stdout')
+      .map(p => p.content).join('')
+
+    expect(ansi).toContain('alpha\x1b[K\r\nbeta\x1b[K\r\ngamma\x1b[K')
+    expect(ansi).not.toContain('alpha\x1b[K\nbeta')
   })
 
   it('pads single-line commit text with \\x1b[K as well', () => {

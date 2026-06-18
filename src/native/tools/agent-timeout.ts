@@ -32,7 +32,7 @@
  * Industry reference (per 2026-05-06 survey):
  *   - Aider / Continue: per-request timeout, no idle vs max split
  *   - Codex CLI: `max_runtime_seconds` per subagent (1800s default)
- *   - external coding-assistant, Cursor: no built-in deadline; user-Esc only
+ *   - Claude Code, Cursor: no built-in deadline; user-Esc only
  *   - OpenHands: Stuck Detector (semantic loop, not wall-clock)
  *
  * 0.13.57 picks idle+max with progress-signal heartbeat — closer to
@@ -92,13 +92,30 @@ export function parseAgentTimeoutMs(
 }
 
 /** Resolve the active idle/max policy from env, with defaults. */
-export function resolveAgentTimeoutPolicy(env: NodeJS.ProcessEnv = process.env): {
+export interface AgentTimeoutPolicyOverrides {
+  idleTimeoutMs?: unknown
+  maxRuntimeMs?: unknown
+}
+
+function parsePositiveAgentTimeoutOverrideMs(raw: unknown): number | null {
+  if (raw === undefined || raw === null || raw === '') return null
+  const n = typeof raw === 'number' ? raw : Number(String(raw).trim())
+  if (!Number.isFinite(n) || n <= 0) return null
+  return Math.floor(n)
+}
+
+export function resolveAgentTimeoutPolicy(
+  env: NodeJS.ProcessEnv = process.env,
+  overrides: AgentTimeoutPolicyOverrides = {},
+): {
   idleTimeoutMs: number
   maxRuntimeMs: number
 } {
+  const idleOverride = parsePositiveAgentTimeoutOverrideMs(overrides.idleTimeoutMs)
+  const maxOverride = parsePositiveAgentTimeoutOverrideMs(overrides.maxRuntimeMs)
   return {
-    idleTimeoutMs: parseAgentTimeoutMs(env['OWLCODA_AGENT_IDLE_TIMEOUT_MS'], DEFAULT_IDLE_TIMEOUT_MS),
-    maxRuntimeMs: parseAgentTimeoutMs(env['OWLCODA_AGENT_MAX_RUNTIME_MS'], DEFAULT_MAX_RUNTIME_MS),
+    idleTimeoutMs: idleOverride ?? parseAgentTimeoutMs(env['OWLCODA_AGENT_IDLE_TIMEOUT_MS'], DEFAULT_IDLE_TIMEOUT_MS),
+    maxRuntimeMs: maxOverride ?? parseAgentTimeoutMs(env['OWLCODA_AGENT_MAX_RUNTIME_MS'], DEFAULT_MAX_RUNTIME_MS),
   }
 }
 

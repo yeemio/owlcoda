@@ -103,6 +103,97 @@ describe('conversation — phase event shadow recording', () => {
     }))
   })
 
+  it('records verification evidence for successful verification-like bash only', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'edit src/foo.ts, run npm test, and report results')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'edit',
+      description: 'stub edit',
+      async execute() {
+        return { output: 'edited', isError: false, metadata: { path: 'src/foo.ts' } }
+      },
+    })
+    dispatcher.register({
+      name: 'bash',
+      description: 'stub bash',
+      async execute(input: any) {
+        const command = String(input.command ?? '')
+        if (command.includes('npm test')) {
+          return { output: '2 tests passed, 0 failed', isError: false }
+        }
+        return { output: 'process killed (timeout)', isError: true, metadata: { exitCode: 128 } }
+      },
+    })
+
+    queueResponses([
+      toolUseResponse('edit', 'tu_edit', { file_path: 'src/foo.ts', old_string: 'a', new_string: 'b' }),
+      toolUseResponse('bash', 'tu_failed_dry_run', { command: 'python3 gen_l0_identity.py --dry-run' }),
+      toolUseResponse('bash', 'tu_test', { command: 'npm test' }),
+      textResponse('Final report: src/foo.ts updated and all tests passed.'),
+    ])
+
+    await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://test',
+      apiKey: 'k',
+      maxIterations: 8,
+      callbacks: { onToolApproval: vi.fn().mockResolvedValue(true) },
+    })
+
+    const taskState = conv.options?.taskState ?? ensureTaskExecutionState(conv)
+    const bashVerificationEvents = taskState.phaseEvents.filter((event) =>
+      event.kind === 'verification_evidence' && event.tool === 'bash'
+    )
+    expect(bashVerificationEvents).toHaveLength(1)
+    expect(bashVerificationEvents[0]).toEqual(expect.objectContaining({
+      detail: expect.stringContaining('npm test'),
+      phaseHint: 'verify',
+    }))
+  })
+
+  it('does not record verification evidence for piped bash checks without pipefail', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'run the build and report whether it passed')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'bash',
+      description: 'stub bash',
+      async execute() {
+        return {
+          output: [
+            'vite v6.4.3 building for production...',
+            '✗ Build failed in 4ms',
+            'error during build:',
+            'Could not resolve entry module "index.html".',
+            '[exit code: 0]',
+          ].join('\n'),
+          isError: false,
+          metadata: { exitCode: 0 },
+        }
+      },
+    })
+
+    queueResponses([
+      toolUseResponse('bash', 'tu_piped_build', { command: 'npm run build 2>&1 | tail -20' }),
+      textResponse('Build output inspected.'),
+    ])
+
+    await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://test',
+      apiKey: 'k',
+      maxIterations: 4,
+      callbacks: { onToolApproval: vi.fn().mockResolvedValue(true) },
+    })
+
+    const taskState = conv.options?.taskState ?? ensureTaskExecutionState(conv)
+    const bashVerificationEvents = taskState.phaseEvents.filter((event) =>
+      event.kind === 'verification_evidence' && event.tool === 'bash'
+    )
+    expect(bashVerificationEvents).toHaveLength(0)
+  })
+
   it('records a read-only review path without mutating evidence', async () => {
     const conv = createConversation({ system: 'test', model: 'test-model' })
     addUserMessage(conv, 'read src/foo.ts and tell me if it has AI flavor; do not edit')

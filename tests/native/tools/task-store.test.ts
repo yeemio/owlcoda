@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+import * as taskStore from '../../../src/native/tools/task-store.js'
 import {
   createTask,
   getTask,
@@ -8,6 +9,7 @@ import {
   deleteTask,
   stopTask,
   resetTaskStore,
+  hasRunningProcess,
   getTaskStep,
   updateTaskStep,
   getCurrentOrNextStep,
@@ -101,6 +103,66 @@ describe('TaskStore', () => {
     expect(listTasks()).toHaveLength(0)
     const t = createTask({ subject: 'C', description: 'c' })
     expect(t.id).toBe('task-1')
+  })
+
+  it('snapshots and restores serializable tasks without reviving process handles', () => {
+    const task = createTask({
+      subject: 'Resume proof',
+      description: 'TaskStore should survive session restore',
+      conversationId: 'conv-resume-proof',
+      steps: [{
+        id: 'prove-resume',
+        title: 'Prove resume',
+        description: 'verify after restore',
+        verification: [{ id: 'artifact', kind: 'file_exists', path: '/tmp/owlcoda-task-store-proof.txt' }],
+      }],
+    })
+    updateTaskStep(task.id, 'prove-resume', {
+      status: 'blocked',
+      failureReason: 'artifact not present yet',
+    })
+
+    expect(typeof (taskStore as any).snapshotTaskStore).toBe('function')
+    expect(typeof (taskStore as any).restoreTaskStore).toBe('function')
+
+    const snapshot = (taskStore as any).snapshotTaskStore('conv-resume-proof')
+    resetTaskStore()
+    expect(getTask(task.id)).toBeUndefined()
+
+    ;(taskStore as any).restoreTaskStore(snapshot)
+
+    const restored = getTask(task.id)
+    expect(restored?.subject).toBe('Resume proof')
+    expect(restored?.steps?.[0]?.status).toBe('blocked')
+    expect(restored?.steps?.[0]?.verification[0]?.path).toBe('/tmp/owlcoda-task-store-proof.txt')
+    expect((taskStore as any)._processCount()).toBe(0)
+
+    const next = createTask({ subject: 'Next', description: 'id should not collide' })
+    expect(next.id).toBe('task-2')
+  })
+
+  it('restores in-progress command tasks as incomplete when no process handle survives', () => {
+    const task = createTask({
+      subject: 'Long command',
+      description: 'Command was running before resume',
+      conversationId: 'conv-command-resume',
+      command: 'sleep 60; echo done',
+      cwd: '/tmp',
+    })
+    updateTask(task.id, { status: 'in_progress' })
+    const live = getTask(task.id)!
+    live.stdout = 'started\n'
+
+    const snapshot = (taskStore as any).snapshotTaskStore('conv-command-resume')
+    resetTaskStore()
+    ;(taskStore as any).restoreTaskStore(snapshot)
+
+    const restored = getTask(task.id)!
+    expect(restored.status).toBe('in_progress')
+    expect(hasRunningProcess(task.id)).toBe(false)
+    expect(restored.longTaskSnapshot?.status).toBe('incomplete')
+    expect(restored.longTaskSnapshot?.timeoutKind).toBe('process_handle_missing_after_resume')
+    expect(restored.longTaskSnapshot?.inspectCommand).toBe(`TaskOutput task_id=${task.id} block=false`)
   })
 })
 

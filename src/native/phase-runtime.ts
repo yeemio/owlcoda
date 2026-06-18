@@ -314,6 +314,7 @@ function countVerificationEvidence(events: PhaseEvent[]): number {
 
 function claimsVerification(text: string): boolean {
   return /\b(?:verified|verification|audit|audited|DeliveryAudit|TaskVerify|tests?\s+(?:pass|passed|green)|all tests pass|0 failed)\b/i.test(text)
+    || /\b(?:dry[- ]?run|smoke|sanity|verification|tests?|checks?|audit)\b[^.!?\n]{0,100}\b(?:proves?|proved|confirms?|confirmed|works?|clean|passes?|passed|green|ok)\b/i.test(text)
     || /(?:验证|校验|审计|测试)[^。！？\n]{0,80}(?:通过|完成|确认|全绿)/i.test(text)
 }
 

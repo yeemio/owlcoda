@@ -201,7 +201,7 @@ export class LogUpdate {
       // dynamic rows still visible behind them.
       //
       // Fix: terminate each commit line with \x1b[K (erase-in-line
-      // to end of row) BEFORE the embedded \n. The ANSI still goes
+      // to end of row) BEFORE the embedded CRLF. The ANSI still goes
       // through the same writeDiffToTerminal buffered write, so the
       // one-invariant (per-frame single stdout write) is preserved.
       // \x1b[K is a VT100-standard sequence supported universally
@@ -211,15 +211,17 @@ export class LogUpdate {
       // DECAWM (auto-wrap) disable around the write is belt-and-braces:
       // it guarantees a line that happens to fill viewport.width exactly
       // doesn't push the cursor into the "pending wrap" state where a
-      // trailing \x1b[K or \n misbehaves across terminal emulators
+      // trailing \x1b[K or newline misbehaves across terminal emulators
       // (Terminal.app, iTerm2, tmux and Ghostty each interpret the
       // deferred-wrap edge slightly differently).
       // Sanitize each committed line: bare C0 controls (esp. \r from CRLF tool
       // output / progress bars) would reset the cursor mid-row and collide with
       // the per-line \x1b[K / next line, blanking or head-overwriting scrollback
       // rows. Control chars are zero-width, so this does not change rowCount.
+      // Use explicit CRLF between rows: raw TTYs do not guarantee ONLCR, and
+      // bare LF can leave the next committed row starting at the previous column.
       const commitLines = next.staticCommit.text.split('\n').map(sanitizeCommitLine)
-      const paddedCommit = commitLines.join('\x1b[K\n') + '\x1b[K'
+      const paddedCommit = commitLines.join('\x1b[K\r\n') + '\x1b[K'
 
       // Bulk LF burst clamp:
       //   When rowCount > viewport.height, paddedCommit's embedded \n's already

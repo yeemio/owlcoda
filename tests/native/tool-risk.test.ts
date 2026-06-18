@@ -23,6 +23,13 @@ describe('classifyToolRisk — safe tools', () => {
     ['ProbePlan', {}],
     ['StructuredOutput', { schema: {} }],
     ['Sleep', { seconds: 1 }],
+    ['AgentRunList', {}],
+    ['AgentRunGet', { agentId: 'agent-1234' }],
+    ['LongTaskList', {}],
+    ['LongTaskGet', { longTaskId: 'task:task-1' }],
+    ['LongTaskAwait', { longTaskId: 'task:task-1', timeoutMs: 1000 }],
+    ['RuntimeRecoveryList', {}],
+    ['RuntimeRecoveryGet', { checkpointId: 'blocked_task_checkpoint-1' }],
   ])('classifies %s as safe', (toolName, args) => {
     expect(classifyToolRisk(toolName, args as Record<string, unknown>)).toBe<RiskClass>('safe')
   })
@@ -45,6 +52,7 @@ describe('classifyToolRisk — internal_state tools', () => {
     ['ProjectMap', { action: 'scan' }],
     ['TaskCreate', { subject: 't', description: 'd' }],
     ['TaskCreate', { subject: 't', description: 'd', command: '' }],
+    ['LongTaskReplace', { longTaskId: 'task:task-1' }],
   ])('classifies %s%j as internal_state', (toolName, args) => {
     expect(classifyToolRisk(toolName, args as Record<string, unknown>)).toBe<RiskClass>('internal_state')
   })
@@ -59,6 +67,8 @@ describe('classifyToolRisk — bash delegation', () => {
     ['bash', { command: '' }, 'mutating'], // unknown → mutating (fail-safe)
     ['TaskCreate', { subject: 't', description: 'd', command: 'echo hi' }, 'mutating'],
     ['TaskCreate', { subject: 't', description: 'd', command: 'rm -rf /tmp/x' }, 'destructive'],
+    ['LongTaskReplace', { longTaskId: 'task:task-1', command: 'echo hi' }, 'mutating'],
+    ['LongTaskReplace', { longTaskId: 'task:task-1', command: 'rm -rf /tmp/x' }, 'destructive'],
   ] as const)('classifies %s with command=%o as %s', (toolName, args, expected) => {
     expect(classifyToolRisk(toolName, args as Record<string, unknown>)).toBe<RiskClass>(expected)
   })
@@ -162,6 +172,14 @@ describe('classifyToolRisk — exhaustive against ToolDispatcher registry', () =
     TodoWrite: { todos: [] },
     AskUserQuestion: { questions: [] },
     Sleep: { seconds: 1 },
+    AgentRunList: {},
+    AgentRunGet: { agentId: 'agent-1234' },
+    LongTaskList: {},
+    LongTaskGet: { longTaskId: 'task:task-1' },
+    LongTaskAwait: { longTaskId: 'task:task-1', timeoutMs: 1000 },
+    LongTaskReplace: { longTaskId: 'task:task-1' },
+    RuntimeRecoveryList: {},
+    RuntimeRecoveryGet: { checkpointId: 'blocked_task_checkpoint-1' },
     EnterPlanMode: {},
     ExitPlanMode: {},
     EnterWorktree: { name: 'f' },
@@ -203,7 +221,7 @@ describe('classifyToolRisk — exhaustive against ToolDispatcher registry', () =
     // SAMPLE_ARGS and either to one of the explicit Sets in
     // classifyToolRisk or to DEFAULT_MUTATING_EXPLICIT_ACK.
     // Update the expected count when intentionally adding a tool.
-    expect(registered.length).toBe(43)
+    expect(registered.length).toBe(51)
   })
 
   it.each(registered.map((name) => [name]))(

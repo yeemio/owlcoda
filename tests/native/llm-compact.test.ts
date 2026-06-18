@@ -257,7 +257,7 @@ describe('serializeTurnsForCompactor', () => {
   })
 })
 
-// ─── 7-section request builder ────────────────────────────────────────
+// ─── 8-section request builder ────────────────────────────────────────
 
 describe('buildCompactionRequest', () => {
   it('returns null when conversation is at-or-below recent-keep size', () => {
@@ -275,7 +275,7 @@ describe('buildCompactionRequest', () => {
     expect(req.droppedTurns.length).toBe(turns.length - RECENT_TURNS_VERBATIM_COUNT)
   })
 
-  it('includes all 7 section headers in the prompt', () => {
+  it('includes all 8 section headers in the prompt', () => {
     const turns = [
       userTurn('what is 2+2?'),
       assistantTurn('4'),
@@ -290,6 +290,7 @@ describe('buildCompactionRequest', () => {
     const req = buildCompactionRequest(conv)!
     expect(req.prompt).toContain('[system]')
     expect(req.prompt).toContain('[latest_user_goal]')
+    expect(req.prompt).toContain('[task_contract_anchor]')
     expect(req.prompt).toContain('[recent_turns_verbatim]')
     expect(req.prompt).toContain('[tool_call_summary]')
     expect(req.prompt).toContain('[error_evidence]')
@@ -317,6 +318,79 @@ describe('buildCompactionRequest', () => {
     const conv = makeConv(turns)
     const req = buildCompactionRequest(conv)!
     expect(req.prompt).toContain(goal)
+  })
+
+  it('includes task contract anchor when latest user text is only runtime recovery', () => {
+    const initialPrompt = [
+      '请并发 subagent 生成四个 1200-1500 字段落。',
+      '只能输出到 /Users/publicuser/AI/gitrep/owlmodel/out/full。',
+      '不碰 8066/8029 cutover。',
+      '最终报告必须列出证据路径。',
+    ].join('\n')
+    const conv = makeConv([
+      userTurn(initialPrompt),
+      assistantTurn('开始核对代理和目录。'),
+      toolUseTurn('Read', { path: '/Users/publicuser/AI/gitrep/owlmodel/README.md' }, 'read-1'),
+      toolResultTurn('read-1', 'README body'),
+      assistantTurn('发现已有污染，需要分片生成。'),
+      userTurn('你一直在忙活什么？'),
+      assistantTurn('我在继续跑。'),
+      userTurn('批准啊，你来做'),
+      assistantTurn('收到，继续。'),
+    ])
+    conv.options = {
+      taskState: {
+        contract: {
+          version: 1,
+          sourceTurnHash: 'h',
+          sourceText: initialPrompt,
+          objective: initialPrompt,
+          dominantGap: 'produce shard files and evidence report',
+          cwd: '/Users/publicuser/AI/gitrep/owlmodel',
+          scopeMode: 'explicit_paths',
+          explicitWriteTargets: ['/Users/publicuser/AI/gitrep/owlmodel/out/full'],
+          allowedWritePaths: [{
+            path: '/Users/publicuser/AI/gitrep/owlmodel/out/full',
+            kind: 'directory',
+            origin: 'explicit',
+          }],
+          touchedPaths: [],
+          createdAt: 0,
+          updatedAt: 0,
+          confidence: 'high',
+        },
+        run: {
+          status: 'waiting_user',
+          iterations: 8,
+          lifetimeIterations: 12,
+          productionGateFired: true,
+          scratchArtifactPaths: [],
+          currentFocus: 'waiting on write-scope approval for shard outputs',
+          lastProgressAt: 0,
+          lastGuardReason: 'Task contract blocked write to /Users/publicuser/AI/gitrep/owlmodel/out/full/shard-01.md.',
+          pendingWriteApproval: {
+            attemptedPaths: [
+              '/Users/publicuser/AI/gitrep/owlmodel/out/full/shard-01.md',
+              '/Users/publicuser/AI/gitrep/owlmodel/out/full/shard-02.md',
+            ],
+            requestedAt: 0,
+          },
+          runWorkspace: null,
+          lastUpdatedAt: 0,
+        },
+        proposedToolCalls: [],
+        phaseEvents: [],
+      },
+    }
+
+    const req = buildCompactionRequest(conv, { recentTurnsCount: 4 })!
+
+    expect(req.prompt).toContain('[task_contract_anchor]')
+    expect(req.prompt).toContain('请并发 subagent')
+    expect(req.prompt).toContain('1200-1500')
+    expect(req.prompt).toContain('/Users/publicuser/AI/gitrep/owlmodel/out/full')
+    expect(req.prompt).toContain('/Users/publicuser/AI/gitrep/owlmodel/out/full/shard-02.md')
+    expect(req.prompt).toContain('Task contract blocked write')
   })
 })
 
@@ -561,6 +635,34 @@ describe('tryCompact', () => {
     expect(conv.options?.llmCompactFailureCount).toBe(0)
   })
 
+  it('LLM success installs a context replacement checkpoint with digest and replacement history', async () => {
+    const conv = makeConv(baseTurns(10))
+    const result = await tryCompact(conv, {
+      reason: 'threshold',
+      apiBaseUrl: 'http://x',
+      truncationKeepCount: 4,
+      fetchImpl: mockFetch({ body: { content: [{ type: 'text', text: validSummary }] } }),
+    })
+
+    const checkpoint = conv.options?.runtimeRecoveryLedger?.checkpoints
+      .find((item) => item.kind === 'context_replacement_checkpoint')
+    const contextReplacement = checkpoint?.payload.context_replacement as any
+
+    expect(result.method).toBe('llm_summary')
+    expect(checkpoint?.disposition).toBe('active')
+    expect(contextReplacement).toMatchObject({
+      reason: 'threshold',
+      window_id: 'threshold',
+      ledger_status: 'active',
+      replacement_history: conv.turns,
+    })
+    expect(contextReplacement.input_history_digest).toMatch(/^sha256:/)
+    expect(conv.options?.runtimeEventLog?.events.some((event) =>
+      event.kind === 'checkpoint_installed'
+      && event.checkpointKind === 'context_replacement_checkpoint',
+    )).toBe(true)
+  })
+
   it('LLM success writes reviewable compaction fidelity telemetry', async () => {
     await withTempOwlCodaHome(async (home) => {
       const conv = makeConv([
@@ -698,6 +800,89 @@ Open risks:
     })
     expect(result.method).toBe('truncation')
     expect(result.fallbackReason).toBe('no_llm_opts')
+  })
+
+  it('truncation fallback installs a context replacement checkpoint too', async () => {
+    const conv = makeConv(baseTurns(10))
+    const result = await tryCompact(conv, {
+      reason: 'threshold',
+      truncationKeepCount: 4,
+    })
+    const checkpoint = conv.options?.runtimeRecoveryLedger?.checkpoints
+      .find((item) => item.kind === 'context_replacement_checkpoint')
+    const contextReplacement = checkpoint?.payload.context_replacement as any
+
+    expect(result.method).toBe('truncation')
+    expect(contextReplacement).toMatchObject({
+      reason: 'threshold',
+      window_id: 'threshold',
+      ledger_status: 'active',
+      replacement_history: conv.turns,
+    })
+    expect(contextReplacement.input_history_digest).toMatch(/^sha256:/)
+  })
+
+  it('truncation fallback preserves task contract anchor before tail turns', async () => {
+    const initialPrompt = '写四个 1200-1500 字 shard，只能落盘到 /tmp/owlmodel/out/full，最后给证据报告。'
+    const conv = makeConv([
+      userTurn(initialPrompt),
+      assistantTurn('分析任务。'),
+      ...baseTurns(10),
+      userTurn('批准啊，你来做'),
+      assistantTurn('继续执行。'),
+    ])
+    conv.options = {
+      taskState: {
+        contract: {
+          version: 1,
+          sourceTurnHash: 'h',
+          sourceText: initialPrompt,
+          objective: initialPrompt,
+          dominantGap: null,
+          cwd: '/tmp/owlmodel',
+          scopeMode: 'explicit_paths',
+          explicitWriteTargets: ['/tmp/owlmodel/out/full'],
+          allowedWritePaths: [{
+            path: '/tmp/owlmodel/out/full',
+            kind: 'directory',
+            origin: 'explicit',
+          }],
+          touchedPaths: ['/tmp/owlmodel/out/full/shard-01.md'],
+          createdAt: 0,
+          updatedAt: 0,
+          confidence: 'high',
+        },
+        run: {
+          status: 'open',
+          iterations: 9,
+          lifetimeIterations: 9,
+          productionGateFired: true,
+          scratchArtifactPaths: [],
+          currentFocus: 'generate remaining shards',
+          lastProgressAt: 0,
+          lastGuardReason: null,
+          pendingWriteApproval: null,
+          runWorkspace: null,
+          lastUpdatedAt: 0,
+        },
+        proposedToolCalls: [],
+        phaseEvents: [],
+      },
+    }
+
+    const result = await tryCompact(conv, {
+      reason: 'threshold',
+      truncationKeepCount: 2,
+    })
+
+    expect(result.method).toBe('truncation')
+    expect(conv.turns.length).toBe(3)
+    const anchorText = (conv.turns[0]!.content[0] as any).text as string
+    expect(anchorText).toContain('[Task contract anchor preserved across compaction]')
+    expect(anchorText).toContain('1200-1500 字 shard')
+    expect(anchorText).toContain('/tmp/owlmodel/out/full')
+    expect(anchorText).toContain('/tmp/owlmodel/out/full/shard-01.md')
+    expect((conv.turns[1]!.content[0] as any).text).toBe('批准啊，你来做')
   })
 
   it('conversation too small → no_op', async () => {

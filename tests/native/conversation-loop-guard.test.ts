@@ -13,6 +13,7 @@ import {
 import { buildToolDef } from '../../src/native/protocol/request.js'
 import { shouldScheduleRuntimeAutoRetry } from '../../src/native/repl-shared.js'
 import { ensureTaskExecutionState } from '../../src/native/task-state.js'
+import { recordLongTaskSnapshot, resetLongTaskLifecycleForTesting } from '../../src/native/long-task-lifecycle.js'
 import { recordReadAndBuildNudge } from '../../src/native/tools/read.js'
 import { createTask, resetTaskStore, updateTaskStep } from '../../src/native/tools/task-store.js'
 import { createTaskUpdateTool } from '../../src/native/tools/task-update.js'
@@ -178,6 +179,53 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+describe('runtime event envelope', () => {
+  it('records turn and tool item lifecycle events in the conversation runtime log', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Call the probe tool and then report completion.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'ProbeTool',
+      description: 'runtime event probe',
+      async execute(input: any) {
+        return { output: `probe:${String(input['value'] ?? '')}`, isError: false }
+      },
+    })
+
+    const responses = [
+      toolUseResponse('ProbeTool', 'probe-tool-1', { value: 'ok' }),
+      textResponse('Probe complete.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 3,
+    })
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    expect(result.stopReason).toBe('end_turn')
+    expect(events.map((event) => event.kind)).toEqual([
+      'turn_started',
+      'item_started',
+      'item_completed',
+      'turn_completed',
+    ])
+    expect(events[1]).toMatchObject({
+      kind: 'item_started',
+      itemId: 'probe-tool-1',
+      payload: { tool_name: 'ProbeTool' },
+    })
+    expect(events[2]).toMatchObject({
+      kind: 'item_completed',
+      itemId: 'probe-tool-1',
+      payload: { tool_name: 'ProbeTool', is_error: false },
+    })
+  })
+})
+
 describe('native conversation free-mode long task loop policy', () => {
   beforeEach(() => {
     delete process.env['OWLCODA_AGENTIC_MODE']
@@ -313,7 +361,7 @@ describe('native conversation free-mode long task loop policy', () => {
       'curl -fsS http://127.0.0.1:8001/mes/health',
       'docker compose -f deploy/p0.yml restart middleware',
       'docker compose ps --format json',
-      "grep MES_CLIENT_KEY /home/publicuser/sieracMes-AI/deploy/env/mes.env",
+      "grep MES_CLIENT_KEY /home/sieracclaw/sieracMes-AI/deploy/env/mes.env",
       'docker compose -f deploy/p0.yml exec middleware env',
       'curl -fsS http://127.0.0.1:8001/mes/admin/stats -H "X-MES-Client-Key: ..."',
       'docker compose -f deploy/p0.yml stop middleware',
@@ -1283,6 +1331,64 @@ describe('native conversation tool loop guard default (cost-burn protection)', (
     expect(executions).toBeLessThanOrEqual(2)
   })
 
+  it('does not stop sleep/bash polling when monitor output shows monotonic progress', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Monitor a long-running QA generation job until the shard counts grow.')
+
+    const dispatcher = new ToolDispatcher()
+    let sleeps = 0
+    let polls = 0
+    dispatcher.register({
+      name: 'Sleep',
+      description: 'test sleep',
+      async execute() {
+        sleeps += 1
+        return { output: 'Slept for 120.0s', isError: false }
+      },
+    })
+    dispatcher.register({
+      name: 'bash',
+      description: 'test bash',
+      async execute() {
+        polls += 1
+        const base = polls === 1 ? 40 : 50
+        return {
+          output: [
+            '=== 18:25:30 ===',
+            `${base + 1} /tmp/out/L0_identity_qa_shardA.jsonl`,
+            `${base + 2} /tmp/out/L0_identity_qa_shardB.jsonl`,
+            `${base + 3} /tmp/out/L0_identity_qa_shardC.jsonl`,
+            `${base + 4} /tmp/out/L0_identity_qa_shardD.jsonl`,
+          ].join('\n'),
+          isError: false,
+        }
+      },
+    })
+
+    const monitorCommand = 'OUT=/tmp/out && wc -l "$OUT"/L0_identity_qa_shard{A,B,C,D}.jsonl'
+    const responses = [
+      toolUseResponse('Sleep', 'sleep-1', { durationSeconds: 120 }),
+      toolUseResponse('bash', 'poll-1', { command: monitorCommand }),
+      toolUseResponse('Sleep', 'sleep-2', { durationSeconds: 120 }),
+      toolUseResponse('bash', 'poll-2', { command: monitorCommand }),
+      toolUseResponse('Sleep', 'sleep-3', { durationSeconds: 120 }),
+      textResponse('Final report: shard counts are growing; continuing externally is safe.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const errors: string[] = []
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      callbacks: { onError(e) { errors.push(e) } },
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(errors).toEqual([])
+    expect(sleeps).toBe(3)
+    expect(polls).toBe(2)
+  })
+
   it('2026-05-28: 3 distinct sub-agent isolated failures do NOT trip same-class loop guard', async () => {
     // Hierarchical orchestrator-subagent invariant: a parent fan-outing N
     // sub-agents with different prompts and seeing M of them report
@@ -1362,6 +1468,770 @@ describe('native conversation tool loop guard default (cost-burn protection)', (
     expect(result.stopReason).toBe('end_turn')
     expect(errors).toEqual([])
     expect(result.finalText).toContain('3 of 4')
+  })
+
+  it('injects child-run synthesis checkpoint for same-turn multi-Agent timeouts', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Fan out four long child audits and report all timeouts precisely.')
+
+    const dispatcher = new ToolDispatcher()
+    let executions = 0
+    dispatcher.register({
+      name: 'Agent',
+      description: 'fake timeout sub-agent',
+      async execute(input: Record<string, unknown>) {
+        executions += 1
+        const desc = String(input['description'] ?? `D${executions}`)
+        const agentId = `agent-${desc}`
+        return {
+          output: `Agent incomplete: watchdog timeout while running ${desc}.`,
+          isError: true,
+          metadata: {
+            agentId,
+            agentType: 'general-purpose',
+            agentTimeout: true,
+            timeoutKind: 'idle',
+            subAgentIsolatedFailure: true,
+            completion_status: 'failed',
+            failureCategory: 'agent:watchdog_timeout',
+            longTaskSnapshot: {
+              longTaskId: `agent:${agentId}`,
+              source: 'agent',
+              status: 'timeout',
+              objective: desc,
+              startedAt: '2026-06-17T00:00:00.000Z',
+              updatedAt: '2026-06-17T00:10:00.000Z',
+              agentId,
+              agentType: 'general-purpose',
+              inspectCommand: `AgentRunGet agentId=${agentId}`,
+              timeoutKind: 'idle',
+              lastProgress: 'tool_start:bash',
+              outputSnippet: `timeout output for ${desc}`,
+            },
+          },
+        }
+      },
+    })
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    const responses = [
+      contentResponse([
+        { type: 'tool_use', id: 'agent-1', name: 'Agent', input: { description: 'D1', prompt: 'audit D1' } },
+        { type: 'tool_use', id: 'agent-2', name: 'Agent', input: { description: 'D2', prompt: 'audit D2' } },
+        { type: 'tool_use', id: 'agent-3', name: 'Agent', input: { description: 'D3', prompt: 'audit D3' } },
+        { type: 'tool_use', id: 'agent-4', name: 'Agent', input: { description: 'D4', prompt: 'audit D4' } },
+      ], 'tool_use'),
+      textResponse('Child-run report: agent-D1 timeout; agent-D2 timeout; agent-D3 timeout; agent-D4 timeout. Each should be inspected with AgentRunGet before retrying.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return responses.shift()!
+    })
+
+    const notices: string[] = []
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 4,
+      callbacks: {
+        onNotice(message) {
+          notices.push(message)
+        },
+      },
+    })
+
+    expect(executions).toBe(4)
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('agent-D4 timeout')
+    expect(notices.some((n) => /^Child-run synthesis checkpoint:/.test(n))).toBe(true)
+
+    const checkpointMessages = requestBodies[1]?.['messages'] as Array<Record<string, unknown>>
+    const checkpointText = JSON.stringify(checkpointMessages).replace(/\\"/g, '"')
+    expect(checkpointText).toContain('[Runtime child-run synthesis checkpoint]')
+    expect(checkpointText).toContain('"kind": "child_run_synthesis_checkpoint"')
+    expect(checkpointText).toContain('"child_count": 4')
+    expect(checkpointText).toContain('"agent_id": "agent-D1"')
+    expect(checkpointText).toContain('"inspect_command": "AgentRunGet agentId=agent-D4"')
+    expect(checkpointText).toContain('Your next reply MUST be plain text')
+  })
+
+  it('records child-run synthesis checkpoint payload in the runtime recovery ledger', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Fan out two long child audits and preserve their recovery points.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'Agent',
+      description: 'fake timeout sub-agent',
+      async execute(input: Record<string, unknown>) {
+        const desc = String(input['description'] ?? 'child')
+        const agentId = `agent-${desc}`
+        return {
+          output: `Agent incomplete: watchdog timeout while running ${desc}.`,
+          isError: true,
+          metadata: {
+            agentId,
+            agentTimeout: true,
+            timeoutKind: 'max_runtime',
+            subAgentIsolatedFailure: true,
+            completion_status: 'failed',
+            failureCategory: 'agent:watchdog_timeout',
+            longTaskSnapshot: {
+              longTaskId: `agent:${agentId}`,
+              source: 'agent',
+              status: 'timeout',
+              objective: desc,
+              startedAt: '2026-06-17T00:00:00.000Z',
+              updatedAt: '2026-06-17T00:10:00.000Z',
+              agentId,
+              inspectCommand: `AgentRunGet agentId=${agentId}`,
+              timeoutKind: 'max_runtime',
+            },
+          },
+        }
+      },
+    })
+
+    const responses = [
+      contentResponse([
+        { type: 'tool_use', id: 'agent-1', name: 'Agent', input: { description: 'D1', prompt: 'audit D1' } },
+        { type: 'tool_use', id: 'agent-2', name: 'Agent', input: { description: 'D2', prompt: 'audit D2' } },
+      ], 'tool_use'),
+      textResponse('Child-run report: agent-D1 timeout; agent-D2 timeout.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 4,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    const ledger = (conv.options as any)?.runtimeRecoveryLedger
+    expect(ledger?.checkpoints).toHaveLength(1)
+    expect(ledger.checkpoints[0].kind).toBe('child_run_synthesis_checkpoint')
+    expect(ledger.checkpoints[0].inspectCommands).toEqual([
+      'AgentRunGet agentId=agent-D1',
+      'AgentRunGet agentId=agent-D2',
+    ])
+    expect(ledger.checkpoints[0].payload.child_count).toBe(2)
+  })
+
+  it('resolves child-run synthesis checkpoint after the required text-only report', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Fan out two long child audits and then report each child precisely.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'Agent',
+      description: 'fake timeout sub-agent',
+      async execute(input: Record<string, unknown>) {
+        const desc = String(input['description'] ?? 'child')
+        const agentId = `agent-${desc}`
+        return {
+          output: `Agent incomplete: watchdog timeout while running ${desc}.`,
+          isError: true,
+          metadata: {
+            agentId,
+            agentTimeout: true,
+            timeoutKind: 'idle',
+            subAgentIsolatedFailure: true,
+            completion_status: 'failed',
+            failureCategory: 'agent:watchdog_timeout',
+            longTaskSnapshot: {
+              longTaskId: `agent:${agentId}`,
+              source: 'agent',
+              status: 'timeout',
+              objective: desc,
+              startedAt: '2026-06-17T00:00:00.000Z',
+              updatedAt: '2026-06-17T00:10:00.000Z',
+              agentId,
+              inspectCommand: `AgentRunGet agentId=${agentId}`,
+              timeoutKind: 'idle',
+            },
+          },
+        }
+      },
+    })
+
+    const responses = [
+      contentResponse([
+        { type: 'tool_use', id: 'agent-1', name: 'Agent', input: { description: 'D1', prompt: 'audit D1' } },
+        { type: 'tool_use', id: 'agent-2', name: 'Agent', input: { description: 'D2', prompt: 'audit D2' } },
+      ], 'tool_use'),
+      textResponse('agent-D1 status=timeout failure_category=agent:watchdog_timeout inspect=AgentRunGet agentId=agent-D1 next=retry narrower. agent-D2 status=timeout failure_category=agent:watchdog_timeout inspect=AgentRunGet agentId=agent-D2 next=retry narrower.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 4,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.kind).toBe('child_run_synthesis_checkpoint')
+    expect(checkpoint?.disposition).toBe('resolved')
+    expect(checkpoint?.dispositionReason).toContain('child-run synthesis report')
+  })
+
+  it('injects persisted runtime recovery ledger on a resumed user turn', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-17T00:00:01.000Z',
+        checkpoints: [{
+          id: 'blocked_task_checkpoint-1',
+          kind: 'blocked_task_checkpoint',
+          generatedAt: '2026-06-17T00:00:01.000Z',
+          conversationId: conv.id,
+          inspectCommands: ['TaskGet taskId=task-1'],
+          payload: {
+            schema_version: 1,
+            kind: 'blocked_task_checkpoint',
+            generated_at: '2026-06-17T00:00:01.000Z',
+            blocked_task: {
+              task_id: 'task-1',
+              step_id: 'prove-ledger',
+              status: 'blocked',
+              inspect_command: 'TaskGet taskId=task-1',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'continue from the saved checkpoint')
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return textResponse('Recovered from runtime ledger.')
+    })
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    const firstRequestText = JSON.stringify(requestBodies[0]?.['messages']).replace(/\\"/g, '"')
+    expect(firstRequestText).toContain('[Runtime recovery ledger]')
+    expect(firstRequestText).toContain('"kind": "runtime_recovery_ledger"')
+    expect(firstRequestText).toContain('"kind": "blocked_task_checkpoint"')
+    expect(firstRequestText).toContain('"inspectCommands"')
+    expect(firstRequestText).toContain('"TaskGet taskId=task-1"')
+    expect((conv.options as any)?.runtimeRecoveryLedger?.lastPromptedAt).toBe('2026-06-17T00:00:01.000Z')
+  })
+
+  it('does not add task-step execution pressure after a text-only recovery-ledger audit', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Create /tmp/owlcoda-dogfood-resume-ledger-missing.md after the blocked checkpoint is resolved.')
+    const taskState = ensureTaskExecutionState(conv)
+    conv.turns.push({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Blocked report from the previous run.' }],
+      timestamp: Date.now(),
+    })
+    ;(conv as any).options = {
+      ...(conv as any).options,
+      taskState,
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-17T00:00:01.000Z',
+        checkpoints: [{
+          id: 'blocked_task_checkpoint-1',
+          kind: 'blocked_task_checkpoint',
+          generatedAt: '2026-06-17T00:00:01.000Z',
+          conversationId: conv.id,
+          inspectCommands: ['TaskGet taskId=task-1'],
+          payload: {
+            schema_version: 1,
+            kind: 'blocked_task_checkpoint',
+            generated_at: '2026-06-17T00:00:01.000Z',
+            blocked_task: {
+              task_id: 'task-1',
+              step_id: 'prove-ledger',
+              status: 'blocked',
+              inspect_command: 'TaskGet taskId=task-1',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Read-only audit only. Do not use tools or create files; quote the recovery ledger fields.')
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return textResponse('The Runtime recovery ledger is visible: blocked_task_checkpoint task-1 prove-ledger TaskGet taskId=task-1.')
+    })
+
+    const notices: string[] = []
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+      callbacks: {
+        onNotice(message) {
+          notices.push(message)
+        },
+      },
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(requestBodies).toHaveLength(1)
+    expect(notices.some((notice) => /Task-step nudge/.test(notice))).toBe(false)
+  })
+
+  it('passes the current runtime recovery ledger into RuntimeRecovery inspect tools', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-17T00:00:01.000Z',
+        checkpoints: [{
+          id: 'blocked_task_checkpoint-1',
+          kind: 'blocked_task_checkpoint',
+          generatedAt: '2026-06-17T00:00:01.000Z',
+          conversationId: conv.id,
+          inspectCommands: ['TaskGet taskId=task-1'],
+          payload: {
+            schema_version: 1,
+            kind: 'blocked_task_checkpoint',
+            blocked_task: {
+              task_id: 'task-1',
+              step_id: 'prove-runtime-recovery-get',
+              status: 'blocked',
+              inspect_command: 'TaskGet taskId=task-1',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Use RuntimeRecoveryList and RuntimeRecoveryGet to inspect the saved checkpoint.')
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    const responses = [
+      toolUseResponse('RuntimeRecoveryList', 'tool-list', {}),
+      toolUseResponse('RuntimeRecoveryGet', 'tool-get', { checkpointId: 'blocked_task_checkpoint-1' }),
+      textResponse('RuntimeRecoveryGet confirmed blocked_task_checkpoint task-1 prove-runtime-recovery-get TaskGet taskId=task-1.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return responses.shift()!
+    })
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 4,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('blocked_task_checkpoint')
+    expect(JSON.stringify(requestBodies[1]?.['messages']).replace(/\\"/g, '"')).toContain('blocked_task_checkpoint-1')
+    expect(JSON.stringify(requestBodies[2]?.['messages']).replace(/\\"/g, '"')).toContain('"task_id": "task-1"')
+  })
+
+  it('injects a mixed-source long-task synthesis checkpoint on resume and hard-stops ignored tool use', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-17T01:00:00.000Z',
+        checkpoints: [{
+          id: 'long_task_checkpoint-1',
+          kind: 'long_task_checkpoint',
+          generatedAt: '2026-06-17T00:50:00.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['TaskOutput task_id=task-1 block=false'],
+          payload: {
+            schema_version: 1,
+            kind: 'long_task_checkpoint',
+            generated_at: '2026-06-17T00:50:00.000Z',
+            long_tasks: [{
+              long_task_id: 'task:task-1',
+              source: 'task_command',
+              status: 'incomplete',
+              objective: 'detached command',
+              started_at: '2026-06-17T00:00:00.000Z',
+              updated_at: '2026-06-17T00:50:00.000Z',
+              inspect_command: 'TaskOutput task_id=task-1 block=false',
+              timeout_kind: 'process_handle_missing_after_resume',
+            }],
+          },
+        }, {
+          id: 'child_run_synthesis_checkpoint-2',
+          kind: 'child_run_synthesis_checkpoint',
+          generatedAt: '2026-06-17T00:55:00.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['AgentRunGet agentId=agent-D1'],
+          payload: {
+            schema_version: 1,
+            kind: 'child_run_synthesis_checkpoint',
+            generated_at: '2026-06-17T00:55:00.000Z',
+            child_count: 1,
+            children: [{
+              agent_id: 'agent-D1',
+              status: 'timeout',
+              failure_category: 'agent:watchdog_timeout',
+              timeout_kind: 'watchdog_timeout',
+              inspect_command: 'AgentRunGet agentId=agent-D1',
+            }],
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Resume and synthesize the mixed long-task recovery state.')
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    const responses = [
+      toolUseResponse('RuntimeRecoveryList', 'tool-list-after-synthesis', {}),
+      textResponse('I should not get here after ignoring the synthesis gate.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return responses.shift()!
+    })
+
+    const errors: string[] = []
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 3,
+      callbacks: {
+        onError(message) {
+          errors.push(message)
+        },
+      },
+    })
+
+    const firstRequestText = JSON.stringify(requestBodies[0]?.['messages']).replace(/\\"/g, '"')
+    const synthesis = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints
+      ?.find((checkpoint: any) => checkpoint.kind === 'long_task_synthesis_checkpoint')
+
+    expect(firstRequestText).toContain('[Runtime long-task synthesis checkpoint]')
+    expect(firstRequestText).toContain('task:task-1')
+    expect(firstRequestText).toContain('agent:agent-D1')
+    expect(synthesis?.disposition).toBe('active')
+    expect(result.stopReason).toBe('tool_loop')
+    expect(errors.some((message) => message.includes('ignored the long-task synthesis checkpoint'))).toBe(true)
+  })
+
+  it('resolves mixed-source long-task synthesis and source checkpoints after a complete text report', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-17T01:10:00.000Z',
+        checkpoints: [{
+          id: 'long_task_checkpoint-1',
+          kind: 'long_task_checkpoint',
+          generatedAt: '2026-06-17T01:00:00.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['TaskOutput task_id=task-1 block=false'],
+          payload: {
+            schema_version: 1,
+            kind: 'long_task_checkpoint',
+            generated_at: '2026-06-17T01:00:00.000Z',
+            long_tasks: [{
+              long_task_id: 'task:task-1',
+              source: 'task_command',
+              status: 'incomplete',
+              objective: 'detached command',
+              started_at: '2026-06-17T00:00:00.000Z',
+              updated_at: '2026-06-17T01:00:00.000Z',
+              inspect_command: 'TaskOutput task_id=task-1 block=false',
+            }],
+          },
+        }, {
+          id: 'child_run_synthesis_checkpoint-2',
+          kind: 'child_run_synthesis_checkpoint',
+          generatedAt: '2026-06-17T01:05:00.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['AgentRunGet agentId=agent-D1'],
+          payload: {
+            schema_version: 1,
+            kind: 'child_run_synthesis_checkpoint',
+            generated_at: '2026-06-17T01:05:00.000Z',
+            child_count: 1,
+            children: [{
+              agent_id: 'agent-D1',
+              status: 'timeout',
+              failure_category: 'agent:watchdog_timeout',
+              inspect_command: 'AgentRunGet agentId=agent-D1',
+            }],
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Resume and synthesize mixed long-task recovery.')
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return textResponse('task:task-1 source=task_command status=incomplete evidence=no live process handle inspect_command=TaskOutput task_id=task-1 block=false next_action=rerun or replace command. agent:agent-D1 status=timeout failure_category=agent:watchdog_timeout inspect_command=AgentRunGet agentId=agent-D1 next_action=retry narrower.')
+    })
+
+    const first = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(first.stopReason).toBe('end_turn')
+    expect(JSON.stringify(requestBodies[0]?.['messages']).replace(/\\"/g, '"')).toContain('[Runtime long-task synthesis checkpoint]')
+    const checkpoints = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints ?? []
+    const dispositions = Object.fromEntries(checkpoints.map((checkpoint: any) => [checkpoint.kind, checkpoint.disposition]))
+    expect(dispositions.long_task_checkpoint).toBe('resolved')
+    expect(dispositions.child_run_synthesis_checkpoint).toBe('resolved')
+    expect(dispositions.long_task_synthesis_checkpoint).toBe('resolved')
+
+    addUserMessage(conv, 'Resume again after the mixed synthesis report.')
+    const secondRequestBodies: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      secondRequestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return textResponse('No unresolved mixed-source long-task checkpoints remain.')
+    })
+
+    const second = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(second.stopReason).toBe('end_turn')
+    expect(JSON.stringify(secondRequestBodies[0]?.['messages']).replace(/\\"/g, '"')).not.toContain('[Runtime recovery ledger]')
+    expect(JSON.stringify(secondRequestBodies[0]?.['messages']).replace(/\\"/g, '"')).not.toContain('[Runtime long-task synthesis checkpoint]')
+  })
+
+  it('resolves a blocked-task recovery checkpoint after the matching task step completes', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-17T00:00:01.000Z',
+        checkpoints: [{
+          id: 'blocked_task_checkpoint-1',
+          kind: 'blocked_task_checkpoint',
+          generatedAt: '2026-06-17T00:00:01.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['TaskGet taskId=task-1'],
+          payload: {
+            schema_version: 1,
+            kind: 'blocked_task_checkpoint',
+            blocked_task: {
+              task_id: 'task-1',
+              step_id: 'prove-ledger',
+              status: 'blocked',
+              inspect_command: 'TaskGet taskId=task-1',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Mark the recovered task step completed.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'TaskUpdate',
+      description: 'test task update',
+      async execute() {
+        return {
+          output: 'Updated task task-1 step prove-ledger: status=completed',
+          isError: false,
+          metadata: {
+            stepUpdate: true,
+            task: { id: 'task-1' },
+            step: { id: 'prove-ledger', status: 'completed' },
+          },
+        }
+      },
+    })
+
+    const firstResponses = [
+      toolUseResponse('TaskUpdate', 'tool-update', {
+        taskId: 'task-1',
+        stepId: 'prove-ledger',
+        stepStatus: 'completed',
+      }),
+      textResponse('Recovered step task-1/prove-ledger is completed.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => firstResponses.shift()!)
+
+    const first = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 3,
+    })
+
+    expect(first.stopReason).toBe('end_turn')
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.disposition).toBe('resolved')
+    expect(checkpoint?.dispositionReason).toContain('task-1')
+
+    addUserMessage(conv, 'Resume after the task step is completed.')
+    const requestBodies: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return textResponse('No unresolved recovery checkpoints remain.')
+    })
+
+    const second = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(second.stopReason).toBe('end_turn')
+    expect(JSON.stringify(requestBodies[0]?.['messages']).replace(/\\"/g, '"')).not.toContain('[Runtime recovery ledger]')
+  })
+
+  it('resolves a resumed child-run checkpoint after a complete text report so later resumes stay quiet', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-17T00:10:00.000Z',
+        checkpoints: [{
+          id: 'child_run_synthesis_checkpoint-1',
+          kind: 'child_run_synthesis_checkpoint',
+          generatedAt: '2026-06-17T00:10:00.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['AgentRunGet agentId=agent-D1', 'AgentRunGet agentId=agent-D2'],
+          payload: {
+            schema_version: 1,
+            kind: 'child_run_synthesis_checkpoint',
+            generated_at: '2026-06-17T00:10:00.000Z',
+            child_count: 2,
+            children: [{
+              agent_id: 'agent-D1',
+              status: 'timeout',
+              failure_category: 'agent:watchdog_timeout',
+              inspect_command: 'AgentRunGet agentId=agent-D1',
+            }, {
+              agent_id: 'agent-D2',
+              status: 'timeout',
+              failure_category: 'agent:watchdog_timeout',
+              inspect_command: 'AgentRunGet agentId=agent-D2',
+            }],
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Resume and report the child-run synthesis checkpoint.')
+
+    const firstRequestBodies: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      firstRequestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return textResponse('agent-D1 status=timeout failure_category=agent:watchdog_timeout inspect_command=AgentRunGet agentId=agent-D1 next_action=retry narrower. agent-D2 status=timeout failure_category=agent:watchdog_timeout inspect_command=AgentRunGet agentId=agent-D2 next_action=retry narrower.')
+    })
+
+    const first = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(first.stopReason).toBe('end_turn')
+    expect(JSON.stringify(firstRequestBodies[0]?.['messages']).replace(/\\"/g, '"')).toContain('[Runtime recovery ledger]')
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.disposition).toBe('resolved')
+
+    addUserMessage(conv, 'Resume again after the child synthesis report.')
+    const secondRequestBodies: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      secondRequestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return textResponse('No unresolved child-run checkpoints remain.')
+    })
+
+    const second = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(second.stopReason).toBe('end_turn')
+    expect(JSON.stringify(secondRequestBodies[0]?.['messages']).replace(/\\"/g, '"')).not.toContain('[Runtime recovery ledger]')
+  })
+
+  it('hard-stops when the model ignores child-run synthesis and keeps calling tools', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Fan out four long child audits and do not hide failed children.')
+
+    const dispatcher = new ToolDispatcher()
+    let executions = 0
+    dispatcher.register({
+      name: 'Agent',
+      description: 'fake timeout sub-agent',
+      async execute(input: Record<string, unknown>) {
+        executions += 1
+        const desc = String(input['description'] ?? `D${executions}`)
+        const agentId = `agent-${desc}`
+        return {
+          output: `Agent incomplete: watchdog timeout while running ${desc}.`,
+          isError: true,
+          metadata: {
+            agentId,
+            agentType: 'general-purpose',
+            agentTimeout: true,
+            timeoutKind: 'idle',
+            subAgentIsolatedFailure: true,
+            completion_status: 'failed',
+            failureCategory: 'agent:watchdog_timeout',
+            longTaskSnapshot: {
+              longTaskId: `agent:${agentId}`,
+              source: 'agent',
+              status: 'timeout',
+              objective: desc,
+              startedAt: '2026-06-17T00:00:00.000Z',
+              updatedAt: '2026-06-17T00:10:00.000Z',
+              agentId,
+              agentType: 'general-purpose',
+              inspectCommand: `AgentRunGet agentId=${agentId}`,
+            },
+          },
+        }
+      },
+    })
+
+    const responses = [
+      contentResponse([
+        { type: 'tool_use', id: 'agent-1', name: 'Agent', input: { description: 'D1', prompt: 'audit D1' } },
+        { type: 'tool_use', id: 'agent-2', name: 'Agent', input: { description: 'D2', prompt: 'audit D2' } },
+        { type: 'tool_use', id: 'agent-3', name: 'Agent', input: { description: 'D3', prompt: 'audit D3' } },
+        { type: 'tool_use', id: 'agent-4', name: 'Agent', input: { description: 'D4', prompt: 'audit D4' } },
+      ], 'tool_use'),
+      toolUseResponse('Agent', 'agent-5', { description: 'D5', prompt: 'retry without summarizing' }),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const errors: string[] = []
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 4,
+      callbacks: {
+        onError(message) {
+          errors.push(message)
+        },
+      },
+    })
+
+    expect(executions).toBe(4)
+    expect(result.stopReason).toBe('tool_loop')
+    expect(errors.some((message) => message.includes('ignored the child-run synthesis checkpoint'))).toBe(true)
+    expect(JSON.stringify(conv.turns)).not.toContain('agent-5')
   })
 
   it('2026-05-28: parent re-issuing the SAME Agent prompt 3x still trips loop guard (intentKey-based)', async () => {
@@ -1831,6 +2701,852 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
       )
     )
     expect(sawIntercept).toBe(true)
+  })
+
+  it('turns repeated sleep/bash monitoring into a long-task checkpoint prompt', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Keep monitoring the four long-running shard jobs until they finish')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'Sleep',
+      description: 'fast test sleep',
+      async execute(_input: any) {
+        return { output: 'Slept for 120.0s', isError: false }
+      },
+    })
+    dispatcher.register({
+      name: 'bash',
+      description: 'fast test bash',
+      async execute(_input: any) {
+        return { output: '243 QA, 4 processes active, shards still growing', isError: false }
+      },
+    })
+
+    const responses = [
+      toolUseResponse('Sleep', 'tool-1', { durationSeconds: 120 }),
+      toolUseResponse('bash', 'tool-2', { command: 'wc -l "$OUT"/L0_identity_qa_shard*.jsonl && pgrep -f gen_l0_identity' }),
+      toolUseResponse('Sleep', 'tool-3', { durationSeconds: 120 }),
+      toolUseResponse('bash', 'tool-4', { command: 'wc -l "$OUT"/L0_identity_qa_shard*.jsonl && pgrep -f gen_l0_identity' }),
+      toolUseResponse('Sleep', 'tool-5', { durationSeconds: 120 }),
+      textResponse('Checkpoint: 243 QA, 4 processes active. Stop polling and resume with the recorded command later.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const notices: string[] = []
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      callbacks: { onNotice(n) { notices.push(n) } },
+    })
+
+    expect(notices.some((n) => /Loop intercept \(checkpoint\)/.test(n))).toBe(true)
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('Checkpoint')
+
+    const interceptBlock = conv.turns
+      .flatMap((turn) => turn.role === 'user' ? turn.content : [])
+      .find((b: any) => b?.type === 'tool_result' && /Runtime long-task checkpoint/.test(String(b?.content ?? ''))) as any
+    expect(interceptBlock).toBeTruthy()
+    expect(interceptBlock.content).toContain('Do not keep polling')
+    expect(interceptBlock.content).toContain('inspection or verification command')
+    expect(interceptBlock.content).not.toContain('resume command')
+  })
+
+  it('includes runtime long-task snapshots in the long-task checkpoint prompt', async () => {
+    resetTaskStore()
+    try {
+      const conv = createConversation({ system: 'test', model: 'test-model' })
+      addUserMessage(conv, 'Start a shard generator and monitor it without losing the lifecycle state')
+
+      const dispatcher = new ToolDispatcher()
+      dispatcher.register({
+        name: 'Sleep',
+        description: 'fast test sleep',
+        async execute(_input: any) {
+          return { output: 'Slept for 120.0s', isError: false }
+        },
+      })
+      dispatcher.register({
+        name: 'bash',
+        description: 'fast test bash',
+        async execute(_input: any) {
+          return { output: 'still running; no new shard count yet', isError: false }
+        },
+      })
+
+      const responses = [
+        toolUseResponse('TaskCreate', 'task-create-1', {
+          subject: 'shard generator',
+          description: 'Generate QA shards',
+          command: 'sleep 5; echo done',
+        }),
+        toolUseResponse('Sleep', 'sleep-1', { durationSeconds: 120 }),
+        toolUseResponse('bash', 'poll-1', { command: 'wc -l "$OUT"/L0_identity_qa_shard*.jsonl' }),
+        toolUseResponse('Sleep', 'sleep-2', { durationSeconds: 120 }),
+        toolUseResponse('bash', 'poll-2', { command: 'pgrep -f gen_l0_identity && wc -l "$OUT"/L0_identity_qa_shard*.jsonl' }),
+        toolUseResponse('Sleep', 'sleep-3', { durationSeconds: 120 }),
+        textResponse('Checkpoint: task-1 is still running; inspect it with TaskOutput before deciding what to do next.'),
+      ]
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+      const notices: string[] = []
+      const result = await runConversationLoop(conv, dispatcher, {
+        apiBaseUrl: 'http://localhost:0',
+        apiKey: 'test',
+        callbacks: { onNotice(n) { notices.push(n) } },
+      })
+
+      expect(notices.some((n) => /Loop intercept \(checkpoint\)/.test(n))).toBe(true)
+      expect(result.stopReason).toBe('end_turn')
+
+      const interceptBlock = conv.turns
+        .flatMap((turn) => turn.role === 'user' ? turn.content : [])
+        .find((b: any) => b?.type === 'tool_result' && /Runtime long-task checkpoint/.test(String(b?.content ?? ''))) as any
+      expect(interceptBlock).toBeTruthy()
+      expect(interceptBlock.content).toContain('Runtime long-task snapshots')
+      expect(interceptBlock.content).toContain('task:task-1')
+      expect(interceptBlock.content).toContain('status=running')
+      expect(interceptBlock.content).toContain('sleep 5; echo done')
+      expect(interceptBlock.content).toContain('TaskOutput')
+      expect(interceptBlock.content).toContain('Runtime long-task checkpoint payload')
+      expect(interceptBlock.content).toContain('"kind": "long_task_checkpoint"')
+      expect(interceptBlock.content).toContain('"long_task_id": "task:task-1"')
+      expect(interceptBlock.content).toContain('"inspect_command": "TaskOutput task_id=task-1 block=false"')
+    } finally {
+      resetTaskStore()
+    }
+  }, 10000)
+
+  it('records long-task checkpoint payload in the runtime recovery ledger', async () => {
+    resetTaskStore()
+    resetLongTaskLifecycleForTesting()
+    try {
+      const conv = createConversation({ system: 'test', model: 'test-model' })
+      addUserMessage(conv, 'Start a long-running task and preserve a durable checkpoint.')
+
+      const dispatcher = new ToolDispatcher()
+      dispatcher.register({
+        name: 'Sleep',
+        description: 'fast test sleep',
+        async execute(_input: any) {
+          return { output: 'Slept for 120.0s', isError: false }
+        },
+      })
+      dispatcher.register({
+        name: 'bash',
+        description: 'fast test bash',
+        async execute(_input: any) {
+          return { output: 'still running; no new shard count yet', isError: false }
+        },
+      })
+
+      const responses = [
+        toolUseResponse('TaskCreate', 'task-create-1', {
+          subject: 'durable shard generator',
+          description: 'Generate durable QA shards',
+          command: 'sleep 5; echo durable',
+        }),
+        toolUseResponse('Sleep', 'sleep-1', { durationSeconds: 120 }),
+        toolUseResponse('bash', 'poll-1', { command: 'wc -l "$OUT"/durable_qa_shard*.jsonl' }),
+        toolUseResponse('Sleep', 'sleep-2', { durationSeconds: 120 }),
+        toolUseResponse('bash', 'poll-2', { command: 'pgrep -f durable_qa_shard && wc -l "$OUT"/durable_qa_shard*.jsonl' }),
+        toolUseResponse('Sleep', 'sleep-3', { durationSeconds: 120 }),
+        textResponse('Checkpoint: task-1 is still running.'),
+      ]
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+      const result = await runConversationLoop(conv, dispatcher, {
+        apiBaseUrl: 'http://localhost:0',
+        apiKey: 'test',
+      })
+
+      expect(result.stopReason).toBe('end_turn')
+      const ledger = (conv.options as any)?.runtimeRecoveryLedger
+      expect(ledger?.checkpoints).toHaveLength(1)
+      expect(ledger.checkpoints[0].kind).toBe('long_task_checkpoint')
+      expect(ledger.checkpoints[0].inspectCommands).toEqual([
+        'TaskOutput task_id=task-1 block=false',
+      ])
+      expect(ledger.checkpoints[0].payload.long_tasks[0].long_task_id).toBe('task:task-1')
+    } finally {
+      resetTaskStore()
+      resetLongTaskLifecycleForTesting()
+    }
+  }, 10000)
+
+  it('records a durable replacement checkpoint when LongTaskReplace starts a replacement', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Replace the restored lost-handle long task and preserve recovery accounting.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'LongTaskReplace',
+      description: 'fake replacement starter',
+      async execute(_input: any) {
+        return {
+          output: [
+            'LongTaskReplace: started replacement',
+            'original_long_task_id=task:task-1',
+            'replacement_long_task_id=task:task-2',
+            'replacement_task_id=task-2',
+          ].join('\n'),
+          isError: false,
+          metadata: {
+            replacement_status: 'started',
+            original_long_task_id: 'task:task-1',
+            replacement_long_task_id: 'task:task-2',
+            replacement_task_id: 'task-2',
+            replacement_reason: 'process handle missing after resume',
+            command: 'echo replacement-evidence',
+            cwd: '/tmp',
+            original_long_task_snapshot: {
+              longTaskId: 'task:task-1',
+              source: 'task_command',
+              status: 'incomplete',
+              objective: 'Original detached command',
+              startedAt: '2026-06-18T00:00:00.000Z',
+              updatedAt: '2026-06-18T00:10:00.000Z',
+              inspectCommand: 'LongTaskGet longTaskId=task:task-1',
+              timeoutKind: 'process_handle_missing_after_resume',
+            },
+            longTaskSnapshot: {
+              longTaskId: 'task:task-2',
+              source: 'task_command',
+              status: 'running',
+              objective: 'Replacement command',
+              startedAt: '2026-06-18T00:10:01.000Z',
+              updatedAt: '2026-06-18T00:10:01.000Z',
+              inspectCommand: 'TaskOutput task_id=task-2 block=false',
+            },
+          },
+        }
+      },
+    })
+
+    const responses = [
+      toolUseResponse('LongTaskReplace', 'replace-1', { longTaskId: 'task:task-1' }),
+      textResponse('Replacement checkpoint recorded; inspect replacement task before claiming completion.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 3,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.kind).toBe('long_task_replacement_checkpoint')
+    expect(checkpoint?.disposition).toBe('active')
+    expect(checkpoint?.inspectCommands).toEqual([
+      'LongTaskGet longTaskId=task:task-1',
+      'LongTaskGet longTaskId=task:task-2',
+      'TaskOutput task_id=task-2 block=false',
+    ])
+    expect(checkpoint?.payload.replacement).toMatchObject({
+      original_long_task_id: 'task:task-1',
+      replacement_long_task_id: 'task:task-2',
+      replacement_task_id: 'task-2',
+      status: 'started',
+      command: 'echo replacement-evidence',
+      cwd: '/tmp',
+      inspect_command: 'LongTaskGet longTaskId=task:task-2',
+      output_command: 'TaskOutput task_id=task-2 block=false',
+    })
+  })
+
+  it('lets same-batch RuntimeRecoveryList see a just-created replacement checkpoint', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Replace a lost long task and immediately inspect the recovery ledger.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'LongTaskReplace',
+      description: 'fake replacement starter',
+      async execute(_input: any) {
+        return {
+          output: 'LongTaskReplace: started replacement',
+          isError: false,
+          metadata: {
+            replacement_status: 'started',
+            original_long_task_id: 'task:task-1',
+            replacement_long_task_id: 'task:task-2',
+            replacement_task_id: 'task-2',
+            command: 'echo replacement-evidence',
+            original_long_task_snapshot: {
+              longTaskId: 'task:task-1',
+              source: 'task_command',
+              status: 'incomplete',
+              objective: 'Original detached command',
+              inspectCommand: 'LongTaskGet longTaskId=task:task-1',
+            },
+          },
+        }
+      },
+    })
+    dispatcher.register({
+      name: 'RuntimeRecoveryList',
+      description: 'fake recovery list',
+      async execute(_input: any, context?: any) {
+        const checkpoints = context?.runtimeRecoveryLedger?.checkpoints ?? []
+        return {
+          output: checkpoints.map((checkpoint: any) => `${checkpoint.id} kind=${checkpoint.kind}`).join('\n')
+            || 'No unresolved runtime recovery checkpoints are available for this conversation.',
+          isError: false,
+        }
+      },
+    })
+
+    const responses = [
+      contentResponse([
+        { type: 'tool_use', id: 'replace-1', name: 'LongTaskReplace', input: { longTaskId: 'task:task-1' } },
+        { type: 'tool_use', id: 'list-1', name: 'RuntimeRecoveryList', input: {} },
+      ], 'tool_use'),
+      textResponse('Same-batch ledger inspection saw the replacement checkpoint.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 3,
+    })
+
+    const toolResultText = JSON.stringify(conv.turns).replace(/\\"/g, '"')
+    expect(result.stopReason).toBe('end_turn')
+    expect(toolResultText).toContain('long_task_replacement_checkpoint-1 kind=long_task_replacement_checkpoint')
+  })
+
+  it('resolves a replacement checkpoint when the replacement long task reaches terminal status', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-18T00:10:01.000Z',
+        checkpoints: [{
+          id: 'long_task_replacement_checkpoint-1',
+          kind: 'long_task_replacement_checkpoint',
+          generatedAt: '2026-06-18T00:10:01.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: [
+            'LongTaskGet longTaskId=task:task-2',
+            'TaskOutput task_id=task-2 block=false',
+          ],
+          payload: {
+            schema_version: 1,
+            kind: 'long_task_replacement_checkpoint',
+            replacement: {
+              original_long_task_id: 'task:task-1',
+              replacement_long_task_id: 'task:task-2',
+              replacement_task_id: 'task-2',
+              status: 'started',
+              inspect_command: 'LongTaskGet longTaskId=task:task-2',
+              output_command: 'TaskOutput task_id=task-2 block=false',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Inspect the replacement task and update recovery truth.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'TaskOutput',
+      description: 'fake terminal replacement output',
+      async execute(_input: any) {
+        return {
+          output: 'Task: task-2\nStatus: completed\n--- stdout ---\nreplacement-evidence',
+          isError: false,
+          metadata: {
+            task: {
+              task_id: 'task-2',
+              status: 'completed',
+              longTaskSnapshot: {
+                longTaskId: 'task:task-2',
+                source: 'task_command',
+                status: 'completed',
+                objective: 'Replacement command',
+                startedAt: '2026-06-18T00:10:01.000Z',
+                updatedAt: '2026-06-18T00:10:02.000Z',
+                finishedAt: '2026-06-18T00:10:02.000Z',
+                inspectCommand: 'TaskOutput task_id=task-2 block=false',
+                outputSnippet: 'stdout: replacement-evidence',
+              },
+            },
+          },
+        }
+      },
+    })
+
+    const responses = [
+      toolUseResponse('TaskOutput', 'task-output-replacement', { task_id: 'task-2', block: false }),
+      textResponse('Replacement resolved: task:task-1 was replaced by task:task-2 and stdout contains replacement-evidence.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 3,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.kind).toBe('long_task_replacement_checkpoint')
+    expect(checkpoint?.disposition).toBe('resolved')
+    expect(checkpoint?.dispositionReason).toContain('terminal replacement long-task inspect result')
+  })
+
+  it('intercepts Sleep after a surfaced runtime_await wait policy', async () => {
+    resetLongTaskLifecycleForTesting()
+    try {
+      const conv = createConversation({ system: 'test', model: 'test-model' })
+      recordLongTaskSnapshot({
+        longTaskId: 'task:task-1',
+        source: 'task_command',
+        status: 'running',
+        objective: 'Wait policy sleep proof',
+        startedAt: '2026-06-18T09:00:00.000Z',
+        conversationId: conv.id,
+        taskId: 'task-1',
+        command: 'sleep 30; echo done',
+        cwd: '/tmp',
+        inspectCommand: 'TaskOutput task_id=task-1 block=false',
+      })
+      addUserMessage(conv, 'Use the runtime wait policy for the long task.')
+
+      const dispatcher = new ToolDispatcher()
+      let sleepCalls = 0
+      dispatcher.register({
+        name: 'Sleep',
+        description: 'fast test sleep',
+        async execute(_input: any) {
+          sleepCalls += 1
+          return { output: 'Slept for 5.0s', isError: false }
+        },
+      })
+
+      const responses = [
+        toolUseResponse('LongTaskList', 'list-wait-policy', {}),
+        toolUseResponse('Sleep', 'sleep-policy-violation', { durationSeconds: 5 }),
+        textResponse('The runtime wait policy says to use LongTaskAwait, so I will report that instead of sleeping.'),
+      ]
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+      const notices: string[] = []
+      const result = await runConversationLoop(conv, dispatcher, {
+        apiBaseUrl: 'http://localhost:0',
+        apiKey: 'test',
+        callbacks: { onNotice(n) { notices.push(n) } },
+      })
+
+      const toolResultsText = JSON.stringify(conv.turns).replace(/\\"/g, '"')
+      expect(result.stopReason).toBe('end_turn')
+      expect(sleepCalls).toBe(0)
+      expect(notices.some((notice) => notice.startsWith('[long-task-wait-policy]'))).toBe(true)
+      expect(toolResultsText).toContain('[long-task-wait-policy] skipped Sleep')
+      expect(toolResultsText).toContain('task:task-1')
+      expect(toolResultsText).toContain('LongTaskAwait longTaskId=task:task-1 timeoutMs=5000')
+      expect(toolResultsText).not.toContain('Slept for 5.0s')
+    } finally {
+      resetLongTaskLifecycleForTesting()
+    }
+  })
+
+  it('intercepts blocking TaskOutput after a surfaced runtime_await wait policy', async () => {
+    resetLongTaskLifecycleForTesting()
+    try {
+      const conv = createConversation({ system: 'test', model: 'test-model' })
+      recordLongTaskSnapshot({
+        longTaskId: 'task:task-1',
+        source: 'task_command',
+        status: 'running',
+        objective: 'Wait policy TaskOutput proof',
+        startedAt: '2026-06-18T09:05:00.000Z',
+        conversationId: conv.id,
+        taskId: 'task-1',
+        command: 'sleep 30; echo done',
+        cwd: '/tmp',
+        inspectCommand: 'TaskOutput task_id=task-1 block=false',
+      })
+      addUserMessage(conv, 'Inspect long task policy, then avoid blocking output polling.')
+
+      const dispatcher = new ToolDispatcher()
+      let taskOutputCalls = 0
+      dispatcher.register({
+        name: 'TaskOutput',
+        description: 'fake blocking task output',
+        async execute(_input: any) {
+          taskOutputCalls += 1
+          return { output: 'Timeout waiting for task task-1', isError: false }
+        },
+      })
+
+      const responses = [
+        toolUseResponse('LongTaskList', 'list-wait-policy', {}),
+        toolUseResponse('TaskOutput', 'task-output-policy-violation', { task_id: 'task-1', block: true, timeout: 5000 }),
+        textResponse('The runtime wait policy says to use LongTaskAwait instead of blocking TaskOutput.'),
+      ]
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+      const result = await runConversationLoop(conv, dispatcher, {
+        apiBaseUrl: 'http://localhost:0',
+        apiKey: 'test',
+      })
+
+      const toolResultsText = JSON.stringify(conv.turns).replace(/\\"/g, '"')
+      expect(result.stopReason).toBe('end_turn')
+      expect(taskOutputCalls).toBe(0)
+      expect(toolResultsText).toContain('[long-task-wait-policy] skipped TaskOutput')
+      expect(toolResultsText).toContain('task:task-1')
+      expect(toolResultsText).toContain('LongTaskAwait longTaskId=task:task-1 timeoutMs=5000')
+      expect(toolResultsText).not.toContain('Timeout waiting for task task-1')
+    } finally {
+      resetLongTaskLifecycleForTesting()
+    }
+  })
+
+  it('resolves same-turn long-task checkpoint after the required text-only report', async () => {
+    resetTaskStore()
+    resetLongTaskLifecycleForTesting()
+    try {
+      const conv = createConversation({ system: 'test', model: 'test-model' })
+      addUserMessage(conv, 'Start a long-running task, checkpoint it, and then stop polling.')
+
+      const dispatcher = new ToolDispatcher()
+      dispatcher.register({
+        name: 'Sleep',
+        description: 'fast test sleep',
+        async execute(_input: any) {
+          return { output: 'Slept for 120.0s', isError: false }
+        },
+      })
+      dispatcher.register({
+        name: 'bash',
+        description: 'fast test bash',
+        async execute(_input: any) {
+          return { output: 'still running; no new shard count yet', isError: false }
+        },
+      })
+
+      const responses = [
+        toolUseResponse('TaskCreate', 'task-create-resolve', {
+          subject: 'resolvable shard generator',
+          description: 'Generate resolvable QA shards',
+          command: 'sleep 5; echo resolvable',
+        }),
+        toolUseResponse('Sleep', 'sleep-resolve-1', { durationSeconds: 120 }),
+        toolUseResponse('bash', 'poll-resolve-1', { command: 'wc -l "$OUT"/resolvable_qa_shard*.jsonl' }),
+        toolUseResponse('Sleep', 'sleep-resolve-2', { durationSeconds: 120 }),
+        toolUseResponse('bash', 'poll-resolve-2', { command: 'pgrep -f resolvable_qa_shard && wc -l "$OUT"/resolvable_qa_shard*.jsonl' }),
+        toolUseResponse('Sleep', 'sleep-resolve-3', { durationSeconds: 120 }),
+        textResponse('long_task_checkpoint report: task:task-1 status=running inspect_command=TaskOutput task_id=task-1 block=false next_action=resume from this checkpoint later; do not poll now.'),
+      ]
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+      const result = await runConversationLoop(conv, dispatcher, {
+        apiBaseUrl: 'http://localhost:0',
+        apiKey: 'test',
+      })
+
+      expect(result.stopReason).toBe('end_turn')
+      const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+      expect(checkpoint?.kind).toBe('long_task_checkpoint')
+      expect(checkpoint?.disposition).toBe('resolved')
+      expect(checkpoint?.dispositionReason).toContain('long-task checkpoint report')
+    } finally {
+      resetTaskStore()
+      resetLongTaskLifecycleForTesting()
+    }
+  }, 10000)
+
+  it('resolves a resumed long-task checkpoint after a complete text report so later resumes stay quiet', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-17T00:20:00.000Z',
+        checkpoints: [{
+          id: 'long_task_checkpoint-1',
+          kind: 'long_task_checkpoint',
+          generatedAt: '2026-06-17T00:20:00.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: [
+            'TaskOutput task_id=task-1 block=false',
+            'AgentRunGet agentId=agent-D1',
+          ],
+          payload: {
+            schema_version: 1,
+            kind: 'long_task_checkpoint',
+            generated_at: '2026-06-17T00:20:00.000Z',
+            long_tasks: [{
+              long_task_id: 'task:task-1',
+              source: 'task_command',
+              status: 'running',
+              objective: 'run shard generator',
+              started_at: '2026-06-17T00:00:00.000Z',
+              updated_at: '2026-06-17T00:20:00.000Z',
+              inspect_command: 'TaskOutput task_id=task-1 block=false',
+            }, {
+              long_task_id: 'agent:agent-D1',
+              source: 'agent',
+              status: 'timeout',
+              objective: 'audit D1',
+              started_at: '2026-06-17T00:00:00.000Z',
+              updated_at: '2026-06-17T00:20:00.000Z',
+              inspect_command: 'AgentRunGet agentId=agent-D1',
+            }],
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Resume and report the long-task checkpoint.')
+
+    const firstRequestBodies: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      firstRequestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return textResponse('long_task_checkpoint report: task:task-1 status=running inspect_command=TaskOutput task_id=task-1 block=false next_action=inspect once later; agent:agent-D1 status=timeout inspect_command=AgentRunGet agentId=agent-D1 next_action=retry narrower.')
+    })
+
+    const first = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(first.stopReason).toBe('end_turn')
+    expect(JSON.stringify(firstRequestBodies[0]?.['messages']).replace(/\\"/g, '"')).toContain('[Runtime recovery ledger]')
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.disposition).toBe('resolved')
+
+    addUserMessage(conv, 'Resume again after the long-task report.')
+    const secondRequestBodies: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      secondRequestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return textResponse('No unresolved long-task checkpoints remain.')
+    })
+
+    const second = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(second.stopReason).toBe('end_turn')
+    expect(JSON.stringify(secondRequestBodies[0]?.['messages']).replace(/\\"/g, '"')).not.toContain('[Runtime recovery ledger]')
+  })
+
+  it('resolves long-task checkpoint when TaskOutput inspects a terminal matching snapshot', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-17T00:30:00.000Z',
+        checkpoints: [{
+          id: 'long_task_checkpoint-1',
+          kind: 'long_task_checkpoint',
+          generatedAt: '2026-06-17T00:30:00.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['TaskOutput task_id=task-1 block=false'],
+          payload: {
+            schema_version: 1,
+            kind: 'long_task_checkpoint',
+            generated_at: '2026-06-17T00:30:00.000Z',
+            long_tasks: [{
+              long_task_id: 'task:task-1',
+              source: 'task_command',
+              status: 'running',
+              objective: 'run shard generator',
+              started_at: '2026-06-17T00:00:00.000Z',
+              updated_at: '2026-06-17T00:30:00.000Z',
+              inspect_command: 'TaskOutput task_id=task-1 block=false',
+            }],
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Inspect the long-task checkpoint and report terminal state.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'TaskOutput',
+      description: 'fake terminal task output',
+      async execute(_input: Record<string, unknown>) {
+        return {
+          output: 'Task: task-1\nStatus: completed\n--- stdout ---\ndone',
+          isError: false,
+          metadata: {
+            retrieval_status: 'success',
+            task: {
+              task_id: 'task-1',
+              status: 'completed',
+              longTaskSnapshot: {
+                longTaskId: 'task:task-1',
+                source: 'task_command',
+                status: 'completed',
+                objective: 'run shard generator',
+                startedAt: '2026-06-17T00:00:00.000Z',
+                updatedAt: '2026-06-17T00:31:00.000Z',
+                finishedAt: '2026-06-17T00:31:00.000Z',
+                taskId: 'task-1',
+                inspectCommand: 'TaskOutput task_id=task-1 block=false',
+              },
+            },
+          },
+        }
+      },
+    })
+
+    const responses = [
+      toolUseResponse('TaskOutput', 'task-output-1', { task_id: 'task-1', block: false }),
+      textResponse('task:task-1 is completed; stdout says done.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const notices: string[] = []
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 3,
+      callbacks: {
+        onNotice(n) { notices.push(n) },
+      },
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.disposition).toBe('resolved')
+    expect(checkpoint?.dispositionReason).toContain('terminal')
+    expect(notices.some((notice) => /resolved .*long-task checkpoint/.test(notice))).toBe(true)
+  })
+
+  it('does not include unrelated long-task snapshots in the checkpoint prompt', async () => {
+    resetTaskStore()
+    resetLongTaskLifecycleForTesting()
+    try {
+      recordLongTaskSnapshot({
+        longTaskId: 'task:foreign',
+        source: 'task_command',
+        status: 'running',
+        objective: 'foreign stale task',
+        startedAt: '2026-06-17T00:00:00.000Z',
+        updatedAt: '2026-06-17T00:00:00.000Z',
+        taskId: 'foreign',
+        command: 'sleep 999; echo foreign',
+        inspectCommand: 'TaskOutput task_id=foreign block=false',
+        conversationId: 'conv-foreign',
+      } as any)
+
+      const conv = createConversation({ system: 'test', model: 'test-model' })
+      addUserMessage(conv, 'Start the current shard generator and checkpoint only this conversation')
+
+      const dispatcher = new ToolDispatcher()
+      dispatcher.register({
+        name: 'Sleep',
+        description: 'fast test sleep',
+        async execute(_input: any) {
+          return { output: 'Slept for 120.0s', isError: false }
+        },
+      })
+      dispatcher.register({
+        name: 'bash',
+        description: 'fast test bash',
+        async execute(_input: any) {
+          return { output: 'current generator still running', isError: false }
+        },
+      })
+
+      const responses = [
+        toolUseResponse('TaskCreate', 'task-create-current', {
+          subject: 'current shard generator',
+          description: 'Generate current QA shards',
+          command: 'sleep 5; echo current',
+        }),
+        toolUseResponse('Sleep', 'sleep-current-1', { durationSeconds: 120 }),
+        toolUseResponse('bash', 'poll-current-1', { command: 'wc -l "$OUT"/current_qa_shard*.jsonl' }),
+        toolUseResponse('Sleep', 'sleep-current-2', { durationSeconds: 120 }),
+        toolUseResponse('bash', 'poll-current-2', { command: 'pgrep -f current_qa_shard && wc -l "$OUT"/current_qa_shard*.jsonl' }),
+        toolUseResponse('Sleep', 'sleep-current-3', { durationSeconds: 120 }),
+        textResponse('Checkpoint: current task is still running; no unrelated work is part of this checkpoint.'),
+      ]
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+      const result = await runConversationLoop(conv, dispatcher, {
+        apiBaseUrl: 'http://localhost:0',
+        apiKey: 'test',
+        callbacks: { onNotice() {} },
+      })
+
+      expect(result.stopReason).toBe('end_turn')
+
+      const interceptBlock = conv.turns
+        .flatMap((turn) => turn.role === 'user' ? turn.content : [])
+        .find((b: any) => b?.type === 'tool_result' && /Runtime long-task checkpoint/.test(String(b?.content ?? ''))) as any
+      expect(interceptBlock).toBeTruthy()
+      expect(interceptBlock.content).toContain('Runtime long-task snapshots')
+      expect(interceptBlock.content).toContain('task:task-1')
+      expect(interceptBlock.content).toContain('current shard generator')
+      expect(interceptBlock.content).not.toContain('task:foreign')
+      expect(interceptBlock.content).not.toContain('foreign stale task')
+      expect(interceptBlock.content).not.toContain('sleep 999; echo foreign')
+    } finally {
+      resetTaskStore()
+      resetLongTaskLifecycleForTesting()
+    }
+  }, 10000)
+
+  it('hard-stops if the model ignores a long-task checkpoint and tries another tool', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Keep monitoring long-running shard generation')
+
+    let bashExecutions = 0
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'Sleep',
+      description: 'fast test sleep',
+      async execute(_input: any) {
+        return { output: 'Slept for 120.0s', isError: false }
+      },
+    })
+    dispatcher.register({
+      name: 'bash',
+      description: 'fast test bash',
+      async execute(input: any) {
+        bashExecutions += 1
+        return { output: `poll ${bashExecutions}: ${String(input?.command ?? '')}`, isError: false }
+      },
+    })
+
+    const responses = [
+      toolUseResponse('Sleep', 'tool-1', { durationSeconds: 120 }),
+      toolUseResponse('bash', 'tool-2', { command: 'wc -l "$OUT"/L0_identity_qa_shard*.jsonl' }),
+      toolUseResponse('Sleep', 'tool-3', { durationSeconds: 120 }),
+      toolUseResponse('bash', 'tool-4', { command: 'pgrep -f gen_l0_identity && wc -l "$OUT"/L0_identity_qa_shard*.jsonl' }),
+      toolUseResponse('Sleep', 'tool-5', { durationSeconds: 120 }),
+      toolUseResponse('bash', 'tool-6', { command: 'date && tail -20 "$OUT"/shardA.log' }),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const errors: string[] = []
+    const notices: string[] = []
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      callbacks: {
+        onError(e) { errors.push(e) },
+        onNotice(n) { notices.push(n) },
+      },
+    })
+
+    expect(notices.some((n) => /Loop intercept \(checkpoint\)/.test(n))).toBe(true)
+    expect(result.stopReason).toBe('tool_loop')
+    expect(errors.at(-1)).toMatch(/ignored the long-task checkpoint/i)
+    expect(bashExecutions).toBe(2)
   })
 
   it('escalates to hard terminate on the SECOND loop trigger for the same intentKey', async () => {
@@ -2356,6 +4072,858 @@ describe('task execution nudge wiring (Slice 4)', () => {
     expect(followupText).toContain('You claimed completion')
     expect(followupText).toContain('open required steps')
     expect(followupText).toContain('Call TaskUpdate or TaskVerify')
+  })
+
+  it('injects a blocked-task checkpoint after TaskUpdate marks a step blocked', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Dogfood blocked convergence without writing files.')
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    const responses = [
+      toolUseResponse('TaskCreate', 'tool-create', {
+        subject: 'Blocked convergence',
+        description: 'Prove the runtime stops after a real blocked step.',
+        steps: [{
+          id: 'prove-guard',
+          title: 'Prove guard',
+          description: 'Run a verification check that is expected to fail.',
+          verification: [{
+            id: 'v1',
+            kind: 'file_exists',
+            path: '/tmp/owlcoda-blocked-finalization-missing.md',
+          }],
+        }],
+      }),
+      toolUseResponse('TaskUpdate', 'tool-start', {
+        taskId: 'task-1',
+        stepId: 'prove-guard',
+        stepStatus: 'in_progress',
+      }),
+      toolUseResponse('TaskVerify', 'tool-verify', {
+        taskId: 'task-1',
+        stepId: 'prove-guard',
+      }),
+      toolUseResponse('TaskUpdate', 'tool-blocked', {
+        taskId: 'task-1',
+        stepId: 'prove-guard',
+        stepStatus: 'blocked',
+        failureReason: 'file_exists check v1 failed for the intentionally missing file',
+      }),
+      textResponse('Blocked report: v1 failed because the file is missing. Resume by creating the file or changing the spec to a concrete reachable artifact.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return responses.shift()!
+    })
+
+    const notices: string[] = []
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 8,
+      callbacks: {
+        onNotice(message) {
+          notices.push(message)
+        },
+      },
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('Blocked report')
+    expect(notices.some((n) => /^Blocked-task checkpoint:/.test(n))).toBe(true)
+
+    const checkpointMessages = requestBodies[4]?.['messages'] as Array<Record<string, unknown>>
+    const checkpointText = JSON.stringify(checkpointMessages).replace(/\\"/g, '"')
+    expect(checkpointText).toContain('[Runtime blocked-task checkpoint]')
+    expect(checkpointText).toContain('Task task-1 step prove-guard is now blocked')
+    expect(checkpointText).toContain('Your next reply MUST be plain text')
+    expect(checkpointText).toContain('Do not call TaskVerify, bash, Sleep, Agent, or other tools')
+    expect(checkpointText).toContain('only allowed tool escape is TaskUpdate')
+    expect(checkpointText).toContain('[Runtime blocked-task checkpoint payload]')
+    expect(checkpointText).toContain('"kind": "blocked_task_checkpoint"')
+    expect(checkpointText).toContain('"task_id": "task-1"')
+    expect(checkpointText).toContain('"step_id": "prove-guard"')
+    expect(checkpointText).toContain('"inspect_command": "TaskGet taskId=task-1"')
+  })
+
+  it('records blocked-task checkpoint payload in the runtime recovery ledger', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Block a task step and preserve the recovery point.')
+
+    const responses = [
+      toolUseResponse('TaskCreate', 'tool-create', {
+        subject: 'Blocked recovery ledger',
+        description: 'Prove blocked recovery point persistence.',
+        steps: [{
+          id: 'prove-guard',
+          title: 'Prove guard',
+          description: 'Run a verification check that is expected to fail.',
+          verification: [{
+            id: 'v1',
+            kind: 'file_exists',
+            path: '/tmp/owlcoda-blocked-ledger-missing.md',
+          }],
+        }],
+      }),
+      toolUseResponse('TaskUpdate', 'tool-start', {
+        taskId: 'task-1',
+        stepId: 'prove-guard',
+        stepStatus: 'in_progress',
+      }),
+      toolUseResponse('TaskVerify', 'tool-verify', {
+        taskId: 'task-1',
+        stepId: 'prove-guard',
+      }),
+      toolUseResponse('TaskUpdate', 'tool-blocked', {
+        taskId: 'task-1',
+        stepId: 'prove-guard',
+        stepStatus: 'blocked',
+        failureReason: 'file_exists check v1 failed for the intentionally missing file',
+      }),
+      textResponse('Blocked report: v1 failed because the file is missing.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 8,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    const ledger = (conv.options as any)?.runtimeRecoveryLedger
+    expect(ledger?.checkpoints).toHaveLength(2)
+    expect(ledger.checkpoints[0].kind).toBe('verification_repair_checkpoint')
+    expect(ledger.checkpoints[0].disposition).toBe('resolved')
+    expect(ledger.checkpoints[1].kind).toBe('blocked_task_checkpoint')
+    expect(ledger.checkpoints[1].inspectCommands).toEqual(['TaskGet taskId=task-1'])
+    expect(ledger.checkpoints[1].payload.blocked_task).toMatchObject({
+      task_id: 'task-1',
+      step_id: 'prove-guard',
+      inspect_command: 'TaskGet taskId=task-1',
+    })
+  })
+
+  it('hard-stops when the model ignores a blocked-task checkpoint and keeps calling tools', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Dogfood blocked convergence without writing files.')
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    const responses = [
+      toolUseResponse('TaskCreate', 'tool-create', {
+        subject: 'Blocked convergence',
+        description: 'Prove the runtime stops after a real blocked step.',
+        steps: [{
+          id: 'prove-guard',
+          title: 'Prove guard',
+          description: 'Run a verification check that is expected to fail.',
+          verification: [{
+            id: 'v1',
+            kind: 'file_exists',
+            path: '/tmp/owlcoda-blocked-finalization-missing.md',
+          }],
+        }],
+      }),
+      toolUseResponse('TaskUpdate', 'tool-start', {
+        taskId: 'task-1',
+        stepId: 'prove-guard',
+        stepStatus: 'in_progress',
+      }),
+      toolUseResponse('TaskVerify', 'tool-verify', {
+        taskId: 'task-1',
+        stepId: 'prove-guard',
+      }),
+      toolUseResponse('TaskUpdate', 'tool-blocked', {
+        taskId: 'task-1',
+        stepId: 'prove-guard',
+        stepStatus: 'blocked',
+        failureReason: 'file_exists check v1 failed for the intentionally missing file',
+      }),
+      toolUseResponse('TaskVerify', 'tool-after-blocked', {
+        taskId: 'task-1',
+        stepId: 'prove-guard',
+      }),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return responses.shift()!
+    })
+
+    const errors: string[] = []
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 8,
+      callbacks: {
+        onError(message) {
+          errors.push(message)
+        },
+      },
+    })
+
+    expect(result.stopReason).toBe('tool_loop')
+    expect(errors.some((message) => message.includes('ignored the blocked-task checkpoint'))).toBe(true)
+
+    const checkpointMessages = requestBodies[4]?.['messages'] as Array<Record<string, unknown>>
+    expect(JSON.stringify(checkpointMessages)).toContain('[Runtime blocked-task checkpoint]')
+    expect(JSON.stringify(conv.turns)).not.toContain('tool-after-blocked')
+  })
+
+  it('injects a verification-repair checkpoint after TaskVerify fails', async () => {
+    resetTaskStore()
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Run verification and stop on the repair contract if it fails.')
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    const responses = [
+      toolUseResponse('TaskCreate', 'tool-create', {
+        subject: 'Verification repair',
+        description: 'Prove failed verification becomes a runtime repair checkpoint.',
+        steps: [{
+          id: 'prove-verify',
+          title: 'Prove verify',
+          description: 'Run a check that is expected to fail.',
+          verification: [{
+            id: 'v1',
+            kind: 'file_exists',
+            path: '/tmp/owlcoda-verification-repair-missing.md',
+          }],
+        }],
+      }),
+      toolUseResponse('TaskUpdate', 'tool-start', {
+        taskId: 'task-1',
+        stepId: 'prove-verify',
+        stepStatus: 'in_progress',
+      }),
+      toolUseResponse('TaskVerify', 'tool-verify', {
+        taskId: 'task-1',
+        stepId: 'prove-verify',
+      }),
+      textResponse('Verification repair report: task-1/prove-verify failed check v1 because /tmp/owlcoda-verification-repair-missing.md is missing. Next action is create the artifact or replace the spec with a concrete reachable check, then run TaskVerify taskId=task-1 stepId=prove-verify once.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return responses.shift()!
+    })
+
+    const notices: string[] = []
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 8,
+      callbacks: {
+        onNotice(message) {
+          notices.push(message)
+        },
+      },
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('Verification repair report')
+    expect(notices.some((n) => /^Verification-repair checkpoint:/.test(n))).toBe(true)
+
+    const checkpointMessages = requestBodies[3]?.['messages'] as Array<Record<string, unknown>>
+    const checkpointText = JSON.stringify(checkpointMessages).replace(/\\"/g, '"')
+    expect(checkpointText).toContain('[Runtime verification-repair checkpoint]')
+    expect(checkpointText).toContain('Task task-1 step prove-verify has failed verification')
+    expect(checkpointText).toContain('Your next reply MUST be plain text')
+    expect(checkpointText).toContain('Do not call TaskVerify, bash, Sleep, Agent, or other tools')
+    expect(checkpointText).toContain('only allowed tool escape is TaskUpdate')
+    expect(checkpointText).toContain('[Runtime verification-repair checkpoint payload]')
+    expect(checkpointText).toContain('"kind": "verification_repair_checkpoint"')
+    expect(checkpointText).toContain('"task_id": "task-1"')
+    expect(checkpointText).toContain('"step_id": "prove-verify"')
+    expect(checkpointText).toContain('"check_id": "v1"')
+    expect(checkpointText).toContain('/tmp/owlcoda-verification-repair-missing.md')
+
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.find((item: any) => item.kind === 'verification_repair_checkpoint')
+    expect(checkpoint?.disposition).toBe('acknowledged')
+    expect(checkpoint?.payload?.verification_repair?.failed_checks?.[0]).toMatchObject({
+      check_id: 'v1',
+      passed: false,
+    })
+  })
+
+  it('hard-stops when the model ignores a verification-repair checkpoint and keeps using tools', async () => {
+    resetTaskStore()
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Run verification and do not churn after failure.')
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    const responses = [
+      toolUseResponse('TaskCreate', 'tool-create', {
+        subject: 'Verification repair',
+        description: 'Prove failed verification becomes a hard repair checkpoint.',
+        steps: [{
+          id: 'prove-verify',
+          title: 'Prove verify',
+          description: 'Run a check that is expected to fail.',
+          verification: [{
+            id: 'v1',
+            kind: 'file_exists',
+            path: '/tmp/owlcoda-verification-repair-hard-stop-missing.md',
+          }],
+        }],
+      }),
+      toolUseResponse('TaskUpdate', 'tool-start', {
+        taskId: 'task-1',
+        stepId: 'prove-verify',
+        stepStatus: 'in_progress',
+      }),
+      toolUseResponse('TaskVerify', 'tool-verify', {
+        taskId: 'task-1',
+        stepId: 'prove-verify',
+      }),
+      toolUseResponse('TaskVerify', 'tool-verify-again', {
+        taskId: 'task-1',
+        stepId: 'prove-verify',
+      }),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return responses.shift()!
+    })
+
+    const errors: string[] = []
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 8,
+      callbacks: {
+        onError(message) {
+          errors.push(message)
+        },
+      },
+    })
+
+    expect(result.stopReason).toBe('tool_loop')
+    expect(errors.some((message) => message.includes('ignored the verification-repair checkpoint'))).toBe(true)
+
+    const checkpointMessages = requestBodies[3]?.['messages'] as Array<Record<string, unknown>>
+    expect(JSON.stringify(checkpointMessages)).toContain('[Runtime verification-repair checkpoint]')
+    expect(JSON.stringify(conv.turns)).not.toContain('tool-verify-again')
+  })
+
+  it('allows a user-requested reverify after a verification-repair checkpoint is acknowledged', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-17T07:15:00.000Z',
+        checkpoints: [{
+          id: 'verification_repair_checkpoint-1',
+          kind: 'verification_repair_checkpoint',
+          generatedAt: '2026-06-17T07:10:00.000Z',
+          conversationId: conv.id,
+          disposition: 'acknowledged',
+          dispositionUpdatedAt: '2026-06-17T07:15:00.000Z',
+          dispositionReason: 'Model produced the required text-only verification repair report.',
+          inspectCommands: [
+            'TaskGet taskId=task-1',
+            'TaskVerify taskId=task-1 stepId=prove-verify',
+          ],
+          payload: {
+            schema_version: 1,
+            kind: 'verification_repair_checkpoint',
+            generated_at: '2026-06-17T07:10:00.000Z',
+            verification_repair: {
+              task_id: 'task-1',
+              step_id: 'prove-verify',
+              status: 'failed_verification',
+              passed_count: 0,
+              total_count: 1,
+              failed_checks: [{
+                check_id: 'v1',
+                passed: false,
+                detail: 'not found: /tmp/owlcoda-verification-repair-fixed.md',
+              }],
+              inspect_command: 'TaskGet taskId=task-1',
+              verify_command: 'TaskVerify taskId=task-1 stepId=prove-verify',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'The artifact has been repaired. Run TaskVerify once and report the result.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'TaskVerify',
+      description: 'fake passing verify',
+      async execute() {
+        return {
+          output: 'Verification for task-1 prove-verify: 1/1 passed\n✓ v1: passed',
+          isError: false,
+          metadata: {
+            taskId: 'task-1',
+            stepId: 'prove-verify',
+            passed: true,
+            results: [{ checkId: 'v1', passed: true, checkedAt: '2026-06-17T07:20:00.000Z' }],
+            writeBack: true,
+          },
+        }
+      },
+    })
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    const responses = [
+      toolUseResponse('TaskVerify', 'tool-reverify', {
+        taskId: 'task-1',
+        stepId: 'prove-verify',
+      }),
+      textResponse('Verification repair is now resolved: task-1/prove-verify passed.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return responses.shift()!
+    })
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 3,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(JSON.stringify(requestBodies[0]?.['messages']).replace(/\\"/g, '"')).not.toContain('[Runtime verification-repair checkpoint]')
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.disposition).toBe('resolved')
+    expect(checkpoint?.dispositionReason).toContain('TaskVerify passed')
+  })
+
+  it('lets RuntimeRecoveryList see same-batch verification-repair resolution directly', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-17T07:30:00.000Z',
+        checkpoints: [{
+          id: 'verification_repair_checkpoint-1',
+          kind: 'verification_repair_checkpoint',
+          generatedAt: '2026-06-17T07:25:00.000Z',
+          conversationId: conv.id,
+          disposition: 'acknowledged',
+          dispositionUpdatedAt: '2026-06-17T07:30:00.000Z',
+          dispositionReason: 'Model produced the required text-only verification repair report.',
+          inspectCommands: [
+            'TaskGet taskId=task-1',
+            'TaskVerify taskId=task-1 stepId=prove-verify',
+          ],
+          payload: {
+            schema_version: 1,
+            kind: 'verification_repair_checkpoint',
+            generated_at: '2026-06-17T07:25:00.000Z',
+            verification_repair: {
+              task_id: 'task-1',
+              step_id: 'prove-verify',
+              status: 'failed_verification',
+              failed_checks: [{ check_id: 'v1', passed: false }],
+              inspect_command: 'TaskGet taskId=task-1',
+              verify_command: 'TaskVerify taskId=task-1 stepId=prove-verify',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Reverify, inspect recovery list, and report the final recovery state.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'TaskVerify',
+      description: 'fake passing verify',
+      async execute() {
+        return {
+          output: 'Verification for task-1 prove-verify: 1/1 passed\n✓ v1: passed',
+          isError: false,
+          metadata: {
+            taskId: 'task-1',
+            stepId: 'prove-verify',
+            passed: true,
+            results: [{ checkId: 'v1', passed: true, checkedAt: '2026-06-17T07:35:00.000Z' }],
+          },
+        }
+      },
+    })
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    const responses = [
+      contentResponse([
+        { type: 'tool_use', id: 'tool-reverify', name: 'TaskVerify', input: { taskId: 'task-1', stepId: 'prove-verify' } },
+        { type: 'tool_use', id: 'tool-list', name: 'RuntimeRecoveryList', input: {} },
+      ], 'tool_use'),
+      textResponse('Runtime recovery is resolved after TaskVerify passed.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return responses.shift()!
+    })
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 3,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    const listOutputs = conv.turns.flatMap((turn) =>
+      turn.role === 'user'
+        ? turn.content
+          .filter((block: any) => block.type === 'tool_result' && block.tool_use_id === 'tool-list')
+          .map((block: any) => String(block.content))
+        : [],
+    )
+    expect(listOutputs).toEqual(['No unresolved runtime recovery checkpoints are available for this conversation.'])
+    expect(listOutputs[0]).not.toContain('acknowledged')
+    const followupText = JSON.stringify(requestBodies[1]?.['messages']).replace(/\\"/g, '"')
+    expect(followupText).toContain('[Runtime recovery disposition update]')
+    expect(followupText).toContain('resolved 1 verification-repair checkpoint')
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.disposition).toBe('resolved')
+  })
+
+  it('suppresses redundant TaskUpdate overrun after same-run recovery is already clean', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-18T05:00:00.000Z',
+        checkpoints: [{
+          id: 'verification_repair_checkpoint-1',
+          kind: 'verification_repair_checkpoint',
+          generatedAt: '2026-06-18T04:55:00.000Z',
+          conversationId: conv.id,
+          disposition: 'acknowledged',
+          dispositionUpdatedAt: '2026-06-18T04:58:00.000Z',
+          dispositionReason: 'Model produced the required text-only verification repair report.',
+          inspectCommands: [
+            'TaskGet taskId=task-1',
+            'TaskVerify taskId=task-1 stepId=prove-verify',
+          ],
+          payload: {
+            schema_version: 1,
+            kind: 'verification_repair_checkpoint',
+            generated_at: '2026-06-18T04:55:00.000Z',
+            verification_repair: {
+              task_id: 'task-1',
+              step_id: 'prove-verify',
+              status: 'failed_verification',
+              failed_checks: [{ check_id: 'v1', passed: false }],
+              inspect_command: 'TaskGet taskId=task-1',
+              verify_command: 'TaskVerify taskId=task-1 stepId=prove-verify',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Reverify, inspect recovery list, and report the final recovery state.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'TaskVerify',
+      description: 'fake passing verify',
+      async execute() {
+        return {
+          output: 'Verification for task-1 prove-verify: 1/1 passed\n✓ v1: passed',
+          isError: false,
+          metadata: {
+            taskId: 'task-1',
+            stepId: 'prove-verify',
+            passed: true,
+            results: [{ checkId: 'v1', passed: true, checkedAt: '2026-06-18T05:05:00.000Z' }],
+          },
+        }
+      },
+    })
+
+    const responses = [
+      contentResponse([
+        { type: 'tool_use', id: 'tool-reverify', name: 'TaskVerify', input: { taskId: 'task-1', stepId: 'prove-verify' } },
+        { type: 'tool_use', id: 'tool-list', name: 'RuntimeRecoveryList', input: {} },
+      ], 'tool_use'),
+      contentResponse([
+        { type: 'text', text: 'TaskVerify passed. RuntimeRecoveryList says no unresolved runtime recovery checkpoints remain.' },
+        { type: 'tool_use', id: 'tool-redundant-update', name: 'TaskUpdate', input: { taskId: 'task-1', stepId: 'prove-verify', stepStatus: 'completed' } },
+      ], 'tool_use'),
+      contentResponse([
+        { type: 'text', text: 'The overrun was skipped, so I will mark the same step blocked to record the fixture outcome.' },
+        {
+          type: 'tool_use',
+          id: 'tool-blocked-workaround',
+          name: 'TaskUpdate',
+          input: {
+            taskId: 'task-1',
+            stepId: 'prove-verify',
+            stepStatus: 'blocked',
+            failureReason: 'post-recovery overrun guard intercepted the redundant completion',
+          },
+        },
+      ], 'tool_use'),
+      contentResponse([
+        { type: 'text', text: 'The step mutation was skipped, so I will complete the parent task instead.' },
+        { type: 'tool_use', id: 'tool-task-complete-workaround', name: 'TaskUpdate', input: { taskId: 'task-1', status: 'completed' } },
+      ], 'tool_use'),
+      textResponse('## Post-Recovery Overrun Guard Report\nRecovery ledger: Clean, all checkpoints resolved. All overrun probes were intercepted. The task is logically complete and no further TaskUpdate calls are needed.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const approvalCalls: string[] = []
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 6,
+      callbacks: {
+        unattended: true,
+        onToolApproval: async (toolName) => {
+          approvalCalls.push(toolName)
+          return toolName !== 'TaskUpdate'
+        },
+      },
+    })
+
+    const toolResultsText = JSON.stringify(conv.turns).replace(/\\"/g, '"')
+    expect(result.stopReason).toBe('end_turn')
+    expect(approvalCalls).not.toContain('TaskUpdate')
+    expect(toolResultsText).toContain('[post-recovery-overrun] skipped redundant TaskUpdate')
+    expect(toolResultsText).toContain('requested stepStatus="blocked"')
+    expect(toolResultsText).toContain('requested status="completed"')
+    expect(toolResultsText).not.toContain('Tool execution denied by user.')
+    expect(result.finalText).not.toMatch(/\bretry\b/i)
+    expect(result.conversation.options?.taskState?.run.status).toBe('completed')
+  })
+
+  it('suppresses redundant TaskUpdate overrun inside the same tool batch that resolves recovery', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-18T06:00:00.000Z',
+        checkpoints: [{
+          id: 'verification_repair_checkpoint-1',
+          kind: 'verification_repair_checkpoint',
+          generatedAt: '2026-06-18T05:55:00.000Z',
+          conversationId: conv.id,
+          disposition: 'acknowledged',
+          dispositionUpdatedAt: '2026-06-18T05:58:00.000Z',
+          dispositionReason: 'Model produced the required text-only verification repair report.',
+          inspectCommands: [
+            'TaskGet taskId=task-1',
+            'TaskVerify taskId=task-1 stepId=prove-verify',
+          ],
+          payload: {
+            schema_version: 1,
+            kind: 'verification_repair_checkpoint',
+            generated_at: '2026-06-18T05:55:00.000Z',
+            verification_repair: {
+              task_id: 'task-1',
+              step_id: 'prove-verify',
+              status: 'failed_verification',
+              failed_checks: [{ check_id: 'v1', passed: false }],
+              inspect_command: 'TaskGet taskId=task-1',
+              verify_command: 'TaskVerify taskId=task-1 stepId=prove-verify',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Reverify, inspect recovery list, and do not mutate after recovery is clean.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'TaskVerify',
+      description: 'fake passing verify',
+      async execute() {
+        return {
+          output: 'Verification for task-1 prove-verify: 1/1 passed\n✓ v1: passed',
+          isError: false,
+          metadata: {
+            taskId: 'task-1',
+            stepId: 'prove-verify',
+            passed: true,
+            results: [{ checkId: 'v1', passed: true, checkedAt: '2026-06-18T06:05:00.000Z' }],
+          },
+        }
+      },
+    })
+
+    const responses = [
+      contentResponse([
+        { type: 'tool_use', id: 'tool-reverify', name: 'TaskVerify', input: { taskId: 'task-1', stepId: 'prove-verify' } },
+        { type: 'tool_use', id: 'tool-list', name: 'RuntimeRecoveryList', input: {} },
+        { type: 'tool_use', id: 'tool-same-batch-overrun', name: 'TaskUpdate', input: { taskId: 'task-1', stepId: 'prove-verify', stepStatus: 'completed' } },
+      ], 'tool_use'),
+      textResponse('Recovery ledger: Clean, all checkpoints resolved; same-batch overrun was intercepted.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const approvalCalls: string[] = []
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 3,
+      callbacks: {
+        unattended: true,
+        onToolApproval: async (toolName) => {
+          approvalCalls.push(toolName)
+          return toolName !== 'TaskUpdate'
+        },
+      },
+    })
+
+    const toolResultsText = JSON.stringify(conv.turns).replace(/\\"/g, '"')
+    expect(result.stopReason).toBe('end_turn')
+    expect(approvalCalls).not.toContain('TaskUpdate')
+    expect(toolResultsText).toContain('[post-recovery-overrun] skipped redundant TaskUpdate')
+    expect(toolResultsText).toContain('tool-same-batch-overrun')
+    expect(toolResultsText).not.toContain('Tool execution denied by user.')
+    expect(result.conversation.options?.taskState?.run.status).toBe('completed')
+  })
+
+  it('does not let a trailing denied tool pollute a clean verification-repair closure', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-18T04:00:00.000Z',
+        checkpoints: [{
+          id: 'verification_repair_checkpoint-1',
+          kind: 'verification_repair_checkpoint',
+          generatedAt: '2026-06-18T03:55:00.000Z',
+          conversationId: conv.id,
+          disposition: 'acknowledged',
+          dispositionUpdatedAt: '2026-06-18T03:58:00.000Z',
+          dispositionReason: 'Model produced the required text-only verification repair report.',
+          inspectCommands: [
+            'TaskGet taskId=task-1',
+            'TaskVerify taskId=task-1 stepId=prove-verify',
+          ],
+          payload: {
+            schema_version: 1,
+            kind: 'verification_repair_checkpoint',
+            generated_at: '2026-06-18T03:55:00.000Z',
+            verification_repair: {
+              task_id: 'task-1',
+              step_id: 'prove-verify',
+              status: 'failed_verification',
+              failed_checks: [{ check_id: 'v1', passed: false }],
+              inspect_command: 'TaskGet taskId=task-1',
+              verify_command: 'TaskVerify taskId=task-1 stepId=prove-verify',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Close the repaired verification task and report the runtime recovery state.')
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'TaskUpdate',
+      description: 'fake completed update',
+      async execute() {
+        return {
+          output: 'Updated task task-1 step prove-verify: status=completed',
+          isError: false,
+          metadata: {
+            stepUpdate: true,
+            task: { id: 'task-1' },
+            step: { id: 'prove-verify', status: 'completed' },
+          },
+        }
+      },
+    })
+    dispatcher.register({
+      name: 'RuntimeRecoveryList',
+      description: 'fake clean runtime list',
+      async execute() {
+        return {
+          output: 'No unresolved runtime recovery checkpoints are available for this conversation.',
+          isError: false,
+        }
+      },
+    })
+
+    const responses = [
+      contentResponse([
+        { type: 'tool_use', id: 'tool-complete', name: 'TaskUpdate', input: { taskId: 'task-1', stepId: 'prove-verify', stepStatus: 'completed' } },
+        { type: 'tool_use', id: 'tool-list', name: 'RuntimeRecoveryList', input: {} },
+      ], 'tool_use'),
+      contentResponse([
+        { type: 'text', text: 'No unresolved runtime recovery checkpoints remain.' },
+        { type: 'tool_use', id: 'tool-trailing-denied', name: 'bash', input: { command: 'echo already-closed > /tmp/owlcoda-should-not-run' } },
+      ], 'tool_use'),
+      textResponse('Runtime recovery is fully resolved. No unresolved checkpoints remain. No further action needed.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 3,
+      callbacks: {
+        unattended: true,
+        onToolApproval: async (toolName) => toolName !== 'bash',
+      },
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('No unresolved checkpoints remain')
+    expect((conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]?.disposition).toBe('resolved')
+    expect(result.conversation.options?.taskState?.run.status).toBe('completed')
+  })
+
+  it('does not treat stale resolved recovery history as completion for a new denied tool', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-18T04:30:00.000Z',
+        checkpoints: [{
+          id: 'verification_repair_checkpoint-1',
+          kind: 'verification_repair_checkpoint',
+          generatedAt: '2026-06-18T04:10:00.000Z',
+          conversationId: conv.id,
+          disposition: 'resolved',
+          dispositionUpdatedAt: '2026-06-18T04:30:00.000Z',
+          dispositionReason: 'TaskVerify passed for task task-1 step prove-verify.',
+          inspectCommands: [
+            'TaskGet taskId=task-1',
+            'TaskVerify taskId=task-1 stepId=prove-verify',
+          ],
+          payload: {
+            schema_version: 1,
+            kind: 'verification_repair_checkpoint',
+            generated_at: '2026-06-18T04:10:00.000Z',
+            verification_repair: {
+              task_id: 'task-1',
+              step_id: 'prove-verify',
+              status: 'failed_verification',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Now write a separate artifact that needs approval.')
+
+    const responses = [
+      contentResponse([
+        { type: 'text', text: 'No unresolved runtime recovery checkpoints remain, but I still need approval for this new write.' },
+        { type: 'tool_use', id: 'tool-new-write', name: 'bash', input: { command: 'echo new-work > /tmp/owlcoda-new-denied-work' } },
+      ], 'tool_use'),
+      textResponse('No unresolved runtime recovery checkpoints remain, but the new write still needs approval.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+      callbacks: {
+        unattended: true,
+        onToolApproval: async () => false,
+      },
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.conversation.options?.taskState?.run.status).toBe('waiting_user')
   })
 
   it('injects a missing TaskCreate plan nudge for durable artifact tasks before more broad reading', async () => {

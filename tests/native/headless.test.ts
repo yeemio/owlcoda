@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 // Mock the conversation module
 vi.mock('../../src/native/conversation.js', () => ({
@@ -39,6 +42,7 @@ vi.mock('../../src/native/tool-defs.js', async (importOriginal) => ({
 
 import { runHeadless } from '../../src/native/headless.js'
 import { runConversationLoop, addUserMessage } from '../../src/native/conversation.js'
+import { saveSession } from '../../src/native/session.js'
 
 describe('runHeadless', () => {
   let stdoutWrite: ReturnType<typeof vi.spyOn>
@@ -318,6 +322,102 @@ describe('runHeadless', () => {
     })
   })
 
+  it('restores runtime event log when resuming a saved session', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'owlcoda-headless-runtime-events-'))
+    const previousHome = process.env['OWLCODA_HOME']
+    process.env['OWLCODA_HOME'] = home
+    try {
+      saveSession({
+        id: 'resume-runtime-events',
+        system: 'saved system',
+        model: 'test-model',
+        maxTokens: 1024,
+        tools: [],
+        turns: [{
+          role: 'user',
+          content: [{ type: 'text', text: 'saved prompt' }],
+          timestamp: Date.now(),
+        }],
+        options: {
+          runtimeRecoveryLedger: {
+            schemaVersion: 1,
+            updatedAt: '2026-06-18T00:00:01.000Z',
+            checkpoints: [{
+              id: 'context_replacement_checkpoint-1',
+              kind: 'context_replacement_checkpoint',
+              generatedAt: '2026-06-18T00:00:01.000Z',
+              conversationId: 'resume-runtime-events',
+              disposition: 'active',
+              payload: {
+                schema_version: 1,
+                kind: 'context_replacement_checkpoint',
+                context_replacement: {
+                  input_history_digest: 'sha256:test',
+                  replacement_history: [],
+                  reason: 'threshold',
+                  window_id: 'window-1',
+                  source_turn_id: 'turn-1',
+                  ledger_status: 'active',
+                },
+              },
+              inspectCommands: [],
+            }],
+          },
+          runtimeEventLog: {
+            schemaVersion: 1,
+            updatedAt: '2026-06-18T00:00:01.000Z',
+            nextSeq: 2,
+            events: [{
+              id: 'runtime_event-1',
+              seq: 1,
+              kind: 'checkpoint_installed',
+              at: '2026-06-18T00:00:01.000Z',
+              conversationId: 'resume-runtime-events',
+              checkpointId: 'context_replacement_checkpoint-1',
+              checkpointKind: 'context_replacement_checkpoint',
+              payload: { checkpoint_kind: 'context_replacement_checkpoint' },
+            }],
+          },
+        },
+      } as any)
+
+      vi.mocked(runConversationLoop).mockImplementationOnce(async (conversation: any) => {
+        expect(conversation.options?.runtimeEventLog?.events).toHaveLength(1)
+        expect(conversation.options.runtimeEventLog.events[0]).toMatchObject({
+          kind: 'checkpoint_installed',
+          checkpointKind: 'context_replacement_checkpoint',
+        })
+        return {
+          conversation,
+          finalText: 'resumed with runtime events',
+          iterations: 1,
+          stopReason: 'end_turn',
+          usage: { inputTokens: 0, outputTokens: 0, requestCount: 1 },
+          runtimeFailure: null,
+        }
+      })
+
+      const result = await runHeadless({
+        apiBaseUrl: 'http://localhost:8019',
+        apiKey: 'test-key',
+        model: 'test-model',
+        prompt: 'continue',
+        resumeSession: 'resume-runtime-events',
+        json: true,
+      })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.resumed).toBe(true)
+    } finally {
+      if (previousHome === undefined) {
+        delete process.env['OWLCODA_HOME']
+      } else {
+        process.env['OWLCODA_HOME'] = previousHome
+      }
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
   it('uses tool-output evidence to fail Project Map acceptance contradictions in json mode', async () => {
     process.env['OWLCODA_PROJECT_MAP'] = '1'
     process.env['OWLCODA_MAX_ITERATIONS'] = '8'
@@ -486,6 +586,86 @@ describe('runHeadless', () => {
     expect(payload.tool_calls[0].output.length).toBeLessThan(21_000)
     expect(payload.tool_calls[0].output).toContain('HEAD')
     expect(payload.tool_calls[0].output).toContain('TAIL')
+  })
+
+  it('exposes tool result metadata in json mode for lifecycle inspection', async () => {
+    vi.mocked(runConversationLoop).mockImplementationOnce(async (_conversation: any, _dispatcher: any, opts: any) => {
+      opts.callbacks.onToolStart('TaskOutput', { task_id: 'task-1', block: true })
+      opts.callbacks.onToolEnd('TaskOutput', 'Task task-1 is incomplete: no live process handle.', false, 12, {
+        retrieval_status: 'incomplete',
+        long_task_lifecycle: {
+          schema_version: 1,
+          long_task_id: 'task:task-1',
+          source: 'task_command',
+          status: 'incomplete',
+          supervision_state: 'lost_handle',
+          terminal: false,
+          can_wait: false,
+          inspect_command: 'TaskOutput task_id=task-1 block=false',
+          next_action: 'rerun_or_replace_command',
+        },
+      })
+      return {
+        conversation: { turns: [] } as any,
+        finalText: 'Runtime snapshot captured.',
+        iterations: 1,
+        stopReason: 'end_turn',
+        usage: { inputTokens: 0, outputTokens: 0, requestCount: 1 },
+        runtimeFailure: null,
+      }
+    })
+
+    await runHeadless({
+      apiBaseUrl: 'http://localhost:8019',
+      apiKey: 'test-key',
+      model: 'test-model',
+      prompt: 'Inspect task lifecycle',
+      json: true,
+    })
+
+    const stdoutLines = stdoutWrite.mock.calls.map(c => String(c[0]).trim()).filter(Boolean)
+    expect(stdoutLines).toHaveLength(1)
+    const payload = JSON.parse(stdoutLines[0]!)
+    expect(payload.tool_calls[0].metadata.long_task_lifecycle).toMatchObject({
+      long_task_id: 'task:task-1',
+      supervision_state: 'lost_handle',
+      can_wait: false,
+      next_action: 'rerun_or_replace_command',
+    })
+  })
+
+  it('exposes runtime synthetic intercepts in json mode', async () => {
+    vi.mocked(runConversationLoop).mockImplementationOnce(async (_conversation: any, _dispatcher: any, opts: any) => {
+      opts.callbacks.onNotice('[post-recovery-overrun] skipped redundant TaskUpdate: runtime recovery already resolved for task task-1 step prove-verify; requested stepStatus="completed" is redundant for a clean recovery checkpoint.')
+      opts.callbacks.onNotice('[long-task-wait-policy] skipped Sleep: runtime wait policy for task:task-1 is strategy=runtime_await; use LongTaskAwait longTaskId=task:task-1 timeoutMs=5000 instead.')
+      return {
+        conversation: { turns: [] } as any,
+        finalText: 'Recovery ledger: Clean, all checkpoints resolved.',
+        iterations: 1,
+        stopReason: 'end_turn',
+        usage: { inputTokens: 0, outputTokens: 0, requestCount: 1 },
+        runtimeFailure: null,
+      }
+    })
+
+    await runHeadless({
+      apiBaseUrl: 'http://localhost:8019',
+      apiKey: 'test-key',
+      model: 'test-model',
+      prompt: 'same-batch recovery probe',
+      json: true,
+    })
+
+    const stdoutLines = stdoutWrite.mock.calls.map(c => String(c[0]).trim()).filter(Boolean)
+    expect(stdoutLines).toHaveLength(1)
+    const payload = JSON.parse(stdoutLines[0]!)
+    expect(payload.runtime_intercepts).toEqual([{
+      kind: 'post_recovery_overrun',
+      message: '[post-recovery-overrun] skipped redundant TaskUpdate: runtime recovery already resolved for task task-1 step prove-verify; requested stepStatus="completed" is redundant for a clean recovery checkpoint.',
+    }, {
+      kind: 'long_task_wait_policy',
+      message: '[long-task-wait-policy] skipped Sleep: runtime wait policy for task:task-1 is strategy=runtime_await; use LongTaskAwait longTaskId=task:task-1 timeoutMs=5000 instead.',
+    }])
   })
 
   it('waits for json stdout flush before returning', async () => {

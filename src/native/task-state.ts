@@ -25,6 +25,7 @@ import type { ProvenanceLedgerData, ProvenanceRecord, UserPathExtraction } from 
 import type { ResolvedPermissions } from './protocol/permission-rule-types.js'
 
 const CONTINUATION_ONLY_RE = /^(?:继续|续跑|接着|继续一下|继续说|开始|继续吧|continue|resume|go on|carry on|go ahead|ok|okay|认可(?:了)?(?:，|,)?(?:开始|继续)?)\s*[.!。！]*$/i
+const TASK_STATUS_CHECK_RE = /^(?:你)?(?:一直)?(?:在)?(?:忙活|忙|做)(?:了)?什么[？?。!！]*$|^(?:刚刚)?(?:不是)?一直说.+(?:不过|失败)[？?。!！]*$|^(?:目前|现在|当前).{0,60}(?:进度|输出了|完成了多少|在做)/i
 const BACKTICK_PATH_RE = /`([^`\n]+)`/g
 const GENERIC_PATH_RE = /(?:^|[\s(])((?:\/|\.\.?\/)?(?:[\w@~.-]+\/)+[\w@~.-]+(?:\.[\w.-]+)?\/?)(?=$|[\s),:;])/g
 const SINGLE_FILE_RE = /(?:^|[\s(])((?:\/|\.\.?\/)?[\w@~.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|mdx|py|ipynb|rs|toml|yaml|yml|sh|txt|css|scss|html))(?=$|[\s),:;])/g
@@ -45,6 +46,7 @@ const PROJECT_PATH_PREFIX_RE = /^(?:src|tests?|docs?|admin|site|scripts?|assets?
 
 export interface WriteGuardViolation {
   attemptedPath: string
+  attemptedPaths: string[]
   allowedPaths: string[]
   message: string
 }
@@ -63,10 +65,17 @@ export function ensureTaskExecutionState(
   const source = collectSubstantiveUserInputs(conversation)
   const sourceText = source.map((entry) => entry.rawText).join('\n\n').trim()
   const sourceTurnHash = stableHash(`${normalizeWhitespace(sourceText)}|${canonicalCwd}`)
+  const latestControlInput = latestUserInputForTaskControl(conversation)
+  const shouldConsumePendingApproval = Boolean(
+    existing?.run.pendingWriteApproval
+    && latestControlInput
+    && isWriteScopeApprovalInput(latestControlInput.normalizedText),
+  )
   if (
     existing
     && existing.contract.sourceTurnHash === sourceTurnHash
     && canonicalizePath(existing.contract.cwd) === canonicalCwd
+    && !shouldConsumePendingApproval
   ) {
     return existing
   }
@@ -95,7 +104,8 @@ export function deriveTaskExecutionState(
     && canonicalizePath(previous.contract.cwd) === canonicalCwd,
   )
   const latestInput = source.at(-1)
-  const approvesPendingWriteScope = Boolean(previous && latestInput && isWriteScopeApprovalInput(latestInput.normalizedText))
+  const latestControlInput = latestUserInputForTaskControl(conversation)
+  const approvesPendingWriteScope = Boolean(previous && latestControlInput && isWriteScopeApprovalInput(latestControlInput.normalizedText))
   const previousPendingPaths = previous?.run.pendingWriteApproval?.attemptedPaths ?? []
   const explicitResult = collectExplicitWriteTargets(source, canonicalCwd)
   const explicitWriteTargets = dedupeStrings([
@@ -280,14 +290,16 @@ export function markTaskWriteScopeBlocked(
   taskState: TaskExecutionState,
   reason: string,
   attemptedPath: string,
+  attemptedPaths: string[] = [attemptedPath],
 ): void {
   const now = Date.now()
+  const pendingPaths = attemptedPaths.length > 0 ? attemptedPaths : [attemptedPath]
   taskState.run.status = 'waiting_user'
   taskState.run.lastGuardReason = reason
   taskState.run.pendingWriteApproval = {
     attemptedPaths: dedupeStrings([
       ...(taskState.run.pendingWriteApproval?.attemptedPaths ?? []),
-      attemptedPath,
+      ...pendingPaths,
     ]),
     requestedAt: now,
   }
@@ -363,7 +375,7 @@ export function evaluateWriteGuard(
     (scope) => scope.origin !== 'external_reference',
   )
   const shellScratchAllowed = SHELL_ARTIFACT_TOOLS.has(toolName)
-  let attemptedPath: string | null = null
+  const blockedPaths: string[] = []
   for (const candidate of attemptedPaths) {
     const isExternalScratchArtifact =
       shellScratchAllowed
@@ -374,10 +386,10 @@ export function evaluateWriteGuard(
       && !isExternalScratchArtifact
       && !allowedScopes.some((scope) => pathMatchesScope(candidate, scope))
     ) {
-      attemptedPath = candidate
-      break
+      blockedPaths.push(candidate)
     }
   }
+  const attemptedPath = blockedPaths[0] ?? null
   if (!attemptedPath) return null
 
   const allowedPaths = allowedScopes.map((scope) => scope.path)
@@ -392,6 +404,7 @@ export function evaluateWriteGuard(
   if (!fsVerdict.allowed) {
     return {
       attemptedPath,
+      attemptedPaths: blockedPaths,
       allowedPaths,
       message: fsVerdict.reason,
     }
@@ -401,6 +414,7 @@ export function evaluateWriteGuard(
   const more = allowedPaths.length > 4 ? ` (+${allowedPaths.length - 4} more)` : ''
   return {
     attemptedPath,
+    attemptedPaths: blockedPaths,
     allowedPaths,
     message:
       `Task contract blocked write to ${attemptedPath}. ` +
@@ -1290,10 +1304,32 @@ function collectSubstantiveUserInputs(conversation: Conversation): SubstantiveUs
       .trim()
     if (!text) continue
     const normalizedText = normalizeWhitespace(text)
-    if (CONTINUATION_ONLY_RE.test(normalizedText) && collected.length > 0) continue
+    if (collected.length > 0 && isTaskContractControlInput(normalizedText)) continue
     collected.push({ rawText: text, normalizedText })
   }
   return collected
+}
+
+function latestUserInputForTaskControl(conversation: Conversation): SubstantiveUserInput | null {
+  for (let i = conversation.turns.length - 1; i >= 0; i--) {
+    const turn = conversation.turns[i]
+    if (!turn || turn.role !== 'user') continue
+    const text = turn.content
+      .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+      .map((block) => block.text)
+      .join('\n')
+      .trim()
+    if (!text) continue
+    if (text.startsWith('[Runtime ')) continue
+    return { rawText: text, normalizedText: normalizeWhitespace(text) }
+  }
+  return null
+}
+
+function isTaskContractControlInput(normalizedText: string): boolean {
+  return CONTINUATION_ONLY_RE.test(normalizedText)
+    || (isWriteScopeApprovalInput(normalizedText) && !lineHasConcretePath(normalizedText))
+    || TASK_STATUS_CHECK_RE.test(normalizedText)
 }
 
 interface ExplicitWriteTargetResult {
@@ -1428,7 +1464,15 @@ function clauseAroundCandidate(line: string, candidate: string): string {
 }
 
 function isWriteScopeApprovalInput(text: string): boolean {
-  return WRITE_SCOPE_APPROVAL_RE.test(text) && !WRITE_SCOPE_DENIAL_RE.test(text)
+  const approvalText = stripPathLikeTokensForApproval(text)
+  return WRITE_SCOPE_APPROVAL_RE.test(approvalText) && !WRITE_SCOPE_DENIAL_RE.test(approvalText)
+}
+
+function stripPathLikeTokensForApproval(text: string): string {
+  return text
+    .replace(BACKTICK_PATH_RE, ' ')
+    .replace(GENERIC_PATH_RE, ' ')
+    .replace(SINGLE_FILE_RE, ' ')
 }
 
 /**

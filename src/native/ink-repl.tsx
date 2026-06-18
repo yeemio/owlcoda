@@ -57,7 +57,7 @@ import { InkPicker } from './ink-picker.js'
 import { StreamingMarkdownRenderer } from './markdown.js'
 import { MCPManager } from './mcp/manager.js'
 import { loadPermissions, addGlobalPermission } from './permissions.js'
-import { decideTuiToolApproval } from './tui-approval.js'
+import { decideTuiTaskScopeApproval, decideTuiToolApproval } from './tui-approval.js'
 import { classifyBashCommand } from './bash-risk.js'
 import type { Conversation } from './protocol/types.js'
 import { validateAndRepairConversation } from './protocol/request.js'
@@ -1191,16 +1191,15 @@ function NativeReplApp({
     toolName: string
     input: Record<string, unknown>
     attemptedPath: string
+    attemptedPaths: string[]
     allowedPaths: string[]
     message: string
   }): Promise<boolean> => {
-    // Yolo / batch-approve-all also cover task-contract scope expansion.
-    // Without this branch, /yolo on still left every out-of-cwd write
-    // sitting at a prompt — exactly the "I just told you do everything"
-    // friction yolo exists to remove. Per-tool persistent-allow does NOT
-    // apply here because TaskContract is a path-scope decision, not a
-    // tool-class one.
-    if (approveStateRef.current.autoApprove || batchApproveAllRef.current) {
+    const scopeDecision = decideTuiTaskScopeApproval({
+      autoApprove: approveStateRef.current.autoApprove,
+      batchApproveAll: batchApproveAllRef.current,
+    })
+    if (scopeDecision.action === 'allow') {
       return true
     }
     if (approveStateRef.current.autoDeny) {
@@ -1213,6 +1212,7 @@ function NativeReplApp({
         toolName: 'TaskContract',
         input: {
           path: request.attemptedPath,
+          paths: request.attemptedPaths,
           toolName: request.toolName,
           allowedPaths: request.allowedPaths,
         },
@@ -2645,7 +2645,7 @@ function NativeReplApp({
     }
 
     // Shift+Tab cycles the operating mode (normal → auto → plan → normal), like
-    // external coding-assistant. yolo is excluded from the casual cycle (enter it explicitly).
+    // Claude Code. yolo is excluded from the casual cycle (enter it explicitly).
     // useTextInput treats tab as a no-op, so there's no double-handling.
     if (isModesEnabled()) {
       const nextMode = resolveModeCycleKey(

@@ -147,6 +147,7 @@ describe('TaskVerify tool', () => {
       const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
       expect(r.metadata?.['failureCategory']).toBe('verify:unsatisfiable-spec')
       expect(r.output).toMatch(/can never pass|cannot pass|fix the .*verification|TaskUpdate/i)
+      expect(r.output).toContain('TaskUpdate({ taskId, stepId, verification: [...] })')
       const results = r.metadata?.['results'] as Array<Record<string, unknown>>
       expect(results[0]?.['unsatisfiable']).toBe(true)
     })

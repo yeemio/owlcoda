@@ -398,7 +398,7 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
         lines.push(
           '',
           `⚠ ${unsatisfiable.length} check(s) can never pass as written — re-running TaskVerify will not help.`,
-          'Fix the step\'s verification spec via TaskUpdate (correct the path/fields/command), then re-verify:',
+          'Fix the step\'s verification spec via TaskUpdate({ taskId, stepId, verification: [...] }) (correct the path/fields/command), then re-verify:',
           ...unsatisfiable.map(r => `  · ${r.checkId}: ${r.detail ?? 'unsatisfiable'}`),
         )
         metadata['failureCategory'] = 'verify:unsatisfiable-spec'

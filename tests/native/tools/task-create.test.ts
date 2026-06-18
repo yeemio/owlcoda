@@ -173,6 +173,35 @@ describe('TaskCreate tool', () => {
     expect(out.output).toContain('done')
   }, 10000)
 
+  it('command-backed task exposes a long-task lifecycle snapshot while running', async () => {
+    const r = await tool.execute({
+      subject: 'long shard generator',
+      description: 'generate QA shards in the background',
+      command: 'sleep 5; echo done',
+    })
+    expect(r.isError).toBe(false)
+    const taskId = (r.metadata as any).task.id
+    expect((r.metadata as any).longTaskSnapshot).toMatchObject({
+      longTaskId: `task:${taskId}`,
+      source: 'task_command',
+      status: 'running',
+      taskId,
+      command: 'sleep 5; echo done',
+    })
+    expect((r.metadata as any).longTaskSnapshot.inspectCommand).toContain('TaskOutput')
+    expect((r.metadata as any).longTaskSnapshot.resumeCommand).toBeUndefined()
+
+    const out = await outputTool.execute({ task_id: taskId, block: false })
+    expect(out.isError).toBe(false)
+    expect((out.metadata as any).task.longTaskSnapshot).toMatchObject({
+      longTaskId: `task:${taskId}`,
+      source: 'task_command',
+      status: 'running',
+      taskId,
+    })
+    expect((out.metadata as any).task.longTaskSnapshot.resumeCommand).toBeUndefined()
+  }, 10000)
+
   it('captures non-zero exit code as completed', async () => {
     const r = await tool.execute({
       subject: 'fail',

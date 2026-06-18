@@ -49,6 +49,10 @@ export type TuiApprovalDecision =
   | { action: 'allow'; reason: 'auto-approve' | 'batch-all' | 'safe-tool' | 'persistent-allow' }
   | { action: 'prompt'; reason: 'no-consent' | 'dangerous-override'; bashRisk?: BashRiskClassification }
 
+export type TuiTaskScopeApprovalDecision =
+  | { action: 'allow'; reason: 'batch-all' }
+  | { action: 'prompt'; reason: 'write-scope-hard-gate' }
+
 export function decideTuiToolApproval(opts: TuiApprovalInputs): TuiApprovalDecision {
   // Canonicalize so a wrong-case "Bash" still triggers the dangerous-command
   // detection and matches safe/persistent-allow lanes by canonical name.
@@ -76,4 +80,13 @@ export function decideTuiToolApproval(opts: TuiApprovalInputs): TuiApprovalDecis
     return { action: 'prompt', reason: 'dangerous-override', bashRisk }
   }
   return { action: 'prompt', reason: 'no-consent', ...(bashRisk ? { bashRisk } : {}) }
+}
+
+export function decideTuiTaskScopeApproval(opts: Pick<TuiApprovalInputs, 'autoApprove' | 'batchApproveAll'>): TuiTaskScopeApprovalDecision {
+  // TaskContract scope expansion is a path-boundary decision, not a tool prompt.
+  // `/yolo` removes interactive tool confirmations after hard gates have run;
+  // it must not silently add new write roots. A fresh batch-all choice belongs
+  // to the current prompt and can intentionally cover this scope request.
+  if (opts.batchApproveAll) return { action: 'allow', reason: 'batch-all' }
+  return { action: 'prompt', reason: 'write-scope-hard-gate' }
 }

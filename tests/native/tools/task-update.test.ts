@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createTaskUpdateTool } from '../../../src/native/tools/task-update.js'
-import { resetTaskStore, createTask, getTask, blockTask } from '../../../src/native/tools/task-store.js'
+import { resetTaskStore, createTask, getTask, getTaskStep, blockTask } from '../../../src/native/tools/task-store.js'
 
 describe('TaskUpdate tool', () => {
   const tool = createTaskUpdateTool()
@@ -153,6 +153,175 @@ describe('TaskUpdate — step updates (Slice 1)', () => {
     })
     expect(r.isError).toBe(true)
     expect(r.output).toMatch(/verification check/)
+  })
+
+  it('refuses completed when verification checks have no results', async () => {
+    createTask({
+      subject: 'Build report',
+      description: 'desc',
+      steps: [{
+        title: 'Write report',
+        description: 'First',
+        verification: [{ id: 'v1', kind: 'file_exists', path: '/tmp/report.md' }],
+      }],
+    })
+    await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'completed' })
+    expect(r.isError).toBe(true)
+    expect(r.output).toMatch(/TaskVerify|verification result/i)
+  })
+
+  it('does not allow failed verification to be bypassed by clearing results', async () => {
+    createTask({
+      subject: 'Build report',
+      description: 'desc',
+      steps: [{
+        title: 'Write report',
+        description: 'First',
+        verification: [{ id: 'v1', kind: 'file_exists', path: '/tmp/report.md' }],
+      }],
+    })
+    await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
+    await tool.execute({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      verificationResults: [{ checkId: 'v1', passed: false, detail: 'missing', checkedAt: new Date().toISOString() }],
+    })
+    await tool.execute({ taskId: 'task-1', stepId: 'step-1', verificationResults: [] })
+
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'completed' })
+    expect(r.isError).toBe(true)
+    expect(r.output).toMatch(/TaskVerify|verification result/i)
+  })
+
+  it('replaces a broken verification spec and clears stale results until re-verified', async () => {
+    createTask({
+      subject: 'Build report',
+      description: 'desc',
+      steps: [{
+        title: 'Write report',
+        description: 'First',
+        verification: [{ id: 'v1', kind: 'file_exists', path: '/tmp/xxx-report.md' }],
+      }],
+    })
+    await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
+    await tool.execute({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      verificationResults: [{
+        checkId: 'v1',
+        passed: false,
+        detail: 'path looks like an unresolved placeholder',
+        checkedAt: new Date().toISOString(),
+        unsatisfiable: true,
+      } as any],
+    })
+
+    const r = await tool.execute({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      verification: [{ id: 'v1', kind: 'file_exists', path: '/tmp/final-report.md' }],
+    } as any)
+
+    expect(r.isError).toBe(false)
+    expect(r.output).toContain('verification spec 1 checks')
+    const step = getTaskStep('task-1', 'step-1')!
+    expect(step.verification[0]?.path).toBe('/tmp/final-report.md')
+    expect(step.verificationResults).toEqual([])
+
+    const complete = await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'completed' })
+    expect(complete.isError).toBe(true)
+    expect(complete.output).toMatch(/TaskVerify|verification result/i)
+  })
+
+  it('refuses to weaken failed verification by clearing the spec', async () => {
+    createTask({
+      subject: 'Build report',
+      description: 'desc',
+      steps: [{
+        title: 'Write report',
+        description: 'First',
+        verification: [{ id: 'v1', kind: 'file_exists', path: '/tmp/report.md' }],
+      }],
+    })
+    await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
+    await tool.execute({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      verificationResults: [{ checkId: 'v1', passed: false, detail: 'missing', checkedAt: new Date().toISOString() }],
+    })
+
+    const r = await tool.execute({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      verification: [],
+    })
+
+    expect(r.isError).toBe(true)
+    expect(r.output).toMatch(/cannot.*weaken|failed verification/i)
+    const step = getTaskStep('task-1', 'step-1')!
+    expect(step.verification).toHaveLength(1)
+    expect(step.verification[0]?.kind).toBe('file_exists')
+    expect(step.verificationResults).toHaveLength(1)
+  })
+
+  it('refuses to weaken failed verification by replacing it with none', async () => {
+    createTask({
+      subject: 'Build report',
+      description: 'desc',
+      steps: [{
+        title: 'Write report',
+        description: 'First',
+        verification: [{ id: 'v1', kind: 'file_exists', path: '/tmp/report.md' }],
+      }],
+    })
+    await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
+    await tool.execute({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      verificationResults: [{ checkId: 'v1', passed: false, detail: 'missing', checkedAt: new Date().toISOString() }],
+    })
+
+    const r = await tool.execute({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      verification: [{ id: 'v1', kind: 'none', reason: 'skip after failed verification' }],
+    })
+
+    expect(r.isError).toBe(true)
+    expect(r.output).toMatch(/cannot.*weaken|failed verification/i)
+    const step = getTaskStep('task-1', 'step-1')!
+    expect(step.verification).toHaveLength(1)
+    expect(step.verification[0]?.kind).toBe('file_exists')
+    expect(step.verificationResults).toHaveLength(1)
+  })
+
+  it('refuses to change verification evidence on a completed step', async () => {
+    createTask({
+      subject: 'Build report',
+      description: 'desc',
+      steps: [{
+        title: 'Write report',
+        description: 'First',
+        verification: [{ id: 'v1', kind: 'file_exists', path: '/tmp/report.md' }],
+      }],
+    })
+    await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
+    await tool.execute({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      stepStatus: 'completed',
+      verificationResults: [{ checkId: 'v1', passed: true, checkedAt: new Date().toISOString() }],
+    })
+
+    const r = await tool.execute({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      verification: [{ id: 'v1', kind: 'file_exists', path: '/tmp/other.md' }],
+    } as any)
+
+    expect(r.isError).toBe(true)
+    expect(r.output).toMatch(/completed.*cannot.*verification/i)
   })
 
   it('marks blocked with failureReason', async () => {

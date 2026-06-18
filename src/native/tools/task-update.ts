@@ -18,6 +18,7 @@ import {
   updateTaskStep,
   type TaskStatus,
   type TaskStepStatus,
+  type TaskVerificationCheck,
   type TaskVerificationResult,
 } from './task-store.js'
 
@@ -35,6 +36,8 @@ export interface TaskUpdateInput {
   stepStatus?: TaskStepStatus
   /** Paths touched during this step (Slice 1). Appended to existing touchedPaths. */
   touchedPaths?: string[]
+  /** Verification checks for this step (Slice 1). Replaces existing checks and clears stale results unless verificationResults is also supplied. */
+  verification?: TaskVerificationCheck[]
   /** Verification results to record for this step (Slice 1). Replaces existing results. */
   verificationResults?: TaskVerificationResult[]
   /** Failure reason for failed/blocked steps (Slice 1). Required when stepStatus is 'failed' or 'blocked'. */
@@ -61,7 +64,7 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
     async execute(input: TaskUpdateInput): Promise<ToolResult> {
       const {
         taskId, subject, description, status, activeForm, addBlocks, removeBlocks,
-        stepId, stepStatus, touchedPaths, verificationResults, failureReason,
+        stepId, stepStatus, touchedPaths, verification, verificationResults, failureReason,
       } = input
 
       if (!taskId) {
@@ -101,6 +104,7 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
         const result = updateTaskStep(taskId, stepId, {
           status: stepStatus,
           touchedPaths,
+          verification,
           verificationResults,
           failureReason,
         })
@@ -112,6 +116,7 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
         const changes: string[] = []
         if (stepStatus) changes.push(`status=${stepStatus}`)
         if (touchedPaths?.length) changes.push(`touchedPaths +${touchedPaths.length}`)
+        if (verification) changes.push(`verification spec ${verification.length} checks`)
         if (verificationResults?.length) {
           const passed = verificationResults.filter(r => r.passed).length
           changes.push(`verification ${passed}/${verificationResults.length} passed`)

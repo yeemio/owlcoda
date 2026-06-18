@@ -59,6 +59,10 @@ export const UNSAFE_HEADLESS_TOOLS: ReadonlySet<string> = new Set([
   // function below. Membership here makes the dispatch land in the
   // command-aware branch instead of the safe-tool default.
   'TaskCreate',
+  // LongTaskReplace mirrors TaskCreate when the model supplies a command
+  // override. Reusing a stored lifecycle command stays safe-tool here
+  // and is reclassified inside the tool before spawn.
+  'LongTaskReplace',
 ])
 
 import { existsSync, realpathSync } from 'node:fs'
@@ -71,14 +75,14 @@ import { canonicalToolName } from './tool-defs.js'
 
 export type HeadlessApprovalDecision =
   | { allowed: true; reason: 'safe-tool' }
-  | { allowed: true; reason: 'safe-bash'; toolName: 'bash' | 'TaskCreate'; bashRisk: BashRiskClassification }
-  | { allowed: true; reason: 'workspace-test-bash'; toolName: 'bash' | 'TaskCreate'; bashRisk: BashRiskClassification }
+  | { allowed: true; reason: 'safe-bash'; toolName: 'bash' | 'TaskCreate' | 'LongTaskReplace'; bashRisk: BashRiskClassification }
+  | { allowed: true; reason: 'workspace-test-bash'; toolName: 'bash' | 'TaskCreate' | 'LongTaskReplace'; bashRisk: BashRiskClassification }
   | { allowed: true; reason: 'task-contract-auto-approve'; toolName: string }
   | { allowed: false; reason: 'deny-tool-explicit'; toolName: string }
   | { allowed: false; reason: 'deny-tool-not-allowed'; toolName: string }
   | { allowed: false; reason: 'deny-interactive'; toolName: 'AskUserQuestion' }
   | { allowed: false; reason: 'deny-by-default'; toolName: string; bashRisk?: BashRiskClassification }
-  | { allowed: false; reason: 'deny-bash-risk'; toolName: 'bash' | 'TaskCreate'; bashRisk: BashRiskClassification }
+  | { allowed: false; reason: 'deny-bash-risk'; toolName: 'bash' | 'TaskCreate' | 'LongTaskReplace'; bashRisk: BashRiskClassification }
 
 export interface HeadlessApprovalRecord {
   toolName: string
@@ -189,6 +193,21 @@ export function decideHeadlessApproval(
       return { allowed: true, reason: 'workspace-test-bash', toolName: 'TaskCreate', bashRisk }
     }
     return { allowed: false, reason: 'deny-bash-risk', toolName: 'TaskCreate', bashRisk }
+  }
+
+  if (toolName === 'LongTaskReplace') {
+    const cmd = input?.['command']
+    if (cmd === undefined || cmd === null || cmd === '') {
+      return { allowed: true, reason: 'safe-tool' }
+    }
+    const bashRisk = classifyBashCommand(cmd)
+    if (bashRisk.level === 'safe_readonly') {
+      return { allowed: true, reason: 'safe-bash', toolName: 'LongTaskReplace', bashRisk }
+    }
+    if (autoApprove && isAllowedWorkspaceTestBash(cmd, taskState)) {
+      return { allowed: true, reason: 'workspace-test-bash', toolName: 'LongTaskReplace', bashRisk }
+    }
+    return { allowed: false, reason: 'deny-bash-risk', toolName: 'LongTaskReplace', bashRisk }
   }
 
   if (autoApprove && isAllowedStructuredFileMutation(toolName, input, taskState)) {

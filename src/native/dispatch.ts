@@ -18,6 +18,14 @@ import { createWebSearchTool } from './tools/web-search.js'
 import { createTodoWriteTool } from './tools/todo-write.js'
 import { createAskUserQuestionTool } from './tools/ask-user.js'
 import { createSleepTool } from './tools/sleep.js'
+import { createAgentRunGetTool, createAgentRunListTool } from './tools/agent.js'
+import {
+  createLongTaskAwaitTool,
+  createLongTaskGetTool,
+  createLongTaskListTool,
+  createLongTaskReplaceTool,
+} from './tools/long-task.js'
+import { createRuntimeRecoveryGetTool, createRuntimeRecoveryListTool } from './tools/runtime-recovery.js'
 import { createEnterPlanModeTool, type PlanModeState } from './tools/enter-plan-mode.js'
 import { createExitPlanModeTool } from './tools/exit-plan-mode.js'
 import { createConfigTool } from './tools/config.js'
@@ -157,7 +165,12 @@ export class ToolDispatcher {
       const guardViolation = evaluateWriteGuard(toolName, block.input, context?.taskState)
       if (guardViolation) {
         if (context?.taskState) {
-          markTaskWriteScopeBlocked(context.taskState, guardViolation.message, guardViolation.attemptedPath)
+          markTaskWriteScopeBlocked(
+            context.taskState,
+            guardViolation.message,
+            guardViolation.attemptedPath,
+            guardViolation.attemptedPaths,
+          )
         }
         return {
           toolUseId: block.id,
@@ -168,6 +181,7 @@ export class ToolDispatcher {
             metadata: {
               taskGuardBlocked: true,
               attemptedPath: guardViolation.attemptedPath,
+              attemptedPaths: guardViolation.attemptedPaths,
               allowedPaths: guardViolation.allowedPaths,
             },
           },
@@ -248,6 +262,14 @@ export class ToolDispatcher {
     this.register(createTodoWriteTool())
     this.register(createAskUserQuestionTool())
     this.register(createSleepTool())
+    this.register(createAgentRunListTool())
+    this.register(createAgentRunGetTool())
+    this.register(createLongTaskListTool())
+    this.register(createLongTaskGetTool())
+    this.register(createLongTaskAwaitTool())
+    this.register(createLongTaskReplaceTool())
+    this.register(createRuntimeRecoveryListTool())
+    this.register(createRuntimeRecoveryGetTool())
     this.register(createEnterPlanModeTool(planState))
     this.register(createExitPlanModeTool(planState))
     this.register(createConfigTool())

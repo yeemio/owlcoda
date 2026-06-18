@@ -30,6 +30,13 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { BashRiskClassification } from '../bash-risk.js'
 import type { TaskPathScope } from '../protocol/types.js'
+import {
+  compactLongTaskText,
+  forgetLongTaskSnapshot,
+  forgetLongTaskSnapshotsBySource,
+  recordLongTaskSnapshot,
+  type LongTaskSnapshot,
+} from '../long-task-lifecycle.js'
 
 /** Task status values matching upstream TaskStatusSchema. */
 export type TaskStatus =
@@ -144,6 +151,8 @@ export interface Task {
   command?: string
   /** Working directory for `command` (defaults to process.cwd()). */
   cwd?: string
+  /** Parent conversation id for scoped long-task lifecycle snapshots. */
+  conversationId?: string
   /** Captured stdout (only populated for command-backed tasks). */
   stdout?: string
   /** Captured stderr (only populated for command-backed tasks). */
@@ -160,11 +169,19 @@ export interface Task {
   steps?: TaskStep[]
   /** ID of the currently active step (Slice 1). */
   currentStepId?: string
+  /** Runtime lifecycle snapshot for command-backed long tasks. */
+  longTaskSnapshot?: LongTaskSnapshot
 }
 
 let nextId = 1
 const tasks = new Map<string, Task>()
 const runningProcesses = new Map<string, ChildProcess>()
+
+export interface TaskStoreSnapshot {
+  schemaVersion: 1
+  nextId: number
+  tasks: Task[]
+}
 
 /** Generate a sequential task ID. */
 function genId(): string {
@@ -179,6 +196,7 @@ export function createTask(opts: {
   metadata?: Record<string, unknown>
   command?: string
   cwd?: string
+  conversationId?: string
   bashRisk?: BashRiskClassification
   deliverables?: TaskPathScope[]
   steps?: Array<Omit<Partial<TaskStep>, 'status'> & { title: string; description: string }>
@@ -220,6 +238,7 @@ export function createTask(opts: {
     updatedAt: now,
     command: opts.command,
     cwd: opts.cwd,
+    conversationId: opts.conversationId,
     bashRisk: opts.bashRisk,
     deliverables: opts.deliverables ?? [],
     steps: normalizedSteps,
@@ -250,7 +269,7 @@ export function getTaskStep(taskId: string, stepId: string): TaskStep | undefine
 export function updateTaskStep(
   taskId: string,
   stepId: string,
-  updates: Partial<Pick<TaskStep, 'status' | 'touchedPaths' | 'verificationResults' | 'failureReason'>>,
+  updates: Partial<Pick<TaskStep, 'status' | 'touchedPaths' | 'verification' | 'verificationResults' | 'failureReason'>>,
 ): TaskStepUpdateResult {
   const task = tasks.get(taskId)
   if (!task) return { ok: false, reason: `Task "${taskId}" not found.` }
@@ -263,6 +282,26 @@ export function updateTaskStep(
   }
 
   const newStatus = updates.status
+  const effectiveVerification = updates.verification ?? step.verification
+  const effectiveResults = updates.verificationResults ?? step.verificationResults
+
+  if (
+    step.status === 'completed'
+    && (updates.verification !== undefined || updates.verificationResults !== undefined)
+  ) {
+    return {
+      ok: false,
+      reason: `Step "${stepId}" is already completed and cannot change verification spec or results.`,
+    }
+  }
+
+  const verificationWeakeningBlocker = verificationSpecWeakeningBlocker(stepId, step, updates.verification)
+  if (verificationWeakeningBlocker) {
+    return {
+      ok: false,
+      reason: verificationWeakeningBlocker,
+    }
+  }
 
   // Validate transition
   if (newStatus !== undefined) {
@@ -284,12 +323,11 @@ export function updateTaskStep(
 
     // completed requires all verification results passed (if any exist)
     if (newStatus === 'completed') {
-      const results = updates.verificationResults ?? step.verificationResults
-      const hasFailedResult = results.some(r => !r.passed)
-      if (hasFailedResult) {
+      const verificationBlocker = verificationCompletionBlocker(stepId, effectiveVerification, effectiveResults)
+      if (verificationBlocker) {
         return {
           ok: false,
-          reason: `Cannot complete step "${stepId}": one or more verification checks failed. Fix the failures before marking completed.`,
+          reason: verificationBlocker,
         }
       }
     }
@@ -316,6 +354,12 @@ export function updateTaskStep(
   if (updates.touchedPaths !== undefined) {
     step.touchedPaths = [...step.touchedPaths, ...updates.touchedPaths]
   }
+  if (updates.verification !== undefined) {
+    step.verification = updates.verification
+    if (updates.verificationResults === undefined) {
+      step.verificationResults = []
+    }
+  }
   if (updates.verificationResults !== undefined) {
     step.verificationResults = updates.verificationResults
   }
@@ -334,6 +378,55 @@ export function updateTaskStep(
 
   task.updatedAt = new Date().toISOString()
   return { ok: true, task, step }
+}
+
+function verificationCompletionBlocker(
+  stepId: string,
+  checks: TaskVerificationCheck[],
+  results: TaskVerificationResult[],
+): string | null {
+  if (checks.length === 0) {
+    const failedResult = results.find(r => !r.passed)
+    return failedResult
+      ? `Cannot complete step "${stepId}": one or more verification checks failed. Fix the failures before marking completed.`
+      : null
+  }
+  if (results.length === 0) {
+    return `Cannot complete step "${stepId}": verification checks exist but no verification results are recorded. Run TaskVerify for this task and step after the latest work/spec before marking completed.`
+  }
+  const failedResult = results.find(r => !r.passed)
+  if (failedResult) {
+    return `Cannot complete step "${stepId}": one or more verification checks failed. Fix the failures before marking completed.`
+  }
+  const missing = checks.filter(check => !hasPassingResultForCheck(check, results)).map(check => check.id)
+  if (missing.length > 0) {
+    return `Cannot complete step "${stepId}": missing passing verification result(s) for check(s): ${missing.join(', ')}. Run TaskVerify after updating the artifact or verification spec.`
+  }
+  return null
+}
+
+function verificationSpecWeakeningBlocker(
+  stepId: string,
+  step: TaskStep,
+  replacement: TaskVerificationCheck[] | undefined,
+): string | null {
+  if (replacement === undefined) return null
+  const hasFailedEvidence = step.verificationResults.some(result => !result.passed)
+  if (!hasFailedEvidence) return null
+  if (replacement.length === 0 || replacement.some(check => check.kind === 'none')) {
+    return `Cannot weaken verification for step "${stepId}" after failed verification evidence exists. Fix the artifact or replace the spec with concrete checks, then run TaskVerify again.`
+  }
+  return null
+}
+
+function hasPassingResultForCheck(check: TaskVerificationCheck, results: TaskVerificationResult[]): boolean {
+  if (check.kind === 'verification_pack') {
+    const prefix = `${check.id}.`
+    return results.some(result =>
+      result.passed && (result.checkId === check.id || result.checkId.startsWith(prefix)),
+    )
+  }
+  return results.some(result => result.passed && result.checkId === check.id)
 }
 
 /**
@@ -435,6 +528,57 @@ export function listTasks(): Task[] {
   return [...tasks.values()]
 }
 
+/** Return a serializable snapshot of task records. Runtime process handles are intentionally excluded. */
+export function snapshotTaskStore(conversationId?: string): TaskStoreSnapshot {
+  const scopedTasks = [...tasks.values()].filter(task =>
+    conversationId === undefined
+    || task.conversationId === conversationId
+    || task.conversationId === undefined,
+  )
+  return {
+    schemaVersion: 1,
+    nextId,
+    tasks: scopedTasks.map(cloneTaskRecord),
+  }
+}
+
+/** Restore task records from a session snapshot. This never revives background child processes. */
+export function restoreTaskStore(snapshot: TaskStoreSnapshot | null | undefined): void {
+  resetTaskStore()
+  if (!snapshot || snapshot.schemaVersion !== 1 || !Array.isArray(snapshot.tasks)) {
+    return
+  }
+
+  let nextIdFromTasks = 1
+  for (const task of snapshot.tasks) {
+    if (!task || typeof task.id !== 'string') continue
+    const cloned = cloneTaskRecord(task)
+    if (isRestoredCommandTaskMissingProcess(cloned)) {
+      recordTaskLongTaskSnapshot(cloned, 'incomplete', {
+        timeoutKind: 'process_handle_missing_after_resume',
+        lastProgress:
+          'Task was restored from a saved session as in_progress, but this process has no live child process handle to wait on.',
+      })
+    }
+    tasks.set(cloned.id, cloned)
+    const match = /^task-(\d+)$/.exec(cloned.id)
+    if (match) {
+      nextIdFromTasks = Math.max(nextIdFromTasks, Number(match[1]) + 1)
+    }
+  }
+  nextId = Math.max(snapshot.nextId || 1, nextIdFromTasks)
+}
+
+function cloneTaskRecord(task: Task): Task {
+  return JSON.parse(JSON.stringify(task)) as Task
+}
+
+function isRestoredCommandTaskMissingProcess(task: Task): boolean {
+  return task.command !== undefined
+    && task.status === 'in_progress'
+    && task.exitCode === undefined
+}
+
 /** Update a task's fields. Returns the updated task or undefined if not found. */
 export function updateTask(
   id: string,
@@ -479,6 +623,7 @@ export function deleteTask(id: string): boolean {
     try { child.kill('SIGKILL') } catch { /* ignore */ }
     runningProcesses.delete(id)
   }
+  forgetLongTaskSnapshot(`task:${id}`)
   return tasks.delete(id)
 }
 
@@ -498,6 +643,7 @@ export function stopTask(id: string): Task | undefined {
   if (child) {
     try { child.kill('SIGTERM') } catch { /* ignore */ }
   }
+  if (updated?.command) recordTaskLongTaskSnapshot(updated, 'cancelled')
   return updated
 }
 
@@ -508,6 +654,7 @@ export function resetTaskStore(): void {
   }
   runningProcesses.clear()
   tasks.clear()
+  forgetLongTaskSnapshotsBySource('task_command')
   nextId = 1
 }
 
@@ -530,6 +677,7 @@ export function spawnTaskCommand(taskId: string): void {
   task.updatedAt = new Date().toISOString()
   task.stdout = ''
   task.stderr = ''
+  recordTaskLongTaskSnapshot(task, 'running')
 
   let child: ChildProcess
   try {
@@ -543,6 +691,7 @@ export function spawnTaskCommand(taskId: string): void {
     task.error = err instanceof Error ? err.message : String(err)
     task.exitCode = -1
     task.updatedAt = new Date().toISOString()
+    recordTaskLongTaskSnapshot(task, 'failed')
     return
   }
 
@@ -556,6 +705,8 @@ export function spawnTaskCommand(taskId: string): void {
     const cur = task.stdout?.length ?? 0
     if (cur >= MAX_BUF) return
     task.stdout = (task.stdout ?? '') + chunk.toString('utf8')
+    task.updatedAt = new Date().toISOString()
+    recordTaskLongTaskSnapshot(task, 'running')
     if (task.stdout!.length > MAX_BUF) {
       task.stdout = task.stdout!.slice(0, MAX_BUF) + '\n[truncated]'
       // Stop reading; caller already has all the audit data they get.
@@ -566,6 +717,8 @@ export function spawnTaskCommand(taskId: string): void {
     const cur = task.stderr?.length ?? 0
     if (cur >= MAX_BUF) return
     task.stderr = (task.stderr ?? '') + chunk.toString('utf8')
+    task.updatedAt = new Date().toISOString()
+    recordTaskLongTaskSnapshot(task, 'running')
     if (task.stderr!.length > MAX_BUF) {
       task.stderr = task.stderr!.slice(0, MAX_BUF) + '\n[truncated]'
       try { child.stderr?.destroy() } catch { /* ignore */ }
@@ -573,6 +726,7 @@ export function spawnTaskCommand(taskId: string): void {
   })
   child.on('error', (err) => {
     task.error = err instanceof Error ? err.message : String(err)
+    recordTaskLongTaskSnapshot(task, 'failed')
   })
   child.on('exit', (code, signal) => {
     runningProcesses.delete(taskId)
@@ -585,7 +739,48 @@ export function spawnTaskCommand(taskId: string): void {
     }
     task.exitCode = typeof code === 'number' ? code : (signal ? -1 : 0)
     task.updatedAt = new Date().toISOString()
+    const status = task.status === 'cancelled'
+      ? 'cancelled'
+      : task.exitCode === 0
+        ? 'completed'
+        : 'failed'
+    recordTaskLongTaskSnapshot(task, status)
   })
+}
+
+function recordTaskLongTaskSnapshot(
+  task: Task,
+  status: LongTaskSnapshot['status'],
+  extra: {
+    timeoutKind?: string
+    lastProgress?: string
+  } = {},
+): LongTaskSnapshot | undefined {
+  if (!task.command) return undefined
+  const outputSnippet = compactLongTaskText([
+    task.stdout ? `stdout: ${task.stdout}` : '',
+    task.stderr ? `stderr: ${task.stderr}` : '',
+    task.error ? `error: ${task.error}` : '',
+  ].filter(Boolean).join('\n'), 500)
+  const snapshot = recordLongTaskSnapshot({
+    longTaskId: `task:${task.id}`,
+    source: 'task_command',
+    status,
+    objective: task.subject,
+    startedAt: task.createdAt,
+    updatedAt: task.updatedAt,
+    ...(status !== 'running' && status !== 'incomplete' ? { finishedAt: task.updatedAt } : {}),
+    taskId: task.id,
+    command: task.command,
+    ...(task.cwd ? { cwd: task.cwd } : {}),
+    ...(task.conversationId ? { conversationId: task.conversationId } : {}),
+    inspectCommand: `TaskOutput task_id=${task.id} block=false`,
+    ...(extra.timeoutKind ? { timeoutKind: extra.timeoutKind } : {}),
+    ...(extra.lastProgress ? { lastProgress: extra.lastProgress } : {}),
+    ...(outputSnippet ? { outputSnippet } : {}),
+  })
+  task.longTaskSnapshot = snapshot
+  return snapshot
 }
 
 /** True iff this task currently has a live child process. */

@@ -783,6 +783,135 @@ describe('native task state', () => {
     }
   })
 
+  it('captures every blocked bash write target so one approval covers sibling artifacts', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'owlcoda-task-state-multi-block-'))
+    try {
+      await mkdir(join(cwd, 'scripts'), { recursive: true })
+      await mkdir(join(cwd, 'out', 'full'), { recursive: true })
+      const canonicalCwd = await realpath(cwd)
+      const conversation = createConversation({ system: 'test', model: 'm' })
+      addUserMessage(conversation, 'Only edit `scripts/generator.py`.')
+      const taskState = ensureTaskExecutionState(conversation, canonicalCwd)
+
+      const violation = evaluateWriteGuard('bash', {
+        cwd: canonicalCwd,
+        command: [
+          'echo a > out/full/shardA.log',
+          'echo b > out/full/shardB.log',
+          'echo c > out/full/shardC.log',
+        ].join('\n'),
+      }, taskState)
+
+      expect(violation).not.toBeNull()
+      expect(violation!.attemptedPaths).toEqual([
+        join(canonicalCwd, 'out', 'full', 'shardA.log'),
+        join(canonicalCwd, 'out', 'full', 'shardB.log'),
+        join(canonicalCwd, 'out', 'full', 'shardC.log'),
+      ])
+
+      markTaskWriteScopeBlocked(
+        taskState,
+        violation!.message,
+        violation!.attemptedPath,
+        violation!.attemptedPaths,
+      )
+      addUserMessage(conversation, '批准啊，你来做。')
+
+      const approved = ensureTaskExecutionState(conversation, canonicalCwd)
+      expect(approved.run.pendingWriteApproval).toBeNull()
+      for (const path of violation!.attemptedPaths) {
+        expect(approved.contract.allowedWritePaths.some(
+          (scope) => scope.path === path,
+        )).toBe(true)
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('does not let approval prose rewrite the task contract source', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'owlcoda-task-state-approval-source-'))
+    try {
+      await mkdir(join(cwd, 'scripts'), { recursive: true })
+      await mkdir(join(cwd, 'out', 'full'), { recursive: true })
+      const canonicalCwd = await realpath(cwd)
+      const conversation = createConversation({ system: 'test', model: 'm' })
+      addUserMessage(conversation, 'Only edit `scripts/generator.py`; write final shards after approval.')
+      const initial = ensureTaskExecutionState(conversation, canonicalCwd)
+
+      const blockedPaths = [
+        join(canonicalCwd, 'out', 'full', 'shardA.log'),
+        join(canonicalCwd, 'out', 'full', 'shardB.log'),
+      ]
+      markTaskWriteScopeBlocked(
+        initial,
+        `Task contract blocked write to ${blockedPaths[0]}.`,
+        blockedPaths[0]!,
+        blockedPaths,
+      )
+      addUserMessage(conversation, '批准啊，你来做。')
+
+      const approved = ensureTaskExecutionState(conversation, canonicalCwd)
+
+      expect(approved.contract.objective).toBe(initial.contract.objective)
+      expect(approved.contract.sourceText).toBe(initial.contract.sourceText)
+      expect(approved.contract.sourceTurnHash).toBe(initial.contract.sourceTurnHash)
+      expect(approved.contract.sourceText).not.toContain('批准')
+      expect(approved.run.pendingWriteApproval).toBeNull()
+      for (const path of blockedPaths) {
+        expect(approved.contract.allowedWritePaths.some((scope) => scope.path === path)).toBe(true)
+      }
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('does not let progress-check prose rewrite the task contract source', () => {
+    const cwd = join(tmpdir(), 'owlcoda-task-state-progress-check')
+    const conversation = createConversation({ system: 'test', model: 'm' })
+    addUserMessage(conversation, 'Generate four shards under `out/full` and then merge a report.')
+    const initial = ensureTaskExecutionState(conversation, cwd)
+
+    addUserMessage(conversation, '你一直在忙活什么？')
+    const checked = ensureTaskExecutionState(conversation, cwd)
+
+    expect(checked.contract.objective).toBe(initial.contract.objective)
+    expect(checked.contract.sourceText).toBe(initial.contract.sourceText)
+    expect(checked.contract.sourceTurnHash).toBe(initial.contract.sourceTurnHash)
+
+    addUserMessage(conversation, '目前在做的，已经输出了2316s了，我让你检查它的进度')
+    const progressChecked = ensureTaskExecutionState(conversation, cwd)
+
+    expect(progressChecked.contract.objective).toBe(initial.contract.objective)
+    expect(progressChecked.contract.sourceText).toBe(initial.contract.sourceText)
+    expect(progressChecked.contract.sourceTurnHash).toBe(initial.contract.sourceTurnHash)
+  })
+
+  it('does not treat ok inside a path as write-scope approval', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'owlcoda-task-state-path-ok-'))
+    try {
+      const canonicalCwd = await realpath(cwd)
+      const blockedPath = join(canonicalCwd, 'out', 'blocked.log')
+      const okNamedPath = join(canonicalCwd, 'notes', 'sometimes-ok.txt')
+      const conversation = createConversation({ system: 'test', model: 'm' })
+      addUserMessage(conversation, 'Only edit `scripts/generator.py`.')
+      const initial = ensureTaskExecutionState(conversation, canonicalCwd)
+      markTaskWriteScopeBlocked(
+        initial,
+        `Task contract blocked write to ${blockedPath}.`,
+        blockedPath,
+      )
+
+      addUserMessage(conversation, `先看看 ${okNamedPath}`)
+      const next = ensureTaskExecutionState(conversation, canonicalCwd)
+
+      expect(next.run.pendingWriteApproval?.attemptedPaths).toEqual([blockedPath])
+      expect(next.contract.allowedWritePaths.some((scope) => scope.path === blockedPath)).toBe(false)
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
   it('expands write scope from bootstrap packet allowlists without importing forbidden paths', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'owlcoda-task-state-packet-'))
     const packetPath = join(cwd, 'docs', 'executor-packet.md')
@@ -2001,7 +2130,7 @@ describe('external_reference origin — P1 regression (0.14.18)', () => {
       const taskState = ensureTaskExecutionState(conversation, '/Users/publicuser/AI/OwlManage')
 
       expect(taskState.contract.allowedWritePaths.some(
-        (s) => s.origin === 'user-external' && s.path.includes('/work/ppt/output/owlcoda'),
+        (s) => s.origin === 'user-external' && s.path.toLowerCase().includes('/work/ppt/output/owlcoda'),
       )).toBe(true)
     }
   })

@@ -10,9 +10,9 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import type { Conversation } from '../protocol/types.js'
+import type { Conversation, RuntimeRecoveryLedger, RuntimeRecoveryCheckpointRecord } from '../protocol/types.js'
 import { ProviderRequestError, formatProviderDiagnostic } from '../../provider-error.js'
-import type { NativeToolDef, ToolResult } from './types.js'
+import type { NativeToolDef, ToolExecutionContext, ToolResult } from './types.js'
 import {
   createConversation,
   addUserMessage,
@@ -30,6 +30,7 @@ import {
   createAgentWatchdog,
   formatAgentTimeoutMessage,
   resolveAgentTimeoutPolicy,
+  type AgentProgressMark,
   type AgentTimeoutFiring,
 } from './agent-timeout.js'
 import { detectCompletionClaim } from '../task-state.js'
@@ -38,6 +39,15 @@ import {
   resolveAdaptiveAgentLimit,
   resolveAgentConcurrencyCap,
 } from '../adaptive-concurrency.js'
+import {
+  buildLongTaskLifecycleVerdict,
+  compactLongTaskText,
+  formatLongTaskLifecycleVerdictLine,
+  formatLongTaskWaitPolicyLine,
+  forgetLongTaskSnapshotsBySource,
+  recordLongTaskSnapshot,
+  type LongTaskSnapshot,
+} from '../long-task-lifecycle.js'
 
 export interface AgentInput {
   /** Short 3-5 word description of the task */
@@ -56,6 +66,10 @@ export interface AgentInput {
   model?: string
   /** Optional iteration budget for long-running sub-agent work. */
   max_iterations?: number
+  /** Optional per-call idle watchdog timeout in milliseconds. Positive values only; 0/invalid values are ignored. */
+  idle_timeout_ms?: number
+  /** Optional per-call max-runtime watchdog timeout in milliseconds. Positive values only; 0/invalid values are ignored. */
+  max_runtime_ms?: number
   /**
    * Slice 5: agent artifact contract. When non-empty, the sub-agent MUST
    * touch at least one path matching each expected artifact before the
@@ -104,6 +118,617 @@ const runningAgents = new Map<string, { description: string; startTime: number }
 
 export function getRunningAgents(): Map<string, { description: string; startTime: number }> {
   return runningAgents
+}
+
+export type AgentRunStatus = 'running' | 'success' | 'failed' | 'partial' | 'inferred' | 'cancelled' | 'incomplete'
+
+export interface AgentRunRecord {
+  agentId: string
+  description: string
+  agentType: string
+  model?: string
+  status: AgentRunStatus
+  startedAt: string
+  updatedAt: string
+  finishedAt?: string
+  conversationId?: string
+  elapsedSeconds?: number
+  iterations?: number
+  stopReason?: string | null
+  failureCategory?: string
+  completionStatus?: string
+  timeoutKind?: string
+  lastProgress?: AgentProgressMark
+  parentTaskId?: string | null
+  parentStepId?: string | null
+  expectedArtifacts?: TaskPathScope[]
+  touchedPaths: string[]
+  outputSnippet?: string
+  errorSnippet?: string
+  longTaskSnapshot?: LongTaskSnapshot
+}
+
+export interface AgentRunHistorySnapshot {
+  schemaVersion: 1
+  records: AgentRunRecord[]
+}
+
+const MAX_AGENT_RUN_HISTORY = 50
+const agentRunHistory = new Map<string, AgentRunRecord>()
+
+export function __resetAgentRunHistoryForTesting(): void {
+  agentRunHistory.clear()
+  runningAgents.clear()
+  forgetLongTaskSnapshotsBySource('agent')
+}
+
+function rememberAgentRun(record: AgentRunRecord): void {
+  if (!agentRunHistory.has(record.agentId) && agentRunHistory.size >= MAX_AGENT_RUN_HISTORY) {
+    const oldest = agentRunHistory.keys().next().value
+    if (oldest) agentRunHistory.delete(oldest)
+  }
+  agentRunHistory.set(record.agentId, record)
+}
+
+export function snapshotAgentRunHistory(conversationId?: string): AgentRunHistorySnapshot {
+  const records = [...agentRunHistory.values()]
+    .filter((record) => !conversationId || record.conversationId === conversationId)
+    .map(cloneAgentRunRecord)
+  return { schemaVersion: 1, records }
+}
+
+export function restoreAgentRunHistory(
+  snapshot?: AgentRunHistorySnapshot | null,
+  runtimeRecoveryLedger?: RuntimeRecoveryLedger,
+  conversationId?: string,
+): void {
+  for (const record of normalizeAgentRunSnapshotRecords(snapshot)) {
+    if (conversationId && record.conversationId && record.conversationId !== conversationId) continue
+    rememberRestoredAgentRun(record)
+  }
+  restoreAgentRunHistoryFromLedger(runtimeRecoveryLedger, conversationId)
+}
+
+function normalizeAgentRunSnapshotRecords(snapshot?: AgentRunHistorySnapshot | null): AgentRunRecord[] {
+  if (!snapshot || snapshot.schemaVersion !== 1 || !Array.isArray(snapshot.records)) return []
+  const normalized: AgentRunRecord[] = []
+  for (const raw of snapshot.records) {
+    const record = normalizeAgentRunRecord(raw)
+    if (record) normalized.push(record)
+  }
+  return normalized
+}
+
+function normalizeAgentRunRecord(raw: unknown): AgentRunRecord | null {
+  if (!raw || typeof raw !== 'object') return null
+  const data = raw as Record<string, unknown>
+  const agentId = stringField(data['agentId'])
+  const description = stringField(data['description'])
+  if (!agentId || !description) return null
+  const now = new Date().toISOString()
+  const startedAt = stringField(data['startedAt']) ?? stringField(data['updatedAt']) ?? now
+  const updatedAt = stringField(data['updatedAt']) ?? startedAt
+  const restoredRunning = data['status'] === 'running'
+  const status = restoredRunning ? 'incomplete' : normalizeAgentRunStatus(data['status'])
+  const timeoutKind = restoredRunning
+    ? 'agent_run_handle_missing_after_resume'
+    : stringField(data['timeoutKind'])
+  const failureCategory = restoredRunning
+    ? 'agent:run_handle_missing_after_resume'
+    : stringField(data['failureCategory'])
+  const longTaskSnapshot = normalizeLongTaskSnapshot(data['longTaskSnapshot'])
+  return {
+    agentId,
+    description,
+    agentType: stringField(data['agentType']) ?? 'general-purpose',
+    ...(stringField(data['model']) ? { model: stringField(data['model']) } : {}),
+    status,
+    startedAt,
+    updatedAt: restoredRunning ? now : updatedAt,
+    ...(stringField(data['finishedAt']) || restoredRunning ? { finishedAt: stringField(data['finishedAt']) ?? now } : {}),
+    ...(stringField(data['conversationId']) ? { conversationId: stringField(data['conversationId']) } : {}),
+    ...(numberField(data['elapsedSeconds']) !== undefined ? { elapsedSeconds: numberField(data['elapsedSeconds']) } : {}),
+    ...(numberField(data['iterations']) !== undefined ? { iterations: numberField(data['iterations']) } : {}),
+    ...(data['stopReason'] === null || typeof data['stopReason'] === 'string' ? { stopReason: data['stopReason'] as string | null } : {}),
+    ...(failureCategory ? { failureCategory } : {}),
+    ...(stringField(data['completionStatus']) ? { completionStatus: stringField(data['completionStatus']) } : {}),
+    ...(timeoutKind ? { timeoutKind } : {}),
+    ...(isAgentProgressMark(data['lastProgress']) ? { lastProgress: data['lastProgress'] } : {}),
+    parentTaskId: nullableStringField(data['parentTaskId']) ?? null,
+    parentStepId: nullableStringField(data['parentStepId']) ?? null,
+    expectedArtifacts: Array.isArray(data['expectedArtifacts']) ? data['expectedArtifacts'] as TaskPathScope[] : [],
+    touchedPaths: stringArrayField(data['touchedPaths']),
+    ...(stringField(data['outputSnippet']) ? { outputSnippet: stringField(data['outputSnippet']) } : {}),
+    ...(stringField(data['errorSnippet']) ? { errorSnippet: stringField(data['errorSnippet']) } : {}),
+    ...(longTaskSnapshot ? { longTaskSnapshot } : {}),
+  }
+}
+
+function rememberRestoredAgentRun(record: AgentRunRecord): void {
+  const longTaskSnapshot = record.longTaskSnapshot
+    ? recordLongTaskSnapshot(record.longTaskSnapshot)
+    : recordAgentLongTaskSnapshot({
+      agentId: record.agentId,
+      status: mapAgentRunStatusToLongTaskStatus(record.status, record.failureCategory),
+      input: {
+        description: record.description,
+        prompt: record.outputSnippet ?? record.description,
+        parentTaskId: record.parentTaskId ?? undefined,
+        parentStepId: record.parentStepId ?? undefined,
+        expectedArtifacts: record.expectedArtifacts,
+      },
+      agentType: record.agentType,
+      model: record.model,
+      conversationId: record.conversationId,
+      startedAt: record.startedAt,
+      updatedAt: record.updatedAt,
+      finishedAt: record.finishedAt,
+      timeoutKind: record.timeoutKind,
+      lastProgress: formatProgress(record.lastProgress),
+      outputSnippet: record.outputSnippet,
+    })
+  rememberAgentRun({ ...record, longTaskSnapshot })
+}
+
+function restoreAgentRunHistoryFromLedger(
+  ledger: RuntimeRecoveryLedger | undefined,
+  conversationId?: string,
+): void {
+  if (!ledger) return
+  for (const checkpoint of ledger.checkpoints) {
+    if (conversationId && checkpoint.conversationId !== conversationId) continue
+    if (checkpoint.kind !== 'child_run_synthesis_checkpoint') continue
+    for (const record of reconstructAgentRunsFromChildCheckpoint(checkpoint)) {
+      if (!agentRunHistory.has(record.agentId)) rememberRestoredAgentRun(record)
+    }
+  }
+}
+
+function reconstructAgentRunsFromChildCheckpoint(checkpoint: RuntimeRecoveryCheckpointRecord): AgentRunRecord[] {
+  const children = Array.isArray(checkpoint.payload['children']) ? checkpoint.payload['children'] : []
+  const records: AgentRunRecord[] = []
+  for (const child of children) {
+    if (!child || typeof child !== 'object') continue
+    const data = child as Record<string, unknown>
+    const agentId = stringField(data['agent_id']) ?? stringField(data['agentId'])
+    if (!agentId) continue
+    const description = stringField(data['description'])
+      ?? stringField(data['objective'])
+      ?? agentId
+    const failureCategory = stringField(data['failure_category'])
+      ?? stringField(data['failureCategory'])
+    const timeoutKind = stringField(data['timeout_kind'])
+      ?? stringField(data['timeoutKind'])
+    const status = mapChildCheckpointStatusToAgentRunStatus(stringField(data['status']), failureCategory)
+    const startedAt = stringField(data['started_at'])
+      ?? stringField(data['startedAt'])
+      ?? checkpoint.generatedAt
+    const updatedAt = stringField(data['updated_at'])
+      ?? stringField(data['updatedAt'])
+      ?? checkpoint.generatedAt
+    const outputSnippet = stringField(data['output_snippet'])
+      ?? stringField(data['outputSnippet'])
+    const parentTaskId = nullableStringField(data['parent_task_id'])
+      ?? nullableStringField(data['parentTaskId'])
+    const parentStepId = nullableStringField(data['parent_step_id'])
+      ?? nullableStringField(data['parentStepId'])
+    const agentType = stringField(data['agent_type'])
+      ?? stringField(data['agentType'])
+      ?? 'general-purpose'
+    const snapshotStatus = normalizeLongTaskStatus(stringField(data['status']))
+      ?? mapAgentRunStatusToLongTaskStatus(status, failureCategory)
+    const longTaskSnapshot = recordLongTaskSnapshot({
+      longTaskId: `agent:${agentId}`,
+      source: 'agent',
+      status: snapshotStatus,
+      objective: description,
+      startedAt,
+      updatedAt,
+      ...(status !== 'running' ? { finishedAt: updatedAt } : {}),
+      conversationId: checkpoint.conversationId,
+      agentId,
+      agentType,
+      inspectCommand: stringField(data['inspect_command'])
+        ?? stringField(data['inspectCommand'])
+        ?? `AgentRunGet agentId=${agentId}`,
+      ...(parentTaskId !== undefined ? { parentTaskId } : {}),
+      ...(parentStepId !== undefined ? { parentStepId } : {}),
+      ...(timeoutKind ? { timeoutKind } : {}),
+      ...(stringField(data['last_progress']) ?? stringField(data['lastProgress'])
+        ? { lastProgress: stringField(data['last_progress']) ?? stringField(data['lastProgress']) }
+        : {}),
+      ...(outputSnippet ? { outputSnippet } : {}),
+    })
+    records.push({
+      agentId,
+      description,
+      agentType,
+      status,
+      startedAt,
+      updatedAt,
+      ...(status !== 'running' ? { finishedAt: updatedAt } : {}),
+      conversationId: checkpoint.conversationId,
+      ...(failureCategory ? { failureCategory } : {}),
+      ...(timeoutKind ? { timeoutKind } : {}),
+      parentTaskId: parentTaskId ?? null,
+      parentStepId: parentStepId ?? null,
+      expectedArtifacts: [],
+      touchedPaths: [],
+      ...(outputSnippet ? { outputSnippet } : {}),
+      longTaskSnapshot,
+    })
+  }
+  return records
+}
+
+function recordAgentRunStarted(opts: {
+  agentId: string
+  description: string
+  agentType: string
+  model: string
+  input: AgentInput
+  conversationId?: string
+}): void {
+  const now = new Date().toISOString()
+  const longTaskSnapshot = recordAgentLongTaskSnapshot({
+    agentId: opts.agentId,
+    status: 'running',
+    input: opts.input,
+    agentType: opts.agentType,
+    model: opts.model,
+    conversationId: opts.conversationId,
+    startedAt: now,
+    updatedAt: now,
+  })
+  rememberAgentRun({
+    agentId: opts.agentId,
+    description: opts.description,
+    agentType: opts.agentType,
+    model: opts.model,
+    ...(opts.conversationId ? { conversationId: opts.conversationId } : {}),
+    status: 'running',
+    startedAt: now,
+    updatedAt: now,
+    parentTaskId: opts.input.parentTaskId ?? null,
+    parentStepId: opts.input.parentStepId ?? null,
+    expectedArtifacts: opts.input.expectedArtifacts ?? [],
+    touchedPaths: [],
+    longTaskSnapshot,
+  })
+}
+
+function recordAgentRunSettled(opts: {
+  agentId: string
+  status: AgentRunStatus
+  input: AgentInput
+  subConv: Conversation
+  result: ToolResult
+}): void {
+  const existing = agentRunHistory.get(opts.agentId)
+  const now = new Date().toISOString()
+  const metadata = (opts.result.metadata ?? {}) as Record<string, unknown>
+  opts.result.metadata = metadata
+  const elapsedSeconds = typeof metadata['elapsedSeconds'] === 'number' ? metadata['elapsedSeconds'] : undefined
+  const iterations = typeof metadata['iterations'] === 'number' ? metadata['iterations'] : undefined
+  const stopReason = typeof metadata['stopReason'] === 'string' || metadata['stopReason'] === null
+    ? metadata['stopReason'] as string | null
+    : undefined
+  const failureCategory = typeof metadata['failureCategory'] === 'string' ? metadata['failureCategory'] : undefined
+  const completionStatus = typeof metadata['completion_status'] === 'string' ? metadata['completion_status'] : undefined
+  const timeoutKind = typeof metadata['timeoutKind'] === 'string' ? metadata['timeoutKind'] : undefined
+  const lastProgress = isAgentProgressMark(metadata['lastProgress']) ? metadata['lastProgress'] : undefined
+  const outputSnippet = snippet(opts.result.output)
+  const agentType = existing?.agentType ?? String(opts.input.subagent_type ?? 'general-purpose')
+  const longTaskSnapshot = recordAgentLongTaskSnapshot({
+    agentId: opts.agentId,
+    status: mapAgentRunStatusToLongTaskStatus(opts.status, failureCategory),
+    input: opts.input,
+    agentType,
+    model: existing?.model,
+    conversationId: existing?.conversationId,
+    startedAt: existing?.startedAt ?? now,
+    updatedAt: now,
+    finishedAt: now,
+    timeoutKind,
+    lastProgress: formatProgress(lastProgress),
+    outputSnippet,
+  })
+  metadata['longTaskSnapshot'] = longTaskSnapshot
+  rememberAgentRun({
+    agentId: opts.agentId,
+    description: existing?.description ?? opts.input.description,
+    agentType,
+    ...(existing?.model ? { model: existing.model } : {}),
+    ...(existing?.conversationId ? { conversationId: existing.conversationId } : {}),
+    status: opts.status,
+    startedAt: existing?.startedAt ?? now,
+    updatedAt: now,
+    finishedAt: now,
+    ...(elapsedSeconds !== undefined ? { elapsedSeconds } : {}),
+    ...(iterations !== undefined ? { iterations } : {}),
+    ...(stopReason !== undefined ? { stopReason } : {}),
+    ...(failureCategory ? { failureCategory } : {}),
+    ...(completionStatus ? { completionStatus } : {}),
+    ...(timeoutKind ? { timeoutKind } : {}),
+    ...(lastProgress ? { lastProgress } : {}),
+    parentTaskId: opts.input.parentTaskId ?? existing?.parentTaskId ?? null,
+    parentStepId: opts.input.parentStepId ?? existing?.parentStepId ?? null,
+    expectedArtifacts: opts.input.expectedArtifacts ?? existing?.expectedArtifacts ?? [],
+    touchedPaths: getAgentTouchedPaths(opts.subConv),
+    outputSnippet,
+    ...(opts.result.isError ? { errorSnippet: outputSnippet } : {}),
+    longTaskSnapshot,
+  })
+}
+
+function recordAgentLongTaskSnapshot(opts: {
+  agentId: string
+  status: LongTaskSnapshot['status']
+  input: AgentInput
+  agentType: string
+  model?: string
+  conversationId?: string
+  startedAt: string
+  updatedAt: string
+  finishedAt?: string
+  timeoutKind?: string
+  lastProgress?: string
+  outputSnippet?: string
+}): LongTaskSnapshot {
+  return recordLongTaskSnapshot({
+    longTaskId: `agent:${opts.agentId}`,
+    source: 'agent',
+    status: opts.status,
+    objective: opts.input.description,
+    startedAt: opts.startedAt,
+    updatedAt: opts.updatedAt,
+    ...(opts.finishedAt ? { finishedAt: opts.finishedAt } : {}),
+    agentId: opts.agentId,
+    agentType: opts.agentType,
+    ...(opts.model ? { model: opts.model } : {}),
+    ...(opts.conversationId ? { conversationId: opts.conversationId } : {}),
+    promptSnippet: compactLongTaskText(opts.input.prompt, 500),
+    inspectCommand: `AgentRunGet agentId=${opts.agentId}`,
+    parentTaskId: opts.input.parentTaskId ?? null,
+    parentStepId: opts.input.parentStepId ?? null,
+    ...(opts.timeoutKind ? { timeoutKind: opts.timeoutKind } : {}),
+    ...(opts.lastProgress && opts.lastProgress !== 'none' ? { lastProgress: opts.lastProgress } : {}),
+    ...(opts.outputSnippet ? { outputSnippet: opts.outputSnippet } : {}),
+  })
+}
+
+function mapAgentRunStatusToLongTaskStatus(
+  status: AgentRunStatus,
+  failureCategory: string | undefined,
+): LongTaskSnapshot['status'] {
+  if (failureCategory === 'agent:watchdog_timeout') return 'timeout'
+  if (status === 'incomplete') return 'incomplete'
+  if (status === 'success') return 'completed'
+  if (status === 'failed') return 'failed'
+  return status
+}
+
+function isAgentProgressMark(value: unknown): value is AgentProgressMark {
+  if (!value || typeof value !== 'object') return false
+  const mark = value as Record<string, unknown>
+  return typeof mark['type'] === 'string' && typeof mark['at'] === 'number'
+}
+
+function snippet(text: string, limit = 500): string {
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= limit) return normalized
+  return `${normalized.slice(0, limit).trimEnd()}...`
+}
+
+function cloneAgentRunRecord(record: AgentRunRecord): AgentRunRecord {
+  return {
+    ...record,
+    expectedArtifacts: record.expectedArtifacts ? record.expectedArtifacts.map((artifact) => ({ ...artifact })) : [],
+    touchedPaths: [...record.touchedPaths],
+    ...(record.lastProgress ? { lastProgress: { ...record.lastProgress } } : {}),
+    ...(record.longTaskSnapshot ? { longTaskSnapshot: { ...record.longTaskSnapshot } } : {}),
+  }
+}
+
+function normalizeAgentRunStatus(value: unknown): AgentRunStatus {
+  return value === 'running'
+    || value === 'success'
+    || value === 'failed'
+    || value === 'partial'
+    || value === 'inferred'
+    || value === 'cancelled'
+    || value === 'incomplete'
+    ? value
+    : 'failed'
+}
+
+function mapChildCheckpointStatusToAgentRunStatus(
+  status: string | undefined,
+  failureCategory: string | undefined,
+): AgentRunStatus {
+  if (status === 'completed' || status === 'success') return 'success'
+  if (status === 'partial') return 'partial'
+  if (status === 'inferred') return 'inferred'
+  if (status === 'cancelled') return 'cancelled'
+  if (status === 'running') return 'running'
+  if (status === 'incomplete') return 'incomplete'
+  if (status === 'timeout' || failureCategory === 'agent:watchdog_timeout') return 'failed'
+  return 'failed'
+}
+
+function normalizeLongTaskStatus(status: string | undefined): LongTaskSnapshot['status'] | undefined {
+  return status === 'running'
+    || status === 'completed'
+    || status === 'failed'
+    || status === 'timeout'
+    || status === 'cancelled'
+    || status === 'partial'
+    || status === 'incomplete'
+    || status === 'inferred'
+    ? status
+    : undefined
+}
+
+function normalizeLongTaskSnapshot(value: unknown): LongTaskSnapshot | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const data = value as Record<string, unknown>
+  const longTaskId = stringField(data['longTaskId'])
+  const source = data['source'] === 'agent' || data['source'] === 'task_command' ? data['source'] : undefined
+  const status = normalizeLongTaskStatus(stringField(data['status']))
+  const objective = stringField(data['objective'])
+  const startedAt = stringField(data['startedAt'])
+  const updatedAt = stringField(data['updatedAt'])
+  const inspectCommand = stringField(data['inspectCommand'])
+  if (!longTaskId || !source || !status || !objective || !startedAt || !updatedAt || !inspectCommand) return undefined
+  return {
+    longTaskId,
+    source,
+    status,
+    objective,
+    startedAt,
+    updatedAt,
+    ...(stringField(data['finishedAt']) ? { finishedAt: stringField(data['finishedAt']) } : {}),
+    ...(stringField(data['conversationId']) ? { conversationId: stringField(data['conversationId']) } : {}),
+    ...(stringField(data['taskId']) ? { taskId: stringField(data['taskId']) } : {}),
+    ...(stringField(data['agentId']) ? { agentId: stringField(data['agentId']) } : {}),
+    ...(stringField(data['agentType']) ? { agentType: stringField(data['agentType']) } : {}),
+    ...(stringField(data['model']) ? { model: stringField(data['model']) } : {}),
+    ...(stringField(data['command']) ? { command: stringField(data['command']) } : {}),
+    ...(stringField(data['cwd']) ? { cwd: stringField(data['cwd']) } : {}),
+    ...(stringField(data['promptSnippet']) ? { promptSnippet: stringField(data['promptSnippet']) } : {}),
+    inspectCommand,
+    ...(nullableStringField(data['parentTaskId']) !== undefined ? { parentTaskId: nullableStringField(data['parentTaskId']) } : {}),
+    ...(nullableStringField(data['parentStepId']) !== undefined ? { parentStepId: nullableStringField(data['parentStepId']) } : {}),
+    ...(stringField(data['timeoutKind']) ? { timeoutKind: stringField(data['timeoutKind']) } : {}),
+    ...(stringField(data['lastProgress']) ? { lastProgress: stringField(data['lastProgress']) } : {}),
+    ...(stringField(data['outputSnippet']) ? { outputSnippet: stringField(data['outputSnippet']) } : {}),
+  }
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined
+}
+
+function nullableStringField(value: unknown): string | null | undefined {
+  if (value === null) return null
+  return stringField(value)
+}
+
+function numberField(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function stringArrayField(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+}
+
+function recentAgentRuns(limit: number): AgentRunRecord[] {
+  return [...agentRunHistory.values()]
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, limit)
+}
+
+function parsePositiveLimit(value: unknown, fallback: number): number {
+  const parsed = typeof value === 'number' ? value : Number.parseInt(String(value ?? ''), 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback
+  return Math.min(Math.floor(parsed), MAX_AGENT_RUN_HISTORY)
+}
+
+function formatProgress(mark: AgentProgressMark | undefined): string {
+  if (!mark) return 'none'
+  return mark.detail ? `${mark.type}:${mark.detail}` : mark.type
+}
+
+function formatAgentRunSummary(record: AgentRunRecord): string {
+  const fields = [
+    record.agentId,
+    `status=${record.status}`,
+    `type=${record.agentType}`,
+    `description="${record.description}"`,
+  ]
+  if (record.failureCategory) fields.push(`failureCategory=${record.failureCategory}`)
+  if (record.timeoutKind) fields.push(`timeoutKind=${record.timeoutKind}`)
+  if (record.parentTaskId || record.parentStepId) fields.push(`parent=${record.parentTaskId ?? '-'}${record.parentStepId ? `/${record.parentStepId}` : ''}`)
+  if (record.elapsedSeconds !== undefined) fields.push(`elapsed=${record.elapsedSeconds.toFixed(1)}s`)
+  return fields.join(' ')
+}
+
+function formatAgentRunDetail(record: AgentRunRecord): string {
+  const lines = [
+    `Agent run ${record.agentId}`,
+    `status=${record.status}`,
+    `type=${record.agentType}`,
+    `description=${record.description}`,
+    `startedAt=${record.startedAt}`,
+    `updatedAt=${record.updatedAt}`,
+  ]
+  if (record.finishedAt) lines.push(`finishedAt=${record.finishedAt}`)
+  if (record.model) lines.push(`model=${record.model}`)
+  if (record.parentTaskId || record.parentStepId) lines.push(`parent=${record.parentTaskId ?? '-'}${record.parentStepId ? `/${record.parentStepId}` : ''}`)
+  if (record.failureCategory) lines.push(`failureCategory=${record.failureCategory}`)
+  if (record.completionStatus) lines.push(`completionStatus=${record.completionStatus}`)
+  if (record.timeoutKind) lines.push(`timeoutKind=${record.timeoutKind}`)
+  const lifecycleLine = formatLongTaskLifecycleVerdictLine(record.longTaskSnapshot)
+  if (lifecycleLine) lines.push(lifecycleLine)
+  const waitPolicyLine = formatLongTaskWaitPolicyLine(record.longTaskSnapshot)
+  if (waitPolicyLine) lines.push(waitPolicyLine)
+  if (record.iterations !== undefined) lines.push(`iterations=${record.iterations}`)
+  if (record.stopReason !== undefined) lines.push(`stopReason=${record.stopReason ?? 'none'}`)
+  if (record.elapsedSeconds !== undefined) lines.push(`elapsed=${record.elapsedSeconds.toFixed(1)}s`)
+  lines.push(`lastProgress=${formatProgress(record.lastProgress)}`)
+  if (record.expectedArtifacts && record.expectedArtifacts.length > 0) {
+    lines.push('Expected artifacts:')
+    lines.push(...record.expectedArtifacts.slice(0, 10).map((artifact) => `  - ${artifact.path} (${artifact.kind})`))
+  }
+  if (record.touchedPaths.length > 0) {
+    lines.push('Touched paths:')
+    lines.push(...record.touchedPaths.slice(0, 10).map((path) => `  - ${path}`))
+  }
+  if (record.outputSnippet) lines.push(`Output: ${record.outputSnippet}`)
+  return lines.join('\n')
+}
+
+export function createAgentRunListTool(): NativeToolDef<{ limit?: number }> {
+  return {
+    name: 'AgentRunList',
+    description: 'List recent Agent run lifecycle records. Read-only; this does not resume, retry, or mutate sub-agents.',
+    maturity: 'beta' as const,
+    async execute(input: { limit?: number } = {}): Promise<ToolResult> {
+      const records = recentAgentRuns(parsePositiveLimit(input.limit, 20))
+      if (records.length === 0) {
+        return { output: 'No Agent runs recorded in this process.', isError: false, metadata: { records: [] } }
+      }
+      return {
+        output: records.map(formatAgentRunSummary).join('\n'),
+        isError: false,
+        metadata: { records },
+      }
+    },
+  }
+}
+
+export function createAgentRunGetTool(): NativeToolDef<{ agentId: string }> {
+  return {
+    name: 'AgentRunGet',
+    description: 'Read one Agent run lifecycle record by agentId. Read-only; this does not resume, retry, or mutate sub-agents.',
+    maturity: 'beta' as const,
+    async execute(input: { agentId: string }): Promise<ToolResult> {
+      const agentId = typeof input?.agentId === 'string' ? input.agentId.trim() : ''
+      if (!agentId) return { output: 'agentId is required.', isError: true }
+      const record = agentRunHistory.get(agentId)
+      if (!record) return { output: `Agent run "${agentId}" not found.`, isError: true, metadata: { agentId } }
+      return {
+        output: formatAgentRunDetail(record),
+        isError: false,
+        metadata: {
+          record,
+          ...(record.longTaskSnapshot
+            ? { long_task_lifecycle: buildLongTaskLifecycleVerdict(record.longTaskSnapshot) }
+            : {}),
+        },
+      }
+    },
+  }
 }
 
 const DEFAULT_GENERAL_AGENT_MAX_ITERATIONS = 200
@@ -470,7 +1095,7 @@ function buildWatchdogTimeoutResult(opts: {
     metadata['elapsedSeconds'] = elapsedSeconds
   }
 
-  return {
+  const toolResult: ToolResult = {
     output: formatIsolatedFailureOutput({
       reason: 'watchdog_timeout',
       status: 'failed',
@@ -479,6 +1104,8 @@ function buildWatchdogTimeoutResult(opts: {
     isError: true,
     metadata,
   }
+  recordAgentRunSettled({ agentId, status: 'failed', input, subConv, result: toolResult })
+  return toolResult
 }
 
 function parsePositiveIterationBudget(value: unknown): number | null {
@@ -567,7 +1194,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
     description:
       'Launch a sub-agent to handle a specific task. The sub-agent runs in its own conversation context with access to tools. Use for delegating independent subtasks.',
 
-    async execute(input: AgentInput, context?: { signal?: AbortSignal }): Promise<ToolResult> {
+    async execute(input: AgentInput, context?: ToolExecutionContext): Promise<ToolResult> {
       const { description, prompt, subagent_type } = input
 
       if (!prompt || typeof prompt !== 'string') {
@@ -650,13 +1277,24 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
 
       // Track this agent
       runningAgents.set(agentId, { description, startTime: Date.now() })
+      recordAgentRunStarted({
+        agentId,
+        description,
+        agentType,
+        model: activeModel,
+        input,
+        conversationId: context?.conversationId,
+      })
 
       // 0.13.57 agent_timeout_policy_v1 — two-axis watchdog. Idle timeout
       // resets on any progress signal (assistant text, tool start/end,
       // tool progress chunk, runtime notice); max-runtime is the
       // absolute hard ceiling. Both env-tunable; both default ON. See
       // agent-timeout.ts for the design notes.
-      const policy = resolveAgentTimeoutPolicy()
+      const policy = resolveAgentTimeoutPolicy(process.env, {
+        idleTimeoutMs: input.idle_timeout_ms,
+        maxRuntimeMs: input.max_runtime_ms,
+      })
       const watchdog = createAgentWatchdog({
         idleTimeoutMs: policy.idleTimeoutMs,
         maxRuntimeMs: policy.maxRuntimeMs,
@@ -763,7 +1401,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
               expectedArtifactCount: input.expectedArtifacts?.length ?? 0,
               expectedArtifactPaths: getAgentExpectedArtifactPaths(input),
             })
-            return {
+            const toolResult: ToolResult = {
               output: 'Agent cancelled',
               isError: true,
               metadata: {
@@ -780,6 +1418,8 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
                 failureCategory: 'agent:aborted',
               },
             }
+            recordAgentRunSettled({ agentId, status: 'cancelled', input, subConv, result: toolResult })
+            return toolResult
           }
 
           const isTimeoutKind = failure.kind === 'timeout' || failure.kind === 'stream_idle_timeout'
@@ -805,7 +1445,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
             subConvId: subConv.id,
           })
 
-          return {
+          const toolResult: ToolResult = {
             output: formatIsolatedFailureOutput({
               reason,
               status: 'failed',
@@ -827,6 +1467,8 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
               failureMessage: failure.message,
             },
           }
+          recordAgentRunSettled({ agentId, status: 'failed', input, subConv, result: toolResult })
+          return toolResult
         }
 
         // If the subagent finished without a final message (hit iteration cap,
@@ -860,7 +1502,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
             parentStepId: input.parentStepId ?? null,
             subConvId: subConv.id,
           })
-          return {
+          const toolResult: ToolResult = {
             output: formatIsolatedFailureOutput({
               reason: 'max_iterations',
               status: 'failed',
@@ -890,6 +1532,8 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
               failureMessage: 'Sub-agent hit max_iterations before producing a final message.',
             },
           }
+          recordAgentRunSettled({ agentId, status: 'failed', input, subConv, result: toolResult })
+          return toolResult
         }
 
         if (subAgentRequiresWritesButTouchedNothing(subConv)) {
@@ -911,7 +1555,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
             parentStepId: input.parentStepId ?? null,
             subConvId: subConv.id,
           })
-          return {
+          const toolResult: ToolResult = {
             output: formatIsolatedFailureOutput({
               reason: 'no_deliverable',
               status: 'failed',
@@ -936,6 +1580,8 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
               scratchArtifactPaths: subConv.options?.taskState?.run.scratchArtifactPaths ?? [],
             },
           }
+          recordAgentRunSettled({ agentId, status: 'failed', input, subConv, result: toolResult })
+          return toolResult
         }
 
         // Slice 5: agent artifact contract enforcement.
@@ -983,7 +1629,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
             parentStepId: input.parentStepId ?? null,
             subConvId: subConv.id,
           })
-          return {
+          const toolResult: ToolResult = {
             output: formatIsolatedFailureOutput({
               reason: 'artifact_contract',
               status: statusForOutput,
@@ -1015,6 +1661,8 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
               artifactMatched: false,
             },
           }
+          recordAgentRunSettled({ agentId, status: statusForOutput, input, subConv, result: toolResult })
+          return toolResult
         }
 
         emitAgentInvocation({
@@ -1034,7 +1682,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
           parentStepId: input.parentStepId ?? null,
           subConvId: subConv.id,
         })
-        return {
+        const toolResult: ToolResult = {
           output,
           isError: false,
           metadata: {
@@ -1052,6 +1700,8 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
             artifactMatched: (input.expectedArtifacts?.length ?? 0) > 0 ? true : null,
           },
         }
+        recordAgentRunSettled({ agentId, status: 'success', input, subConv, result: toolResult })
+        return toolResult
       } catch (err: unknown) {
         runningAgents.delete(agentId)
         const firing = watchdog.getFiring()
@@ -1085,7 +1735,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
             parentStepId: input.parentStepId ?? null,
             subConvId: subConv.id,
           })
-          return {
+          const toolResult: ToolResult = {
             output: 'Agent cancelled',
             isError: true,
             metadata: {
@@ -1097,6 +1747,8 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
               failureCategory: 'agent:aborted',
             },
           }
+          recordAgentRunSettled({ agentId, status: 'cancelled', input, subConv, result: toolResult })
+          return toolResult
         }
         // Structured provider errors pass through their formatted form so the
         // headline/provider/request-id stays visible.
@@ -1115,7 +1767,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
             parentStepId: input.parentStepId ?? null,
             subConvId: subConv.id,
           })
-          return {
+          const toolResult: ToolResult = {
             output: formatIsolatedFailureOutput({
               reason: 'provider_error',
               status: 'failed',
@@ -1133,6 +1785,8 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
               providerRetryable: err.diagnostic.retryable,
             },
           }
+          recordAgentRunSettled({ agentId, status: 'failed', input, subConv, result: toolResult })
+          return toolResult
         }
         const msg = err instanceof Error ? err.message : String(err)
         emitAgentInvocation({
@@ -1148,7 +1802,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
           parentStepId: input.parentStepId ?? null,
           subConvId: subConv.id,
         })
-        return {
+        const toolResult: ToolResult = {
           output: formatIsolatedFailureOutput({
             reason: 'unknown',
             status: 'failed',
@@ -1163,6 +1817,8 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
             failureCategory: 'agent:unknown',
           },
         }
+        recordAgentRunSettled({ agentId, status: 'failed', input, subConv, result: toolResult })
+        return toolResult
       }
       } finally {
         releaseSlot()

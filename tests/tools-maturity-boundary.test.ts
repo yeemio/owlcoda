@@ -97,16 +97,16 @@ describe('native tool maturity and registration boundary', () => {
     const advertisedNames = buildNativeToolDefs(dispatcher).map(def => def.name)
 
     expect(advertisedNames).toEqual(registeredNames)
-    expect(registeredNames).toHaveLength(43)
-    expect(schemaNames).toHaveLength(44)
+    expect(registeredNames).toHaveLength(51)
+    expect(schemaNames).toHaveLength(52)
 
     const schemaOnlyRows = rows
       .filter(row => !registeredNames.includes(row.name))
       .map(row => row.name)
 
     expect(sorted(schemaOnlyRows)).toEqual(['Agent'])
-    expect(markdown).toContain('43 registered tool_defs')
-    expect(markdown).toContain('44 schema rows')
+    expect(markdown).toContain('51 registered tool_defs')
+    expect(markdown).toContain('52 schema rows')
   })
 
   it.skipIf(!HAS_TOOLS_DOC)('keeps docs summary counts aligned with the tool-by-tool table', async () => {
@@ -116,7 +116,7 @@ describe('native tool maturity and registration boundary', () => {
     expect(parseSummaryCounts(markdown)).toEqual(countRowsByMaturity(rows))
     expect(parseSummaryCounts(markdown)).toEqual({
       production: 13,
-      beta: 25,
+      beta: 33,
       stub: 1,
       experimental: 5,
     })

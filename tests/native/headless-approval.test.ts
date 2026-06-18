@@ -58,6 +58,7 @@ describe('headless approval policy', () => {
     // re-introduced the spawn capability — the policy decides per-call
     // whether the command is actually safe (see TaskCreate tests below).
     expect(UNSAFE_HEADLESS_TOOLS.has('TaskCreate')).toBe(true)
+    expect(UNSAFE_HEADLESS_TOOLS.has('LongTaskReplace')).toBe(true)
   })
 
   it('safe tools are always allowed regardless of autoApprove', () => {
@@ -156,6 +157,37 @@ describe('headless approval policy', () => {
     expect(autoApproved.allowed).toBe(false)
     if (autoApproved.reason === 'deny-bash-risk') {
       expect(autoApproved.bashRisk.level).toBe('needs_approval')
+    }
+  })
+
+  it('LongTaskReplace without command override is treated as safe-tool', () => {
+    expect(decideHeadlessApproval('LongTaskReplace', false, { longTaskId: 'task:task-1' }))
+      .toEqual({ allowed: true, reason: 'safe-tool' })
+  })
+
+  it('LongTaskReplace with safe_readonly command passes without --auto-approve', () => {
+    const decision = decideHeadlessApproval('LongTaskReplace', false, {
+      longTaskId: 'task:task-1',
+      command: 'echo replacement-ok',
+    })
+    expect(decision.allowed).toBe(true)
+    if (decision.allowed) {
+      expect(decision.reason).toBe('safe-bash')
+      expect(decision.toolName).toBe('LongTaskReplace')
+    }
+  })
+
+  it('LongTaskReplace with dangerous command is denied without --auto-approve', () => {
+    const decision = decideHeadlessApproval('LongTaskReplace', false, {
+      longTaskId: 'task:task-1',
+      command: 'rm -rf /tmp/owlcoda-headless-replace',
+    })
+    expect(decision.allowed).toBe(false)
+    if (decision.reason === 'deny-bash-risk') {
+      expect(decision.toolName).toBe('LongTaskReplace')
+      expect(decision.bashRisk.level).toBe('dangerous')
+    } else {
+      throw new Error(`expected deny-bash-risk, got ${decision.reason}`)
     }
   })
 

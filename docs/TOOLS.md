@@ -4,11 +4,11 @@
 > Source of truth: `src/native/dispatch.ts` default registration,
 > `src/native/tool-defs.ts` schemas, and `src/native/tools/*.ts`
 > behavioral audit (not comments).
-> Scope: 47 native tool schemas/factories are tracked below. The default
-> dispatcher currently advertises **45 registered tool_defs** through
+> Scope: 52 native tool schemas/factories are tracked below. The default
+> dispatcher currently advertises **51 registered tool_defs** through
 > `buildNativeToolDefs(new ToolDispatcher())`. `Agent` is host-wired by
-> `ink-repl.tsx` because it needs provider deps; `REPL` is schema/factory
-> only and remains an orphan. The "42+ tools" headline is therefore a
+> `ink-repl.tsx` because it needs provider deps and is the only remaining
+> schema-only surface. The "42+ tools" headline is therefore a
 > lower-bound count, not a production-count claim.
 
 ## Summary
@@ -16,21 +16,24 @@
 - **production**: 13
   bash, read, write, edit, glob, grep, NotebookEdit, WebFetch, WebSearch,
   EnterWorktree, ExitWorktree, TeamCreate, TeamDelete
-- **beta**: 26
-  Agent, AskUserQuestion, Sleep, EnterPlanMode, ExitPlanMode, Config,
-  TodoWrite, Skill, ToolSearch, StructuredOutput, Brief, PowerShell, REPL,
+- **beta**: 33
+  Agent, AgentRunList, AgentRunGet, LongTaskList, LongTaskGet, LongTaskAwait,
+  LongTaskReplace,
+  RuntimeRecoveryList, RuntimeRecoveryGet,
+  AskUserQuestion, Sleep,
+  EnterPlanMode, ExitPlanMode, Config,
+  TodoWrite, Skill, ToolSearch, StructuredOutput, Brief, PowerShell,
   TaskCreate, TaskList, TaskGet, TaskUpdate, TaskStop, TaskOutput,
   TaskVerify, DeliveryAudit, SkillRoutePreview, RunWorkspace,
   ProjectMap, ArtifactVerify, ProbePlan
-- **stub**: 3
-  SendMessage, ScheduleCron, McpAuth
+- **stub**: 1
+  McpAuth
 - **experimental**: 5
   RemoteTrigger, LSP, MCPTool, ListMcpResources, ReadMcpResource
 
-Default registration truth: 45 registered tool_defs, 47 schema rows.
+Default registration truth: 51 registered tool_defs, 52 schema rows.
 Schema-only / host-wired surfaces: Agent (registered by `ink-repl.tsx`
-with live provider deps) and REPL (exported/tested but not wired into
-the default dispatcher). Tungsten and Workflow were removed in 0.13.32 —
+with live provider deps). Tungsten and Workflow were removed in 0.13.32 —
 they were upstream-cloud-only placeholders that returned "not available"
 in local mode and had no realistic local implementation path.
 
@@ -63,6 +66,14 @@ in local mode and had no realistic local implementation path.
 | TeamCreate | 91 | production (label: experimental) | mkdir + writeFile under ~/.owlcoda/teams | team-create.test.ts (55) | real disk persistence; only "experimental" because the *team* feature itself is half-built (no agents actually consume the team dir) |
 | TeamDelete | 83 | production (label: experimental) | rm + readFile under ~/.owlcoda | team-delete.test.ts (61) | real disk; same caveat |
 | Agent | 589 | beta | spawns sub-conversation via runConversationLoop, real provider calls | agent.test.ts (299) — behavioral | schema/factory exists; host-wired by ink-repl.tsx with provider deps, not default-registered |
+| AgentRunList | 34 | beta | reads in-memory Agent run history | agent.test.ts + dispatch/tool-risk/tool-defs coverage | read-only lifecycle inspection; bounded recent history only, no resume/retry/background scheduler |
+| AgentRunGet | 25 | beta | reads one in-memory Agent run history record | agent.test.ts + dispatch/tool-risk/tool-defs coverage | read-only detail inspection by agentId; no resume/retry/background scheduler |
+| LongTaskList | 417 | beta | reads runtime-owned long-task lifecycle snapshot registry | long-task.test.ts + dispatch/tool-risk/tool-defs coverage | read-only lifecycle registry list; reports status/supervision/waitability/inspect command, no wait/resume/retry/background scheduler |
+| LongTaskGet | 417 | beta | reads one runtime-owned long-task lifecycle snapshot | long-task.test.ts + dispatch/tool-risk/tool-defs coverage | read-only detail inspection by longTaskId; exposes lifecycle verdict and wait/replacement policy, no background scheduler |
+| LongTaskAwait | 417 | beta | bounded runtime wait over the long-task lifecycle snapshot registry | long-task.test.ts + dispatch/tool-risk/tool-defs coverage | read-only wait-policy executor; replaces ad hoc Sleep/bash polling for waitable records, but does not resume/retry/background supervise |
+| LongTaskReplace | 417 | beta | creates a classified replacement TaskCreate-style command task from a replace_or_retry lifecycle record | long-task.test.ts + dispatch/tool-risk/tool-defs/headless-approval coverage | first-class replacement gate for lost-handle command tasks; refuses unsafe commands and does not auto-replay Agent records |
+| RuntimeRecoveryList | 96 | beta | reads conversation-local runtime recovery ledger from ToolExecutionContext | runtime-recovery.test.ts + conversation-loop-guard/tool-risk/tool-defs coverage | read-only durable recovery checkpoint list; no resume/retry/background scheduler |
+| RuntimeRecoveryGet | 96 | beta | reads one conversation-local runtime recovery checkpoint from ToolExecutionContext | runtime-recovery.test.ts + conversation-loop-guard/tool-risk/tool-defs coverage | read-only checkpoint payload/detail inspection; no resume/retry/task or agent mutation |
 | AskUserQuestion | 173 | beta | host UI callback or readline fallback on stdin | none directly (covered indirectly) | depends on ToolExecutionContext.askUserQuestion |
 | Sleep | 45 | beta | setTimeout | none (no test file) | trivial; works |
 | EnterPlanMode | 59 | beta | mutates shared PlanModeState | enter-plan-mode.test.ts (52) | state-only; no enforcement of "no writes during plan mode" inside the tool itself |
@@ -80,7 +91,6 @@ in local mode and had no realistic local implementation path.
 | ProjectMap | 136 | beta | bounded default-on project scan plus optional `.owlcoda-run/project-map.json` persistence | project-map.test.ts + project-map-dogfood-acceptance.test.ts | Runtime Control Plane snapshot surface; `OWLCODA_PROJECT_MAP=0` is the rollback override; not a full-repo index, does not execute commands, and does not bypass write gates |
 | ArtifactVerify | 108 | beta | runs supported artifact verification packs | artifact-verify.test.ts | currently supports `html_deck`; narrow verification helper |
 | ProbePlan | 376 | beta | stores probe plans and optionally mutates live conversation options | probe-plan.test.ts | default dispatcher has no live-conversation accessor; ink-repl re-registers it with one |
-| REPL | 79 | beta | delegates to dispatcher.executeTool | repl.test.ts (51) | **orphan: schema/factory exists but not registered in dispatch.ts**; only callable if a host wires it manually |
 | TaskCreate | 49 | beta | in-memory task entry; optional safe_readonly bash child via task-store | task-create.test.ts (163) — behavior + safety gates | pure-TODO mode is still manual; command mode only spawns after bash-risk + headless-approval + direct safe_readonly recheck |
 | TaskList | 59 | beta | reads in-memory Map | task-list.test.ts | in-memory session task list; not a process/job discovery tool |
 | TaskGet | 57 | beta | reads in-memory Map | task-get.test.ts (48) | returns task record fields; command output is surfaced by TaskOutput |
@@ -88,8 +98,6 @@ in local mode and had no realistic local implementation path.
 | TaskStop | 62 | beta | cancels Map entry; SIGTERM for TaskCreate command-backed child | task-stop.test.ts (57) | only stops processes launched through TaskCreate(command=...); pure-TODO tasks are status-only |
 | TaskOutput | 115 | beta | reads Map and captured stdout/stderr/exitCode for command-backed tasks | task-output.test.ts (51) | block=true only makes sense for command-backed tasks or tasks another turn will update |
 | TaskVerify | 362 | beta | runs task-step verification checks and writes results back to task-store | task-verify.test.ts | real verification runner for file/command/artifact checks; still session-scoped task state |
-| SendMessage | 79 | stub | writes to module-level Map | send-message.test.ts (44) | **no recipient ever consumes the queue from anywhere except getMessageQueue() helper** — fire-and-forget into a Map |
-| ScheduleCron | 124 | stub | mutates in-memory Map | schedule-cron.test.ts (46) | **no cron daemon, no scheduler, no execution path** — just stores cron strings; "create" never causes anything to fire |
 | McpAuth | 77 | stub | mutates in-memory Map | mcp-auth.test.ts (42) | **records `authenticated: true` regardless of token validity**; no real auth flow even when MCP manager is connected |
 | RemoteTrigger | 127 | experimental | fs read/write under ~/.owlcoda/triggers | remote-trigger.test.ts (64) | **`run` action only updates a `lastRun` timestamp — does not actually invoke anything**; create/list/get/update do real disk I/O |
 | LSP | 71 | experimental | none with default provider; delegates if a provider is wired | lsp.test.ts (38) | default provider is a "not available" stub. No LSP provider is wired in dispatch.ts |
@@ -110,38 +118,31 @@ in local mode and had no realistic local implementation path.
 
 ## Stub tools that need attention
 
-1. **SendMessage** — the in-memory queue has no consumer. No tool, no
-   loop, no scheduler reads from `messageQueues`. Fix: either remove
-   the tool or wire team-mode agents to drain their inbox before each
-   turn.
-
-2. **ScheduleCron** — there is no cron runner. Cron entries are stored
-   and listed, never executed. Fix: actually start a cron-style timer
-   on `create`, or rename the tool to something honest like `CronStore`.
-
-3. **McpAuth** — does not validate tokens or perform OAuth. Fix: route
+1. **McpAuth** — does not validate tokens or perform OAuth. Fix: route
    into the MCP manager's auth flow (or remove the OAuth branch which
    is misleading).
 
-4. **RemoteTrigger.run** — same shape problem as ScheduleCron: stores
-   and reports, doesn't trigger anything. Fix: wire `run` to actually
-   fire the trigger's payload, or document this as a "log only" stub.
+2. **RemoteTrigger.run** — stores and reports, doesn't trigger anything.
+   Fix: wire `run` to actually fire the trigger's payload, or document
+   this as a "log only" stub.
 
-5. **Task tools** — no longer pure stubs in 0.13.31: TaskCreate can
+> **Deleted in the ADR-007 stub sweep**: **SendMessage** (in-memory
+> queue with no consumer — multi-agent passing goes through `Agent`
+> worktree-isolated file handoff) and **ScheduleCron** (stored cron
+> strings that never fired — scheduling is delegated to external cron
+> + `owlcoda run`, per the anti-roadmap).
+
+3. **Task tools** — no longer pure stubs in 0.13.31: TaskCreate can
    launch safe_readonly commands, TaskOutput surfaces captured I/O, and
    TaskStop signals TaskCreate-owned children. Remaining caveat: the
    backing store is still in-memory/session-lifetime only, and pure-TODO
    tasks still need explicit TaskUpdate. Keep calling this beta, not a
    durable job scheduler.
 
-6. **REPL** — exported and tested but never registered in dispatch.
-   Either register it or remove from `index.ts` to stop the public
-   surface from suggesting it's available.
-
 ## False advertising risk
 
 The headline "42+ native tools" is still a defensible lower-bound
-because the default dispatcher advertises 45 registered tool_defs. The
+because the default dispatcher advertises 51 registered tool_defs. The
 risk is in the *implication* that all advertised tools are production
 features:
 
@@ -160,12 +161,14 @@ features:
   embedding index, repo graph, hook runner, or write-authorization bypass.
 
 - **Team coordination** — TeamCreate/TeamDelete create directories
-  but nothing else uses them. SendMessage queues into a Map that
-  nothing drains. Together these advertise "multi-agent teamwork"
-  that doesn't exist as runtime behavior.
+  but nothing else uses them, advertising "multi-agent teamwork"
+  that doesn't exist as runtime behavior. (SendMessage, the in-memory
+  inbox with no consumer, was removed in the ADR-007 stub sweep.)
 
-- **Scheduling** — ScheduleCron and RemoteTrigger.run both look like
-  they enable scheduling/automation but neither has an executor.
+- **Scheduling** — RemoteTrigger.run looks like it enables
+  scheduling/automation but has no executor. (ScheduleCron was removed
+  in the ADR-007 stub sweep; scheduling is delegated to external cron
+  + `owlcoda run`.)
 
 - **MCP** — three MCP tools and McpAuth all *can* work when an MCP
   manager is wired (dispatch passes one through). McpAuth specifically
@@ -176,11 +179,8 @@ features:
   capability is misleading until someone calls `createLSPTool(provider)`
   with a real provider.
 
-- **REPL** — exported but unregistered. If "/tools" or capability
-  listings include it, that's wrong.
-
 Recommendation: keep the headline "42+ tools" only when paired with an
-honest split such as "13 production, 26 beta, 3 stub, 5 experimental;
-45 default-registered tool_defs; 2 schema-only/host-wired surfaces".
+honest split such as "13 production, 33 beta, 1 stub, 5 experimental;
+51 default-registered tool_defs; 1 schema-only/host-wired surface".
 For user-facing marketing, lead with the production/beta capabilities
 and hide or gate the remaining stubs behind an experimental surface.

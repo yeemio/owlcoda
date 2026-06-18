@@ -34,6 +34,7 @@ import type { TaskPathScope } from '../protocol/types.js'
 import type { ProjectMapSnapshot, ProjectMapVerificationProfile } from '../protocol/project-map-types.js'
 import {
   createTask,
+  getTask,
   spawnTaskCommand,
   getCurrentOrNextStep,
   type TaskStepAction,
@@ -167,6 +168,7 @@ export function createTaskCreateTool(): NativeToolDef<TaskCreateInput> {
           steps: projectMapVerification.steps,
           command: commandToRun,
           cwd,
+          conversationId: context?.conversationId,
           bashRisk,
         })
         const nextStep = getCurrentOrNextStep(task.id)
@@ -192,7 +194,14 @@ export function createTaskCreateTool(): NativeToolDef<TaskCreateInput> {
 
       // Pure-todo mode: behave exactly like 0.13.30 when no steps.
       if (commandToRun === undefined) {
-        const task = createTask({ subject, description, activeForm, metadata, deliverables })
+        const task = createTask({
+          subject,
+          description,
+          activeForm,
+          metadata,
+          deliverables,
+          conversationId: context?.conversationId,
+        })
         return {
           output:
             `Created task ${task.id}: "${task.subject}" ` +
@@ -210,17 +219,20 @@ export function createTaskCreateTool(): NativeToolDef<TaskCreateInput> {
         metadata,
         command: commandToRun,
         cwd,
+        conversationId: context?.conversationId,
         bashRisk: safeBashRisk,
         deliverables,
       })
 
       spawnTaskCommand(task.id)
+      const runningTask = getTask(task.id) ?? task
 
       return {
         output: `Created task ${task.id}: "${task.subject}" (running: ${commandToRun})`,
         isError: false,
         metadata: {
           task: { id: task.id, subject: task.subject, stepCount: 0, currentStepId: null },
+          ...(runningTask.longTaskSnapshot ? { longTaskSnapshot: runningTask.longTaskSnapshot } : {}),
           command: commandToRun,
           bashRisk: {
             level: safeBashRisk.level,

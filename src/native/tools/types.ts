@@ -5,6 +5,7 @@
  */
 
 import type { TaskExecutionState } from '../protocol/types.js'
+import type { RuntimeRecoveryLedger } from '../protocol/types.js'
 import type { ProjectMapSnapshot } from '../protocol/project-map-types.js'
 
 export interface ToolResult {
@@ -50,6 +51,10 @@ export interface ToolExecutionContext {
   taskState?: TaskExecutionState
   /** Conversation-local Project Map snapshot when Project Map is enabled. */
   projectMapSnapshot?: ProjectMapSnapshot
+  /** Parent conversation id for conversation-scoped runtime ledgers. */
+  conversationId?: string
+  /** Conversation-local durable runtime recovery checkpoints. Read-only. */
+  runtimeRecoveryLedger?: RuntimeRecoveryLedger
   /**
    * Ask the user a question through the host UI. When provided, tools
    * MUST use this instead of writing prompts to stdout directly —

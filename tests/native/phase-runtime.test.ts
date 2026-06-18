@@ -325,6 +325,27 @@ describe('evaluateCompletionClaim', () => {
     }))
   })
 
+  it('blocks dry-run proof claims when the dry-run did not produce verification evidence', () => {
+    const taskState = state({
+      touchedPaths: ['/tmp/project/gen_l0_identity.py'],
+      events: [
+        event('post_grant_evidence', 'execute'),
+        event('tool_completed', 'execute', { tool: 'bash', detail: 'error' }),
+      ],
+    })
+
+    expect(evaluateCompletionClaim({
+      taskState,
+      finalText: 'Final report: Dry-run proves excerpts load clean and QA generation works.',
+      deliverable: deliverable('code_change'),
+      legacyCompletionAccepted: true,
+    })).toEqual(expect.objectContaining({
+      status: 'blocked',
+      reason: expect.stringContaining('claims verification/testing'),
+      verificationEvidenceCount: 0,
+    }))
+  })
+
   it('accepts verification claims when verification evidence exists', () => {
     const taskState = state({
       touchedPaths: ['/tmp/project/src/index.ts'],

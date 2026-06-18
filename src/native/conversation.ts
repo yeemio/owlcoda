@@ -15,6 +15,7 @@ import type {
   AnthropicToolUseBlock,
   Conversation,
   AssistantResponse,
+  RuntimeRecoveryLedger,
 } from './protocol/types.js'
 import type { AnthropicMessagesRequest } from './protocol/types.js'
 import { computeAdaptiveTimeoutMs } from '../middleware/adaptive-timeout.js'
@@ -152,6 +153,29 @@ import {
   isProjectMapSnapshotStale,
   recordProjectMapSnapshotSample,
 } from './project-map.js'
+import {
+  buildLongTaskLifecycleVerdict,
+  buildLongTaskCheckpointPayload,
+  formatLongTaskCheckpointPayloadForPrompt,
+  formatLongTaskSnapshotsForCheckpoint,
+  recentLongTaskSnapshots,
+  type LongTaskLifecycleVerdict,
+  type LongTaskSnapshot,
+} from './long-task-lifecycle.js'
+import {
+  appendRuntimeRecoveryCheckpoint,
+  getUnresolvedRuntimeRecoveryCheckpoints,
+  injectRuntimeRecoveryLedgerPromptIfNeeded,
+  markBlockedTaskRecoveryCheckpointAcknowledged,
+  markBlockedTaskRecoveryCheckpointResolved,
+  markChildRunSynthesisCheckpointResolved,
+  markLongTaskReplacementCheckpointResolved,
+  markLongTaskRecoveryCheckpointResolved,
+  markLongTaskSynthesisCheckpointResolved,
+  markVerificationRepairCheckpointAcknowledged,
+  markVerificationRepairCheckpointResolved,
+} from './runtime-recovery-ledger.js'
+import { appendRuntimeEvent } from './runtime-events.js'
 
 /**
  * PERM-7: emitted-warnings dedup set. Keyed on the ResolvedPermissions
@@ -230,16 +254,60 @@ function isToolLoopGuardEnabled(): boolean {
 //     for tests and operators who want the old "fail fast" semantics
 //     while we dogfood soft.
 type LoopInterceptMode = 'soft' | 'hard'
+type LoopInterceptKind = 'generic' | 'long_task_polling'
 function getLoopInterceptMode(): LoopInterceptMode {
   const v = (process.env['OWLCODA_LOOP_INTERCEPT'] ?? '').toLowerCase().trim()
   if (v === 'hard' || v === 'off' || v === '0' || v === 'false') return 'hard'
   return 'soft'
 }
 
+function classifyLoopInterceptKind(
+  reason: string,
+  attempt: { name: string; category: string },
+): LoopInterceptKind {
+  const lowerReason = reason.toLowerCase()
+  const toolName = attempt.name.toLowerCase()
+  const category = attempt.category.toLowerCase()
+  if (
+    lowerReason.includes('sleep/bash')
+    || lowerReason.includes('bash/sleep')
+    || (lowerReason.includes('repeated sleep') && (toolName === 'sleep' || category === 'sleep'))
+  ) {
+    return 'long_task_polling'
+  }
+  return 'generic'
+}
+
 function buildLoopInterceptPrompt(
   reason: string,
-  attempt: { name: string; intentTarget: string; intentKey: string },
+  attempt: { name: string; category: string; intentTarget: string; intentKey: string },
+  options: { conversationId?: string } = {},
 ): string {
+  const kind = classifyLoopInterceptKind(reason, attempt)
+  if (kind === 'long_task_polling') {
+    const lifecycleSnapshots = formatLongTaskSnapshotsForCheckpoint({
+      conversationId: options.conversationId,
+    })
+    const lifecyclePayload = formatLongTaskCheckpointPayloadForPrompt({
+      conversationId: options.conversationId,
+    })
+    return [
+      '[Runtime long-task checkpoint]',
+      `${reason}.`,
+      '',
+      `intent: tool=${attempt.name}, target=${attempt.intentTarget}`,
+      '',
+      ...(lifecycleSnapshots ? [lifecycleSnapshots, ''] : []),
+      ...(lifecyclePayload ? [lifecyclePayload, ''] : []),
+      'Do not keep polling. Your next reply MUST be plain text — no tool_use blocks. In it:',
+      '  1. State the original objective and the latest observed progress/evidence from existing tool output.',
+      '  2. Name the active/background work you believe is still running, including PIDs, shard files, counts, or timestamps if already observed.',
+      '  3. Give the exact inspection or verification command if it is already known from the transcript; only describe a runtime-supported resume path if output explicitly provided one.',
+      '  4. Stop at a checkpoint: mark what is complete, what remains running, and what the user can safely do next.',
+      '',
+      'Do not ask for permission to keep waiting, and do not call Sleep/bash again for the same monitor loop before the user replies.',
+    ].join('\n')
+  }
   return [
     '[Runtime loop intercept]',
     `${reason}.`,
@@ -675,6 +743,7 @@ export interface ConversationCallbacks {
     toolName: string
     input: Record<string, unknown>
     attemptedPath: string
+    attemptedPaths: string[]
     allowedPaths: string[]
     message: string
   }) => Promise<boolean>
@@ -813,8 +882,23 @@ export async function runConversationLoop(
   let finalText = ''
   let lastStopReason: string | null = null
   let runtimeFailure: ConversationRuntimeFailure | null = null
+  const runtimeTurnId = `turn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  appendRuntimeEvent(conversation, {
+    kind: 'turn_started',
+    turnId: runtimeTurnId,
+    payload: {
+      model: conversation.model,
+      max_iterations: maxIterations,
+    },
+  })
   let noTextIterations = 0 // consecutive iterations with no assistant text
   let summaryGateViolations = 0 // consecutive summary-gate refusals (tool-only reply after a nudge)
+  let longTaskSynthesisPending: string[] | null = null
+  let longTaskCheckpointPending: string[] | null = null
+  let blockedTaskFinalizationPending: BlockedTaskCheckpoint | null = null
+  let childRunSynthesisPending: ChildRunSynthesisCheckpoint | null = null
+  let verificationRepairPending: VerificationRepairCheckpoint | null = null
+  let runtimeRecoveryResolvedThisRun = false
   let openTaskAutoContinueCount = 0
   let deliveryCheckInjections = 0
   let probeCoverageInjections = 0
@@ -860,6 +944,15 @@ export async function runConversationLoop(
   let heapPressureAdvisoryFired = false
   const taskState = ensureTaskExecutionState(conversation, opts.cwd)
   ensureConversationProjectMap(conversation, opts.cwd)
+  let runtimeRecoveryLedgerAuditPending = injectRuntimeRecoveryLedgerPromptIfNeeded(conversation)
+  if (runtimeRecoveryLedgerAuditPending) {
+    const synthesisIds = activeLongTaskSynthesisIdsFromRecoveryLedger(conversation)
+    longTaskSynthesisPending = synthesisIds.length > 0 ? synthesisIds : null
+    verificationRepairPending = activeVerificationRepairCheckpointFromRecoveryLedger(conversation)
+  }
+  if (runtimeRecoveryLedgerAuditPending) {
+    opts.callbacks?.onNotice?.('Runtime recovery ledger: injected durable checkpoint summary for resume.')
+  }
 
   const taskContractNotice = describeTaskExecutionState(taskState)
   if (taskContractNotice) {
@@ -1632,6 +1725,164 @@ export async function runConversationLoop(
       targetedCheckConsumed: false,
     }
 
+    let blockedTaskCheckpointSatisfiedThisTurn = false
+    let childRunSynthesisSatisfiedThisTurn = false
+    let verificationRepairSatisfiedThisTurn = false
+
+    if (longTaskSynthesisPending) {
+      if (response.toolUseBlocks.length > 0 || response.hasToolUse) {
+        const loopReason =
+          'Model ignored the long-task synthesis checkpoint and attempted tool use instead of a text-only recovery synthesis report. ' +
+          'Stopping to avoid reconstructing scattered long-task state from memory.'
+        opts.callbacks?.onError?.(loopReason)
+        recordGateEvent({
+          ts: Date.now(),
+          kind: 'tool_loop',
+          conversationId: conversation.id,
+          iteration: taskState.run.lifetimeIterations ?? 0,
+          contract: buildGateEventContract(taskState),
+          lastToolSignatures: lastNToolSignatures(toolAttempts),
+          reason: loopReason,
+        })
+        lastStopReason = 'tool_loop'
+        break
+      }
+      if (hasMeaningfulAssistantText(response.text)) {
+        longTaskSynthesisPending = null
+      }
+    }
+
+    if (longTaskCheckpointPending) {
+      if (response.toolUseBlocks.length > 0 || response.hasToolUse) {
+        const loopReason =
+          'Model ignored the long-task checkpoint and attempted tool use instead of a text-only checkpoint. ' +
+          'Stopping to avoid continued no-value polling.'
+        opts.callbacks?.onError?.(loopReason)
+        recordGateEvent({
+          ts: Date.now(),
+          kind: 'tool_loop',
+          conversationId: conversation.id,
+          iteration: taskState.run.lifetimeIterations ?? 0,
+          contract: buildGateEventContract(taskState),
+          lastToolSignatures: lastNToolSignatures(toolAttempts),
+          reason: loopReason,
+        })
+        lastStopReason = 'tool_loop'
+        break
+      }
+      if (hasMeaningfulAssistantText(response.text)) {
+        const updated = markLongTaskRecoveryCheckpointResolved(conversation, {
+          longTaskIds: longTaskCheckpointPending,
+          reason: 'Model produced the required text-only long-task checkpoint report.',
+        })
+        if (updated > 0) {
+          runtimeRecoveryResolvedThisRun = true
+          opts.callbacks?.onNotice?.(`Runtime recovery ledger: resolved ${updated} long-task checkpoint(s).`)
+        }
+        longTaskCheckpointPending = null
+      }
+    }
+
+    if (blockedTaskFinalizationPending) {
+      if (response.toolUseBlocks.length > 0 || response.hasToolUse) {
+        const loopReason =
+          `Model ignored the blocked-task checkpoint for task ${blockedTaskFinalizationPending.taskId} ` +
+          `step ${blockedTaskFinalizationPending.stepId} and attempted tool use instead of a text-only blocked report. ` +
+          'Stopping to avoid continued no-value task churn.'
+        opts.callbacks?.onError?.(loopReason)
+        recordGateEvent({
+          ts: Date.now(),
+          kind: 'tool_loop',
+          conversationId: conversation.id,
+          iteration: taskState.run.lifetimeIterations ?? 0,
+          contract: buildGateEventContract(taskState),
+          lastToolSignatures: lastNToolSignatures(toolAttempts),
+          reason: loopReason,
+        })
+        lastStopReason = 'tool_loop'
+        break
+      }
+      if (hasMeaningfulAssistantText(response.text)) {
+        markBlockedTaskRecoveryCheckpointAcknowledged(conversation, {
+          taskId: blockedTaskFinalizationPending.taskId,
+          stepId: blockedTaskFinalizationPending.stepId,
+          reason: 'Model produced the required text-only blocked checkpoint report.',
+        })
+        blockedTaskFinalizationPending = null
+        blockedTaskCheckpointSatisfiedThisTurn = true
+      }
+    }
+
+    if (childRunSynthesisPending) {
+      if (response.toolUseBlocks.length > 0 || response.hasToolUse) {
+        const loopReason =
+          `Model ignored the child-run synthesis checkpoint for ${childRunSynthesisPending.childCount} child runs ` +
+          'and attempted tool use instead of a text-only per-child report. Stopping to avoid hiding child failures.'
+        opts.callbacks?.onError?.(loopReason)
+        recordGateEvent({
+          ts: Date.now(),
+          kind: 'tool_loop',
+          conversationId: conversation.id,
+          iteration: taskState.run.lifetimeIterations ?? 0,
+          contract: buildGateEventContract(taskState),
+          lastToolSignatures: lastNToolSignatures(toolAttempts),
+          reason: loopReason,
+        })
+        lastStopReason = 'tool_loop'
+        break
+      }
+      if (hasMeaningfulAssistantText(response.text)) {
+        const updated = markChildRunSynthesisCheckpointResolved(conversation, {
+          agentIds: childRunSynthesisPending.children.map((child) => child.agentId),
+          reason: 'Model produced the required text-only child-run synthesis report.',
+        })
+        if (updated > 0) {
+          runtimeRecoveryResolvedThisRun = true
+          opts.callbacks?.onNotice?.(`Runtime recovery ledger: resolved ${updated} child-run synthesis checkpoint(s).`)
+        }
+        childRunSynthesisPending = null
+        childRunSynthesisSatisfiedThisTurn = true
+      }
+    }
+
+    if (verificationRepairPending) {
+      const pending = verificationRepairPending
+      if (response.toolUseBlocks.length > 0 || response.hasToolUse) {
+        if (isVerificationRepairDispositionToolUse(response.toolUseBlocks, pending)) {
+          verificationRepairPending = null
+        } else {
+          const loopReason =
+            `Model ignored the verification-repair checkpoint for task ${pending.taskId} ` +
+            `step ${pending.stepId} and attempted tool use instead of a text-only repair report. ` +
+            'Stopping to avoid repeated verification churn or workaround completion.'
+          opts.callbacks?.onError?.(loopReason)
+          recordGateEvent({
+            ts: Date.now(),
+            kind: 'tool_loop',
+            conversationId: conversation.id,
+            iteration: taskState.run.lifetimeIterations ?? 0,
+            contract: buildGateEventContract(taskState),
+            lastToolSignatures: lastNToolSignatures(toolAttempts),
+            reason: loopReason,
+          })
+          lastStopReason = 'tool_loop'
+          break
+        }
+      }
+      if (hasMeaningfulAssistantText(response.text)) {
+        const updated = markVerificationRepairCheckpointAcknowledged(conversation, {
+          taskId: pending.taskId,
+          stepId: pending.stepId,
+          reason: 'Model produced the required text-only verification repair report.',
+        })
+        if (updated > 0) {
+          opts.callbacks?.onNotice?.(`Runtime recovery ledger: acknowledged ${updated} verification-repair checkpoint(s).`)
+        }
+        verificationRepairPending = null
+        verificationRepairSatisfiedThisTurn = true
+      }
+    }
+
     const wasSummaryGatePending = convergence.summaryGatePending
     if (convergence.summaryGatePending) {
       const violatesGate = !hasMeaningfulAssistantText(response.text)
@@ -1880,12 +2131,53 @@ export async function runConversationLoop(
 
     // 3. If no tool use → done
     if (!effectiveResponse.hasToolUse) {
+      if (runtimeRecoveryLedgerAuditPending && effectiveResponse.text.trim()) {
+        const synthesisUpdated = resolveReportedLongTaskSynthesisCheckpoints(conversation, effectiveResponse.text)
+        if (synthesisUpdated > 0) {
+          runtimeRecoveryResolvedThisRun = true
+          opts.callbacks?.onNotice?.(`Runtime recovery ledger: resolved ${synthesisUpdated} reported long-task synthesis checkpoint(s).`)
+        }
+        const childUpdated = resolveReportedChildRunRecoveryCheckpoints(conversation, effectiveResponse.text)
+        if (childUpdated > 0) {
+          runtimeRecoveryResolvedThisRun = true
+          opts.callbacks?.onNotice?.(`Runtime recovery ledger: resolved ${childUpdated} reported child-run checkpoint(s).`)
+        }
+        const longTaskUpdated = resolveReportedLongTaskRecoveryCheckpoints(conversation, effectiveResponse.text)
+        if (longTaskUpdated > 0) {
+          runtimeRecoveryResolvedThisRun = true
+          opts.callbacks?.onNotice?.(`Runtime recovery ledger: resolved ${longTaskUpdated} reported long-task checkpoint(s).`)
+        }
+        const replacementUpdated = resolveReportedLongTaskReplacementCheckpoints(conversation, effectiveResponse.text)
+        if (replacementUpdated > 0) {
+          runtimeRecoveryResolvedThisRun = true
+          opts.callbacks?.onNotice?.(`Runtime recovery ledger: resolved ${replacementUpdated} reported long-task replacement checkpoint(s).`)
+        }
+        runtimeRecoveryLedgerAuditPending = false
+        openTaskAutoContinueCount = 0
+        break
+      }
+      if (blockedTaskCheckpointSatisfiedThisTurn) {
+        openTaskAutoContinueCount = 0
+        break
+      }
+      if (childRunSynthesisSatisfiedThisTurn) {
+        openTaskAutoContinueCount = 0
+        break
+      }
+      if (verificationRepairSatisfiedThisTurn) {
+        openTaskAutoContinueCount = 0
+        break
+      }
       if (turnPlan.mode === 'task_realign') {
         openTaskAutoContinueCount = 0
         if (taskState.run.status === 'waiting_user') {
           break
         }
         continue
+      }
+      if (shouldAcceptResolvedRuntimeRecoveryClosure(conversation, effectiveResponse.text, runtimeRecoveryResolvedThisRun)) {
+        openTaskAutoContinueCount = 0
+        break
       }
       const phaseRuntimeNoTool = isPhaseRuntimeEnabled()
       const phaseVerdictNoTool = phaseRuntimeNoTool ? deriveTurnPhase(taskState) : undefined
@@ -2064,6 +2356,7 @@ export async function runConversationLoop(
       && !toolPlan.summaryGateTriggered
 
     // 4. Execute tools
+    runtimeRecoveryLedgerAuditPending = false
     const toolResults = await executeTools(
       effectiveResponse.toolUseBlocks,
       dispatcher,
@@ -2090,6 +2383,7 @@ export async function runConversationLoop(
       // 2026-06-13: cross-turn failure-class ledger for the windowed loop
       // guard's blind spot (failures spread beyond the 24-attempt window).
       crossTurnFailureClasses,
+      runtimeRecoveryResolvedThisRun,
     )
 
     // 4a. Probe-coverage tracking (0.13.51; 0.13.54: pass tool outcome
@@ -2205,12 +2499,28 @@ export async function runConversationLoop(
     const allToolResults = softModeFillers.length > 0
       ? [...toolResults.results, ...softModeFillers]
       : toolResults.results
+    const runtimeRecoveryDispositionNotices = [
+      ...(toolResults.runtimeRecoveryDispositionNotices ?? []),
+      ...resolveRuntimeRecoveryCheckpointsFromToolResults(conversation, allToolResults),
+    ]
+    if (runtimeRecoveryDispositionNotices.length > 0) {
+      runtimeRecoveryResolvedThisRun = true
+    }
     const resultBlocks = dispatcher.toContentBlocks(allToolResults)
     const truncatedBlocks = truncateToolResultBlocks(resultBlocks, TOOL_OUTPUT_MAX_CHARS)
     const artifactRepairPlan = buildArtifactRepairRuntimePlan(allToolResults, artifactRepairAttempts)
+    const blockedTaskCheckpoint = findBlockedTaskCheckpoint(allToolResults)
+    const childRunSynthesisCheckpoint = findChildRunSynthesisCheckpoint(allToolResults, effectiveResponse.toolUseBlocks)
+    const verificationRepairCheckpoint = findVerificationRepairCheckpoint(allToolResults)
     const turnContent = [
       ...truncatedBlocks,
       ...artifactRepairPlan.blocks,
+      ...(runtimeRecoveryDispositionNotices.length > 0
+        ? [createRuntimeRecoveryDispositionBlock(runtimeRecoveryDispositionNotices)]
+        : []),
+      ...(blockedTaskCheckpoint ? [createBlockedTaskCheckpointBlock(blockedTaskCheckpoint)] : []),
+      ...(childRunSynthesisCheckpoint ? [createChildRunSynthesisCheckpointBlock(childRunSynthesisCheckpoint)] : []),
+      ...(verificationRepairCheckpoint ? [createVerificationRepairCheckpointBlock(verificationRepairCheckpoint)] : []),
       ...toolPlan.runtimeBlocks,
       ...(shouldNudgeToolOnlyTurn ? [createToolOnlyNudgeBlock()] : []),
     ]
@@ -2225,8 +2535,55 @@ export async function runConversationLoop(
     for (const notice of artifactRepairPlan.notices) {
       opts.callbacks?.onNotice?.(notice)
     }
+    for (const notice of runtimeRecoveryDispositionNotices) {
+      opts.callbacks?.onNotice?.(notice)
+    }
     for (const blocked of artifactRepairPlan.blockedSignals) {
       opts.callbacks?.onError?.(blocked)
+    }
+    if (blockedTaskCheckpoint) {
+      blockedTaskFinalizationPending = blockedTaskCheckpoint
+      appendRuntimeRecoveryCheckpoint(conversation, {
+        kind: 'blocked_task_checkpoint',
+        payload: buildBlockedTaskCheckpointPayload(blockedTaskCheckpoint),
+        inspectCommands: [`TaskGet taskId=${blockedTaskCheckpoint.taskId}`],
+      })
+      openTaskAutoContinueCount = 0
+      opts.callbacks?.onNotice?.(
+        `Blocked-task checkpoint: task ${blockedTaskCheckpoint.taskId} step ${blockedTaskCheckpoint.stepId} was marked blocked — requesting a text-only blocked report.`,
+      )
+    }
+    if (childRunSynthesisCheckpoint) {
+      childRunSynthesisPending = childRunSynthesisCheckpoint
+      appendRuntimeRecoveryCheckpoint(conversation, {
+        kind: 'child_run_synthesis_checkpoint',
+        payload: buildChildRunSynthesisPayload(childRunSynthesisCheckpoint),
+        inspectCommands: childRunSynthesisCheckpoint.children
+          .map((child) => child.inspectCommand)
+          .filter((command): command is string => typeof command === 'string' && command.length > 0),
+      })
+      openTaskAutoContinueCount = 0
+      opts.callbacks?.onNotice?.(
+        `Child-run synthesis checkpoint: ${childRunSynthesisCheckpoint.childCount} child Agent runs need a text-only per-child report.`,
+      )
+    }
+    if (verificationRepairCheckpoint) {
+      verificationRepairPending = verificationRepairCheckpoint
+      appendRuntimeRecoveryCheckpoint(conversation, {
+        kind: 'verification_repair_checkpoint',
+        payload: buildVerificationRepairCheckpointPayload(verificationRepairCheckpoint),
+        inspectCommands: [
+          `TaskGet taskId=${verificationRepairCheckpoint.taskId}`,
+          `TaskVerify taskId=${verificationRepairCheckpoint.taskId} stepId=${verificationRepairCheckpoint.stepId}`,
+        ],
+      })
+      openTaskAutoContinueCount = 0
+      opts.callbacks?.onNotice?.(
+        `Verification-repair checkpoint: task ${verificationRepairCheckpoint.taskId} step ${verificationRepairCheckpoint.stepId} failed verification — requesting a text-only repair report.`,
+      )
+    }
+    if (toolResults.results.some((result) => result.result.metadata?.['loopInterceptKind'] === 'long_task_polling')) {
+      longTaskCheckpointPending = activeLongTaskIdsFromRecoveryLedger(conversation)
     }
     if (toolResults.terminalError) {
       markTaskGuardBlocked(taskState, toolResults.terminalError)
@@ -2301,7 +2658,9 @@ export async function runConversationLoop(
     lastStopReason = 'max_iterations'
   }
 
-  if (finalText.trim() && lastStopReason === 'end_turn' && taskState.run.status !== 'waiting_user') {
+  if (finalText.trim() && lastStopReason === 'end_turn' && shouldAcceptResolvedRuntimeRecoveryClosure(conversation, finalText, runtimeRecoveryResolvedThisRun)) {
+    markTaskCompleted(taskState, finalText)
+  } else if (finalText.trim() && lastStopReason === 'end_turn' && taskState.run.status !== 'waiting_user') {
     const legacyCompletionAccepted = isDurableTaskCompletion(taskState, finalText)
     if (isPhaseRuntimeEnabled()) {
       const deliverable = getDeliverableContract(taskState)
@@ -2379,7 +2738,237 @@ export async function runConversationLoop(
     markTaskGuardBlocked(taskState, 'The loop stopped after successful tool results before the assistant produced a durable next step.')
   }
 
+  appendRuntimeEvent(conversation, {
+    kind: 'turn_completed',
+    turnId: runtimeTurnId,
+    payload: {
+      stop_reason: lastStopReason,
+      iterations,
+      request_count: totalUsage.requestCount,
+    },
+  })
   return { conversation, finalText, iterations, stopReason: lastStopReason, usage: totalUsage, runtimeFailure }
+}
+
+function shouldAcceptResolvedRuntimeRecoveryClosure(
+  conversation: Conversation,
+  finalText: string,
+  runtimeRecoveryResolvedThisRun: boolean,
+): boolean {
+  if (!runtimeRecoveryResolvedThisRun) return false
+  const ledger = conversation.options?.runtimeRecoveryLedger
+  if (!ledger || ledger.checkpoints.length === 0) return false
+  if (getUnresolvedRuntimeRecoveryCheckpoints(ledger).length > 0) return false
+  const hasResolvedCheckpoint = ledger.checkpoints.some((checkpoint) => checkpoint.disposition === 'resolved')
+  if (!hasResolvedCheckpoint) return false
+  return /\b(?:no unresolved runtime recovery checkpoints?|no unresolved checkpoints?|zero unresolved checkpoints?|0 unresolved checkpoints?|all checkpoints resolved|recovery ledger:\s*clean|recovery state:\s*clean|runtime recovery (?:is )?resolved|runtime recovery (?:is )?clean|recovery already closed|task already completed|no material work remaining)\b/i.test(finalText)
+}
+
+function buildPostRecoveryOverrunResult(
+  conversation: Conversation | undefined,
+  block: AnthropicToolUseBlock,
+  runtimeRecoveryResolvedThisRun: boolean,
+): ToolExecutionResult | null {
+  if (!runtimeRecoveryResolvedThisRun || !conversation) return null
+  if (block.name !== 'TaskUpdate') return null
+
+  const input = objectValue(block.input)
+  const taskId = stringValue(input?.['taskId'])
+  const stepId = stringValue(input?.['stepId'])
+  const stepStatus = stringValue(input?.['stepStatus'])
+  const taskStatus = stringValue(input?.['status'])
+  const requestedStatus = stepStatus ?? taskStatus
+  const statusField = stepStatus ? 'stepStatus' : 'status'
+  if (!taskId || !requestedStatus) return null
+  if (!['completed', 'blocked', 'failed', 'cancelled'].includes(requestedStatus)) return null
+
+  const ledger = conversation.options?.runtimeRecoveryLedger
+  if (!ledger || getUnresolvedRuntimeRecoveryCheckpoints(ledger).length > 0) return null
+
+  let checkpointStepId: string | undefined
+  const checkpoint = ledger.checkpoints.find((item) => {
+    if (item.kind !== 'verification_repair_checkpoint' || item.disposition !== 'resolved') return false
+    const target = verificationRepairCheckpointFromPayload(item.payload)
+    if (target?.taskId !== taskId) return false
+    if (stepId && target.stepId !== stepId) return false
+    checkpointStepId = target.stepId
+    return true
+  })
+  if (!checkpoint) return null
+
+  const scope = stepId
+    ? `task ${taskId} step ${stepId}`
+    : `task ${taskId} after verification-repair step ${checkpointStepId ?? '(unknown)'}`
+  const statusNote = !stepStatus
+    ? 'would bypass the recovered step-level checkpoint'
+    : requestedStatus === 'completed'
+      ? 'is redundant for a clean recovery checkpoint'
+      : 'would reopen or poison a clean recovery checkpoint'
+  const output =
+    `[post-recovery-overrun] skipped redundant TaskUpdate: runtime recovery already resolved for ${scope}; requested ${statusField}="${requestedStatus}" ${statusNote}; no unresolved runtime recovery checkpoints remain. Report the clean recovery state and do not retry TaskUpdate for this checkpoint.`
+  return {
+    toolUseId: block.id,
+    toolName: 'TaskUpdate',
+    result: {
+      output,
+      isError: false,
+      metadata: {
+        postRecoveryOverrunSuppressed: true,
+        taskId,
+        ...(stepId ? { stepId } : {}),
+        ...(checkpointStepId ? { checkpointStepId } : {}),
+        [statusField]: requestedStatus,
+        checkpointId: checkpoint.id,
+      },
+    },
+    durationMs: 0,
+  }
+}
+
+function buildLongTaskWaitPolicyInterceptResult(
+  conversation: Conversation | undefined,
+  block: AnthropicToolUseBlock,
+): ToolExecutionResult | null {
+  const violation = findLongTaskWaitPolicyViolation(conversation, block)
+  if (!violation) return null
+  const { snapshot, verdict, kind } = violation
+  const policy = verdict.wait_policy
+  const nextAction = policy.strategy === 'runtime_await'
+    ? `use ${policy.next_check_command}`
+    : 'stop polling and report the current lifecycle state'
+  const output =
+    `[long-task-wait-policy] skipped ${block.name}: runtime wait policy for ${snapshot.longTaskId} ` +
+    `is strategy=${policy.strategy}; ${nextAction} instead of ${describeWaitPolicyViolation(kind)}.`
+
+  return {
+    toolUseId: block.id,
+    toolName: block.name,
+    result: {
+      output,
+      isError: false,
+      metadata: {
+        longTaskWaitPolicyIntercept: true,
+        violationKind: kind,
+        longTaskId: snapshot.longTaskId,
+        waitStrategy: policy.strategy,
+        stopPolling: policy.stop_polling,
+        nextCheckCommand: policy.next_check_command,
+        skippedToolName: block.name,
+        ...(snapshot.taskId ? { taskId: snapshot.taskId } : {}),
+        ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
+      },
+    },
+    durationMs: 0,
+  }
+}
+
+type LongTaskWaitPolicyViolationKind =
+  | 'sleep_polling'
+  | 'bash_polling'
+  | 'blocking_task_output'
+  | 'stop_polling_task_output'
+
+interface LongTaskWaitPolicyViolation {
+  kind: LongTaskWaitPolicyViolationKind
+  snapshot: LongTaskSnapshot
+  verdict: LongTaskLifecycleVerdict
+}
+
+function findLongTaskWaitPolicyViolation(
+  conversation: Conversation | undefined,
+  block: AnthropicToolUseBlock,
+): LongTaskWaitPolicyViolation | null {
+  if (!conversation) return null
+  const candidates = surfacedLongTaskWaitPolicyCandidates(conversation)
+  if (candidates.length === 0) return null
+
+  const toolName = block.name.toLowerCase()
+  const input = objectValue(block.input) ?? {}
+  if (toolName === 'sleep') {
+    const candidate = candidates.find(({ verdict }) => shouldInterceptGenericWait(verdict))
+    return candidate ? { kind: 'sleep_polling', ...candidate } : null
+  }
+
+  if (toolName === 'bash') {
+    const command = stringValue(input['command']) ?? ''
+    if (!isBashLongTaskPollingCommand(command)) return null
+    const candidate = candidates.find(({ verdict }) => shouldInterceptGenericWait(verdict))
+    return candidate ? { kind: 'bash_polling', ...candidate } : null
+  }
+
+  if (toolName === 'taskoutput') {
+    const taskId = stringValue(input['task_id']) ?? stringValue(input['taskId'])
+    if (!taskId) return null
+    const candidate = candidates.find(({ snapshot }) => snapshot.taskId === taskId)
+    if (!candidate) return null
+    const blockRequested = input['block'] === true
+    if (candidate.verdict.wait_policy.strategy === 'runtime_await' && blockRequested) {
+      return { kind: 'blocking_task_output', ...candidate }
+    }
+    if (candidate.verdict.wait_policy.stop_polling) {
+      return { kind: 'stop_polling_task_output', ...candidate }
+    }
+  }
+
+  return null
+}
+
+function surfacedLongTaskWaitPolicyCandidates(
+  conversation: Conversation,
+): Array<{ snapshot: LongTaskSnapshot; verdict: LongTaskLifecycleVerdict }> {
+  return recentLongTaskSnapshots(10, { conversationId: conversation.id })
+    .map((snapshot) => ({ snapshot, verdict: buildLongTaskLifecycleVerdict(snapshot) }))
+    .filter((item): item is { snapshot: LongTaskSnapshot; verdict: LongTaskLifecycleVerdict } =>
+      item.verdict !== undefined &&
+      isActionableWaitPolicy(item.verdict) &&
+      hasSurfacedLongTaskWaitPolicy(conversation, item.snapshot, item.verdict),
+    )
+}
+
+function isActionableWaitPolicy(verdict: LongTaskLifecycleVerdict): boolean {
+  return verdict.wait_policy.strategy === 'runtime_await' || verdict.wait_policy.stop_polling
+}
+
+function shouldInterceptGenericWait(verdict: LongTaskLifecycleVerdict): boolean {
+  return verdict.wait_policy.strategy === 'runtime_await' || verdict.wait_policy.stop_polling
+}
+
+function hasSurfacedLongTaskWaitPolicy(
+  conversation: Conversation,
+  snapshot: LongTaskSnapshot,
+  verdict: LongTaskLifecycleVerdict,
+): boolean {
+  const id = snapshot.longTaskId
+  const strategy = verdict.wait_policy.strategy
+  for (const turn of conversation.turns) {
+    if (turn.role !== 'user') continue
+    for (const rawBlock of turn.content) {
+      const block = objectValue(rawBlock)
+      if (!block) continue
+      if (block?.['type'] !== 'tool_result') continue
+      const content = typeof block['content'] === 'string' ? block['content'] : ''
+      if (!content.includes(id)) continue
+      if (content.includes(`wait_strategy=${strategy}`)) return true
+      if (content.includes(`WaitPolicy: strategy=${strategy}`)) return true
+    }
+  }
+  return false
+}
+
+function isBashLongTaskPollingCommand(command: string): boolean {
+  const normalized = command.toLowerCase()
+  if (/\bsleep\s+\d+/.test(normalized)) return true
+  if (/\bpgrep\b|\bps\b/.test(normalized)) return true
+  if (/\bwc\s+-l\b/.test(normalized)) return true
+  if (/\btail\b|\bcat\b/.test(normalized) && /\b(log|out|jsonl|tmp)\b/.test(normalized)) return true
+  return false
+}
+
+function describeWaitPolicyViolation(kind: LongTaskWaitPolicyViolationKind): string {
+  if (kind === 'sleep_polling') return 'Sleep polling'
+  if (kind === 'bash_polling') return 'bash polling'
+  if (kind === 'blocking_task_output') return 'blocking TaskOutput polling'
+  return 'polling after stop_polling=true'
 }
 
 export function shouldShowNoResponseFallback(options: {
@@ -4796,6 +5385,867 @@ function createToolOnlyNudgeBlock(): AnthropicTextBlock {
   }
 }
 
+function createRuntimeRecoveryDispositionBlock(notices: string[]): AnthropicTextBlock {
+  return {
+    type: 'text',
+    text: [
+      '[Runtime recovery disposition update]',
+      ...notices,
+      'Use this disposition update as newer runtime truth than any stale recovery-list output from the same tool batch.',
+    ].join('\n'),
+  }
+}
+
+interface BlockedTaskCheckpoint {
+  taskId: string
+  stepId: string
+  failureReason?: string
+}
+
+interface VerificationRepairCheckpoint {
+  taskId: string
+  stepId: string
+  failedChecks: VerificationRepairFailedCheck[]
+  passedCount: number
+  totalCount: number
+  outputSnippet?: string
+}
+
+interface LongTaskReplacementCheckpoint {
+  originalLongTaskId: string
+  replacementLongTaskId: string
+  replacementTaskId: string
+  status: string
+  reason?: string
+  command?: string
+  cwd?: string
+  originalInspectCommand?: string
+  replacementInspectCommand: string
+  outputCommand: string
+  originalSnapshot?: Record<string, unknown>
+  replacementSnapshot?: Record<string, unknown>
+}
+
+interface VerificationRepairFailedCheck {
+  checkId: string
+  detail?: string
+  unsatisfiable?: boolean
+}
+
+function findBlockedTaskCheckpoint(results: ToolExecutionResult[]): BlockedTaskCheckpoint | null {
+  for (const result of results) {
+    if (result.toolName !== 'TaskUpdate') continue
+    if (result.result.isError) continue
+
+    const metadata = result.result.metadata as Record<string, unknown> | undefined
+    if (metadata?.['stepUpdate'] !== true) continue
+
+    const task = metadata['task'] as Record<string, unknown> | undefined
+    const step = metadata['step'] as Record<string, unknown> | undefined
+    if (step?.['status'] !== 'blocked') continue
+
+    const taskId = typeof task?.['id'] === 'string' ? task['id'] : null
+    const stepId = typeof step['id'] === 'string' ? step['id'] : null
+    if (!taskId || !stepId) continue
+
+    const failureReason = typeof step['failureReason'] === 'string'
+      ? step['failureReason']
+      : undefined
+    return {
+      taskId,
+      stepId,
+      ...(failureReason ? { failureReason } : {}),
+    }
+  }
+  return null
+}
+
+function findVerificationRepairCheckpoint(results: ToolExecutionResult[]): VerificationRepairCheckpoint | null {
+  for (const result of results) {
+    if (result.toolName !== 'TaskVerify') continue
+    if (result.result.isError) continue
+
+    const metadata = objectValue(result.result.metadata)
+    if (!metadata || metadata['passed'] !== false) continue
+
+    const taskId = stringValue(metadata['taskId'])
+    const stepId = stringValue(metadata['stepId'])
+    if (!taskId || !stepId) continue
+
+    const rawResults = Array.isArray(metadata['results']) ? metadata['results'] : []
+    const failedChecks = rawResults
+      .map((item) => objectValue(item))
+      .filter((item): item is Record<string, unknown> => Boolean(item))
+      .filter((item) => item['passed'] === false)
+      .map((item) => ({
+        checkId: stringValue(item['checkId']) ?? '(unknown-check)',
+        ...(stringValue(item['detail']) ? { detail: stringValue(item['detail']) } : {}),
+        ...(item['unsatisfiable'] === true ? { unsatisfiable: true } : {}),
+      }))
+      .filter((item) => item.checkId !== '(unknown-check)')
+
+    if (failedChecks.length === 0) continue
+    return {
+      taskId,
+      stepId,
+      failedChecks,
+      passedCount: Number(rawResults.filter((item) => objectValue(item)?.['passed'] === true).length),
+      totalCount: rawResults.length,
+      outputSnippet: compactForCheckpoint(result.result.output, 800),
+    }
+  }
+  return null
+}
+
+function findLongTaskReplacementCheckpoint(results: ToolExecutionResult[]): LongTaskReplacementCheckpoint | null {
+  for (const result of results) {
+    if (result.toolName !== 'LongTaskReplace') continue
+    if (result.result.isError) continue
+
+    const metadata = objectValue(result.result.metadata)
+    if (!metadata || metadata['replacement_status'] !== 'started') continue
+
+    const originalLongTaskId = stringValue(metadata['original_long_task_id'])
+      ?? stringValue(metadata['originalLongTaskId'])
+    const replacementLongTaskId = stringValue(metadata['replacement_long_task_id'])
+      ?? stringValue(metadata['replacementLongTaskId'])
+    const replacementTaskId = stringValue(metadata['replacement_task_id'])
+      ?? stringValue(metadata['replacementTaskId'])
+    if (!originalLongTaskId || !replacementLongTaskId || !replacementTaskId) continue
+
+    const originalSnapshot = objectValue(metadata['original_long_task_snapshot'])
+      ?? objectValue(metadata['originalLongTaskSnapshot'])
+    const replacementSnapshot = objectValue(metadata['longTaskSnapshot'])
+      ?? objectValue(metadata['long_task_snapshot'])
+      ?? objectValue(objectValue(metadata['replacement_task'])?.['longTaskSnapshot'])
+      ?? objectValue(objectValue(metadata['replacement_task'])?.['long_task_snapshot'])
+    const originalInspectCommand = stringValue(originalSnapshot?.['inspectCommand'])
+      ?? stringValue(originalSnapshot?.['inspect_command'])
+      ?? `LongTaskGet longTaskId=${originalLongTaskId}`
+    const replacementInspectCommand = `LongTaskGet longTaskId=${replacementLongTaskId}`
+    const outputCommand = `TaskOutput task_id=${replacementTaskId} block=false`
+
+    return {
+      originalLongTaskId,
+      replacementLongTaskId,
+      replacementTaskId,
+      status: 'started',
+      ...(stringValue(metadata['replacement_reason']) ? { reason: stringValue(metadata['replacement_reason']) } : {}),
+      ...(stringValue(metadata['command']) ? { command: stringValue(metadata['command']) } : {}),
+      ...(stringValue(metadata['cwd']) ? { cwd: stringValue(metadata['cwd']) } : {}),
+      ...(originalInspectCommand ? { originalInspectCommand } : {}),
+      replacementInspectCommand,
+      outputCommand,
+      ...(originalSnapshot ? { originalSnapshot } : {}),
+      ...(replacementSnapshot ? { replacementSnapshot } : {}),
+    }
+  }
+  return null
+}
+
+function appendLongTaskReplacementCheckpointFromResults(
+  conversation: Conversation,
+  results: ToolExecutionResult[],
+): LongTaskReplacementCheckpoint | null {
+  const checkpoint = findLongTaskReplacementCheckpoint(results)
+  if (!checkpoint) return null
+  appendRuntimeRecoveryCheckpoint(conversation, {
+    kind: 'long_task_replacement_checkpoint',
+    payload: buildLongTaskReplacementCheckpointPayload(checkpoint),
+    inspectCommands: longTaskReplacementCheckpointInspectCommands(checkpoint),
+  })
+  return checkpoint
+}
+
+function isVerificationRepairDispositionToolUse(
+  blocks: AnthropicToolUseBlock[],
+  checkpoint: VerificationRepairCheckpoint,
+): boolean {
+  if (blocks.length !== 1) return false
+  const block = blocks[0]
+  if (!block || block.name !== 'TaskUpdate') return false
+  const input = objectValue(block.input)
+  const taskId = stringValue(input?.['taskId'])
+  const stepId = stringValue(input?.['stepId'])
+  const stepStatus = stringValue(input?.['stepStatus'])
+  const failureReason = stringValue(input?.['failureReason'])
+  return taskId === checkpoint.taskId
+    && stepId === checkpoint.stepId
+    && (stepStatus === 'blocked' || stepStatus === 'failed')
+    && Boolean(failureReason)
+}
+
+function resolveBlockedTaskRecoveryCheckpointsFromToolResults(
+  conversation: Conversation,
+  results: ToolExecutionResult[],
+): string[] {
+  const notices: string[] = []
+  for (const result of results) {
+    if (result.toolName !== 'TaskUpdate') continue
+    if (result.result.isError) continue
+
+    const metadata = result.result.metadata as Record<string, unknown> | undefined
+    if (metadata?.['stepUpdate'] !== true) continue
+
+    const task = metadata['task'] as Record<string, unknown> | undefined
+    const step = metadata['step'] as Record<string, unknown> | undefined
+    if (step?.['status'] !== 'completed') continue
+
+    const taskId = typeof task?.['id'] === 'string' ? task['id'] : null
+    const stepId = typeof step['id'] === 'string' ? step['id'] : null
+    if (!taskId || !stepId) continue
+
+    const updated = markBlockedTaskRecoveryCheckpointResolved(conversation, {
+      taskId,
+      stepId,
+      reason: `TaskUpdate marked task ${taskId} step ${stepId} completed.`,
+    })
+    if (updated > 0) {
+      notices.push(`Runtime recovery ledger: resolved ${updated} checkpoint(s) for task ${taskId} step ${stepId}.`)
+    }
+  }
+  return notices
+}
+
+function resolveVerificationRepairCheckpointsFromToolResults(
+  conversation: Conversation,
+  results: ToolExecutionResult[],
+): string[] {
+  const notices: string[] = []
+  for (const result of results) {
+    if (result.toolName === 'TaskVerify' && !result.result.isError) {
+      const metadata = objectValue(result.result.metadata)
+      if (metadata?.['passed'] !== true) continue
+      const taskId = stringValue(metadata['taskId'])
+      const stepId = stringValue(metadata['stepId'])
+      if (!taskId || !stepId) continue
+      const updated = markVerificationRepairCheckpointResolved(conversation, {
+        taskId,
+        stepId,
+        reason: `TaskVerify passed for task ${taskId} step ${stepId}.`,
+      })
+      if (updated > 0) {
+        notices.push(`Runtime recovery ledger: resolved ${updated} verification-repair checkpoint(s) for task ${taskId} step ${stepId}.`)
+      }
+    }
+
+    if (result.toolName === 'TaskUpdate' && !result.result.isError) {
+      const metadata = objectValue(result.result.metadata)
+      if (metadata?.['stepUpdate'] !== true) continue
+      const task = objectValue(metadata['task'])
+      const step = objectValue(metadata['step'])
+      const status = stringValue(step?.['status'])
+      if (status !== 'completed' && status !== 'blocked' && status !== 'failed') continue
+      const taskId = stringValue(task?.['id'])
+      const stepId = stringValue(step?.['id'])
+      if (!taskId || !stepId) continue
+      const updated = markVerificationRepairCheckpointResolved(conversation, {
+        taskId,
+        stepId,
+        reason: status === 'completed'
+          ? `TaskUpdate marked task ${taskId} step ${stepId} completed after verification repair.`
+          : `TaskUpdate converted failed verification for task ${taskId} step ${stepId} into status=${status}.`,
+      })
+      if (updated > 0) {
+        notices.push(`Runtime recovery ledger: resolved ${updated} verification-repair checkpoint(s) for task ${taskId} step ${stepId}.`)
+      }
+    }
+  }
+  return notices
+}
+
+function resolveRuntimeRecoveryCheckpointsFromToolResults(
+  conversation: Conversation,
+  results: ToolExecutionResult[],
+): string[] {
+  return [
+    ...resolveBlockedTaskRecoveryCheckpointsFromToolResults(conversation, results),
+    ...resolveLongTaskRecoveryCheckpointsFromToolResults(conversation, results),
+    ...resolveLongTaskReplacementCheckpointsFromToolResults(conversation, results),
+    ...resolveVerificationRepairCheckpointsFromToolResults(conversation, results),
+  ]
+}
+
+const TERMINAL_LONG_TASK_STATUSES = new Set(['completed', 'failed', 'timeout', 'cancelled', 'partial', 'incomplete'])
+
+function resolveLongTaskRecoveryCheckpointsFromToolResults(
+  conversation: Conversation,
+  results: ToolExecutionResult[],
+): string[] {
+  const terminalLongTaskIds = terminalLongTaskIdsFromToolResults(results)
+  if (terminalLongTaskIds.size === 0) return []
+
+  const notices: string[] = []
+  const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.kind !== 'long_task_checkpoint') continue
+    const longTaskIds = longTaskIdsFromPayload(checkpoint.payload)
+    if (longTaskIds.length === 0) continue
+    if (!longTaskIds.every((longTaskId) => terminalLongTaskIds.has(longTaskId))) continue
+    const updated = markLongTaskRecoveryCheckpointResolved(conversation, {
+      longTaskIds,
+      reason: `terminal long-task inspect result covered all long task ids for checkpoint ${checkpoint.id}.`,
+    })
+    if (updated > 0) {
+      notices.push(`Runtime recovery ledger: resolved ${updated} terminal long-task checkpoint(s).`)
+    }
+  }
+  return notices
+}
+
+function resolveLongTaskReplacementCheckpointsFromToolResults(
+  conversation: Conversation,
+  results: ToolExecutionResult[],
+): string[] {
+  const terminalLongTaskIds = terminalLongTaskIdsFromToolResults(results)
+  if (terminalLongTaskIds.size === 0) return []
+
+  const notices: string[] = []
+  const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.kind !== 'long_task_replacement_checkpoint') continue
+    const replacement = longTaskReplacementFromPayload(checkpoint.payload)
+    if (!replacement) continue
+    if (!terminalLongTaskIds.has(replacement.replacementLongTaskId)) continue
+    const updated = markLongTaskReplacementCheckpointResolved(conversation, {
+      originalLongTaskId: replacement.originalLongTaskId,
+      replacementLongTaskId: replacement.replacementLongTaskId,
+      reason: `terminal replacement long-task inspect result covered ${replacement.replacementLongTaskId} for checkpoint ${checkpoint.id}.`,
+    })
+    if (updated > 0) {
+      notices.push(`Runtime recovery ledger: resolved ${updated} long-task replacement checkpoint(s).`)
+    }
+  }
+  return notices
+}
+
+function resolveReportedChildRunRecoveryCheckpoints(
+  conversation: Conversation,
+  reportText: string,
+): number {
+  const normalizedReport = reportText.trim()
+  if (!normalizedReport) return 0
+
+  let updatedTotal = 0
+  const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.kind !== 'child_run_synthesis_checkpoint') continue
+    const agentIds = childRunAgentIdsFromPayload(checkpoint.payload)
+    if (agentIds.length === 0) continue
+    if (!agentIds.every((agentId) => normalizedReport.includes(agentId))) continue
+    updatedTotal += markChildRunSynthesisCheckpointResolved(conversation, {
+      agentIds,
+      reason: `Text report covered all child-run agent ids for checkpoint ${checkpoint.id}.`,
+    })
+  }
+  return updatedTotal
+}
+
+function resolveReportedLongTaskRecoveryCheckpoints(
+  conversation: Conversation,
+  reportText: string,
+): number {
+  const normalizedReport = reportText.trim()
+  if (!normalizedReport) return 0
+
+  let updatedTotal = 0
+  const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.kind !== 'long_task_checkpoint') continue
+    const longTaskIds = longTaskIdsFromPayload(checkpoint.payload)
+    if (longTaskIds.length === 0) continue
+    if (!longTaskIds.every((longTaskId) => normalizedReport.includes(longTaskId))) continue
+    updatedTotal += markLongTaskRecoveryCheckpointResolved(conversation, {
+      longTaskIds,
+      reason: `Text report covered all long task ids for checkpoint ${checkpoint.id}.`,
+    })
+  }
+  return updatedTotal
+}
+
+function resolveReportedLongTaskSynthesisCheckpoints(
+  conversation: Conversation,
+  reportText: string,
+): number {
+  const normalizedReport = reportText.trim()
+  if (!normalizedReport) return 0
+
+  let updatedTotal = 0
+  const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.kind !== 'long_task_synthesis_checkpoint') continue
+    const longTaskIds = longTaskIdsFromPayload(checkpoint.payload)
+    if (longTaskIds.length === 0) continue
+    if (!longTaskIds.every((longTaskId) => normalizedReport.includes(longTaskId))) continue
+    updatedTotal += markLongTaskSynthesisCheckpointResolved(conversation, {
+      longTaskIds,
+      reason: `Text report covered all synthesized long task ids for checkpoint ${checkpoint.id}.`,
+    })
+  }
+  return updatedTotal
+}
+
+function resolveReportedLongTaskReplacementCheckpoints(
+  conversation: Conversation,
+  reportText: string,
+): number {
+  const normalizedReport = reportText.trim()
+  if (!normalizedReport) return 0
+
+  let updatedTotal = 0
+  const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.kind !== 'long_task_replacement_checkpoint') continue
+    const replacement = longTaskReplacementFromPayload(checkpoint.payload)
+    if (!replacement) continue
+    if (!normalizedReport.includes(replacement.originalLongTaskId)) continue
+    if (!normalizedReport.includes(replacement.replacementLongTaskId)) continue
+    updatedTotal += markLongTaskReplacementCheckpointResolved(conversation, {
+      originalLongTaskId: replacement.originalLongTaskId,
+      replacementLongTaskId: replacement.replacementLongTaskId,
+      reason: `Text report covered replacement ${replacement.originalLongTaskId} -> ${replacement.replacementLongTaskId} for checkpoint ${checkpoint.id}.`,
+    })
+  }
+  return updatedTotal
+}
+
+function latestLongTaskIdsFromRecoveryLedger(conversation: Conversation): string[] {
+  const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
+    .filter((checkpoint) => checkpoint.kind === 'long_task_checkpoint')
+  const latest = checkpoints.at(-1)
+  return latest ? longTaskIdsFromPayload(latest.payload) : []
+}
+
+function activeLongTaskIdsFromRecoveryLedger(conversation: Conversation): string[] {
+  return latestLongTaskIdsFromRecoveryLedger(conversation)
+}
+
+function activeLongTaskSynthesisIdsFromRecoveryLedger(conversation: Conversation): string[] {
+  const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
+    .filter((checkpoint) => checkpoint.kind === 'long_task_synthesis_checkpoint')
+  const latest = checkpoints.at(-1)
+  return latest ? longTaskIdsFromPayload(latest.payload) : []
+}
+
+function activeVerificationRepairCheckpointFromRecoveryLedger(
+  conversation: Conversation,
+): VerificationRepairCheckpoint | null {
+  const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
+    .filter((checkpoint) =>
+      checkpoint.kind === 'verification_repair_checkpoint'
+      && (checkpoint.disposition ?? 'active') === 'active'
+    )
+  const latest = checkpoints.at(-1)
+  if (!latest) return null
+  return verificationRepairCheckpointFromPayload(latest.payload)
+}
+
+function verificationRepairCheckpointFromPayload(
+  payload: Record<string, unknown>,
+): VerificationRepairCheckpoint | null {
+  const repair = objectValue(payload['verification_repair'])
+  const taskId = stringValue(repair?.['task_id'])
+  const stepId = stringValue(repair?.['step_id'])
+  if (!taskId || !stepId) return null
+  const failedChecks = Array.isArray(repair?.['failed_checks'])
+    ? repair['failed_checks']
+      .map((item) => objectValue(item))
+      .filter((item): item is Record<string, unknown> => Boolean(item))
+      .map((item) => ({
+        checkId: stringValue(item['check_id']) ?? stringValue(item['checkId']) ?? '(unknown-check)',
+        ...(stringValue(item['detail']) ? { detail: stringValue(item['detail']) } : {}),
+        ...(item['unsatisfiable'] === true ? { unsatisfiable: true } : {}),
+      }))
+      .filter((item) => item.checkId !== '(unknown-check)')
+    : []
+  return {
+    taskId,
+    stepId,
+    failedChecks,
+    passedCount: numberValue(repair?.['passed_count']) ?? 0,
+    totalCount: numberValue(repair?.['total_count']) ?? failedChecks.length,
+    outputSnippet: stringValue(repair?.['output_snippet']),
+  }
+}
+
+function longTaskIdsFromPayload(payload: Record<string, unknown>): string[] {
+  const tasks = Array.isArray(payload['long_tasks']) ? payload['long_tasks'] : []
+  const ids: string[] = []
+  for (const task of tasks) {
+    const record = objectValue(task)
+    if (!record) continue
+    const longTaskId = stringValue(record['long_task_id'])
+      ?? stringValue(record['longTaskId'])
+    if (longTaskId) ids.push(longTaskId)
+  }
+  return [...new Set(ids)].sort()
+}
+
+function terminalLongTaskIdsFromToolResults(results: ToolExecutionResult[]): Set<string> {
+  const ids = new Set<string>()
+  for (const result of results) {
+    if (result.result.isError) continue
+    const metadata = objectValue(result.result.metadata)
+    for (const snapshot of longTaskSnapshotsFromMetadata(metadata)) {
+      const longTaskId = stringValue(snapshot['longTaskId'])
+        ?? stringValue(snapshot['long_task_id'])
+      const status = stringValue(snapshot['status'])
+      if (!longTaskId || !status || !TERMINAL_LONG_TASK_STATUSES.has(status)) continue
+      ids.add(longTaskId)
+    }
+  }
+  return ids
+}
+
+function longTaskSnapshotsFromMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown>[] {
+  if (!metadata) return []
+  const snapshots: Record<string, unknown>[] = []
+  const direct = objectValue(metadata['longTaskSnapshot'])
+    ?? objectValue(metadata['long_task_snapshot'])
+  if (direct) snapshots.push(direct)
+
+  for (const containerKey of ['task', 'record']) {
+    const container = objectValue(metadata[containerKey])
+    const nested = objectValue(container?.['longTaskSnapshot'])
+      ?? objectValue(container?.['long_task_snapshot'])
+    if (nested) snapshots.push(nested)
+  }
+  return snapshots
+}
+
+function childRunAgentIdsFromPayload(payload: Record<string, unknown>): string[] {
+  const children = Array.isArray(payload['children']) ? payload['children'] : []
+  const ids: string[] = []
+  for (const child of children) {
+    if (!child || typeof child !== 'object') continue
+    const agentId = stringValue((child as Record<string, unknown>)['agent_id'])
+      ?? stringValue((child as Record<string, unknown>)['agentId'])
+    if (agentId) ids.push(agentId)
+  }
+  return [...new Set(ids)].sort()
+}
+
+function longTaskReplacementFromPayload(payload: Record<string, unknown>): {
+  originalLongTaskId: string
+  replacementLongTaskId: string
+  replacementTaskId?: string
+} | null {
+  const replacement = objectValue(payload['replacement'])
+  const originalLongTaskId = stringValue(replacement?.['original_long_task_id'])
+    ?? stringValue(replacement?.['originalLongTaskId'])
+  const replacementLongTaskId = stringValue(replacement?.['replacement_long_task_id'])
+    ?? stringValue(replacement?.['replacementLongTaskId'])
+  if (!originalLongTaskId || !replacementLongTaskId) return null
+  return {
+    originalLongTaskId,
+    replacementLongTaskId,
+    ...(stringValue(replacement?.['replacement_task_id'])
+      ? { replacementTaskId: stringValue(replacement?.['replacement_task_id']) }
+      : {}),
+  }
+}
+
+function createBlockedTaskCheckpointBlock(checkpoint: BlockedTaskCheckpoint): AnthropicTextBlock {
+  return {
+    type: 'text',
+    text: buildBlockedTaskCheckpointPrompt(checkpoint),
+  }
+}
+
+function buildBlockedTaskCheckpointPrompt(checkpoint: BlockedTaskCheckpoint): string {
+  const reason = checkpoint.failureReason?.trim() || 'No failureReason was recorded.'
+  return [
+    '[Runtime blocked-task checkpoint]',
+    `Task ${checkpoint.taskId} step ${checkpoint.stepId} is now blocked.`,
+    `Recorded blocker: ${reason}`,
+    '',
+    formatBlockedTaskCheckpointPayloadForPrompt(checkpoint),
+    '',
+    'Your next reply MUST be plain text with no tool_use blocks.',
+    'Report the blocker, the evidence already observed, and the smallest user action or artifact/spec change needed to resume.',
+    'Do not call TaskVerify, TaskUpdate, bash, Sleep, Agent, or other tools until the user replies.',
+  ].join('\n')
+}
+
+function formatBlockedTaskCheckpointPayloadForPrompt(checkpoint: BlockedTaskCheckpoint): string {
+  return [
+    '[Runtime blocked-task checkpoint payload]',
+    '```json',
+    JSON.stringify(buildBlockedTaskCheckpointPayload(checkpoint), null, 2),
+    '```',
+  ].join('\n')
+}
+
+function buildBlockedTaskCheckpointPayload(checkpoint: BlockedTaskCheckpoint): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    kind: 'blocked_task_checkpoint',
+    generated_at: new Date().toISOString(),
+    blocked_task: {
+      task_id: checkpoint.taskId,
+      step_id: checkpoint.stepId,
+      status: 'blocked',
+      failure_reason: checkpoint.failureReason ?? null,
+      inspect_command: `TaskGet taskId=${checkpoint.taskId}`,
+    },
+  }
+}
+
+function longTaskReplacementCheckpointInspectCommands(checkpoint: LongTaskReplacementCheckpoint): string[] {
+  const commands = [
+    checkpoint.originalInspectCommand,
+    checkpoint.replacementInspectCommand,
+    checkpoint.outputCommand,
+  ]
+  return [...new Set(commands.filter((command): command is string => Boolean(command?.trim())))]
+}
+
+function buildLongTaskReplacementCheckpointPayload(checkpoint: LongTaskReplacementCheckpoint): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    kind: 'long_task_replacement_checkpoint',
+    generated_at: new Date().toISOString(),
+    replacement: {
+      original_long_task_id: checkpoint.originalLongTaskId,
+      replacement_long_task_id: checkpoint.replacementLongTaskId,
+      replacement_task_id: checkpoint.replacementTaskId,
+      status: checkpoint.status,
+      ...(checkpoint.reason ? { reason: checkpoint.reason } : {}),
+      ...(checkpoint.command ? { command: checkpoint.command } : {}),
+      ...(checkpoint.cwd ? { cwd: checkpoint.cwd } : {}),
+      original_inspect_command: checkpoint.originalInspectCommand ?? `LongTaskGet longTaskId=${checkpoint.originalLongTaskId}`,
+      inspect_command: checkpoint.replacementInspectCommand,
+      output_command: checkpoint.outputCommand,
+    },
+    ...(checkpoint.originalSnapshot ? { original_snapshot: checkpoint.originalSnapshot } : {}),
+    ...(checkpoint.replacementSnapshot ? { replacement_snapshot: checkpoint.replacementSnapshot } : {}),
+  }
+}
+
+function createVerificationRepairCheckpointBlock(checkpoint: VerificationRepairCheckpoint): AnthropicTextBlock {
+  return {
+    type: 'text',
+    text: buildVerificationRepairCheckpointPrompt(checkpoint),
+  }
+}
+
+function buildVerificationRepairCheckpointPrompt(checkpoint: VerificationRepairCheckpoint): string {
+  return [
+    '[Runtime verification-repair checkpoint]',
+    `Task ${checkpoint.taskId} step ${checkpoint.stepId} has failed verification.`,
+    'Do not turn this into workaround completion, and do not keep re-running the same verification before repair.',
+    '',
+    formatVerificationRepairCheckpointPayloadForPrompt(checkpoint),
+    '',
+    'Your next reply MUST be plain text with no tool_use blocks.',
+    'Report the failed checks, the evidence already observed, whether the artifact or verification spec needs repair, and the exact next TaskVerify command to run after repair.',
+    'Do not call TaskVerify, bash, Sleep, Agent, or other tools until the user replies. The only allowed tool escape is TaskUpdate for the same task/step with stepStatus="blocked" or "failed" and a concrete failureReason.',
+  ].join('\n')
+}
+
+function formatVerificationRepairCheckpointPayloadForPrompt(checkpoint: VerificationRepairCheckpoint): string {
+  return [
+    '[Runtime verification-repair checkpoint payload]',
+    '```json',
+    JSON.stringify(buildVerificationRepairCheckpointPayload(checkpoint), null, 2),
+    '```',
+  ].join('\n')
+}
+
+function buildVerificationRepairCheckpointPayload(checkpoint: VerificationRepairCheckpoint): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    kind: 'verification_repair_checkpoint',
+    generated_at: new Date().toISOString(),
+    verification_repair: {
+      task_id: checkpoint.taskId,
+      step_id: checkpoint.stepId,
+      status: 'failed_verification',
+      passed_count: checkpoint.passedCount,
+      total_count: checkpoint.totalCount,
+      failed_checks: checkpoint.failedChecks.map((check) => ({
+        check_id: check.checkId,
+        passed: false,
+        ...(check.detail ? { detail: check.detail } : {}),
+        ...(check.unsatisfiable ? { unsatisfiable: true } : {}),
+      })),
+      inspect_command: `TaskGet taskId=${checkpoint.taskId}`,
+      verify_command: `TaskVerify taskId=${checkpoint.taskId} stepId=${checkpoint.stepId}`,
+      repair_options: [
+        'repair_artifact_then_reverify',
+        'replace_broken_verification_spec_with_concrete_checks_then_reverify',
+        'mark_step_blocked_with_failureReason_if_repair_requires_user_input',
+      ],
+      ...(checkpoint.outputSnippet ? { output_snippet: checkpoint.outputSnippet } : {}),
+    },
+  }
+}
+
+interface ChildRunSynthesisCheckpoint {
+  childCount: number
+  children: ChildRunSummary[]
+}
+
+interface ChildRunSummary {
+  toolUseId: string
+  agentId: string
+  status: string
+  description?: string
+  failureCategory?: string
+  timeoutKind?: string
+  inspectCommand?: string
+  parentTaskId?: string | null
+  parentStepId?: string | null
+  lastProgress?: string
+  outputSnippet?: string
+}
+
+function findChildRunSynthesisCheckpoint(
+  results: ToolExecutionResult[],
+  blocks: AnthropicToolUseBlock[],
+): ChildRunSynthesisCheckpoint | null {
+  const blocksById = new Map(blocks.map((block) => [block.id, block]))
+  const children: ChildRunSummary[] = []
+  for (const result of results) {
+    if (result.toolName !== 'Agent') continue
+    if (!result.result.isError) continue
+
+    const metadata = result.result.metadata as Record<string, unknown> | undefined
+    if (metadata?.['subAgentIsolatedFailure'] !== true) continue
+
+    const failureCategory = typeof metadata['failureCategory'] === 'string'
+      ? metadata['failureCategory']
+      : undefined
+    const agentTimeout = metadata['agentTimeout'] === true
+    if (failureCategory && !failureCategory.startsWith('agent:') && !agentTimeout) continue
+    const childFailureCategory = agentTimeout ? 'agent:watchdog_timeout' : failureCategory
+
+    const snapshot = metadata['longTaskSnapshot'] as Record<string, unknown> | undefined
+    const block = blocksById.get(result.toolUseId)
+    const input = block?.input as Record<string, unknown> | undefined
+    const agentId = stringValue(metadata['agentId'])
+      ?? stringValue(snapshot?.['agentId'])
+      ?? result.toolUseId
+    const description = stringValue(input?.['description'])
+      ?? stringValue(snapshot?.['objective'])
+    const status = stringValue(snapshot?.['status'])
+      ?? stringValue(metadata['completion_status'])
+      ?? 'failed'
+    const timeoutKind = stringValue(metadata['timeoutKind'])
+      ?? stringValue(snapshot?.['timeoutKind'])
+    const inspectCommand = stringValue(snapshot?.['inspectCommand'])
+      ?? `AgentRunGet agentId=${agentId}`
+    const parentTaskId = nullableStringValue(snapshot?.['parentTaskId'])
+    const parentStepId = nullableStringValue(snapshot?.['parentStepId'])
+    const lastProgress = formatChildRunProgress(metadata['lastProgress'])
+      ?? stringValue(snapshot?.['lastProgress'])
+    const outputSnippet = stringValue(snapshot?.['outputSnippet'])
+      ?? compactForCheckpoint(result.result.output, 240)
+
+    children.push({
+      toolUseId: result.toolUseId,
+      agentId,
+      status,
+      ...(description ? { description } : {}),
+      ...(childFailureCategory ? { failureCategory: childFailureCategory } : {}),
+      ...(timeoutKind ? { timeoutKind } : {}),
+      ...(inspectCommand ? { inspectCommand } : {}),
+      ...(parentTaskId !== undefined ? { parentTaskId } : {}),
+      ...(parentStepId !== undefined ? { parentStepId } : {}),
+      ...(lastProgress ? { lastProgress } : {}),
+      ...(outputSnippet ? { outputSnippet } : {}),
+    })
+  }
+  return children.length >= 2
+    ? { childCount: children.length, children }
+    : null
+}
+
+function createChildRunSynthesisCheckpointBlock(checkpoint: ChildRunSynthesisCheckpoint): AnthropicTextBlock {
+  return {
+    type: 'text',
+    text: buildChildRunSynthesisCheckpointPrompt(checkpoint),
+  }
+}
+
+function buildChildRunSynthesisCheckpointPrompt(checkpoint: ChildRunSynthesisCheckpoint): string {
+  return [
+    '[Runtime child-run synthesis checkpoint]',
+    `${checkpoint.childCount} child Agent runs failed or timed out in the same tool batch.`,
+    '',
+    formatChildRunSynthesisPayloadForPrompt(checkpoint),
+    '',
+    'Your next reply MUST be plain text with no tool_use blocks.',
+    'Report one line per child run. For each child, include agent_id, status, failure_category, evidence already observed, inspect_command, and the smallest next action.',
+    'Do not collapse these children into a single vague summary, and do not call Agent, bash, Sleep, TaskUpdate, or other tools until the user replies.',
+  ].join('\n')
+}
+
+function formatChildRunSynthesisPayloadForPrompt(checkpoint: ChildRunSynthesisCheckpoint): string {
+  return [
+    '[Runtime child-run synthesis payload]',
+    '```json',
+    JSON.stringify(buildChildRunSynthesisPayload(checkpoint), null, 2),
+    '```',
+  ].join('\n')
+}
+
+function buildChildRunSynthesisPayload(checkpoint: ChildRunSynthesisCheckpoint): Record<string, unknown> {
+  return {
+    schema_version: 1,
+    kind: 'child_run_synthesis_checkpoint',
+    generated_at: new Date().toISOString(),
+    child_count: checkpoint.childCount,
+    children: checkpoint.children.map((child) => ({
+      tool_use_id: child.toolUseId,
+      agent_id: child.agentId,
+      status: child.status,
+      ...(child.description ? { description: child.description } : {}),
+      ...(child.failureCategory ? { failure_category: child.failureCategory } : {}),
+      ...(child.timeoutKind ? { timeout_kind: child.timeoutKind } : {}),
+      ...(child.inspectCommand ? { inspect_command: child.inspectCommand } : {}),
+      ...(child.parentTaskId !== undefined ? { parent_task_id: child.parentTaskId } : {}),
+      ...(child.parentStepId !== undefined ? { parent_step_id: child.parentStepId } : {}),
+      ...(child.lastProgress ? { last_progress: child.lastProgress } : {}),
+      ...(child.outputSnippet ? { output_snippet: child.outputSnippet } : {}),
+    })),
+  }
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+}
+
+function nullableStringValue(value: unknown): string | null | undefined {
+  if (value === null) return null
+  return stringValue(value)
+}
+
+function formatChildRunProgress(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.length > 0) return value
+  if (!value || typeof value !== 'object') return undefined
+  const record = value as Record<string, unknown>
+  const kind = stringValue(record['kind'])
+  const tool = stringValue(record['toolName'])
+  return [kind, tool].filter(Boolean).join(':') || undefined
+}
+
+function compactForCheckpoint(value: string, limit: number): string {
+  const normalized = value.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= limit) return normalized
+  return `${normalized.slice(0, limit).trimEnd()}...`
+}
+
 /**
  * Hard deadline on the tool cancel path. After abort fires, a tool has
  * this long to unwind cooperatively before we synthesize an aborted
@@ -5018,9 +6468,11 @@ async function executeTools(
   interceptedIntents?: Set<string>,
   schemaFailCounts?: Map<string, number>,
   crossTurnFailureClasses?: Map<string, number>,
-): Promise<{ results: ToolExecutionResult[]; loopError?: string; terminalError?: string }> {
+  runtimeRecoveryResolvedThisRun = false,
+): Promise<{ results: ToolExecutionResult[]; loopError?: string; terminalError?: string; runtimeRecoveryDispositionNotices: string[] }> {
   const results: ToolExecutionResult[] = []
   const userIntent = latestUserText ? inferUserIntent(latestUserText) : 'neutral'
+  const runtimeRecoveryDispositionNotices: string[] = []
 
   for (const block of blocks) {
     if (signal?.aborted) break
@@ -5045,7 +6497,7 @@ async function executeTools(
           `with the same missing required field(s) [${schemaForecast.missingFields.join(', ')}] ` +
           `${priorCount + 1} time(s). Hard-terminating to break the empty-input retry loop.`
         callbacks?.onError?.(reason)
-        return { results, loopError: reason }
+        return { results, loopError: reason, runtimeRecoveryDispositionNotices }
       }
       schemaFailCounts.set(key, priorCount + 1)
     }
@@ -5055,13 +6507,25 @@ async function executeTools(
     if (loopError) {
       const mode = getLoopInterceptMode()
       const alreadyIntercepted = interceptedIntents?.has(nextAttempt.intentKey) === true
+      const interceptKind = classifyLoopInterceptKind(loopError, nextAttempt)
       // 0.13.55: soft intercept. First hit per intentKey synthesizes a
       // tool_result demanding root-cause + patch proposal + user-query
       // (no terminate). Second hit on the same intentKey escalates to
       // the legacy hard-terminate path.
       if (mode === 'soft' && !alreadyIntercepted) {
         interceptedIntents?.add(nextAttempt.intentKey)
-        callbacks?.onNotice?.(`Loop intercept (soft): ${loopError}`)
+        callbacks?.onNotice?.(`Loop intercept (${interceptKind === 'long_task_polling' ? 'checkpoint' : 'soft'}): ${loopError}`)
+        if (interceptKind === 'long_task_polling' && conversationForGuard) {
+          const payload = buildLongTaskCheckpointPayload({
+            conversationId: conversationForGuard.id,
+          })
+          if (payload) {
+            appendRuntimeRecoveryCheckpoint(conversationForGuard, {
+              kind: 'long_task_checkpoint',
+              payload: payload as unknown as Record<string, unknown>,
+            })
+          }
+        }
         // Record the attempt so subsequent loop-guard checks see it
         // and so the second-hit hard-terminate can fire.
         recordToolAttempt(attempts, { ...nextAttempt, isError: true })
@@ -5069,10 +6533,13 @@ async function executeTools(
           toolUseId: block.id,
           toolName: block.name,
           result: {
-            output: buildLoopInterceptPrompt(loopError, nextAttempt),
+            output: buildLoopInterceptPrompt(loopError, nextAttempt, {
+              conversationId: conversationForGuard?.id,
+            }),
             isError: true,
             metadata: {
               loopIntercept: true,
+              loopInterceptKind: interceptKind,
               loopReason: loopError,
               intentKey: nextAttempt.intentKey,
             },
@@ -5084,7 +6551,7 @@ async function executeTools(
         break
       }
       callbacks?.onError?.(loopError)
-      return { results, loopError }
+      return { results, loopError, runtimeRecoveryDispositionNotices }
     }
 
     // Analysis-intent guard (0.13.48; bash + TaskCreate + probe-consent
@@ -5310,12 +6777,22 @@ async function executeTools(
         toolName: block.name,
         input: block.input,
         attemptedPath: guardViolation.attemptedPath,
+        attemptedPaths: guardViolation.attemptedPaths,
         allowedPaths: guardViolation.allowedPaths,
         message: guardViolation.message,
       })
-      if (!approved || !approveTaskWriteScope(taskState, guardViolation.attemptedPath)) {
+      const approvedWriteScope = approved
+        && guardViolation.attemptedPaths.every((attemptedPath) =>
+          approveTaskWriteScope(taskState, attemptedPath),
+        )
+      if (!approvedWriteScope) {
         if (signal?.aborted) break
-        markTaskWriteScopeBlocked(taskState, guardViolation.message, guardViolation.attemptedPath)
+        markTaskWriteScopeBlocked(
+          taskState,
+          guardViolation.message,
+          guardViolation.attemptedPath,
+          guardViolation.attemptedPaths,
+        )
         recordGateEvent({
           ts: Date.now(),
           kind: 'write_scope_block',
@@ -5334,6 +6811,7 @@ async function executeTools(
             metadata: {
               taskGuardBlocked: true,
               attemptedPath: guardViolation.attemptedPath,
+              attemptedPaths: guardViolation.attemptedPaths,
               allowedPaths: guardViolation.allowedPaths,
             },
           },
@@ -5341,6 +6819,27 @@ async function executeTools(
         })
         continue
       }
+    }
+
+    const postRecoveryOverrun = buildPostRecoveryOverrunResult(
+      conversationForGuard,
+      block,
+      runtimeRecoveryResolvedThisRun,
+    )
+    if (postRecoveryOverrun) {
+      callbacks?.onNotice?.(postRecoveryOverrun.result.output)
+      results.push(postRecoveryOverrun)
+      continue
+    }
+
+    const waitPolicyIntercept = buildLongTaskWaitPolicyInterceptResult(
+      conversationForGuard,
+      block,
+    )
+    if (waitPolicyIntercept) {
+      callbacks?.onNotice?.(waitPolicyIntercept.result.output)
+      results.push(waitPolicyIntercept)
+      continue
     }
 
     // --- Slice 1: shadow-record proposal (only when taskState is present) ---
@@ -5440,6 +6939,15 @@ async function executeTools(
       recordPermissionPhaseEvent(taskState, taskState.run.lifetimeIterations ?? 0, 'permission_granted', block.name)
     }
 
+    if (conversationForGuard) {
+      appendRuntimeEvent(conversationForGuard, {
+        kind: 'item_started',
+        itemId: block.id,
+        payload: {
+          tool_name: block.name,
+        },
+      })
+    }
     callbacks?.onToolStart?.(block.name, block.input)
 
     // --- Slice 1: shadow-record execution start (guarded; taskState may be undefined) ---
@@ -5456,8 +6964,16 @@ async function executeTools(
       signal?: AbortSignal
       taskState?: ActiveTaskState
       projectMapSnapshot?: ProjectMapSnapshot
+      conversationId?: string
+      runtimeRecoveryLedger?: RuntimeRecoveryLedger
       askUserQuestion?: (question: string, opts?: AskUserQuestionOpts) => Promise<string>
-    } = { signal, taskState, projectMapSnapshot: conversationForGuard?.options?.projectMapSnapshot }
+    } = {
+      signal,
+      taskState,
+      projectMapSnapshot: conversationForGuard?.options?.projectMapSnapshot,
+      conversationId: conversationForGuard?.id,
+      runtimeRecoveryLedger: conversationForGuard?.options?.runtimeRecoveryLedger,
+    }
     if (callbacks?.onToolProgress) {
       context.onProgress = (event: ToolProgressEvent) => {
         if (!signal?.aborted) callbacks.onToolProgress!(block.name, event)
@@ -5473,9 +6989,33 @@ async function executeTools(
 
     const result = await executeToolWithAbortDeadline(dispatcher, block, context, signal)
     if (signal?.aborted) break
+    if (conversationForGuard) {
+      appendRuntimeEvent(conversationForGuard, {
+        kind: 'item_completed',
+        itemId: block.id,
+        payload: {
+          tool_name: block.name,
+          is_error: result.result.isError === true,
+          duration_ms: result.durationMs,
+        },
+      })
+    }
 
     if (taskState) {
       recordToolResultProvenance(taskState, block, result)
+    }
+    if (conversationForGuard) {
+      const replacementCheckpoint = appendLongTaskReplacementCheckpointFromResults(conversationForGuard, [result])
+      if (replacementCheckpoint) {
+        callbacks?.onNotice?.(
+          `Long-task replacement checkpoint: ${replacementCheckpoint.originalLongTaskId} was replaced by ${replacementCheckpoint.replacementLongTaskId}.`,
+        )
+      }
+      const dispositionNotices = resolveRuntimeRecoveryCheckpointsFromToolResults(conversationForGuard, [result])
+      if (dispositionNotices.length > 0) {
+        runtimeRecoveryResolvedThisRun = true
+        runtimeRecoveryDispositionNotices.push(...dispositionNotices)
+      }
     }
 
     // --- Slice 1: shadow-record settlement + post-grant evidence (guarded) ---
@@ -5509,6 +7049,9 @@ async function executeTools(
         }
         if (block.name === 'DeliveryAudit' || block.name === 'TaskVerify' || block.name === 'ArtifactVerify') {
           recordVerificationEvidencePhaseEvent(taskState, taskState.run.lifetimeIterations ?? 0, block.name, `${block.name} returned without error`)
+        } else if (isReliableVerificationLikeBashCommand(block.name, block.input as Record<string, unknown>)) {
+          const command = previewWithoutSplittingToken(normalizeWhitespace(String((block.input as Record<string, unknown>)['command'] ?? '')), 120)
+          recordVerificationEvidencePhaseEvent(taskState, taskState.run.lifetimeIterations ?? 0, block.name, `bash verification command returned without error: ${command}`)
         }
       }
     }
@@ -5555,8 +7098,15 @@ async function executeTools(
         rawFailureCategory.length > 0
           ? rawFailureCategory
           : undefined
+      const progressFingerprint =
+        !result.result.isError && (block.name === 'bash' || block.name === 'Bash')
+          ? bashMonitorProgressFingerprint(result.result.output)
+          : null
       const completedAttempt = {
         ...nextAttempt,
+        ...(progressFingerprint
+          ? { signature: `${nextAttempt.signature}#progress:${hashToolPayload(progressFingerprint)}` }
+          : {}),
         isError: result.result.isError,
         failureCategory,
       }
@@ -5578,11 +7128,11 @@ async function executeTools(
         ? result.result.metadata['terminalFailureReason']
         : `${block.name} reported a terminal failure.`
       callbacks?.onError?.(reason)
-      return { results, terminalError: reason }
+      return { results, terminalError: reason, runtimeRecoveryDispositionNotices }
     }
   }
 
-  return { results }
+  return { results, runtimeRecoveryDispositionNotices }
 }
 
 function extractToolEvidencePath(input: Record<string, unknown>): string | null {
@@ -5603,6 +7153,36 @@ function canonicalizeToolEvidencePath(pathToCheck: string): string {
     const canonicalParent = canonicalizeToolEvidencePath(parent)
     return pathNormalize(pathResolve(canonicalParent, pathBasename(resolved)))
   }
+}
+
+function isVerificationLikeBashCommand(toolName: string, input: Record<string, unknown>): boolean {
+  if (toolName !== 'bash' && toolName !== 'Bash') return false
+  const command = normalizeWhitespace(String(input['command'] ?? ''))
+  if (!command) return false
+  return /\b(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|typecheck|lint|build|verify|smoke)(?::[\w.-]+)?\b/i.test(command)
+    || /\b(?:pytest|vitest|jest|mocha|playwright\s+test|go\s+test|cargo\s+test|ruff|mypy|tsc|eslint)\b/i.test(command)
+    || /\b(?:--dry-run|dry[- ]run|smoke|verify|verification)\b/i.test(command)
+}
+
+function isReliableVerificationLikeBashCommand(toolName: string, input: Record<string, unknown>): boolean {
+  if (!isVerificationLikeBashCommand(toolName, input)) return false
+  const command = normalizeWhitespace(String(input['command'] ?? ''))
+  return !hasUnprotectedPipeline(command)
+}
+
+function hasUnprotectedPipeline(command: string): boolean {
+  if (!/(^|[^|])\|(?!\|)/.test(command)) return false
+  return !/\b(?:pipefail|PIPESTATUS)\b/.test(command)
+}
+
+function bashMonitorProgressFingerprint(output: string): string | null {
+  const counts: string[] = []
+  for (const line of output.split(/\r?\n/)) {
+    const match = line.match(/^\s*(\d+)\s+(\S+\.(?:jsonl|json|log|txt|csv|tsv))\b/)
+    if (!match) continue
+    counts.push(`${match[2]}=${match[1]}`)
+  }
+  return counts.length >= 2 ? `count-lines:${counts.join(';')}` : null
 }
 
 export function buildToolAttempt(
@@ -5681,6 +7261,27 @@ export function recordCrossTurnFailureClass(
   }
 }
 
+function sleepBashPollingLoopReason(window: ToolAttemptSignature[]): string | null {
+  if (window.length !== 5) return null
+  const categories = window.map((attempt) => attempt.category)
+  const pattern = categories.join('/')
+  if (pattern !== 'sleep/bash/sleep/bash/sleep' && pattern !== 'bash/sleep/bash/sleep/bash') {
+    return null
+  }
+
+  const bashAttempts = window.filter((attempt) => attempt.category === 'bash')
+  if (bashAttempts.some((attempt) => attempt.signature.includes('#progress:'))) return null
+  if (!bashAttempts.every(isBashMonitoringAttempt)) return null
+
+  return `task stuck in tool loop: repeated ${pattern} monitoring attempts`
+}
+
+function isBashMonitoringAttempt(attempt: ToolAttemptSignature): boolean {
+  if (attempt.category !== 'bash') return false
+  const text = `${attempt.target} ${attempt.intentTarget}`.toLowerCase()
+  return /\b(?:date|du|find|grep|jobs|lsof|ls|pgrep|ps|stat|tail|wc)\b/.test(text)
+}
+
 export function detectToolLoop(
   attempts: ToolAttemptSignature[],
   next: ToolAttemptSignature,
@@ -5715,6 +7316,9 @@ export function detectToolLoop(
       : `tool=${next.name}`
     return `task stuck in tool loop: repeated failing ${next.category} attempts on ${targetLabel}`
   }
+
+  const longTaskPollingLoop = sleepBashPollingLoopReason([...recent.slice(-4), next])
+  if (longTaskPollingLoop) return longTaskPollingLoop
 
   if (next.category !== 'bash') {
     const lastFour = [...recent.slice(-4), next]
@@ -5991,12 +7595,12 @@ export function createConversation(opts: {
  * being too long for one turn — heap pressure, output bloat, max-
  * tokens continuation handling. Then a 2026-05-07 industry survey
  * exposed the upstream cause: owlcoda's default of 4096 was an
- * outlier on the low end. external coding-assistant uses 32K, Aider 8K-32K per
+ * outlier on the low end. Claude Code uses 32K, Aider 8K-32K per
  * model, opencode 32K. Every model in our supported matrix
  * (Claude 4.x, DeepSeek V4, Kimi K2, GPT-5, Gemini 2.5, Qwen 3)
  * supports ≥16K output natively; many support 32K-128K.
  *
- * 0.13.65 raises the default to 32,768 (matches external coding-assistant) and
+ * 0.13.65 raises the default to 32,768 (matches Claude Code) and
  * exposes `OWLCODA_MAX_OUTPUT_TOKENS` as a per-session override.
  * Callers passing an explicit `opts.maxTokens` still win — the
  * resolver only applies to call sites that previously used the

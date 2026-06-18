@@ -155,6 +155,8 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
       subagent_type: { type: 'string', description: 'Agent type: "general-purpose" (default) or "Explore" (read-only)' },
       model: { type: 'string', description: 'Optional model id for the sub-agent. Defaults to the parent conversation model. Use a different model to isolate orchestration sub-agents from a data-generation backend (so one backend outage does not take down the whole fan-out).' },
       max_iterations: { type: 'number', description: 'Optional iteration budget for long-running sub-agent work. Defaults to 200 for general-purpose agents and 80 for Explore agents.' },
+      idle_timeout_ms: { type: 'number', description: 'Optional per-call idle watchdog timeout in milliseconds for known long-running sub-agent work. Positive values only; 0/invalid values are ignored so the Agent call cannot disable the idle guard.' },
+      max_runtime_ms: { type: 'number', description: 'Optional per-call maximum runtime watchdog timeout in milliseconds for known long-running sub-agent work. Positive values only; 0/invalid values are ignored so the Agent call cannot disable the hard ceiling.' },
       expectedArtifacts: {
         type: 'array',
         description: 'Slice 5 artifact contract: when non-empty, the sub-agent MUST touch at least one path matching each artifact or the tool returns isError=true. Omit for text/research agents that do not write files.',
@@ -172,6 +174,77 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
       parentStepId: { type: 'string', description: 'Parent step ID for traceability (optional).' },
     },
     required: ['description', 'prompt'],
+  },
+  AgentRunList: {
+    type: 'object',
+    properties: {
+      limit: { type: 'number', description: 'Maximum recent Agent runs to return. Defaults to 20; capped by the runtime history limit.' },
+    },
+    description: 'Read-only inspection of recent Agent run lifecycle records. This does not resume, retry, or mutate sub-agents.',
+  },
+  AgentRunGet: {
+    type: 'object',
+    properties: {
+      agentId: { type: 'string', description: 'Agent run ID returned by Agent metadata or AgentRunList.' },
+    },
+    required: ['agentId'],
+    description: 'Read one Agent run lifecycle record by ID. Read-only; this does not resume, retry, or mutate sub-agents.',
+  },
+  LongTaskList: {
+    type: 'object',
+    properties: {
+      limit: { type: 'number', description: 'Maximum recent long-task lifecycle records to return. Defaults to 20; capped by the runtime registry limit.' },
+    },
+    description: 'Read-only inspection of runtime-owned long-task lifecycle records for the current conversation. This does not wait, resume, retry, or mutate tasks or agents.',
+  },
+  LongTaskGet: {
+    type: 'object',
+    properties: {
+      longTaskId: { type: 'string', description: 'Long task ID returned by LongTaskList, such as task:task-1 or agent:agent-D1.' },
+    },
+    required: ['longTaskId'],
+    description: 'Read one runtime-owned long-task lifecycle record by ID. Read-only; this does not wait, resume, retry, or mutate tasks or agents.',
+  },
+  LongTaskAwait: {
+    type: 'object',
+    properties: {
+      longTaskId: { type: 'string', description: 'Long task ID returned by LongTaskList, such as task:task-1 or agent:agent-D1.' },
+      timeoutMs: { type: 'number', description: 'Optional runtime wait budget in milliseconds. The runtime clamps this to the long-task wait_policy max_wait_ms.' },
+    },
+    required: ['longTaskId'],
+    description: 'Use the runtime-managed wait policy for one waitable long task. Read-only; this does not resume, retry, or mutate tasks or agents.',
+  },
+  LongTaskReplace: {
+    type: 'object',
+    properties: {
+      longTaskId: { type: 'string', description: 'Long task ID returned by LongTaskList/LongTaskGet whose wait_policy strategy is replace_or_retry.' },
+      command: {
+        type: 'string',
+        description: 'Optional safe_readonly replacement command. When omitted, runtime reuses the original classified command from the task_command lifecycle snapshot. Dangerous, unknown, or needs_approval commands are refused.',
+      },
+      cwd: { type: 'string', description: 'Optional working directory for the replacement command. Defaults to the original task cwd when available.' },
+      subject: { type: 'string', description: 'Optional subject for the replacement task.' },
+      description: { type: 'string', description: 'Optional description for the replacement task.' },
+      reason: { type: 'string', description: 'Optional reason recorded on the replacement task metadata.' },
+    },
+    required: ['longTaskId'],
+    description: 'Runtime-controlled replacement path for replace_or_retry long-task records. Only command-backed task_command records can be replaced automatically; Agent records require an explicit new Agent call.',
+  },
+  RuntimeRecoveryList: {
+    type: 'object',
+    properties: {
+      limit: { type: 'number', description: 'Maximum recent runtime recovery checkpoints to return. Defaults to 20; capped by the runtime ledger limit.' },
+      includeResolved: { type: 'boolean', description: 'When true, include resolved and superseded checkpoint history. Defaults to false so stale checkpoints do not steer recovery.' },
+    },
+    description: 'Read-only inspection of durable runtime recovery checkpoints for the current conversation. This does not resume, retry, or mutate tasks or agents.',
+  },
+  RuntimeRecoveryGet: {
+    type: 'object',
+    properties: {
+      checkpointId: { type: 'string', description: 'Runtime recovery checkpoint ID returned by RuntimeRecoveryList or the recovery ledger prompt.' },
+    },
+    required: ['checkpointId'],
+    description: 'Read one durable runtime recovery checkpoint by ID. Read-only; this does not resume, retry, or mutate tasks or agents.',
   },
   EnterPlanMode: {
     type: 'object',
@@ -237,6 +310,11 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
       description: { type: 'string', description: 'Detailed description of work to do' },
       activeForm: { type: 'string', description: 'Task description in present continuous form' },
       metadata: { type: 'object', description: 'Optional metadata key-value pairs' },
+      command: {
+        type: 'string',
+        description: 'Optional safe_readonly bash command to spawn as a background task. Dangerous, unknown, or needs_approval commands are refused; use bash for operator-approved commands.',
+      },
+      cwd: { type: 'string', description: 'Working directory for command execution' },
       deliverables: {
         type: 'array',
         description: 'Optional structured deliverable paths for this task plan',
@@ -358,6 +436,49 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
       stepId: { type: 'string', description: 'Step ID to update (triggers step-level update when present)' },
       stepStatus: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'failed', 'blocked', 'cancelled'], description: 'New status for the step' },
       touchedPaths: { type: 'array', items: { type: 'string' }, description: 'Paths touched during this step (appended to existing)' },
+      verification: {
+        type: 'array',
+        description: 'Replacement verification checks for this step. Use this to correct an unsatisfiable or wrong TaskVerify spec, then re-run TaskVerify before completion. Replaces existing checks and clears stale results unless verificationResults is also supplied.',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string' },
+            kind: { type: 'string', enum: ['file_exists', 'file_contains', 'artifact_count', 'verification_pack', 'command', 'none'] },
+            packId: { type: 'string' },
+            path: { type: 'string' },
+            pattern: { type: 'string' },
+            root: { type: 'string' },
+            glob: { type: 'string' },
+            min: { type: 'number' },
+            deckPath: { type: 'string' },
+            expectedSections: { type: 'number' },
+            buildNotesPath: { type: 'string' },
+            requiredMarkers: {
+              type: 'array',
+              items: {
+                anyOf: [
+                  { type: 'string' },
+                  {
+                    type: 'object',
+                    properties: {
+                      marker: { type: 'string' },
+                      label: { type: 'string' },
+                    },
+                    required: ['marker'],
+                  },
+                ],
+              },
+            },
+            minFileSizeBytes: { type: 'number' },
+            minSectionBytes: { type: 'number' },
+            forbiddenTerms: { type: 'array', items: { type: 'string' } },
+            command: { type: 'string' },
+            expectedExitCode: { type: 'number' },
+            reason: { type: 'string' },
+          },
+          required: ['id', 'kind'],
+        },
+      },
       verificationResults: {
         type: 'array',
         description: 'Verification results to record for this step (replaces existing results)',
@@ -368,6 +489,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
             passed: { type: 'boolean' },
             detail: { type: 'string' },
             checkedAt: { type: 'string' },
+            unsatisfiable: { type: 'boolean' },
             metadata: { type: 'object', description: 'Optional structured verification metadata, such as a verification pack result.' },
           },
           required: ['checkId', 'passed', 'checkedAt'],

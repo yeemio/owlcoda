@@ -1,6 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createTaskOutputTool } from '../../../src/native/tools/task-output.js'
-import { resetTaskStore, createTask, updateTask, updateTaskStep } from '../../../src/native/tools/task-store.js'
+import {
+  resetTaskStore,
+  createTask,
+  updateTask,
+  updateTaskStep,
+  snapshotTaskStore,
+  restoreTaskStore,
+  spawnTaskCommand,
+} from '../../../src/native/tools/task-store.js'
 
 describe('TaskOutput tool', () => {
   const tool = createTaskOutputTool()
@@ -35,6 +43,20 @@ describe('TaskOutput tool', () => {
     expect(r.output).toContain('not found')
   })
 
+  it('accepts task:<id> long-task aliases and resolves them to task ids', async () => {
+    createTask({ subject: 'Alias task', description: 'longTaskId alias should work' })
+    updateTask('task-1', { status: 'completed' })
+
+    const r = await tool.execute({ task_id: 'task:task-1', block: false })
+
+    expect(r.isError).toBe(false)
+    expect(r.output).toContain('Resolved task_id alias: task:task-1 -> task-1')
+    expect(r.output).toContain('Task: task-1')
+    expect((r.metadata as any).requested_task_id).toBe('task:task-1')
+    expect((r.metadata as any).resolved_task_id).toBe('task-1')
+    expect((r.metadata as any).retrieval_status).toBe('success')
+  })
+
   it('returns error without task_id', async () => {
     const r = await tool.execute({ task_id: '' })
     expect(r.isError).toBe(true)
@@ -48,6 +70,80 @@ describe('TaskOutput tool', () => {
     expect(r.output).toContain('Timeout')
     expect((r.metadata as any).retrieval_status).toBe('timeout')
   }, 5000)
+
+  it('returns incomplete immediately for a restored command task with no live process handle', async () => {
+    const task = createTask({
+      subject: 'Detached command',
+      description: 'command was running before process restart',
+      conversationId: 'conv-task-output-resume',
+      command: 'sleep 60; echo done',
+      cwd: '/tmp',
+    })
+    updateTask(task.id, { status: 'in_progress' })
+    const snapshot = snapshotTaskStore('conv-task-output-resume')
+    resetTaskStore()
+    restoreTaskStore(snapshot)
+
+    const start = Date.now()
+    const r = await tool.execute({ task_id: task.id, block: true, timeout: 600 })
+    const elapsed = Date.now() - start
+
+    expect(r.isError).toBe(false)
+    expect(elapsed).toBeLessThan(200)
+    expect(r.output).toContain('no live process handle')
+    expect(r.output).toContain('Lifecycle: status=incomplete supervision_state=lost_handle can_wait=false terminal=false next_action=rerun_or_replace_command')
+    expect(r.output).toContain('WaitPolicy: strategy=replace_or_retry recommended_wait_ms=0 max_wait_ms=0 stop_polling=true')
+    expect((r.metadata as any).retrieval_status).toBe('incomplete')
+    expect((r.metadata as any).task.longTaskSnapshot.status).toBe('incomplete')
+    expect((r.metadata as any).long_task_lifecycle).toMatchObject({
+      schema_version: 1,
+      long_task_id: `task:${task.id}`,
+      source: 'task_command',
+      status: 'incomplete',
+      supervision_state: 'lost_handle',
+      terminal: false,
+      can_wait: false,
+      inspect_command: `TaskOutput task_id=${task.id} block=false`,
+      next_action: 'rerun_or_replace_command',
+      wait_policy: expect.objectContaining({
+        strategy: 'replace_or_retry',
+        stop_polling: true,
+      }),
+    })
+  })
+
+  it('includes lifecycle verdict when a live command wait times out', async () => {
+    const task = createTask({
+      subject: 'Live command',
+      description: 'command is still running in this process',
+      conversationId: 'conv-task-output-live-timeout',
+      command: 'sleep 1; echo done',
+      cwd: '/tmp',
+    })
+    spawnTaskCommand(task.id)
+
+    const r = await tool.execute({ task_id: task.id, block: true, timeout: 20 })
+
+    expect(r.isError).toBe(false)
+    expect(r.output).toContain('Timeout waiting for task task-1')
+    expect(r.output).toContain('Lifecycle: status=running supervision_state=live can_wait=true terminal=false next_action=inspect_again_later')
+    expect(r.output).toContain('WaitPolicy: strategy=runtime_await recommended_wait_ms=5000 max_wait_ms=30000 stop_polling=false')
+    expect((r.metadata as any).retrieval_status).toBe('timeout')
+    expect((r.metadata as any).long_task_lifecycle).toMatchObject({
+      long_task_id: `task:${task.id}`,
+      status: 'running',
+      supervision_state: 'live',
+      terminal: false,
+      can_wait: true,
+      next_action: 'inspect_again_later',
+      wait_policy: expect.objectContaining({
+        strategy: 'runtime_await',
+        recommended_wait_ms: 5000,
+        max_wait_ms: 30000,
+        stop_polling: false,
+      }),
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------
