@@ -60,6 +60,7 @@ import { createSkillRoutePreviewTool } from './tools/skill-route-preview.js'
 import { createRunWorkspaceTool } from './tools/run-workspace.js'
 import { createProjectMapTool } from './tools/project-map.js'
 import { createArtifactVerifyTool } from './tools/artifact-verify.js'
+import { createJudgeBackendProbeTool } from './tools/judge-backend-probe.js'
 import { applyToolFailurePolicy } from './tools/semantic-failure.js'
 import {
   evaluateWriteGuard,
@@ -306,6 +307,7 @@ export class ToolDispatcher {
     // ProbePlan registers without a live-conversation accessor by default;
     // ink-repl re-registers it with one, same pattern as Config/Agent.
     this.register(createProbePlanTool())
+    this.register(createJudgeBackendProbeTool())
   }
 }
 

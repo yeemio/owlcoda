@@ -126,11 +126,11 @@ const COMMAND_JOB_RE = /(?:\brun\s+(?:the\s+)?tests?|\bexecute\s+command|\bcheck
 
 // text_deliverable signals: write/generate text into chat
 // "写一份技术方案" — allow intervening words between 写 and 方案
-const TEXT_DELIVERABLE_RE = /(?:写[^。！？\n.!?]{0,10}(?:技术|实施|详细)?方案|写实施方案|总结|梳理|输出分析|写评审意见|\bdraft\s+a\s+plan|\bwrite\s+(?:a\s+)?(?:technical\s+)?(?:plan|spec|proposal|summary|analysis)|\bgive\s+(?:a\s+)?(?:summary|analysis|overview)|提供[^。！？\n.!?]{0,60}(?:分析|总结|评估|建议)|给出[^。！？\n.!?]{0,60}(?:分析|总结|评估|建议|报告))/i
+const TEXT_DELIVERABLE_RE = /(?:写[^。！？\n.!?]{0,10}(?:技术|实施|详细)?方案|写实施方案|总结|梳理|输出分析|分析出来|列举|一一列举|写评审意见|\bdraft\s+a\s+plan|\bwrite\s+(?:a\s+)?(?:technical\s+)?(?:plan|spec|proposal|summary|analysis)|\bgive\s+(?:a\s+)?(?:summary|analysis|overview)|提供[^。！？\n.!?]{0,60}(?:分析|总结|评估|建议)|给出[^。！？\n.!?]{0,60}(?:分析|总结|评估|建议|报告))/i
 
 // read_only_review signals: explicit read-only / review in chat
 // Note: Chinese patterns don't use \b — word boundaries don't apply to CJK characters
-const READ_ONLY_REVIEW_RE = /(?:只读评审|代码走读|技术评审|审视|分析一下|看下方案|结果在聊天里输出|不要求写文件|不要创建\s*artifact|\bread[- ]?only\s+(?:review|audit)|\blook\s+at\s+(?:this|the)|\bwhat[''']?s\s+wrong\s+with|看看[^。！？\n.!?]{0,30}有什么问题|\btell\s+me\s+what\s+is\s+wrong)/i
+const READ_ONLY_REVIEW_RE = /(?:只读评审|代码走读|技术评审|审视|只需要分析|只分析|分析一下|看下方案|结果在聊天里输出|不要求写文件|不要写文件|不要改代码|不改代码|不要创建\s*artifact|\bread[- ]?only\s+(?:review|audit)|\blook\s+at\s+(?:this|the)|\bwhat[''']?s\s+wrong\s+with|看看[^。！？\n.!?]{0,30}有什么问题|\btell\s+me\s+what\s+is\s+wrong)/i
 
 // Generic path-like (supporting signal only if no artifact suffix)
 const GENERIC_PATH_RE = /`(?:\.{0,2}\/|~\/|[A-Za-z0-9_.-]+\/)[^`]+`|(?:^|[\s(])(?:\.{0,2}\/|~\/)[^\s,;；。！？"'`]{4,}/gm

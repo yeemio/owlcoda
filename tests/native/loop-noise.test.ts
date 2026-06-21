@@ -147,20 +147,26 @@ describe('loop-noise routing', () => {
     expect(cleared.workflowPhase).toBeNull()          // present-null = clear
   })
 
-  // 0.13.58: Context compaction is a user-meaningful state change
-  // (turn count drops, history is summarized). Pre-0.13.58 it was
-  // routed to footer-only — at 800K+ tokens the footer flashes once
-  // and disappears under the next event, so users genuinely couldn't
-  // tell whether /compact ran. Now it gets a durable transcript line
-  // alongside the footer banner.
-  it('routes Context compacted notices to BOTH footer and transcript (0.13.58)', () => {
+  it('routes Context compacted notices to the footer without writing them to the transcript', () => {
     const routed = routeConversationNotice(
       'Context compacted: 824K -> 412K tokens; kept 18/36 turns (threshold 800K).',
       baseState,
     )
 
     expect(routed.footerNotice).toContain('Context compacted:')
-    expect(routed.transcriptEntry).toContain('Context compacted:')
+    expect(routed.transcriptEntry).toBeNull()
+    expect(routed.workflowPhase).toBeUndefined()
+    expect(routed.nextState).toEqual({ ...baseState, compactionCount: 1 })
+  })
+
+  it('routes Production gate notices to the footer without writing them to the transcript', () => {
+    const routed = routeConversationNotice(
+      'Production gate: 3 distinct files read across 5 iterations under a durable-artifact task with 0 deliverables.',
+      baseState,
+    )
+
+    expect(routed.footerNotice).toContain('Production gate:')
+    expect(routed.transcriptEntry).toBeNull()
     expect(routed.workflowPhase).toBeUndefined()
     expect(routed.nextState).toEqual({ ...baseState, compactionCount: 1 })
   })
@@ -213,14 +219,14 @@ describe('loop-noise routing', () => {
     expect(routed.nextState).toEqual({ ...baseState, compactionCount: 1 })
   })
 
-  it('routes Context limit hit notices to BOTH footer and transcript (0.13.58)', () => {
+  it('routes Context limit hit notices to the footer without writing them to the transcript', () => {
     const routed = routeConversationNotice(
       'Context limit hit - compacted 36 -> 18 turns, retrying.',
       baseState,
     )
 
     expect(routed.footerNotice).toContain('Context limit hit')
-    expect(routed.transcriptEntry).toContain('Context limit hit')
+    expect(routed.transcriptEntry).toBeNull()
     expect(routed.nextState).toEqual({ ...baseState, compactionCount: 1 })
   })
 

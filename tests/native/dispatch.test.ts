@@ -29,7 +29,7 @@ describe('Native Tool Dispatcher', () => {
     }
   })
 
-  it('registers all 51 default tools', () => {
+  it('registers all 52 default tools', () => {
     const dispatcher = new ToolDispatcher()
     const names = dispatcher.getToolNames()
     expect(names).toContain('bash')
@@ -83,7 +83,8 @@ describe('Native Tool Dispatcher', () => {
     expect(names).toContain('ProjectMap')
     expect(names).toContain('ArtifactVerify')
     expect(names).toContain('ProbePlan')
-    expect(names).toHaveLength(51)
+    expect(names).toContain('JudgeBackendProbe')
+    expect(names).toHaveLength(52)
   })
 
   it('has() returns true for registered tools', () => {

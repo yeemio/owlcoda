@@ -251,7 +251,9 @@ export function shouldDrainQueuedInputAfterTurn(options: {
   hasQueuedInput: boolean
   taskFailed: boolean
   autoRetryFailure: ConversationRuntimeFailure | null
+  taskAborted?: boolean
 }): boolean {
+  if (options.taskAborted) return false
   return options.hasQueuedInput
     && (!options.taskFailed || options.autoRetryFailure !== null)
 }
@@ -1128,7 +1130,6 @@ export const SLASH_COMMANDS_REQUIRING_ARGS = new Set([
   '/release-notes',
   '/pr-comments',
   '/effort',
-  '/color',
   '/commit',
   '/search',
 ])

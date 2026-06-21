@@ -48,6 +48,7 @@ export { createSkillRoutePreviewTool } from './skill-route-preview.js'
 export { createRunWorkspaceTool } from './run-workspace.js'
 export { createProjectMapTool } from './project-map.js'
 export { createArtifactVerifyTool } from './artifact-verify.js'
+export { createJudgeBackendProbeTool } from './judge-backend-probe.js'
 export {
   applySemanticToolFailure,
   applyToolFailurePolicy,
@@ -84,3 +85,4 @@ export type { SkillRoutePreviewInput } from './skill-route-preview.js'
 export type { RunWorkspaceAction, RunWorkspaceInput } from './run-workspace.js'
 export type { ProjectMapAction, ProjectMapInput } from './project-map.js'
 export type { ArtifactVerifyInput } from './artifact-verify.js'
+export type { JudgeBackendProbeInput } from './judge-backend-probe.js'

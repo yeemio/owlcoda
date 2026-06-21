@@ -422,6 +422,42 @@ describe('TaskCreate tool', () => {
     ])
   })
 
+  it('preserves Project Map run_verdict_gate taskVerifyChecks', async () => {
+    const scorePath = path.join(process.cwd(), 'out', 'score.json')
+    const snapshot = projectMapSnapshotWithProfiles([
+      {
+        id: 'scorer-health',
+        commands: [],
+        taskVerifyChecks: [{
+          id: 'scorer-run-verdict',
+          kind: 'run_verdict_gate',
+          path: scorePath,
+          reason: 'block downstream retrain when scorer health is infra-failed',
+        }],
+      },
+    ])
+    const r = await tool.execute({
+      subject: 'Score calibration',
+      description: 'Use scorer run verdict',
+      steps: [{
+        title: 'Check score health',
+        description: 'block retrain if scorer health fails',
+        projectMapVerificationProfileIds: ['scorer-health'],
+      }],
+    }, { projectMapSnapshot: snapshot } as any)
+
+    expect(r.isError).toBe(false)
+    const task = getTask('task-1')!
+    expect(task.steps?.[0]?.verification).toEqual([
+      expect.objectContaining({
+        id: 'scorer-run-verdict',
+        kind: 'run_verdict_gate',
+        path: scorePath,
+        reason: 'block downstream retrain when scorer health is infra-failed',
+      }),
+    ])
+  })
+
   it('rejects unknown Project Map verification profile ids', async () => {
     const r = await tool.execute({
       subject: 'Verified Project Map work',

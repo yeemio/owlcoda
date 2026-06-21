@@ -13,6 +13,7 @@ import {
   resolveDefaultMaxOutputTokens,
   addUserMessage,
   runConversationLoop,
+  type ConversationRuntimeFailure,
   type ConversationCallbacks,
   type ConversationLoopOptions,
 } from './conversation.js'
@@ -39,6 +40,12 @@ import {
   type HeadlessApprovalRecord,
 } from './headless-approval.js'
 import type { ProjectMapSnapshot } from './protocol/project-map-types.js'
+import {
+  applyRuntimeTruthResumeSnapshot,
+  recordRuntimeAutoRetrySuppressionEvent,
+  serializeRuntimeInterventionsFromEvents,
+  type RuntimeInterventionSummary,
+} from './runtime-events.js'
 
 const DEFAULT_SYSTEM_PROMPT = buildSystemPrompt()
 const DEFAULT_RUNTIME_RESUME_RETRIES = 8
@@ -59,7 +66,7 @@ interface SerializedHeadlessToolCall extends HeadlessToolCallLog {
   output_original_chars?: number
 }
 
-interface SerializedRuntimeIntercept {
+type SerializedRuntimeIntercept = RuntimeInterventionSummary | {
   kind: 'post_recovery_overrun' | 'long_task_wait_policy'
   message: string
 }
@@ -259,6 +266,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       restoreTaskStore(loaded.taskStore)
     }
     restoreAgentRunHistory(loaded.agentRunStore, loaded.runtimeRecoveryLedger, loaded.id)
+    applyRuntimeTruthResumeSnapshot(conversation)
     resolvedSessionId = loaded.id
     resumed = true
   }
@@ -490,7 +498,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
           approvalDecisions,
           prompt: opts.prompt,
         })
-        const runtimeIntercepts = serializeRuntimeIntercepts(noticeLog)
+        const runtimeIntercepts = serializeRuntimeIntercepts(conversation, noticeLog)
 
         // Save session after completion
         try {
@@ -563,6 +571,23 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       }
 
       const sessionId = resolvedSessionId ?? conversation.id
+      const suppressedAutoResumeKind = headlessRuntimeAutoResumeSuppressedKind(runtimeFailure.kind)
+      const exhausted = !suppressedAutoResumeKind && runtimeFailure.retryable && runtimeRetries >= maxRuntimeRetries
+      const shouldStopForRuntimeFailure = suppressedAutoResumeKind || !runtimeFailure.retryable || exhausted
+      if (shouldStopForRuntimeFailure) {
+        recordRuntimeAutoRetrySuppressionEvent(conversation, {
+          surface: 'headless_runtime_resume',
+          runtimeFailure,
+          suppressionReason: suppressedAutoResumeKind
+            ? 'failure_kind_suppressed'
+            : exhausted
+            ? 'retry_limit_exhausted'
+            : 'non_retryable_failure',
+          runtimeRetries,
+          retryLimit: maxRuntimeRetries,
+          suppressedAutoResumeKind,
+        })
+      }
 
       // Save after every runtime failure so a process crash can still resume
       // from the last well-formed transcript instead of losing tool results.
@@ -570,16 +595,14 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
         saveSession(conversation)
       } catch { /* non-fatal */ }
 
-      const suppressedAutoResumeKind = headlessRuntimeAutoResumeSuppressedKind(runtimeFailure.kind)
-      if (suppressedAutoResumeKind || !runtimeFailure.retryable || runtimeRetries >= maxRuntimeRetries) {
-        const exhausted = !suppressedAutoResumeKind && runtimeFailure.retryable && runtimeRetries >= maxRuntimeRetries
+      if (shouldStopForRuntimeFailure) {
         const message = suppressedAutoResumeKind
           ? `${runtimeFailure.message} Automatic runtime resume suppressed for ${suppressedAutoResumeKind}. Session preserved: ${sessionId}`
           : exhausted
           ? `${runtimeFailure.message} Runtime resume retries exhausted (${runtimeRetries}/${formatRuntimeRetryLimit(maxRuntimeRetries)}). Session preserved: ${sessionId}`
           : runtimeFailure.message
         if (opts.json) {
-          const runtimeIntercepts = serializeRuntimeIntercepts(noticeLog)
+          const runtimeIntercepts = serializeRuntimeIntercepts(conversation, noticeLog)
           const output = JSON.stringify({
             text: '',
             model: conversation.model,
@@ -634,7 +657,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     try { saveSession(conversation) } catch { /* non-fatal */ }
 
     if (opts.json) {
-      const runtimeIntercepts = serializeRuntimeIntercepts(noticeLog)
+      const runtimeIntercepts = serializeRuntimeIntercepts(conversation, noticeLog)
       const output = JSON.stringify({
         text: '',
         model: conversation.model,
@@ -996,7 +1019,16 @@ function serializeToolCalls(calls: HeadlessToolCallLog[]): SerializedHeadlessToo
   })
 }
 
-function serializeRuntimeIntercepts(notices: string[]): SerializedRuntimeIntercept[] {
+function serializeRuntimeIntercepts(
+  conversation: Conversation | null,
+  notices: string[],
+): SerializedRuntimeIntercept[] {
+  const runtimeEventInterventions = serializeRuntimeInterventionsFromEvents(
+    conversation?.options?.runtimeEventLog?.events,
+  )
+  if (runtimeEventInterventions.length > 0) {
+    return runtimeEventInterventions
+  }
   return notices
     .flatMap((message): SerializedRuntimeIntercept[] => {
       if (message.startsWith('[post-recovery-overrun]')) {

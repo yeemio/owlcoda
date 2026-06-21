@@ -42,6 +42,7 @@ vi.mock('../../src/native/tool-defs.js', async (importOriginal) => ({
 
 import { runHeadless } from '../../src/native/headless.js'
 import { runConversationLoop, addUserMessage } from '../../src/native/conversation.js'
+import { appendRuntimeEvent } from '../../src/native/runtime-events.js'
 import { saveSession } from '../../src/native/session.js'
 
 describe('runHeadless', () => {
@@ -387,6 +388,14 @@ describe('runHeadless', () => {
           kind: 'checkpoint_installed',
           checkpointKind: 'context_replacement_checkpoint',
         })
+        const text = conversation.turns
+          .flatMap((turn: any) => turn.content)
+          .filter((block: any) => block.type === 'text')
+          .map((block: any) => block.text)
+          .join('\n')
+        expect(text).toContain('continue')
+        expect(text).toContain('[Runtime truth resume snapshot]')
+        expect(text).toContain('context_replacement_checkpoint-1')
         return {
           conversation,
           finalText: 'resumed with runtime events',
@@ -668,6 +677,61 @@ describe('runHeadless', () => {
     }])
   })
 
+  it('exposes runtime event interventions in json mode even without notice text', async () => {
+    vi.mocked(runConversationLoop).mockImplementationOnce(async (conversation: any) => {
+      appendRuntimeEvent(conversation, {
+        kind: 'runtime_intervention',
+        at: '2026-06-19T10:00:00.000Z',
+        payload: {
+          intervention_kind: 'long_task_wait_policy',
+          action: 'skipped_tool_use',
+          tool_use_id: 'toolu-wait-1',
+          tool_name: 'Sleep',
+          long_task_id: 'task:task-1',
+          wait_strategy: 'runtime_await',
+          stop_polling: true,
+          next_check_command: 'LongTaskAwait longTaskId=task:task-1 timeoutMs=5000',
+          reason: 'runtime owns long-task lifecycle waiting',
+        },
+      })
+      return {
+        conversation: { turns: [] } as any,
+        finalText: 'Runtime-owned wait policy preserved.',
+        iterations: 1,
+        stopReason: 'end_turn',
+        usage: { inputTokens: 0, outputTokens: 0, requestCount: 1 },
+        runtimeFailure: null,
+      }
+    })
+
+    await runHeadless({
+      apiBaseUrl: 'http://localhost:8019',
+      apiKey: 'test-key',
+      model: 'test-model',
+      prompt: 'same-batch recovery probe',
+      json: true,
+    })
+
+    const stdoutLines = stdoutWrite.mock.calls.map(c => String(c[0]).trim()).filter(Boolean)
+    expect(stdoutLines).toHaveLength(1)
+    const payload = JSON.parse(stdoutLines[0]!)
+    expect(payload.runtime_intercepts).toEqual([{
+      kind: 'long_task_wait_policy',
+      source: 'runtime_event_log',
+      event_id: 'runtime_event-1',
+      seq: 1,
+      at: '2026-06-19T10:00:00.000Z',
+      action: 'skipped_tool_use',
+      tool_use_id: 'toolu-wait-1',
+      tool_name: 'Sleep',
+      long_task_id: 'task:task-1',
+      wait_strategy: 'runtime_await',
+      stop_polling: true,
+      next_check_command: 'LongTaskAwait longTaskId=task:task-1 timeoutMs=5000',
+      reason: 'runtime owns long-task lifecycle waiting',
+    }])
+  })
+
   it('waits for json stdout flush before returning', async () => {
     let flush: (() => void) | null = null
     stdoutWrite.mockImplementation(((chunk: string, cb?: (err?: Error | null) => void) => {
@@ -790,7 +854,7 @@ describe('runHeadless', () => {
   it('exits with preserved session details after runtime resume retries are exhausted', async () => {
     process.env['OWLCODA_HEADLESS_RUNTIME_RESUME_RETRIES'] = '1'
     vi.mocked(runConversationLoop).mockResolvedValue({
-      conversation: { turns: [] } as any,
+      conversation: { id: 'test-conv', model: 'test-model', turns: [] } as any,
       finalText: '',
       iterations: 1,
       stopReason: null,
@@ -816,11 +880,25 @@ describe('runHeadless', () => {
     expect(runConversationLoop).toHaveBeenCalledTimes(2)
     expect(stdoutWrite).toHaveBeenCalledWith(expect.stringContaining('"runtime_failure"'), expect.any(Function))
     expect(stdoutWrite).toHaveBeenCalledWith(expect.stringContaining('Runtime resume retries exhausted'), expect.any(Function))
+    const stdoutLines = stdoutWrite.mock.calls.map(c => String(c[0]).trim()).filter(Boolean)
+    const payload = JSON.parse(stdoutLines[0]!)
+    expect(payload.runtime_intercepts).toEqual([expect.objectContaining({
+      kind: 'runtime_auto_retry_suppression',
+      source: 'runtime_event_log',
+      action: 'stopped_after_retry_limit',
+      auto_retry_surface: 'headless_runtime_resume',
+      suppression_reason: 'retry_limit_exhausted',
+      failure_kind: 'provider_error',
+      failure_phase: 'continuation',
+      retryable: true,
+      runtime_retries: 1,
+      retry_limit: '1',
+    })])
   })
 
   it('does not automatically continue timeout runtime failures', async () => {
     vi.mocked(runConversationLoop).mockResolvedValueOnce({
-      conversation: { turns: [] } as any,
+      conversation: { id: 'test-conv', model: 'test-model', turns: [] } as any,
       finalText: '',
       iterations: 1,
       stopReason: null,
@@ -845,6 +923,20 @@ describe('runHeadless', () => {
     expect(result.runtimeRetries).toBe(0)
     expect(runConversationLoop).toHaveBeenCalledTimes(1)
     expect(stdoutWrite).toHaveBeenCalledWith(expect.stringContaining('Automatic runtime resume suppressed for timeout'), expect.any(Function))
+    const stdoutLines = stdoutWrite.mock.calls.map(c => String(c[0]).trim()).filter(Boolean)
+    const payload = JSON.parse(stdoutLines[0]!)
+    expect(payload.runtime_intercepts).toEqual([expect.objectContaining({
+      kind: 'runtime_auto_retry_suppression',
+      source: 'runtime_event_log',
+      action: 'suppressed_auto_resume',
+      auto_retry_surface: 'headless_runtime_resume',
+      suppression_reason: 'failure_kind_suppressed',
+      failure_kind: 'timeout',
+      failure_phase: 'request',
+      retryable: true,
+      runtime_retries: 0,
+      retry_limit: '8',
+    })])
   })
 
   it('outputs JSON error in json mode', async () => {

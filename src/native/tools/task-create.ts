@@ -366,6 +366,7 @@ const TASK_VERIFICATION_KINDS = new Set<TaskVerificationKind>([
   'file_contains',
   'artifact_count',
   'verification_pack',
+  'run_verdict_gate',
   'command',
   'none',
 ])

@@ -1372,6 +1372,15 @@ describe('failed continuation submit handling', () => {
     })).toBe(false)
   })
 
+  it('does not drain queued user input after a user interrupt aborts the active task', () => {
+    expect(shouldDrainQueuedInputAfterTurn({
+      hasQueuedInput: true,
+      taskFailed: false,
+      autoRetryFailure: null,
+      taskAborted: true,
+    })).toBe(false)
+  })
+
   it('treats a scheduled auto-retry as interruptible idle, not as a running task that should swallow new input', () => {
     expect(shouldQueueSubmitBehindRunningTask({
       isLoading: false,

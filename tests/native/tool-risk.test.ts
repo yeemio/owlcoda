@@ -110,6 +110,7 @@ describe('classifyToolRisk — external_effect tools', () => {
     ['RemoteTrigger', { url: 'https://x.com/hook' }, 'external_effect'],
     ['EnterWorktree', { name: 'feature-x' }, 'external_effect'],
     ['ExitWorktree', {}, 'external_effect'],
+    ['JudgeBackendProbe', { endpoint: 'http://127.0.0.1:8019/v1/chat/completions', models: ['mimo'] }, 'external_effect'],
   ] as const)('classifies %s as external_effect', (toolName, args, expected) => {
     expect(classifyToolRisk(toolName, args as Record<string, unknown>)).toBe<RiskClass>(expected)
   })
@@ -180,6 +181,7 @@ describe('classifyToolRisk — exhaustive against ToolDispatcher registry', () =
     LongTaskReplace: { longTaskId: 'task:task-1' },
     RuntimeRecoveryList: {},
     RuntimeRecoveryGet: { checkpointId: 'blocked_task_checkpoint-1' },
+    JudgeBackendProbe: { endpoint: 'http://127.0.0.1:8019/v1/chat/completions', models: ['mimo'] },
     EnterPlanMode: {},
     ExitPlanMode: {},
     EnterWorktree: { name: 'f' },
@@ -221,7 +223,7 @@ describe('classifyToolRisk — exhaustive against ToolDispatcher registry', () =
     // SAMPLE_ARGS and either to one of the explicit Sets in
     // classifyToolRisk or to DEFAULT_MUTATING_EXPLICIT_ACK.
     // Update the expected count when intentionally adding a tool.
-    expect(registered.length).toBe(51)
+    expect(registered.length).toBe(52)
   })
 
   it.each(registered.map((name) => [name]))(

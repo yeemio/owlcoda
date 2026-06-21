@@ -133,12 +133,11 @@ export function routeConversationNotice(
 
   if (/^Production gate:/i.test(message)) {
     // 0.13.70 execution_economics_v1 — production_gate_v1 inject
-    // event. Same routing as Context pressure: footer + transcript
-    // so operators see the runtime nudged the model to switch from
-    // investigation to production.
+    // event. The model receives the actual runtime nudge in its prompt;
+    // users only need a transient status hint, not a scrollback entry.
     return {
       footerNotice: dim(message),
-      transcriptEntry: formatPlatformEvent('session', message),
+      transcriptEntry: null,
       nextState: {
         ...state,
         compactionCount: state.compactionCount + 1,
@@ -162,16 +161,12 @@ export function routeConversationNotice(
   }
 
   if (/^Context compacted:/i.test(message) || /^Context limit hit/i.test(message)) {
-    // 0.13.58: also write to transcript. Pre-0.13.58 these notices
-    // were footer-only and a long session at 800K+ tokens couldn't
-    // see whether /compact ran (the footer banner flashes once and
-    // disappears under the next event). Compaction is a
-    // user-meaningful state change (turn count drops, history is
-    // summarized) — it deserves a durable scrollback line. Same
-    // level as Targeted check / Synthesis phase.
+    // Keep compaction visible as a footer status but out of transcript
+    // scrollback. The durable truth now lives in runtime recovery/checkpoint
+    // ledgers; repeating compaction lines in chat made long tasks read noisy.
     return {
       footerNotice: dim(message),
-      transcriptEntry: formatPlatformEvent('session', message),
+      transcriptEntry: null,
       nextState: {
         ...state,
         compactionCount: state.compactionCount + 1,

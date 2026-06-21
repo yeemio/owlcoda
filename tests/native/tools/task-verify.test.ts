@@ -49,7 +49,7 @@ afterEach(() => {
 
 function makeTaskWithVerification(checks: Array<{
   id: string
-  kind: 'file_exists' | 'file_contains' | 'artifact_count' | 'verification_pack' | 'command' | 'none'
+  kind: 'file_exists' | 'file_contains' | 'artifact_count' | 'verification_pack' | 'command' | 'none' | 'run_verdict_gate'
   packId?: string
   path?: string
   pattern?: string
@@ -253,6 +253,80 @@ describe('TaskVerify tool', () => {
     const step = getTaskStep('task-1', 'step-1')!
     expect(step.verificationResults).toHaveLength(2)
     expect(step.verificationResults.every((result) => result.passed)).toBe(true)
+  })
+
+  it('blocks INFRA_FAIL scorer artifacts from unlocking downstream retrain steps', async () => {
+    const scorePath = path.join(tmpDir, 'score.json')
+    fs.writeFileSync(scorePath, JSON.stringify({
+      verdict: 'INFRA_FAIL',
+      owl_score_trustworthy: false,
+      exit_code: 2,
+      run_health: {
+        calibration_passed: false,
+        judge_total: 5,
+        judge_ok: 0,
+        judge_error: 5,
+        infra_fail_reason: 'error_rate=1.00 (>0.2 threshold)',
+      },
+      diagnostic_gate_summary: {
+        tuned_gate_pass: 26,
+        tuned_gate_total: 63,
+      },
+    }, null, 2))
+
+    makeTaskWithVerification([
+      { id: 'score-gate', kind: 'run_verdict_gate', path: scorePath },
+    ])
+
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+    expect(r.isError).toBe(false)
+    expect(r.metadata?.['passed']).toBe(false)
+    expect(r.metadata?.['failureCategory']).toBe('verify:run-verdict-blocked')
+    expect(r.output).toContain('INFRA_FAIL')
+    expect(r.output).toContain('P2 blocked')
+    expect(r.output).toContain('judge stability')
+    const results = r.metadata?.['results'] as Array<Record<string, any>>
+    expect(results[0]?.metadata?.runVerdictGate).toMatchObject({
+      status: 'blocked',
+      p2Status: 'blocked',
+      trustworthy: false,
+    })
+  })
+
+  it('blocks scorer artifacts whose judge_total is not backed by evidence', async () => {
+    const runDir = path.join(tmpDir, 'scorer-run')
+    fs.mkdirSync(path.join(runDir, 'judge'), { recursive: true })
+    const scorePath = path.join(runDir, 'score.json')
+    fs.writeFileSync(scorePath, JSON.stringify({
+      verdict: 'PASS',
+      owl_score_trustworthy: true,
+      exit_code: 0,
+      run_health: {
+        calibration_passed: true,
+        judge_total: 5,
+        judge_ok: 5,
+        judge_error: 0,
+      },
+    }, null, 2))
+
+    makeTaskWithVerification([
+      { id: 'score-gate', kind: 'run_verdict_gate', path: scorePath },
+    ])
+
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+    expect(r.isError).toBe(false)
+    expect(r.metadata?.['passed']).toBe(false)
+    expect(r.metadata?.['failureCategory']).toBe('verify:run-verdict-blocked')
+    expect(r.output).toContain('judge evidence')
+    expect(r.output).toContain('P2 blocked')
+    const results = r.metadata?.['results'] as Array<Record<string, any>>
+    expect(results[0]?.metadata?.runVerdictGate).toMatchObject({
+      status: 'blocked',
+      evidenceStatus: 'missing',
+      p2Status: 'blocked',
+    })
   })
 
   // file_exists

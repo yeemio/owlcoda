@@ -492,6 +492,7 @@ Browser admin:
 
 Sessions & skills:
   owlcoda sessions              List recent sessions (--limit N, --tag T, --json, --include-test)
+  owlcoda sessions audit-runtime-events [--json]   Audit saved runtime event contracts
   owlcoda skills                List learned skills (alias of \`skills list\`)
   owlcoda skills info|list|show|synth|delete|export|import
   owlcoda skills stats|cleanup|search|match
@@ -595,10 +596,11 @@ export async function doStop(force = false): Promise<void> {
     process.exit(1)
   }
   if (!isPidAlive(pid)) {
-    console.error(`owlcoda process ${pid} is not running (stale PID file)`)
+    const stale = resolveStalePidStopCleanup(pid)
+    console.error(stale.message)
     removePid()
     removeRuntimeMeta()
-    process.exit(1)
+    return
   }
 
   const meta = readRuntimeMeta()
@@ -639,6 +641,13 @@ export async function doStop(force = false): Promise<void> {
 
   await stopAndWait(pid, getMetaBaseUrl(meta))
   console.error(`owlcoda stopped (PID ${pid})`)
+}
+
+export function resolveStalePidStopCleanup(pid: number): { message: string; exitCode: 0 } {
+  return {
+    message: `Cleared stale PID file for OwlCoda process ${pid}; cleared stale PID/runtime metadata.`,
+    exitCode: 0,
+  }
 }
 
 // ANSI dim helper for stale-version warnings. Keep ultra-light: respect
@@ -1363,6 +1372,7 @@ export async function main(): Promise<void> {
     case 'sessions': {
       // Use native session store directly (unified at ~/.owlcoda/sessions/)
       const { listSessions } = await import('./native/session.js')
+      const subCmd = passthroughArgs[0]
       const limit = passthroughArgs.includes('--limit')
         ? parseInt(passthroughArgs[passthroughArgs.indexOf('--limit') + 1] || '20', 10)
         : 20
@@ -1385,7 +1395,24 @@ export async function main(): Promise<void> {
       }
       sessions = sessions.slice(0, limit)
 
-      if (passthroughArgs.includes('--json')) {
+      if (subCmd === 'audit-runtime-events') {
+        const { auditRuntimeEventSessions, runtimeEventAuditHasFailures } = await import('./native/runtime-event-audit.js')
+        const report = auditRuntimeEventSessions(sessions)
+        if (jsonOutput || passthroughArgs.includes('--json')) {
+          process.stdout.write(JSON.stringify(report, null, 2) + '\n')
+        } else {
+          console.error(`\nRuntime event audit: ${report.sessions_scanned} session(s), ${report.totals.event_count} event(s)`)
+          console.error(`  contract-valid:       ${report.totals.contract_valid}`)
+          console.error(`  legacy-compatible:    ${report.totals.legacy_replay_compatible}`)
+          console.error(`  malformed saved:      ${report.totals.malformed_saved_event}`)
+          for (const session of report.sessions.filter((item) => item.status !== 'passed' && item.status !== 'no_runtime_events')) {
+            console.error(`  ${session.status.toUpperCase()} ${session.id}: malformed=${session.diagnostics.malformed_event_count}, legacy=${session.diagnostics.legacy_event_count}`)
+          }
+        }
+        process.exit(runtimeEventAuditHasFailures(report) ? 1 : 0)
+      }
+
+      if (jsonOutput || passthroughArgs.includes('--json')) {
         process.stdout.write(JSON.stringify(sessions, null, 2) + '\n')
       } else {
         if (sessions.length === 0) {

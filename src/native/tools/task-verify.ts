@@ -2,7 +2,8 @@
  * OwlCoda Native TaskVerify Tool — Slice 3, Task Execution Mode v1
  *
  * Deterministic verification for task step completion checks.
- * Supports: file_exists, file_contains, artifact_count, command (safe_readonly only), none.
+ * Supports: file_exists, file_contains, artifact_count, verification_pack,
+ * run_verdict_gate, command (safe_readonly only), none.
  *
  * By default (writeBack=true), verification results are written back to the step's
  * verificationResults via TaskUpdate semantics. Does NOT auto-transition step status —
@@ -26,6 +27,7 @@ import {
 } from './task-store.js'
 import { classifyBashCommand } from '../bash-risk.js'
 import { verifyHtmlDeck } from '../verification-packs/html-deck.js'
+import { evaluateRunVerdictGate, formatRunVerdictGateResult } from '../run-verdict-gate.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -215,6 +217,37 @@ async function runCommand(check: TaskVerificationCheck, now: string): Promise<Ta
   }
 }
 
+async function runRunVerdictGate(check: TaskVerificationCheck, now: string): Promise<TaskVerificationResult> {
+  const p = check.path ?? ''
+  if (!p) {
+    return { checkId: check.id, passed: false, unsatisfiable: true, detail: 'check.path is required for run_verdict_gate', checkedAt: now }
+  }
+  const placeholder = placeholderReason(p)
+  if (placeholder) {
+    return { checkId: check.id, passed: false, unsatisfiable: true, detail: placeholder, checkedAt: now }
+  }
+  try {
+    const raw = fs.readFileSync(path.resolve(p), 'utf-8')
+    const parsed = JSON.parse(raw) as unknown
+    const gate = evaluateRunVerdictGate(parsed, { scorePath: path.resolve(p) })
+    return {
+      checkId: check.id,
+      passed: gate.status === 'pass',
+      detail: formatRunVerdictGateResult(gate),
+      checkedAt: now,
+      metadata: { runVerdictGate: gate },
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return {
+      checkId: check.id,
+      passed: false,
+      detail: `cannot read or parse run verdict artifact ${p}: ${message}`,
+      checkedAt: now,
+    }
+  }
+}
+
 function runNone(check: TaskVerificationCheck, now: string): TaskVerificationResult {
   return {
     checkId: check.id,
@@ -297,6 +330,7 @@ async function runCheck(check: TaskVerificationCheck, now: string): Promise<Task
     case 'file_contains': return [await runFileContains(check, now)]
     case 'artifact_count': return [await runArtifactCount(check, now)]
     case 'verification_pack': return runVerificationPack(check, now)
+    case 'run_verdict_gate': return [await runRunVerdictGate(check, now)]
     case 'command': return [await runCommand(check, now)]
     case 'none': return [runNone(check, now)]
     default:
@@ -319,7 +353,7 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
     name: 'TaskVerify',
     description:
       'Run deterministic verification checks defined on a task step. ' +
-      'Supports: file_exists, file_contains, artifact_count, verification_pack/html_deck, command (safe_readonly only), none. ' +
+      'Supports: file_exists, file_contains, artifact_count, verification_pack/html_deck, run_verdict_gate, command (safe_readonly only), none. ' +
       'By default (writeBack=true), results are written back to step.verificationResults so subsequent ' +
       'TaskUpdate can check them before allowing stepStatus=completed. ' +
       'Does NOT auto-transition step status — use TaskUpdate(stepStatus="completed") after all checks pass. ' +
@@ -387,12 +421,19 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
       // root+glob check was re-run 3-6× because TaskVerify always reported
       // isError:false with no failure signal).
       const unsatisfiable = results.filter(r => r.unsatisfiable)
+      const runVerdictBlocked = results.filter(r =>
+        (r.metadata as Record<string, unknown> | undefined)?.['runVerdictGate']
+        && ((r.metadata as Record<string, unknown>)['runVerdictGate'] as Record<string, unknown>)['status'] === 'blocked',
+      )
       const metadata: Record<string, unknown> = {
         taskId,
         stepId,
         passed: overallPassed,
         results,
         writeBack,
+      }
+      if (runVerdictBlocked.length > 0) {
+        metadata['failureCategory'] = 'verify:run-verdict-blocked'
       }
       if (unsatisfiable.length > 0) {
         lines.push(
@@ -401,7 +442,7 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
           'Fix the step\'s verification spec via TaskUpdate({ taskId, stepId, verification: [...] }) (correct the path/fields/command), then re-verify:',
           ...unsatisfiable.map(r => `  · ${r.checkId}: ${r.detail ?? 'unsatisfiable'}`),
         )
-        metadata['failureCategory'] = 'verify:unsatisfiable-spec'
+        metadata['failureCategory'] = metadata['failureCategory'] ?? 'verify:unsatisfiable-spec'
       }
 
       return {

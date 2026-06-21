@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -129,6 +129,114 @@ describe('CLI commands integration', { timeout: CLI_COMMANDS_TEST_TIMEOUT_MS }, 
     expect(result.stderr).toContain('owlcoda config')
     expect(result.stderr).toContain('127.0.0.1:8019')
     expect(result.stderr).toContain('Launch mode')
+  })
+
+  it('sessions audit-runtime-events --json reports runtime event contract diagnostics without a model turn', async () => {
+    const runtimeDir = makeRuntimeDir()
+    const sessionsDir = join(runtimeDir, 'sessions')
+    mkdirSync(sessionsDir, { recursive: true })
+    writeFileSync(join(sessionsDir, 'runtime-audit-fixture.json'), JSON.stringify({
+      version: 1,
+      id: 'runtime-audit-fixture',
+      model: 'mimo-v2.5-pro',
+      system: 'test',
+      maxTokens: 4096,
+      turns: [],
+      createdAt: 1,
+      updatedAt: 2,
+      runtimeEventLog: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-19T10:00:03.000Z',
+        nextSeq: 4,
+        events: [{
+          id: 'runtime_event-1',
+          seq: 1,
+          kind: 'runtime_intervention',
+          at: '2026-06-19T10:00:00.000Z',
+          conversationId: 'runtime-audit-fixture',
+          payload: { intervention_kind: 'long_task_wait_policy' },
+          contract: {
+            schema_version: 1,
+            kind: 'runtime_event_contract',
+            event_kind: 'runtime_intervention',
+            payload_schema: 'runtime_intervention.v1',
+            validation_status: 'valid',
+          },
+        }, {
+          id: 'runtime_event-2',
+          seq: 2,
+          kind: 'runtime_recovery_report_recorded',
+          at: '2026-06-19T10:00:01.000Z',
+          conversationId: 'runtime-audit-fixture',
+          checkpointId: 'long_task_checkpoint-1',
+          checkpointKind: 'long_task_checkpoint',
+          payload: {
+            report_kind: 'long_task_checkpoint_report',
+            report_source: 'assistant_text',
+            report: {
+              kind: 'long_task_checkpoint_report',
+              checkpoint_id: 'long_task_checkpoint-1',
+              checkpoint_kind: 'long_task_checkpoint',
+              long_task_id: 'task:audit-legacy',
+              inspect_command: 'LongTaskGet longTaskId=task:audit-legacy',
+            },
+          },
+        }, {
+          id: 'runtime_event-3',
+          seq: 3,
+          kind: 'checkpoint_resolved',
+          at: '2026-06-19T10:00:02.000Z',
+          conversationId: 'runtime-audit-fixture',
+          checkpointId: 'long_task_checkpoint-1',
+          checkpointKind: 'long_task_checkpoint',
+          payload: {
+            checkpoint_id: 'long_task_checkpoint-1',
+            checkpoint_kind: 'long_task_checkpoint',
+          },
+          contract: {
+            schema_version: 1,
+            kind: 'runtime_event_contract',
+            event_kind: 'runtime_intervention',
+            payload_schema: 'checkpoint_resolved.v1',
+            validation_status: 'valid',
+          },
+        }],
+      },
+    }, null, 2))
+
+    const result = await runCli(['sessions', 'audit-runtime-events', '--json', '--include-test'], runtimeDir)
+
+    expect(result.code).toBe(1)
+    const report = JSON.parse(result.stdout)
+    expect(report).toMatchObject({
+      schema_version: 1,
+      kind: 'runtime_event_audit_report',
+      sessions_scanned: 1,
+      sessions_with_runtime_events: 1,
+      totals: {
+        event_count: 3,
+        contract_valid: 1,
+        legacy_replay_compatible: 1,
+        malformed_saved_event: 1,
+      },
+    })
+    expect(report.sessions[0]).toMatchObject({
+      id: 'runtime-audit-fixture',
+      status: 'failed',
+      diagnostics: {
+        malformed_event_count: 1,
+      },
+    })
+    expect(report.sessions[0].diagnostics.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        seq: 3,
+        status: 'malformed_saved_event',
+        validation_errors: expect.arrayContaining([
+          'contract.event_kind:mismatch',
+          'payload.disposition',
+        ]),
+      }),
+    ]))
   })
 
   it('logs fails gracefully without logFilePath', async () => {

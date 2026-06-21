@@ -5,6 +5,7 @@ import {
   appendContextReplacementCheckpoint,
   buildRuntimeRecoveryLedgerPrompt,
   injectRuntimeRecoveryLedgerPromptIfNeeded,
+  markBlockedTaskRecoveryCheckpointAcknowledged,
   markLongTaskReplacementCheckpointResolved,
   markLongTaskRecoveryCheckpointResolved,
 } from '../../src/native/runtime-recovery-ledger.js'
@@ -82,6 +83,73 @@ describe('runtime recovery ledger disposition', () => {
     expect(checkpoints[1]?.disposition).toBe('active')
   })
 
+  it('records checkpoint disposition change events when an older checkpoint is superseded', () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+
+    appendRuntimeRecoveryCheckpoint(conv, {
+      kind: 'blocked_task_checkpoint',
+      payload: blockedPayload('prove-ledger', '2026-06-17T00:00:01.000Z'),
+    })
+    const second = appendRuntimeRecoveryCheckpoint(conv, {
+      kind: 'blocked_task_checkpoint',
+      payload: blockedPayload('prove-ledger', '2026-06-17T00:00:02.000Z'),
+    })
+
+    const events = conv.options?.runtimeEventLog?.events ?? []
+    expect(events.map((event) => event.kind)).toEqual([
+      'checkpoint_installed',
+      'checkpoint_disposition_changed',
+      'checkpoint_installed',
+    ])
+    expect(events[1]).toMatchObject({
+      kind: 'checkpoint_disposition_changed',
+      checkpointId: 'blocked_task_checkpoint-1',
+      checkpointKind: 'blocked_task_checkpoint',
+      payload: {
+        checkpoint_id: 'blocked_task_checkpoint-1',
+        checkpoint_kind: 'blocked_task_checkpoint',
+        previous_disposition: 'active',
+        disposition: 'superseded',
+        reason: `Superseded by newer checkpoint ${second.id}.`,
+      },
+    })
+  })
+
+  it('records checkpoint disposition change events when a checkpoint is acknowledged', () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+
+    appendRuntimeRecoveryCheckpoint(conv, {
+      kind: 'blocked_task_checkpoint',
+      payload: blockedPayload('prove-ledger', '2026-06-17T00:00:01.000Z'),
+    })
+
+    const updated = markBlockedTaskRecoveryCheckpointAcknowledged(conv, {
+      taskId: 'task-1',
+      stepId: 'prove-ledger',
+      reason: 'Model produced the required text-only blocked checkpoint report.',
+      updatedAt: '2026-06-17T00:00:02.000Z',
+    })
+
+    const events = conv.options?.runtimeEventLog?.events ?? []
+    expect(updated).toBe(1)
+    expect(events.map((event) => event.kind)).toEqual([
+      'checkpoint_installed',
+      'checkpoint_disposition_changed',
+    ])
+    expect(events[1]).toMatchObject({
+      kind: 'checkpoint_disposition_changed',
+      checkpointId: 'blocked_task_checkpoint-1',
+      checkpointKind: 'blocked_task_checkpoint',
+      payload: {
+        checkpoint_id: 'blocked_task_checkpoint-1',
+        checkpoint_kind: 'blocked_task_checkpoint',
+        previous_disposition: 'active',
+        disposition: 'acknowledged',
+        reason: 'Model produced the required text-only blocked checkpoint report.',
+      },
+    })
+  })
+
   it('builds resume prompt from unresolved checkpoints and omits resolved checkpoint payloads', () => {
     const ledger: RuntimeRecoveryLedger = {
       schemaVersion: 1,
@@ -125,6 +193,46 @@ describe('runtime recovery ledger disposition', () => {
     expect(prompt).toContain('still-blocked-step')
     expect(prompt).not.toContain('old-resolved-step')
     expect(prompt).toContain('"resolved_checkpoint_count": 1')
+  })
+
+  it('keeps loop-intercept closeout checkpoints in the resume prompt', () => {
+    const ledger: RuntimeRecoveryLedger = {
+      schemaVersion: 1,
+      updatedAt: '2026-06-19T00:00:03.000Z',
+      checkpoints: [{
+        id: 'loop_intercept_closeout_checkpoint-1',
+        kind: 'loop_intercept_closeout_checkpoint',
+        generatedAt: '2026-06-19T00:00:03.000Z',
+        conversationId: 'conv-test',
+        disposition: 'active',
+        inspectCommands: [],
+        payload: {
+          schema_version: 1,
+          kind: 'loop_intercept_closeout_checkpoint',
+          loop_intercept_closeout: {
+            loop_reason: 'task stuck in tool loop: Skill nonexistent',
+            intent_key: 'Skill:nonexistent',
+            last_attempt: {
+              tool: 'Skill',
+              intent_target: 'nonexistent',
+            },
+            last_error: 'Skill "nonexistent" not found',
+            resume_packet: {
+              source: 'runtime_loop_intercept',
+              next_action: 'closeout the loop before retrying',
+            },
+          },
+        },
+      }],
+    }
+
+    const prompt = buildRuntimeRecoveryLedgerPrompt(ledger)
+
+    expect(prompt).toContain('loop_intercept_closeout_checkpoint')
+    expect(prompt).toContain('"last_error"')
+    expect(prompt).toContain('nonexistent')
+    expect(prompt).toContain('loop_intercept_closeout_report')
+    expect(prompt).toContain('closeout the loop before retrying')
   })
 
   it('resolves long-task checkpoints by long task identity', () => {
@@ -220,7 +328,8 @@ describe('runtime recovery ledger disposition', () => {
     })
 
     expect(checkpoint.kind).toBe('context_replacement_checkpoint')
-    expect(checkpoint.payload.context_replacement).toMatchObject({
+    const contextReplacement = checkpoint.payload.context_replacement as Record<string, unknown>
+    expect(contextReplacement).toMatchObject({
       reason: 'threshold',
       window_id: 'window-1',
       source_turn_id: 'turn-7',
@@ -231,6 +340,20 @@ describe('runtime recovery ledger disposition', () => {
     expect(snapshot.latestContextReplacement?.checkpoint.id).toBe(checkpoint.id)
     expect(snapshot.latestContextReplacement?.replacementHistory).toEqual(replacementHistory)
     expect(snapshot.latestContextReplacement?.suffixEvents).toEqual([])
+
+    const installEvent = conv.options?.runtimeEventLog?.events.find((event) =>
+      event.kind === 'checkpoint_installed'
+      && event.checkpointId === checkpoint.id
+      && event.checkpointKind === 'context_replacement_checkpoint'
+    )
+    expect(installEvent?.payload?.['context_replacement']).toMatchObject({
+      input_history_digest: contextReplacement.input_history_digest,
+      reason: 'threshold',
+      window_id: 'window-1',
+      source_turn_id: 'turn-7',
+      ledger_status: 'active',
+      replacement_history_turns: replacementHistory.length,
+    })
   })
 
   it('does not inject generic recovery prompts for context replacement checkpoints alone', () => {
@@ -326,6 +449,9 @@ describe('runtime recovery ledger disposition', () => {
       'task:task-1',
     ])
     expect(prompt).toContain('[Runtime long-task synthesis checkpoint]')
-    expect(prompt).toContain('Your next reply MUST be plain text')
+    expect(prompt).toContain('Your next reply MUST be a single JSON object')
+    expect(prompt).toContain('"kind": "long_task_synthesis_report"')
+    expect(prompt).toContain('"long_tasks":')
+    expect(prompt).not.toContain('Your next reply MUST be plain text')
   })
 })

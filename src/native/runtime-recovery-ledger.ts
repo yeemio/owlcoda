@@ -9,6 +9,7 @@ import type {
   RuntimeRecoveryLedger,
 } from './protocol/types.js'
 import {
+  recordCheckpointDispositionChangedEvent,
   recordCheckpointInstalledEvent,
   recordCheckpointResolvedEvent,
 } from './runtime-events.js'
@@ -41,16 +42,22 @@ export function appendRuntimeRecoveryCheckpoint(
   }
 
   const supersededAt = generatedAt
+  const supersededCheckpoints: Array<{
+    previous: RuntimeRecoveryCheckpointRecord
+    updated: RuntimeRecoveryCheckpointRecord
+  }> = []
   const checkpoints = [
     ...previous.map((checkpoint) => {
       if (!identity || !isUnresolvedRuntimeRecoveryCheckpoint(checkpoint)) return checkpoint
       if (checkpointIdentity(checkpoint.kind, checkpoint.payload) !== identity) return checkpoint
-      return withDisposition(
+      const updated = withDisposition(
         checkpoint,
         'superseded',
         supersededAt,
         `Superseded by newer checkpoint ${id}.`,
       )
+      supersededCheckpoints.push({ previous: checkpoint, updated })
+      return updated
     }),
     record,
   ].slice(-MAX_RUNTIME_RECOVERY_CHECKPOINTS)
@@ -62,6 +69,9 @@ export function appendRuntimeRecoveryCheckpoint(
       lastPromptedAt: existing?.lastPromptedAt,
       checkpoints,
     },
+  }
+  for (const { previous, updated } of supersededCheckpoints) {
+    recordCheckpointDispositionChangedEvent(conversation, previous, updated)
   }
   recordCheckpointInstalledEvent(conversation, record)
   return record
@@ -319,7 +329,9 @@ export function buildRuntimeRecoveryLedgerPrompt(ledger: RuntimeRecoveryLedger):
     JSON.stringify(payload, null, 2),
     '```',
     '',
-    'If work remains blocked or incomplete, report the checkpoint kind, inspect command, and smallest next action before using tools.',
+    'If your next response is a report, return a single JSON object in assistant text content with no markdown fence and no tool_use blocks.',
+    'Use the active checkpoint kind to choose one report kind: long_task_checkpoint_report, long_task_replacement_report, long_task_synthesis_report, child_run_synthesis_report, blocked_task_report, verification_repair_report, or loop_intercept_closeout_report.',
+    'Include checkpoint_id when it is visible in the runtime recovery ledger payload, plus the inspect command and smallest next action copied from runtime truth.',
   ].join('\n')
 }
 
@@ -327,7 +339,7 @@ function buildVerificationRepairCheckpointPrompt(
   checkpoint: RuntimeRecoveryCheckpointRecord,
   resolvedCheckpointCount: number,
 ): string {
-  const payload = {
+  const payload: Record<string, unknown> = {
     ...checkpoint.payload,
     checkpoint_id: checkpoint.id,
     resolved_checkpoint_count: resolvedCheckpointCount,
@@ -345,8 +357,14 @@ function buildVerificationRepairCheckpointPrompt(
     JSON.stringify(payload, null, 2),
     '```',
     '',
-    'Your next reply MUST be plain text with no tool_use blocks.',
-    'Report the failed check IDs, evidence already observed, whether the artifact or verification spec needs repair, and the exact next TaskVerify command to run after repair.',
+    formatStructuredRecoveryReportContract({
+      schema_version: 1,
+      kind: 'verification_repair_report',
+      checkpoint_id: checkpoint.id,
+      source: 'runtime_recovery_ledger',
+      verification_repair: payload['verification_repair'],
+      next_action: 'repair artifact or verification spec, then run the exact verify_command once',
+    }),
     'Do not call TaskVerify, bash, Sleep, Agent, or other tools until the user replies. The only allowed tool escape is TaskUpdate for the same task/step with stepStatus="blocked" or "failed" and a concrete failureReason.',
   ].join('\n')
 }
@@ -355,7 +373,7 @@ function buildLongTaskSynthesisCheckpointPrompt(
   checkpoint: RuntimeRecoveryCheckpointRecord,
   resolvedCheckpointCount: number,
 ): string {
-  const payload = {
+  const payload: Record<string, unknown> = {
     ...checkpoint.payload,
     checkpoint_id: checkpoint.id,
     resolved_checkpoint_count: resolvedCheckpointCount,
@@ -373,9 +391,27 @@ function buildLongTaskSynthesisCheckpointPrompt(
     JSON.stringify(payload, null, 2),
     '```',
     '',
-    'Your next reply MUST be plain text with no tool_use blocks.',
-    'Report one line per long task. For each item include long_task_id, source, status, evidence already observed, inspect_command, and the smallest next action.',
+    formatStructuredRecoveryReportContract({
+      schema_version: 1,
+      kind: 'long_task_synthesis_report',
+      checkpoint_id: checkpoint.id,
+      source: 'runtime_recovery_ledger',
+      long_tasks: payload['long_tasks'],
+      next_action: 'smallest safe parent action across these long-task records',
+    }),
     'Do not call RuntimeRecoveryList, RuntimeRecoveryGet, TaskOutput, AgentRunGet, bash, Sleep, Agent, or other tools until the user replies.',
+  ].join('\n')
+}
+
+function formatStructuredRecoveryReportContract(reportShape: Record<string, unknown>): string {
+  return [
+    '[Runtime structured recovery report contract]',
+    'Your next reply MUST be a single JSON object in assistant text content with no markdown fence and no tool_use blocks.',
+    'Use this report shape. Copy facts from the runtime checkpoint payload; do not invent missing status.',
+    'Keep any array field shown below, such as long_tasks or children, as a top-level array; do not flatten it into task_id/status fields.',
+    '```json',
+    JSON.stringify(reportShape, null, 2),
+    '```',
   ].join('\n')
 }
 
@@ -500,12 +536,17 @@ function updateRuntimeRecoveryCheckpointDisposition(
   const updatedAt = input.updatedAt ?? new Date().toISOString()
   let updatedCount = 0
   const resolvedCheckpoints: RuntimeRecoveryCheckpointRecord[] = []
+  const changedCheckpoints: Array<{
+    previous: RuntimeRecoveryCheckpointRecord
+    updated: RuntimeRecoveryCheckpointRecord
+  }> = []
   const checkpoints = ledger.checkpoints.map((checkpoint) => {
     if (!isUnresolvedRuntimeRecoveryCheckpoint(checkpoint)) return checkpoint
     if (checkpointIdentity(checkpoint.kind, checkpoint.payload) !== input.identity) return checkpoint
     updatedCount += 1
     const updated = withDisposition(checkpoint, input.disposition, updatedAt, input.reason)
     if (input.disposition === 'resolved') resolvedCheckpoints.push(updated)
+    else changedCheckpoints.push({ previous: checkpoint, updated })
     return updated
   })
   if (updatedCount === 0) return 0
@@ -516,6 +557,9 @@ function updateRuntimeRecoveryCheckpointDisposition(
       updatedAt,
       checkpoints,
     },
+  }
+  for (const { previous, updated } of changedCheckpoints) {
+    recordCheckpointDispositionChangedEvent(conversation, previous, updated)
   }
   for (const checkpoint of resolvedCheckpoints) {
     recordCheckpointResolvedEvent(conversation, checkpoint)
@@ -587,6 +631,12 @@ function checkpointIdentity(kind: RuntimeRecoveryCheckpointKind, payload: Record
     const taskId = stringField(repair?.['task_id'])
     const stepId = stringField(repair?.['step_id'])
     return taskId && stepId ? `verification_repair:${taskId}:${stepId}` : null
+  }
+  if (kind === 'loop_intercept_closeout_checkpoint') {
+    const closeout = objectField(payload['loop_intercept_closeout'])
+    const intentKey = stringField(closeout?.['intent_key'])
+    const loopReason = stringField(closeout?.['loop_reason'])
+    return intentKey || loopReason ? `loop_intercept_closeout:${intentKey ?? loopReason}` : null
   }
   return null
 }

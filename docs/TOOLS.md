@@ -4,8 +4,8 @@
 > Source of truth: `src/native/dispatch.ts` default registration,
 > `src/native/tool-defs.ts` schemas, and `src/native/tools/*.ts`
 > behavioral audit (not comments).
-> Scope: 52 native tool schemas/factories are tracked below. The default
-> dispatcher currently advertises **51 registered tool_defs** through
+> Scope: 53 native tool schemas/factories are tracked below. The default
+> dispatcher currently advertises **52 registered tool_defs** through
 > `buildNativeToolDefs(new ToolDispatcher())`. `Agent` is host-wired by
 > `ink-repl.tsx` because it needs provider deps and is the only remaining
 > schema-only surface. The "42+ tools" headline is therefore a
@@ -16,7 +16,7 @@
 - **production**: 13
   bash, read, write, edit, glob, grep, NotebookEdit, WebFetch, WebSearch,
   EnterWorktree, ExitWorktree, TeamCreate, TeamDelete
-- **beta**: 33
+- **beta**: 34
   Agent, AgentRunList, AgentRunGet, LongTaskList, LongTaskGet, LongTaskAwait,
   LongTaskReplace,
   RuntimeRecoveryList, RuntimeRecoveryGet,
@@ -25,13 +25,13 @@
   TodoWrite, Skill, ToolSearch, StructuredOutput, Brief, PowerShell,
   TaskCreate, TaskList, TaskGet, TaskUpdate, TaskStop, TaskOutput,
   TaskVerify, DeliveryAudit, SkillRoutePreview, RunWorkspace,
-  ProjectMap, ArtifactVerify, ProbePlan
+  ProjectMap, ArtifactVerify, ProbePlan, JudgeBackendProbe
 - **stub**: 1
   McpAuth
 - **experimental**: 5
   RemoteTrigger, LSP, MCPTool, ListMcpResources, ReadMcpResource
 
-Default registration truth: 51 registered tool_defs, 52 schema rows.
+Default registration truth: 52 registered tool_defs, 53 schema rows.
 Schema-only / host-wired surfaces: Agent (registered by `ink-repl.tsx`
 with live provider deps). Tungsten and Workflow were removed in 0.13.32 —
 they were upstream-cloud-only placeholders that returned "not available"
@@ -91,6 +91,7 @@ in local mode and had no realistic local implementation path.
 | ProjectMap | 136 | beta | bounded default-on project scan plus optional `.owlcoda-run/project-map.json` persistence | project-map.test.ts + project-map-dogfood-acceptance.test.ts | Runtime Control Plane snapshot surface; `OWLCODA_PROJECT_MAP=0` is the rollback override; not a full-repo index, does not execute commands, and does not bypass write gates |
 | ArtifactVerify | 108 | beta | runs supported artifact verification packs | artifact-verify.test.ts | currently supports `html_deck`; narrow verification helper |
 | ProbePlan | 376 | beta | stores probe plans and optionally mutates live conversation options | probe-plan.test.ts | default dispatcher has no live-conversation accessor; ink-repl re-registers it with one |
+| JudgeBackendProbe | 37 | beta | sends fixed-prompt HTTP chat-completions probes to a configured backend | judge-backend-probe.test.ts + tool-risk/tool-defs coverage | release/operator diagnostic for backend health; external-effect gated and not an autonomous judge |
 | TaskCreate | 49 | beta | in-memory task entry; optional safe_readonly bash child via task-store | task-create.test.ts (163) — behavior + safety gates | pure-TODO mode is still manual; command mode only spawns after bash-risk + headless-approval + direct safe_readonly recheck |
 | TaskList | 59 | beta | reads in-memory Map | task-list.test.ts | in-memory session task list; not a process/job discovery tool |
 | TaskGet | 57 | beta | reads in-memory Map | task-get.test.ts (48) | returns task record fields; command output is surfaced by TaskOutput |
@@ -142,7 +143,7 @@ in local mode and had no realistic local implementation path.
 ## False advertising risk
 
 The headline "42+ native tools" is still a defensible lower-bound
-because the default dispatcher advertises 51 registered tool_defs. The
+because the default dispatcher advertises 52 registered tool_defs. The
 risk is in the *implication* that all advertised tools are production
 features:
 
@@ -180,7 +181,7 @@ features:
   with a real provider.
 
 Recommendation: keep the headline "42+ tools" only when paired with an
-honest split such as "13 production, 33 beta, 1 stub, 5 experimental;
-51 default-registered tool_defs; 1 schema-only/host-wired surface".
+honest split such as "13 production, 34 beta, 1 stub, 5 experimental;
+52 default-registered tool_defs; 1 schema-only/host-wired surface".
 For user-facing marketing, lead with the production/beta capabilities
 and hide or gate the remaining stubs behind an experimental surface.

@@ -6,7 +6,7 @@ vi.mock('../../src/native/dispatch.js', () => {
     McpAuth: '[stub] tokens are NOT validated',
   }
   class MockDispatcher {
-    getToolNames() { return ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief'] }
+    getToolNames() { return ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'JudgeBackendProbe'] }
     getToolDescription(name: string): string | undefined { return STUB_DESCRIPTIONS[name] }
   }
   return { ToolDispatcher: MockDispatcher }
@@ -56,6 +56,13 @@ describe('NATIVE_TOOL_SCHEMAS', () => {
     expect(schema.properties.verification).toBeDefined()
     expect(schema.properties.verification.description).toContain('correct an unsatisfiable or wrong TaskVerify spec')
     expect(schema.properties.verification.items.properties.kind.enum).toContain('artifact_count')
+    expect(schema.properties.verification.items.properties.kind.enum).toContain('run_verdict_gate')
+  })
+
+  it('TaskCreate schema exposes run verdict verification gates', () => {
+    const schema = NATIVE_TOOL_SCHEMAS['TaskCreate'] as Record<string, any>
+    const kindEnum = schema.properties.steps.items.properties.verification.items.properties.kind.enum
+    expect(kindEnum).toContain('run_verdict_gate')
   })
 
   it('TaskCreate schema exposes optional command-backed execution fields', () => {
@@ -110,6 +117,14 @@ describe('NATIVE_TOOL_SCHEMAS', () => {
     expect(replace.properties.command.description).toContain('safe_readonly')
     expect(replace.description).toContain('replace_or_retry')
   })
+
+  it('JudgeBackendProbe schema exposes fixed prompt backend health checks', () => {
+    const schema = NATIVE_TOOL_SCHEMAS['JudgeBackendProbe'] as Record<string, any>
+    expect(schema.required).toEqual(['endpoint', 'models'])
+    expect(schema.properties.endpoint.description).toContain('OpenAI-compatible')
+    expect(schema.properties.models.items.type).toBe('string')
+    expect(schema.properties.prompts.description).toContain('fixed judge prompts')
+  })
 })
 
 describe('buildNativeToolDefs', () => {
@@ -117,9 +132,9 @@ describe('buildNativeToolDefs', () => {
     const dispatcher = new ToolDispatcher()
     const defs = buildNativeToolDefs(dispatcher)
 
-    expect(defs).toHaveLength(42)
+    expect(defs).toHaveLength(43)
     const names = defs.map((d: { name: string }) => d.name)
-    expect(names).toEqual(['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief'])
+    expect(names).toEqual(['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'JudgeBackendProbe'])
   })
 
   it('each def has name, description, and input_schema', () => {

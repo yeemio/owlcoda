@@ -27,6 +27,7 @@ import {
   snapshotAgentRunHistory,
   type AgentRunHistorySnapshot,
 } from './tools/agent.js'
+import { applyRuntimeTruthResumeSnapshot } from './runtime-events.js'
 
 function getDefaultSessionsDir(): string {
   const home = process.env['OWLCODA_HOME']
@@ -205,6 +206,7 @@ export function restoreConversation(
     restoreTaskStore(session.taskStore)
   }
   restoreAgentRunHistory(session.agentRunStore, session.runtimeRecoveryLedger, session.id)
+  applyRuntimeTruthResumeSnapshot(conversation)
   return conversation
 }
 

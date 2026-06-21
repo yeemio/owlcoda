@@ -52,8 +52,15 @@ import type {
   AnthropicToolUseBlock,
 } from '../types.js'
 import { recordGateEvent, type GateEvent } from './gate-telemetry.js'
-import type { CompactionLogEntry, Conversation, ConversationTurn, TaskPathScope } from './protocol/types.js'
+import type {
+  CompactionLogEntry,
+  Conversation,
+  ConversationTurn,
+  RuntimeRecoveryCheckpointRecord,
+  TaskPathScope,
+} from './protocol/types.js'
 import { appendContextReplacementCheckpoint } from './runtime-recovery-ledger.js'
+import { appendRuntimeEvent } from './runtime-events.js'
 import { estimateTokens } from './usage.js'
 
 // ─── 8-section bounded input shape ─────────────────────────────────────
@@ -864,6 +871,16 @@ export async function tryCompact(
     inputMaxTokens: opts.inputMaxTokens,
   })
   if (!request) {
+    recordContextCompactionResultEvent(conv, {
+      action: 'context_compaction_noop',
+      reason: opts.reason,
+      method: 'no_op',
+      before,
+      after: before,
+      beforeTokens,
+      afterTokens: beforeTokens,
+      llmAttempted: false,
+    })
     return {
       method: 'no_op',
       reason: opts.reason,
@@ -902,9 +919,21 @@ export async function tryCompact(
       ms: llmResult.ms,
       at: Date.now(),
     })
-    installContextReplacementCheckpoint(conv, inputHistory, opts.reason)
-    recordCompactionFidelityTelemetry(request.droppedTurns, llmResult.summary, opts.fidelityTelemetry)
     const afterTokens = estimateConvTokensSafe(conv)
+    const checkpoint = installContextReplacementCheckpoint(conv, inputHistory, opts.reason)
+    recordContextCompactionResultEvent(conv, {
+      action: 'context_compaction_completed',
+      reason: opts.reason,
+      method: 'llm_summary',
+      before,
+      after: conv.turns.length,
+      beforeTokens,
+      afterTokens,
+      llmMs: llmResult.ms,
+      llmAttempted: true,
+      checkpoint,
+    })
+    recordCompactionFidelityTelemetry(request.droppedTurns, llmResult.summary, opts.fidelityTelemetry)
     return {
       method: 'llm_summary',
       reason: opts.reason,
@@ -983,9 +1012,25 @@ function finishWithTruncation(
     ms: llmMs,
     at: Date.now(),
   })
+  let checkpoint: RuntimeRecoveryCheckpointRecord | undefined
   if (inputHistory && before !== conv.turns.length) {
-    installContextReplacementCheckpoint(conv, inputHistory, reason)
+    checkpoint = installContextReplacementCheckpoint(conv, inputHistory, reason)
   }
+  const afterTokens = estimateConvTokensSafe(conv)
+  recordContextCompactionResultEvent(conv, {
+    action: 'context_compaction_fallback',
+    reason,
+    method: 'truncation',
+    fallbackReason,
+    before,
+    after: conv.turns.length,
+    beforeTokens,
+    afterTokens,
+    llmMs,
+    llmAttempted: fallbackReason === 'llm_compact_failed',
+    llmCompactFailureCount: conv.options?.llmCompactFailureCount,
+    checkpoint,
+  })
   return {
     method: 'truncation',
     reason,
@@ -993,7 +1038,7 @@ function finishWithTruncation(
     before,
     after: conv.turns.length,
     beforeTokens,
-    afterTokens: estimateConvTokensSafe(conv),
+    afterTokens,
     llmMs,
   }
 }
@@ -1002,13 +1047,54 @@ function installContextReplacementCheckpoint(
   conv: Conversation,
   inputHistory: ConversationTurn[],
   reason: CompactReason,
-): void {
-  appendContextReplacementCheckpoint(conv, {
+): RuntimeRecoveryCheckpointRecord {
+  return appendContextReplacementCheckpoint(conv, {
     inputHistory,
     replacementHistory: snapshotTurns(conv.turns),
     reason,
     windowId: reason,
     sourceTurnId: `turn-${inputHistory.length}`,
+  })
+}
+
+function recordContextCompactionResultEvent(
+  conv: Conversation,
+  input: {
+    action: 'context_compaction_completed' | 'context_compaction_fallback' | 'context_compaction_noop'
+    reason: CompactReason
+    method: CompactMethod
+    fallbackReason?: CompactResult['fallbackReason']
+    before: number
+    after: number
+    beforeTokens: number
+    afterTokens: number
+    llmMs?: number
+    llmAttempted: boolean
+    llmCompactFailureCount?: number
+    checkpoint?: RuntimeRecoveryCheckpointRecord
+  },
+): void {
+  appendRuntimeEvent(conv, {
+    kind: 'runtime_intervention',
+    checkpointId: input.checkpoint?.id,
+    checkpointKind: input.checkpoint?.kind,
+    payload: {
+      intervention_kind: 'context_compaction_result',
+      action: input.action,
+      compaction_reason: input.reason,
+      compaction_method: input.method,
+      before_turns: input.before,
+      after_turns: input.after,
+      before_tokens: input.beforeTokens,
+      after_tokens: input.afterTokens,
+      llm_attempted: input.llmAttempted,
+      ...(input.fallbackReason ? { fallback_reason: input.fallbackReason } : {}),
+      ...(typeof input.llmMs === 'number' ? { llm_ms: input.llmMs } : {}),
+      ...(typeof input.llmCompactFailureCount === 'number'
+        ? { llm_compact_failure_count: input.llmCompactFailureCount }
+        : {}),
+      ...(input.checkpoint ? { context_replacement_checkpoint_id: input.checkpoint.id } : {}),
+    },
   })
 }
 

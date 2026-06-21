@@ -78,6 +78,8 @@ const EXTERNAL_EFFECT_TOOLS = new Set<string>([
   'RemoteTrigger',
   // Git worktree creation/exit touches sibling directories outside cwd
   'EnterWorktree', 'ExitWorktree',
+  // Model/backend health probes may hit local or remote OpenAI-compatible endpoints.
+  'JudgeBackendProbe',
 ])
 
 function isInsideCwd(absPath: string, cwd: string = process.cwd()): boolean {

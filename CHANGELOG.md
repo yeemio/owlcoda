@@ -2,6 +2,30 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.9] — 2026-06-21
+
+Runtime Truth Spine reliability release.
+
+### Added
+
+- Added fuller runtime event logging for assistant streams, assistant responses,
+  turn response summaries, compaction results, context replacement metadata, and
+  item-to-turn linkage.
+- Added release smoke coverage that probes runtime event contracts and audits
+  full runtime event logs.
+
+### Changed
+
+- Strengthened saved-session event trails so long-running and resumed sessions
+  have more inspectable runtime evidence.
+
+### Notes
+
+- This release improves reliability evidence and observability for long-run
+  diagnosis. It does not claim long-run degradation is completely eliminated.
+- The npm package remains the public install surface and is paired with public
+  GPL source tag `v0.15.9`.
+
 ## [0.15.8] — 2026-06-18
 
 Long-run reliability release.

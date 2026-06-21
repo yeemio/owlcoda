@@ -323,14 +323,14 @@ describe('buildCompactionRequest', () => {
   it('includes task contract anchor when latest user text is only runtime recovery', () => {
     const initialPrompt = [
       '请并发 subagent 生成四个 1200-1500 字段落。',
-      '只能输出到 /Users/publicuser/AI/gitrep/owlmodel/out/full。',
+      '只能输出到 /Users/yeemio/AI/gitrep/owlmodel/out/full。',
       '不碰 8066/8029 cutover。',
       '最终报告必须列出证据路径。',
     ].join('\n')
     const conv = makeConv([
       userTurn(initialPrompt),
       assistantTurn('开始核对代理和目录。'),
-      toolUseTurn('Read', { path: '/Users/publicuser/AI/gitrep/owlmodel/README.md' }, 'read-1'),
+      toolUseTurn('Read', { path: '/Users/yeemio/AI/gitrep/owlmodel/README.md' }, 'read-1'),
       toolResultTurn('read-1', 'README body'),
       assistantTurn('发现已有污染，需要分片生成。'),
       userTurn('你一直在忙活什么？'),
@@ -346,11 +346,11 @@ describe('buildCompactionRequest', () => {
           sourceText: initialPrompt,
           objective: initialPrompt,
           dominantGap: 'produce shard files and evidence report',
-          cwd: '/Users/publicuser/AI/gitrep/owlmodel',
+          cwd: '/Users/yeemio/AI/gitrep/owlmodel',
           scopeMode: 'explicit_paths',
-          explicitWriteTargets: ['/Users/publicuser/AI/gitrep/owlmodel/out/full'],
+          explicitWriteTargets: ['/Users/yeemio/AI/gitrep/owlmodel/out/full'],
           allowedWritePaths: [{
-            path: '/Users/publicuser/AI/gitrep/owlmodel/out/full',
+            path: '/Users/yeemio/AI/gitrep/owlmodel/out/full',
             kind: 'directory',
             origin: 'explicit',
           }],
@@ -367,11 +367,11 @@ describe('buildCompactionRequest', () => {
           scratchArtifactPaths: [],
           currentFocus: 'waiting on write-scope approval for shard outputs',
           lastProgressAt: 0,
-          lastGuardReason: 'Task contract blocked write to /Users/publicuser/AI/gitrep/owlmodel/out/full/shard-01.md.',
+          lastGuardReason: 'Task contract blocked write to /Users/yeemio/AI/gitrep/owlmodel/out/full/shard-01.md.',
           pendingWriteApproval: {
             attemptedPaths: [
-              '/Users/publicuser/AI/gitrep/owlmodel/out/full/shard-01.md',
-              '/Users/publicuser/AI/gitrep/owlmodel/out/full/shard-02.md',
+              '/Users/yeemio/AI/gitrep/owlmodel/out/full/shard-01.md',
+              '/Users/yeemio/AI/gitrep/owlmodel/out/full/shard-02.md',
             ],
             requestedAt: 0,
           },
@@ -388,8 +388,8 @@ describe('buildCompactionRequest', () => {
     expect(req.prompt).toContain('[task_contract_anchor]')
     expect(req.prompt).toContain('请并发 subagent')
     expect(req.prompt).toContain('1200-1500')
-    expect(req.prompt).toContain('/Users/publicuser/AI/gitrep/owlmodel/out/full')
-    expect(req.prompt).toContain('/Users/publicuser/AI/gitrep/owlmodel/out/full/shard-02.md')
+    expect(req.prompt).toContain('/Users/yeemio/AI/gitrep/owlmodel/out/full')
+    expect(req.prompt).toContain('/Users/yeemio/AI/gitrep/owlmodel/out/full/shard-02.md')
     expect(req.prompt).toContain('Task contract blocked write')
   })
 })
@@ -661,6 +661,19 @@ describe('tryCompact', () => {
       event.kind === 'checkpoint_installed'
       && event.checkpointKind === 'context_replacement_checkpoint',
     )).toBe(true)
+    expect(conv.options?.runtimeEventLog?.events).toContainEqual(expect.objectContaining({
+      kind: 'runtime_intervention',
+      checkpointKind: 'context_replacement_checkpoint',
+      payload: expect.objectContaining({
+        intervention_kind: 'context_compaction_result',
+        action: 'context_compaction_completed',
+        compaction_reason: 'threshold',
+        compaction_method: 'llm_summary',
+        before_turns: 10,
+        after_turns: 1 + RECENT_TURNS_VERBATIM_COUNT,
+        llm_attempted: true,
+      }),
+    }))
   })
 
   it('LLM success writes reviewable compaction fidelity telemetry', async () => {
@@ -740,6 +753,21 @@ Open risks:
     expect(result.fallbackReason).toBe('llm_compact_failed')
     expect(conv.options?.llmCompactFailureCount).toBe(1)
     expect(conv.turns.length).toBe(4)
+    expect(conv.options?.runtimeEventLog?.events).toContainEqual(expect.objectContaining({
+      kind: 'runtime_intervention',
+      checkpointKind: 'context_replacement_checkpoint',
+      payload: expect.objectContaining({
+        intervention_kind: 'context_compaction_result',
+        action: 'context_compaction_fallback',
+        compaction_reason: 'threshold',
+        compaction_method: 'truncation',
+        fallback_reason: 'llm_compact_failed',
+        before_turns: 10,
+        after_turns: 4,
+        llm_attempted: true,
+        llm_compact_failure_count: 1,
+      }),
+    }))
   })
 
   it('3-strike disable: with failureCount=3, skips LLM and truncates with disabled reason', async () => {

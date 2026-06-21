@@ -15,6 +15,7 @@ import type {
   AnthropicToolUseBlock,
   Conversation,
   AssistantResponse,
+  AssistantStreamSummary,
   RuntimeRecoveryLedger,
 } from './protocol/types.js'
 import type { AnthropicMessagesRequest } from './protocol/types.js'
@@ -109,6 +110,7 @@ import {
   consumeNudge,
   createNudgeCounter,
 } from './task-execution-policy.js'
+import { findNextStep, listTasks, getCurrentOrNextStep, taskHasOpenRequiredSteps, type Task, type TaskStep } from './tools/task-store.js'
 import { decideRepairPolicy } from './repair-policy.js'
 import type { VerificationPackResult } from './verification-packs/types.js'
 import { classifyToolRisk } from './tool-risk.js'
@@ -156,7 +158,6 @@ import {
 import {
   buildLongTaskLifecycleVerdict,
   buildLongTaskCheckpointPayload,
-  formatLongTaskCheckpointPayloadForPrompt,
   formatLongTaskSnapshotsForCheckpoint,
   recentLongTaskSnapshots,
   type LongTaskLifecycleVerdict,
@@ -175,7 +176,16 @@ import {
   markVerificationRepairCheckpointAcknowledged,
   markVerificationRepairCheckpointResolved,
 } from './runtime-recovery-ledger.js'
-import { appendRuntimeEvent } from './runtime-events.js'
+import {
+  appendRuntimeEvent,
+  buildRuntimeTruthResumeFallbackReport,
+  parseRuntimeReportObject,
+  recordRuntimeRecoveryReportEvent,
+  recordRuntimeRecoveryTextFallbackReportEvent,
+  recordRuntimeTruthResumeReportEvent,
+  runtimeTruthResumeCheckpointKindForId,
+  validateRuntimeTruthResumeReport,
+} from './runtime-events.js'
 
 /**
  * PERM-7: emitted-warnings dedup set. Keyed on the ResolvedPermissions
@@ -288,9 +298,17 @@ function buildLoopInterceptPrompt(
     const lifecycleSnapshots = formatLongTaskSnapshotsForCheckpoint({
       conversationId: options.conversationId,
     })
-    const lifecyclePayload = formatLongTaskCheckpointPayloadForPrompt({
+    const lifecyclePayload = buildLongTaskCheckpointPayload({
       conversationId: options.conversationId,
     })
+    const lifecyclePayloadPrompt = lifecyclePayload
+      ? [
+          'Runtime long-task checkpoint payload:',
+          '```json',
+          JSON.stringify(lifecyclePayload, null, 2),
+          '```',
+        ].join('\n')
+      : ''
     return [
       '[Runtime long-task checkpoint]',
       `${reason}.`,
@@ -298,12 +316,16 @@ function buildLoopInterceptPrompt(
       `intent: tool=${attempt.name}, target=${attempt.intentTarget}`,
       '',
       ...(lifecycleSnapshots ? [lifecycleSnapshots, ''] : []),
-      ...(lifecyclePayload ? [lifecyclePayload, ''] : []),
-      'Do not keep polling. Your next reply MUST be plain text — no tool_use blocks. In it:',
-      '  1. State the original objective and the latest observed progress/evidence from existing tool output.',
-      '  2. Name the active/background work you believe is still running, including PIDs, shard files, counts, or timestamps if already observed.',
-      '  3. Give the exact inspection or verification command if it is already known from the transcript; only describe a runtime-supported resume path if output explicitly provided one.',
-      '  4. Stop at a checkpoint: mark what is complete, what remains running, and what the user can safely do next.',
+      ...(lifecyclePayloadPrompt ? [lifecyclePayloadPrompt, ''] : []),
+      'Do not keep polling.',
+      formatStructuredRecoveryReportContract({
+        schema_version: 1,
+        kind: 'long_task_checkpoint_report',
+        checkpoint_id: null,
+        source: 'runtime_recovery_ledger',
+        long_tasks: lifecyclePayload?.long_tasks ?? [],
+        next_action: 'stop polling and resume from the runtime checkpoint later',
+      }),
       '',
       'Do not ask for permission to keep waiting, and do not call Sleep/bash again for the same monitor loop before the user replies.',
     ].join('\n')
@@ -327,6 +349,61 @@ function buildLoopInterceptPrompt(
     'be terminated as a hard tool-loop violation.',
   ].join('\n')
 }
+
+function buildLoopInterceptCloseoutCheckpointPayload(input: {
+  conversation: Conversation
+  loopReason: string
+  attempt: { name: string; category: string; intentTarget: string; intentKey: string }
+  input: Record<string, unknown>
+}): Record<string, unknown> {
+  const generatedAt = new Date().toISOString()
+  const lastError = latestToolResultText(input.conversation, input.attempt.name)
+    ?? inferredLoopInterceptError(input.attempt.name, input.input)
+    ?? input.loopReason
+  return {
+    schema_version: 1,
+    kind: 'loop_intercept_closeout_checkpoint',
+    generated_at: generatedAt,
+    loop_intercept_closeout: {
+      loop_reason: input.loopReason,
+      intent_key: input.attempt.intentKey,
+      last_attempt: {
+        tool: input.attempt.name,
+        category: input.attempt.category,
+        intent_target: input.attempt.intentTarget,
+        intent_key: input.attempt.intentKey,
+      },
+      last_error: lastError,
+      resume_packet: {
+        source: 'runtime_loop_intercept',
+        next_action: 'closeout the loop with root cause, concrete patch options, and a user decision instead of retrying the same tool intent',
+      },
+    },
+  }
+}
+
+function latestToolResultText(conversation: Conversation, toolName: string): string | undefined {
+  for (let turnIndex = conversation.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+    const turn = conversation.turns[turnIndex]
+    if (!turn || turn.role !== 'user') continue
+    for (let blockIndex = turn.content.length - 1; blockIndex >= 0; blockIndex -= 1) {
+      const block = turn.content[blockIndex] as unknown as Record<string, unknown> | undefined
+      if (!block || block['type'] !== 'tool_result') continue
+      const content = typeof block['content'] === 'string' ? block['content'] : undefined
+      if (content && content.includes(toolName)) return content
+    }
+  }
+  return undefined
+}
+
+function inferredLoopInterceptError(toolName: string, input: Record<string, unknown>): string | undefined {
+  if (toolName === 'Skill') {
+    const skillName = typeof input['name'] === 'string' ? input['name'] : undefined
+    if (skillName) return `Skill "${skillName}" not found`
+  }
+  return undefined
+}
+
 const AUTO_COMPACT_THRESHOLD = 0.8 // compact at 80% context usage
 const AUTO_COMPACT_KEEP_RATIO = 0.5 // keep 50% of turns after compact
 // 0.13.62: heap-pressure emergency compact. The token-based auto-
@@ -439,6 +516,35 @@ const ARTIFACT_PROGRESS_REPAIR_ITER_WINDOW = 3
 const PRODUCTION_GATE_ITER_THRESHOLD = 5
 const PRODUCTION_GATE_DISTINCT_FILES = 3
 const TOOL_LOOP_GUARD_WINDOW = 24
+
+const STRUCTURED_READ_ONLY_STEP_RE = /(?:wave\s*0|truth\s+audit|current\s+truth|read\s+disk\s+truth|read[- ]?only|audit|inspect|investigat|review|inventory|plan(?:ning)?|审计|调查|排查|读盘|核对|检查|梳理|分析|盘点|只读|现状|真相)/i
+
+function isStructuredReadOnlyStep(step: TaskStep | undefined): boolean {
+  if (!step) return false
+  if (step.status !== 'pending' && step.status !== 'in_progress') return false
+  if ((step.expectedArtifacts ?? []).length > 0) return false
+  const text = `${step.id}\n${step.title}\n${step.description}`
+  return STRUCTURED_READ_ONLY_STEP_RE.test(text)
+}
+
+function findConversationScopedNextStep(conversationId?: string): TaskStep | undefined {
+  const scoped = listTasks()
+    .filter((task: Task) =>
+      (conversationId === undefined || task.conversationId === conversationId || task.conversationId === undefined)
+      && taskHasOpenRequiredSteps(task),
+    )
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+  if (!scoped) return undefined
+  return getCurrentOrNextStep(scoped.id)
+}
+
+function shouldSuppressProductionGateForStructuredStep(conversationId?: string): boolean {
+  const scopedStep = findConversationScopedNextStep(conversationId)
+  if (isStructuredReadOnlyStep(scopedStep)) return true
+  const nextStep = findNextStep()
+  if (!nextStep.hasNext) return false
+  return isStructuredReadOnlyStep(nextStep.nextStep)
+}
 
 // Cross-turn failure-class ceiling. The windowed detectors only see the last
 // TOOL_LOOP_GUARD_WINDOW attempts, so failures spread thinly across a long
@@ -571,6 +677,7 @@ interface ToolExecutionPlan {
   executeBlocks: AnthropicToolUseBlock[]
   runtimeBlocks: AnthropicTextBlock[]
   notices: string[]
+  runtimeInterventionPayload?: Record<string, unknown>
   summaryGateTriggered: boolean
   targetedCheckConsumed: boolean
 }
@@ -882,6 +989,8 @@ export async function runConversationLoop(
   let finalText = ''
   let lastStopReason: string | null = null
   let runtimeFailure: ConversationRuntimeFailure | null = null
+  let runtimeClosureReason: string | null = null
+  let runtimeClosureCheckpointId: string | null = null
   const runtimeTurnId = `turn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   appendRuntimeEvent(conversation, {
     kind: 'turn_started',
@@ -921,6 +1030,26 @@ export async function runConversationLoop(
   // whole run — the cross-turn loop-guard ledger. Persisted across turns like
   // schemaFailCounts; reset per-tool on a genuine success of that tool.
   const crossTurnFailureClasses = new Map<string, number>()
+  const turnResponseSummary = createTurnResponseSummary()
+  let assistantResponseEventIndex = 0
+  const recordAssistantResponseEvent = (response: AssistantResponse, phase: AssistantResponseRuntimePhase): void => {
+    assistantResponseEventIndex += 1
+    if (response.streamSummary) {
+      appendRuntimeEvent(conversation, {
+        kind: 'assistant_stream_recorded',
+        turnId: runtimeTurnId,
+        payload: buildAssistantStreamRecordedPayload(response.streamSummary, assistantResponseEventIndex),
+      })
+    }
+    appendRuntimeEvent(conversation, {
+      kind: 'assistant_response_recorded',
+      turnId: runtimeTurnId,
+      payload: buildAssistantResponseRecordedPayload(response, {
+        responseIndex: assistantResponseEventIndex,
+        phase,
+      }),
+    })
+  }
   // 0.13.63 (D): rolling window of assistant text-output sizes (in
   // chars) for the most recent iterations. When the last 3 in a row
   // each exceed OUTPUT_BLOAT_CHARS, fire `[Runtime output-bloat check]`
@@ -942,6 +1071,30 @@ export async function runConversationLoop(
   const convergence = createConvergenceRuntimeState()
   const heapCompactGovernor = createHeapCompactGovernor()
   let heapPressureAdvisoryFired = false
+  const preflightContextOverflow = getUncompactableContextOverflowPreflight(conversation, opts.contextWindow)
+  if (preflightContextOverflow) {
+    opts.callbacks?.onError?.(
+      `Request still exceeds context limit before runtime setup ` +
+      `(${preflightContextOverflow.totalTokens} est. > ${preflightContextOverflow.contextWindow} limit). ` +
+      `Use /clear to reset, or /model to switch to a model with a larger context window.`,
+    )
+    iterations = 1
+    convergence.phase = 'hard_stop'
+    lastStopReason = 'hard_stop'
+    appendRuntimeEvent(conversation, {
+      kind: 'turn_completed',
+      turnId: runtimeTurnId,
+      payload: buildTurnCompletedPayload({
+        stop_reason: lastStopReason,
+        iterations,
+        usage: totalUsage,
+        finalText,
+        responseSummary: turnResponseSummary,
+        closure_reason: 'uncompactable_context_overflow_preflight',
+      }),
+    })
+    return { conversation, finalText, iterations, stopReason: lastStopReason, usage: totalUsage, runtimeFailure }
+  }
   const taskState = ensureTaskExecutionState(conversation, opts.cwd)
   ensureConversationProjectMap(conversation, opts.cwd)
   let runtimeRecoveryLedgerAuditPending = injectRuntimeRecoveryLedgerPromptIfNeeded(conversation)
@@ -1059,6 +1212,7 @@ export async function runConversationLoop(
         !taskState.run.productionGateFired
         && taskState.run.status === 'open'
         && shouldHardStopOnNoTouchedPaths(deliverable)
+        && !shouldSuppressProductionGateForStructuredStep(conversation.id)
         && taskState.contract.touchedPaths.length === 0
         && (taskState.run.lifetimeIterations ?? 0) >= PRODUCTION_GATE_ITER_THRESHOLD
       ) {
@@ -1078,6 +1232,17 @@ export async function runConversationLoop(
             timestamp: Date.now(),
           })
           taskState.run.productionGateFired = true
+          appendRuntimeEvent(conversation, {
+            kind: 'runtime_intervention',
+            turnId: runtimeTurnId,
+            payload: buildProductionGateNudgePayload({
+              distinctFilesRead: distinctFiles,
+              iteration: taskState.run.lifetimeIterations ?? 0,
+              taskWriteScopePresent: taskWriteScope !== null,
+              touchedPathCount: taskState.contract.touchedPaths.length,
+              deliverable,
+            }),
+          })
           opts.callbacks?.onNotice?.(
             `Production gate: ${distinctFiles} distinct files read across ` +
             `${taskState.run.lifetimeIterations} iterations under a durable-artifact task ` +
@@ -1253,6 +1418,22 @@ export async function runConversationLoop(
             || (phaseRuntime && phaseVerdict.phase === 'execute' && v2Decision.fire)
             ? 'abandoned_grant_hard_stop'
             : 'task_no_progress_hard'
+          appendRuntimeEvent(conversation, {
+            kind: 'runtime_intervention',
+            turnId: runtimeTurnId,
+            payload: buildTaskNoProgressDecisionPayload({
+              decision: 'hard_stop',
+              action: 'stopped',
+              stopReason: 'task_no_progress',
+              iteration: taskState.run.lifetimeIterations ?? 0,
+              reason,
+              deliverable,
+              wouldHaveHardStopped,
+              hardStopEnabled: noProgressHardStopEnabled,
+              operatingMode,
+              touchedPathCount: taskState.contract.touchedPaths.length,
+            }),
+          })
           recordGateEvent({
             ts: Date.now(),
             kind: hardStopKind,
@@ -1310,6 +1491,21 @@ export async function runConversationLoop(
           // The flag lives on run state → re-arms naturally per task; within a
           // task it stays fired across turns (no re-nag on follow-ups).
           if (!taskState.run.noProgressAdvisoryFired) {
+            appendRuntimeEvent(conversation, {
+              kind: 'runtime_intervention',
+              turnId: runtimeTurnId,
+              payload: buildTaskNoProgressDecisionPayload({
+                decision: 'suppressed_advisory',
+                action: 'continued_with_advisory',
+                iteration: taskState.run.lifetimeIterations ?? 0,
+                reason: `${suppressReason} at ${taskState.run.lifetimeIterations} iterations`,
+                deliverable,
+                wouldHaveHardStopped,
+                hardStopEnabled: noProgressHardStopEnabled,
+                operatingMode,
+                touchedPathCount: taskState.contract.touchedPaths.length,
+              }),
+            })
             opts.callbacks?.onNotice?.(
               `task no-progress suppressed (${suppressReason}): ` +
               `${taskState.run.lifetimeIterations} iterations / 0 touched paths. ` +
@@ -1494,6 +1690,16 @@ export async function runConversationLoop(
         // soft mode after strict.
         for (const t of thresholds) if (t <= fireThreshold) fired.add(t)
         conversation.options.contextPressureNudgesFired = [...fired].sort()
+        appendRuntimeEvent(conversation, {
+          kind: 'runtime_intervention',
+          turnId: runtimeTurnId,
+          payload: buildContextPressureNudgePayload({
+            threshold: fireThreshold,
+            usageRatio,
+            totalTokens,
+            contextWindow: opts.contextWindow,
+          }),
+        })
         opts.callbacks?.onNotice?.(
           `Context pressure (${(fireThreshold * 100).toFixed(0)}%): nudging the model toward ` +
           `terse, evidence-led replies (now ${(usageRatio * 100).toFixed(0)}% of ${formatTokenCount(opts.contextWindow)}).`,
@@ -1685,6 +1891,8 @@ export async function runConversationLoop(
 
     if (opts.signal?.aborted) break
     recordResponseUsage(totalUsage, convergence, response)
+    recordTurnResponseObserved(turnResponseSummary, response)
+    recordAssistantResponseEvent(response, turnPlan.mode === 'synthesis' ? 'synthesis_initial' : 'main')
 
     if (turnPlan.mode === 'synthesis') {
       const settled = await settleSynthesisResponse(
@@ -1693,6 +1901,8 @@ export async function runConversationLoop(
         convergence,
         taskState,
         totalUsage,
+        turnResponseSummary,
+        recordAssistantResponseEvent,
         opts,
       )
       if (settled.response) {
@@ -1728,11 +1938,144 @@ export async function runConversationLoop(
     let blockedTaskCheckpointSatisfiedThisTurn = false
     let childRunSynthesisSatisfiedThisTurn = false
     let verificationRepairSatisfiedThisTurn = false
+    let runtimeTruthResumeReportSatisfiedThisTurn = false
+    const runtimeTruthResumeReportPending = shouldEnforceRuntimeTruthResumeReportGate(conversation)
+
+    if (runtimeTruthResumeReportPending) {
+      const runtimeTruthResumeCheckpointKind = runtimeTruthResumeCheckpointKindForId(
+        runtimeTruthResumeReportPending.checkpointId,
+      )
+      if (response.toolUseBlocks.length > 0 || response.hasToolUse) {
+        const assistantHasReportText = hasMeaningfulAssistantText(response.text)
+        const assistantReportValidation = assistantHasReportText
+          ? validateRuntimeTruthResumeReport(conversation, response.text)
+          : null
+        const assistantReportSatisfied = assistantReportValidation?.satisfied === true
+        const reportSource = assistantReportSatisfied ? 'assistant_text' : 'runtime_synthetic'
+        const reportText = assistantReportSatisfied
+          ? response.text
+          : buildRuntimeTruthResumeFallbackReport(conversation)
+        if (reportText) {
+          const ignoredToolCount = response.toolUseBlocks.length > 0 ? response.toolUseBlocks.length : 1
+          const action = assistantReportSatisfied
+            ? 'dropped_tool_use_preserved_text'
+            : assistantHasReportText
+              ? 'replaced_incomplete_report_with_synthetic_report'
+              : 'dropped_tool_use_synthesized_report'
+          appendRuntimeEvent(conversation, {
+            kind: 'runtime_intervention',
+            turnId: runtimeTurnId,
+            checkpointId: runtimeTruthResumeReportPending.checkpointId,
+            checkpointKind: runtimeTruthResumeCheckpointKind,
+            payload: {
+              intervention_kind: 'runtime_truth_resume_report_gate',
+              action,
+              report_source: reportSource,
+              ...(assistantHasReportText && !assistantReportSatisfied
+                ? {
+                    original_report_source: 'assistant_text',
+                    missing_report_fields: assistantReportValidation?.missingReportFields ?? [],
+                  }
+                : {}),
+              ignored_tool_count: ignoredToolCount,
+              ignored_tools: response.toolUseBlocks.map(summarizeIgnoredRuntimeTruthResumeTool),
+            },
+          })
+          opts.callbacks?.onNotice?.(
+            `Runtime truth resume report gate: ignored ${ignoredToolCount} tool request(s) ` +
+            `for checkpoint ${runtimeTruthResumeReportPending.checkpointId} and returned a tool-free report.`,
+          )
+          recordRuntimeTruthResumeReportEvent(conversation, {
+            turnId: runtimeTurnId,
+            checkpointId: runtimeTruthResumeReportPending.checkpointId,
+            reportSource,
+            text: reportText,
+          })
+          markRuntimeTruthResumeReportGate(conversation, 'satisfied')
+          runtimeClosureReason = 'runtime_truth_resume_report_satisfied'
+          runtimeClosureCheckpointId = runtimeTruthResumeReportPending.checkpointId
+          runtimeTruthResumeReportSatisfiedThisTurn = true
+          response = normalizeFinalAnswerResponse(response, reportText)
+          toolPlan = {
+            executeBlocks: [],
+            runtimeBlocks: [],
+            notices: [],
+            summaryGateTriggered: false,
+            targetedCheckConsumed: false,
+          }
+        } else {
+          const loopReason =
+            `Model ignored the runtime truth resume snapshot ${runtimeTruthResumeReportPending.checkpointId} ` +
+            'and attempted tool use instead of the user-requested no-tools resume report. ' +
+            'Stopping before tool execution so saved runtime truth is not overwritten by speculative recovery.'
+          opts.callbacks?.onError?.(loopReason)
+          markRuntimeTruthResumeReportGate(conversation, 'ignored')
+          recordGateEvent({
+            ts: Date.now(),
+            kind: 'tool_loop',
+            conversationId: conversation.id,
+            iteration: taskState.run.lifetimeIterations ?? 0,
+            contract: buildGateEventContract(taskState),
+            lastToolSignatures: lastNToolSignatures(toolAttempts),
+            reason: loopReason,
+          })
+          lastStopReason = 'tool_loop'
+          break
+        }
+      }
+      if (!runtimeTruthResumeReportSatisfiedThisTurn && hasMeaningfulAssistantText(response.text)) {
+        const reportValidation = validateRuntimeTruthResumeReport(conversation, response.text)
+        if (reportValidation.satisfied) {
+          recordRuntimeTruthResumeReportEvent(conversation, {
+            turnId: runtimeTurnId,
+            checkpointId: runtimeTruthResumeReportPending.checkpointId,
+            reportSource: 'assistant_text',
+            text: response.text,
+          })
+          markRuntimeTruthResumeReportGate(conversation, 'satisfied')
+          runtimeClosureReason = 'runtime_truth_resume_report_satisfied'
+          runtimeClosureCheckpointId = runtimeTruthResumeReportPending.checkpointId
+          runtimeTruthResumeReportSatisfiedThisTurn = true
+        } else {
+          const reportText = buildRuntimeTruthResumeFallbackReport(conversation)
+          if (reportText) {
+            appendRuntimeEvent(conversation, {
+              kind: 'runtime_intervention',
+              turnId: runtimeTurnId,
+              checkpointId: runtimeTruthResumeReportPending.checkpointId,
+              checkpointKind: runtimeTruthResumeCheckpointKind,
+              payload: {
+                intervention_kind: 'runtime_truth_resume_report_gate',
+                action: 'replaced_incomplete_report_with_synthetic_report',
+                report_source: 'runtime_synthetic',
+                original_report_source: 'assistant_text',
+                missing_report_fields: reportValidation.missingReportFields,
+              },
+            })
+            opts.callbacks?.onNotice?.(
+              `Runtime truth resume report gate: replaced an incomplete assistant report ` +
+              `for checkpoint ${runtimeTruthResumeReportPending.checkpointId} with a runtime-owned report.`,
+            )
+            recordRuntimeTruthResumeReportEvent(conversation, {
+              turnId: runtimeTurnId,
+              checkpointId: runtimeTruthResumeReportPending.checkpointId,
+              reportSource: 'runtime_synthetic',
+              text: reportText,
+            })
+            markRuntimeTruthResumeReportGate(conversation, 'satisfied')
+            runtimeClosureReason = 'runtime_truth_resume_report_satisfied'
+            runtimeClosureCheckpointId = runtimeTruthResumeReportPending.checkpointId
+            runtimeTruthResumeReportSatisfiedThisTurn = true
+            response = normalizeFinalAnswerResponse(response, reportText)
+          }
+        }
+      }
+    }
 
     if (longTaskSynthesisPending) {
       if (response.toolUseBlocks.length > 0 || response.hasToolUse) {
         const loopReason =
-          'Model ignored the long-task synthesis checkpoint and attempted tool use instead of a text-only recovery synthesis report. ' +
+          'Model ignored the long-task synthesis checkpoint and attempted tool use instead of a structured JSON recovery synthesis report. ' +
           'Stopping to avoid reconstructing scattered long-task state from memory.'
         opts.callbacks?.onError?.(loopReason)
         recordGateEvent({
@@ -1755,7 +2098,7 @@ export async function runConversationLoop(
     if (longTaskCheckpointPending) {
       if (response.toolUseBlocks.length > 0 || response.hasToolUse) {
         const loopReason =
-          'Model ignored the long-task checkpoint and attempted tool use instead of a text-only checkpoint. ' +
+          'Model ignored the long-task checkpoint and attempted tool use instead of a structured JSON checkpoint report. ' +
           'Stopping to avoid continued no-value polling.'
         opts.callbacks?.onError?.(loopReason)
         recordGateEvent({
@@ -1771,9 +2114,8 @@ export async function runConversationLoop(
         break
       }
       if (hasMeaningfulAssistantText(response.text)) {
-        const updated = markLongTaskRecoveryCheckpointResolved(conversation, {
-          longTaskIds: longTaskCheckpointPending,
-          reason: 'Model produced the required text-only long-task checkpoint report.',
+        const updated = resolveReportedLongTaskRecoveryCheckpoints(conversation, response.text, {
+          turnId: runtimeTurnId,
         })
         if (updated > 0) {
           runtimeRecoveryResolvedThisRun = true
@@ -1787,7 +2129,7 @@ export async function runConversationLoop(
       if (response.toolUseBlocks.length > 0 || response.hasToolUse) {
         const loopReason =
           `Model ignored the blocked-task checkpoint for task ${blockedTaskFinalizationPending.taskId} ` +
-          `step ${blockedTaskFinalizationPending.stepId} and attempted tool use instead of a text-only blocked report. ` +
+          `step ${blockedTaskFinalizationPending.stepId} and attempted tool use instead of a structured JSON blocked report. ` +
           'Stopping to avoid continued no-value task churn.'
         opts.callbacks?.onError?.(loopReason)
         recordGateEvent({
@@ -1803,11 +2145,19 @@ export async function runConversationLoop(
         break
       }
       if (hasMeaningfulAssistantText(response.text)) {
-        markBlockedTaskRecoveryCheckpointAcknowledged(conversation, {
-          taskId: blockedTaskFinalizationPending.taskId,
-          stepId: blockedTaskFinalizationPending.stepId,
-          reason: 'Model produced the required text-only blocked checkpoint report.',
+        const updated = acknowledgeReportedBlockedTaskRecoveryCheckpoints(conversation, response.text, {
+          turnId: runtimeTurnId,
         })
+        if (updated === 0) {
+          recordBlockedTaskTextFallbackReport(conversation, blockedTaskFinalizationPending, response.text, {
+            turnId: runtimeTurnId,
+          })
+          markBlockedTaskRecoveryCheckpointAcknowledged(conversation, {
+            taskId: blockedTaskFinalizationPending.taskId,
+            stepId: blockedTaskFinalizationPending.stepId,
+            reason: 'Model produced the required text-only blocked checkpoint report.',
+          })
+        }
         blockedTaskFinalizationPending = null
         blockedTaskCheckpointSatisfiedThisTurn = true
       }
@@ -1817,7 +2167,7 @@ export async function runConversationLoop(
       if (response.toolUseBlocks.length > 0 || response.hasToolUse) {
         const loopReason =
           `Model ignored the child-run synthesis checkpoint for ${childRunSynthesisPending.childCount} child runs ` +
-          'and attempted tool use instead of a text-only per-child report. Stopping to avoid hiding child failures.'
+          'and attempted tool use instead of a structured JSON per-child report. Stopping to avoid hiding child failures.'
         opts.callbacks?.onError?.(loopReason)
         recordGateEvent({
           ts: Date.now(),
@@ -1832,16 +2182,15 @@ export async function runConversationLoop(
         break
       }
       if (hasMeaningfulAssistantText(response.text)) {
-        const updated = markChildRunSynthesisCheckpointResolved(conversation, {
-          agentIds: childRunSynthesisPending.children.map((child) => child.agentId),
-          reason: 'Model produced the required text-only child-run synthesis report.',
+        const updated = resolveReportedChildRunRecoveryCheckpoints(conversation, response.text, {
+          turnId: runtimeTurnId,
         })
         if (updated > 0) {
           runtimeRecoveryResolvedThisRun = true
           opts.callbacks?.onNotice?.(`Runtime recovery ledger: resolved ${updated} child-run synthesis checkpoint(s).`)
+          childRunSynthesisSatisfiedThisTurn = true
         }
         childRunSynthesisPending = null
-        childRunSynthesisSatisfiedThisTurn = true
       }
     }
 
@@ -1853,7 +2202,7 @@ export async function runConversationLoop(
         } else {
           const loopReason =
             `Model ignored the verification-repair checkpoint for task ${pending.taskId} ` +
-            `step ${pending.stepId} and attempted tool use instead of a text-only repair report. ` +
+            `step ${pending.stepId} and attempted tool use instead of a structured JSON repair report. ` +
             'Stopping to avoid repeated verification churn or workaround completion.'
           opts.callbacks?.onError?.(loopReason)
           recordGateEvent({
@@ -1870,16 +2219,14 @@ export async function runConversationLoop(
         }
       }
       if (hasMeaningfulAssistantText(response.text)) {
-        const updated = markVerificationRepairCheckpointAcknowledged(conversation, {
-          taskId: pending.taskId,
-          stepId: pending.stepId,
-          reason: 'Model produced the required text-only verification repair report.',
+        const updated = acknowledgeReportedVerificationRepairCheckpoints(conversation, response.text, {
+          turnId: runtimeTurnId,
         })
         if (updated > 0) {
           opts.callbacks?.onNotice?.(`Runtime recovery ledger: acknowledged ${updated} verification-repair checkpoint(s).`)
+          verificationRepairSatisfiedThisTurn = true
         }
         verificationRepairPending = null
-        verificationRepairSatisfiedThisTurn = true
       }
     }
 
@@ -1925,6 +2272,13 @@ export async function runConversationLoop(
 
     if (response.toolUseBlocks.length > 0) {
       toolPlan = buildToolExecutionPlan(response.toolUseBlocks, turnPlan.mode, convergence)
+      if (toolPlan.runtimeInterventionPayload) {
+        appendRuntimeEvent(conversation, {
+          kind: 'runtime_intervention',
+          turnId: runtimeTurnId,
+          payload: toolPlan.runtimeInterventionPayload,
+        })
+      }
       for (const notice of toolPlan.notices) {
         opts.callbacks?.onNotice?.(notice)
       }
@@ -2041,6 +2395,16 @@ export async function runConversationLoop(
           }],
           timestamp: Date.now(),
         })
+        appendRuntimeEvent(conversation, {
+          kind: 'runtime_intervention',
+          turnId: runtimeTurnId,
+          payload: buildMaxTokensContinuationNudgePayload({
+            consecutiveTruncations: consecutiveMaxTokensTruncations,
+            injectCount: maxTokensContinuationInjectCount,
+            injectLimit: MAX_TOKENS_CONTINUATION_LIMIT,
+            responseTextChars: effectiveResponse.text.length,
+          }),
+        })
         opts.callbacks?.onNotice?.(
           `Max-tokens continuation (${consecutiveMaxTokensTruncations}× truncated, inject ` +
           `${maxTokensContinuationInjectCount}/${MAX_TOKENS_CONTINUATION_LIMIT}): ` +
@@ -2132,22 +2496,37 @@ export async function runConversationLoop(
     // 3. If no tool use → done
     if (!effectiveResponse.hasToolUse) {
       if (runtimeRecoveryLedgerAuditPending && effectiveResponse.text.trim()) {
-        const synthesisUpdated = resolveReportedLongTaskSynthesisCheckpoints(conversation, effectiveResponse.text)
+        const blockedUpdated = acknowledgeReportedBlockedTaskRecoveryCheckpoints(conversation, effectiveResponse.text, {
+          turnId: runtimeTurnId,
+        })
+        if (blockedUpdated > 0) {
+          runtimeRecoveryResolvedThisRun = true
+          opts.callbacks?.onNotice?.(`Runtime recovery ledger: acknowledged ${blockedUpdated} reported blocked-task checkpoint(s).`)
+        }
+        const synthesisUpdated = resolveReportedLongTaskSynthesisCheckpoints(conversation, effectiveResponse.text, {
+          turnId: runtimeTurnId,
+        })
         if (synthesisUpdated > 0) {
           runtimeRecoveryResolvedThisRun = true
           opts.callbacks?.onNotice?.(`Runtime recovery ledger: resolved ${synthesisUpdated} reported long-task synthesis checkpoint(s).`)
         }
-        const childUpdated = resolveReportedChildRunRecoveryCheckpoints(conversation, effectiveResponse.text)
+        const childUpdated = resolveReportedChildRunRecoveryCheckpoints(conversation, effectiveResponse.text, {
+          turnId: runtimeTurnId,
+        })
         if (childUpdated > 0) {
           runtimeRecoveryResolvedThisRun = true
           opts.callbacks?.onNotice?.(`Runtime recovery ledger: resolved ${childUpdated} reported child-run checkpoint(s).`)
         }
-        const longTaskUpdated = resolveReportedLongTaskRecoveryCheckpoints(conversation, effectiveResponse.text)
+        const longTaskUpdated = resolveReportedLongTaskRecoveryCheckpoints(conversation, effectiveResponse.text, {
+          turnId: runtimeTurnId,
+        })
         if (longTaskUpdated > 0) {
           runtimeRecoveryResolvedThisRun = true
           opts.callbacks?.onNotice?.(`Runtime recovery ledger: resolved ${longTaskUpdated} reported long-task checkpoint(s).`)
         }
-        const replacementUpdated = resolveReportedLongTaskReplacementCheckpoints(conversation, effectiveResponse.text)
+        const replacementUpdated = resolveReportedLongTaskReplacementCheckpoints(conversation, effectiveResponse.text, {
+          turnId: runtimeTurnId,
+        })
         if (replacementUpdated > 0) {
           runtimeRecoveryResolvedThisRun = true
           opts.callbacks?.onNotice?.(`Runtime recovery ledger: resolved ${replacementUpdated} reported long-task replacement checkpoint(s).`)
@@ -2165,6 +2544,10 @@ export async function runConversationLoop(
         break
       }
       if (verificationRepairSatisfiedThisTurn) {
+        openTaskAutoContinueCount = 0
+        break
+      }
+      if (runtimeTruthResumeReportSatisfiedThisTurn) {
         openTaskAutoContinueCount = 0
         break
       }
@@ -2374,6 +2757,7 @@ export async function runConversationLoop(
       // for that exact shape) even when the latest user intent is
       // analysis.
       conversation,
+      runtimeTurnId,
       // 0.13.55: persisted across turns so the second hit on the same
       // intentKey escalates from soft intercept to hard terminate.
       interceptedIntents,
@@ -2442,6 +2826,7 @@ export async function runConversationLoop(
         })
       }
       const allResults = [...toolResults.results, ...abortedFillers]
+      turnResponseSummary.executedToolUseCount += allResults.length
       if (allResults.length > 0) {
         const resultBlocks = dispatcher.toContentBlocks(allResults)
         const truncatedBlocks = truncateToolResultBlocks(resultBlocks, TOOL_OUTPUT_MAX_CHARS)
@@ -2499,6 +2884,7 @@ export async function runConversationLoop(
     const allToolResults = softModeFillers.length > 0
       ? [...toolResults.results, ...softModeFillers]
       : toolResults.results
+    turnResponseSummary.executedToolUseCount += allToolResults.length
     const runtimeRecoveryDispositionNotices = [
       ...(toolResults.runtimeRecoveryDispositionNotices ?? []),
       ...resolveRuntimeRecoveryCheckpointsFromToolResults(conversation, allToolResults),
@@ -2550,7 +2936,7 @@ export async function runConversationLoop(
       })
       openTaskAutoContinueCount = 0
       opts.callbacks?.onNotice?.(
-        `Blocked-task checkpoint: task ${blockedTaskCheckpoint.taskId} step ${blockedTaskCheckpoint.stepId} was marked blocked — requesting a text-only blocked report.`,
+        `Blocked-task checkpoint: task ${blockedTaskCheckpoint.taskId} step ${blockedTaskCheckpoint.stepId} was marked blocked — requesting a structured JSON blocked report.`,
       )
     }
     if (childRunSynthesisCheckpoint) {
@@ -2564,7 +2950,7 @@ export async function runConversationLoop(
       })
       openTaskAutoContinueCount = 0
       opts.callbacks?.onNotice?.(
-        `Child-run synthesis checkpoint: ${childRunSynthesisCheckpoint.childCount} child Agent runs need a text-only per-child report.`,
+        `Child-run synthesis checkpoint: ${childRunSynthesisCheckpoint.childCount} child Agent runs need a structured JSON per-child report.`,
       )
     }
     if (verificationRepairCheckpoint) {
@@ -2579,7 +2965,7 @@ export async function runConversationLoop(
       })
       openTaskAutoContinueCount = 0
       opts.callbacks?.onNotice?.(
-        `Verification-repair checkpoint: task ${verificationRepairCheckpoint.taskId} step ${verificationRepairCheckpoint.stepId} failed verification — requesting a text-only repair report.`,
+        `Verification-repair checkpoint: task ${verificationRepairCheckpoint.taskId} step ${verificationRepairCheckpoint.stepId} failed verification — requesting a structured JSON repair report.`,
       )
     }
     if (toolResults.results.some((result) => result.result.metadata?.['loopInterceptKind'] === 'long_task_polling')) {
@@ -2741,13 +3127,125 @@ export async function runConversationLoop(
   appendRuntimeEvent(conversation, {
     kind: 'turn_completed',
     turnId: runtimeTurnId,
-    payload: {
+    payload: buildTurnCompletedPayload({
       stop_reason: lastStopReason,
       iterations,
-      request_count: totalUsage.requestCount,
-    },
+      usage: totalUsage,
+      finalText,
+      responseSummary: turnResponseSummary,
+      ...(runtimeClosureReason ? { closure_reason: runtimeClosureReason } : {}),
+      ...(runtimeClosureCheckpointId ? { runtime_truth_resume_checkpoint_id: runtimeClosureCheckpointId } : {}),
+      ...(runtimeFailure ? {
+        runtime_failure_kind: runtimeFailure.kind,
+        runtime_failure_phase: runtimeFailure.phase,
+      } : {}),
+    }),
   })
   return { conversation, finalText, iterations, stopReason: lastStopReason, usage: totalUsage, runtimeFailure }
+}
+
+interface TurnResponseSummary {
+  assistantResponseCount: number
+  assistantTextChars: number
+  toolUseCount: number
+  executedToolUseCount: number
+  emptyResponseCount: number
+}
+
+type AssistantResponseRuntimePhase = 'main' | 'synthesis_initial' | 'synthesis_fallback'
+
+function createTurnResponseSummary(): TurnResponseSummary {
+  return {
+    assistantResponseCount: 0,
+    assistantTextChars: 0,
+    toolUseCount: 0,
+    executedToolUseCount: 0,
+    emptyResponseCount: 0,
+  }
+}
+
+function buildAssistantResponseRecordedPayload(
+  response: AssistantResponse,
+  input: { responseIndex: number; phase: AssistantResponseRuntimePhase },
+): Record<string, unknown> {
+  const text = response.text ?? ''
+  return {
+    response_index: input.responseIndex,
+    phase: input.phase,
+    stop_reason: response.stopReason ?? 'unknown',
+    text_chars: text.length,
+    text_digest: digestRuntimeEventText(text),
+    tool_use_count: response.toolUseBlocks.length,
+    has_tool_use: response.hasToolUse,
+    thinking_block_count: response.thinkingBlocks.length,
+    input_tokens: response.usage.inputTokens,
+    output_tokens: response.usage.outputTokens,
+    is_empty_response: !text && response.toolUseBlocks.length === 0 && !response.hasToolUse,
+  }
+}
+
+function buildAssistantStreamRecordedPayload(
+  summary: AssistantStreamSummary,
+  responseIndex: number,
+): Record<string, unknown> {
+  return {
+    response_index: responseIndex,
+    source: summary.source,
+    text_delta_count: summary.textDeltaCount,
+    text_chars: summary.textChars,
+    thinking_start_count: summary.thinkingStartCount,
+    thinking_delta_count: summary.thinkingDeltaCount,
+    thinking_chars: summary.thinkingChars,
+    thinking_end_count: summary.thinkingEndCount,
+    usage_update_count: summary.usageUpdateCount,
+    input_tokens: summary.inputTokens,
+    output_tokens: summary.outputTokens,
+  }
+}
+
+function digestRuntimeEventText(text: string): string {
+  return `sha256:${createHash('sha256').update(text).digest('hex')}`
+}
+
+function recordTurnResponseObserved(summary: TurnResponseSummary, response: AssistantResponse): void {
+  summary.assistantResponseCount += 1
+  summary.assistantTextChars += response.text.length
+  summary.toolUseCount += response.toolUseBlocks.length
+  if (!response.text && response.toolUseBlocks.length === 0 && !response.hasToolUse) {
+    summary.emptyResponseCount += 1
+  }
+}
+
+function buildTurnCompletedPayload(input: {
+  stop_reason: string | null
+  iterations: number
+  usage: { inputTokens: number; outputTokens: number; requestCount: number }
+  finalText: string
+  responseSummary: TurnResponseSummary
+  closure_reason?: string
+  runtime_truth_resume_checkpoint_id?: string
+  runtime_failure_kind?: string
+  runtime_failure_phase?: string
+}): Record<string, unknown> {
+  return {
+    stop_reason: input.stop_reason,
+    iterations: input.iterations,
+    request_count: input.usage.requestCount,
+    input_tokens: input.usage.inputTokens,
+    output_tokens: input.usage.outputTokens,
+    assistant_response_count: input.responseSummary.assistantResponseCount,
+    assistant_text_chars: input.responseSummary.assistantTextChars,
+    final_text_chars: input.finalText.length,
+    tool_use_count: input.responseSummary.toolUseCount,
+    executed_tool_count: input.responseSummary.executedToolUseCount,
+    empty_response_count: input.responseSummary.emptyResponseCount,
+    ...(input.closure_reason ? { closure_reason: input.closure_reason } : {}),
+    ...(input.runtime_truth_resume_checkpoint_id
+      ? { runtime_truth_resume_checkpoint_id: input.runtime_truth_resume_checkpoint_id }
+      : {}),
+    ...(input.runtime_failure_kind ? { runtime_failure_kind: input.runtime_failure_kind } : {}),
+    ...(input.runtime_failure_phase ? { runtime_failure_phase: input.runtime_failure_phase } : {}),
+  }
 }
 
 function shouldAcceptResolvedRuntimeRecoveryClosure(
@@ -2806,6 +3304,28 @@ function buildPostRecoveryOverrunResult(
       : 'would reopen or poison a clean recovery checkpoint'
   const output =
     `[post-recovery-overrun] skipped redundant TaskUpdate: runtime recovery already resolved for ${scope}; requested ${statusField}="${requestedStatus}" ${statusNote}; no unresolved runtime recovery checkpoints remain. Report the clean recovery state and do not retry TaskUpdate for this checkpoint.`
+  appendRuntimeEvent(conversation, {
+    kind: 'runtime_intervention',
+    itemId: block.id,
+    checkpointId: checkpoint.id,
+    checkpointKind: checkpoint.kind,
+    payload: {
+      intervention_kind: 'post_recovery_overrun_guard',
+      action: 'skipped_redundant_task_update',
+      tool_use_id: block.id,
+      tool_name: 'TaskUpdate',
+      task_id: taskId,
+      ...(stepId ? { step_id: stepId } : {}),
+      ...(checkpointStepId ? { checkpoint_step_id: checkpointStepId } : {}),
+      checkpoint_id: checkpoint.id,
+      requested_status_field: statusField,
+      requested_status: requestedStatus,
+      ledger_status: 'clean',
+      recovery_resolved_this_run: runtimeRecoveryResolvedThisRun,
+      scope,
+      reason: statusNote,
+    },
+  })
   return {
     toolUseId: block.id,
     toolName: 'TaskUpdate',
@@ -2829,6 +3349,7 @@ function buildLongTaskWaitPolicyInterceptResult(
   conversation: Conversation | undefined,
   block: AnthropicToolUseBlock,
 ): ToolExecutionResult | null {
+  if (!conversation) return null
   const violation = findLongTaskWaitPolicyViolation(conversation, block)
   if (!violation) return null
   const { snapshot, verdict, kind } = violation
@@ -2839,6 +3360,24 @@ function buildLongTaskWaitPolicyInterceptResult(
   const output =
     `[long-task-wait-policy] skipped ${block.name}: runtime wait policy for ${snapshot.longTaskId} ` +
     `is strategy=${policy.strategy}; ${nextAction} instead of ${describeWaitPolicyViolation(kind)}.`
+  appendRuntimeEvent(conversation, {
+    kind: 'runtime_intervention',
+    itemId: block.id,
+    payload: {
+      intervention_kind: 'long_task_wait_policy',
+      action: 'skipped_tool_use',
+      tool_use_id: block.id,
+      tool_name: block.name,
+      violation_kind: kind,
+      long_task_id: snapshot.longTaskId,
+      wait_strategy: policy.strategy,
+      stop_polling: policy.stop_polling,
+      next_check_command: policy.next_check_command,
+      reason: policy.reason,
+      ...(snapshot.taskId ? { task_id: snapshot.taskId } : {}),
+      ...(snapshot.agentId ? { agent_id: snapshot.agentId } : {}),
+    },
+  })
 
   return {
     toolUseId: block.id,
@@ -3372,26 +3911,123 @@ function hasMeaningfulAssistantText(text: string): boolean {
   return normalizeWhitespace(text).length > 0
 }
 
+function shouldEnforceRuntimeTruthResumeReportGate(conversation: Conversation): { checkpointId: string } | null {
+  const state = conversation.options?.runtimeTruthResume
+  if (!state || state.reportGate !== 'pending') return null
+  const userText = latestExternalUserText(conversation)
+  if (!requestsToolFreeResumeReport(userText)) return null
+  return { checkpointId: state.checkpointId }
+}
+
+function markRuntimeTruthResumeReportGate(
+  conversation: Conversation,
+  reportGate: 'satisfied' | 'ignored',
+): void {
+  const state = conversation.options?.runtimeTruthResume
+  if (!state) return
+  conversation.options = {
+    ...conversation.options,
+    runtimeTruthResume: {
+      ...state,
+      reportGate,
+    },
+  }
+}
+
+function summarizeIgnoredRuntimeTruthResumeTool(
+  block: AnthropicToolUseBlock,
+): Record<string, unknown> {
+  const input = block.input && typeof block.input === 'object' && !Array.isArray(block.input)
+    ? block.input as Record<string, unknown>
+    : {}
+  return {
+    tool_use_id: block.id,
+    tool_name: block.name,
+    input_keys: Object.keys(input).slice(0, 12),
+  }
+}
+
+function latestExternalUserText(conversation: Conversation): string {
+  for (let index = conversation.turns.length - 1; index >= 0; index -= 1) {
+    const turn = conversation.turns[index]
+    if (!turn || turn.role !== 'user') continue
+    const text = turn.content
+      .filter((block): block is AnthropicTextBlock => block.type === 'text')
+      .map((block) => block.text)
+      .join('\n')
+      .trim()
+    if (!text || isRuntimeGeneratedUserPrompt(text)) continue
+    return text
+  }
+  return ''
+}
+
+function isRuntimeGeneratedUserPrompt(text: string): boolean {
+  const trimmed = text.trimStart()
+  return trimmed.startsWith('[Runtime truth resume snapshot]')
+    || trimmed.startsWith('[Runtime recovery ledger]')
+    || trimmed.startsWith('[Runtime long-task synthesis checkpoint]')
+    || trimmed.startsWith('[Runtime verification-repair checkpoint]')
+    || trimmed.startsWith('[Runtime blocked-task checkpoint]')
+    || trimmed.startsWith('[Runtime child-run synthesis checkpoint]')
+    || trimmed.startsWith('[Runtime ')
+}
+
+function requestsToolFreeResumeReport(text: string): boolean {
+  if (!text) return false
+  const normalized = normalizeWhitespace(text).toLowerCase()
+  const noTools =
+    /\bno\s+tools?\b/.test(normalized)
+    || /\bwithout\s+(?:using\s+)?tools?\b/.test(normalized)
+    || /\bdo\s+not\s+call\s+(?:any\s+)?tools?\b/.test(normalized)
+    || /\bdon't\s+call\s+(?:any\s+)?tools?\b/.test(normalized)
+    || /\bplain[- ]text\b/.test(normalized)
+    || /\btext[- ]only\b/.test(normalized)
+    || /\bno\s+tool_use\b/.test(normalized)
+    || /不要(?:再)?调用工具|不(?:要)?调用工具|不用工具|纯文本|只(?:做|输出|报告)/.test(text)
+  if (!noTools) return false
+  return /resume|runtime truth|snapshot|checkpoint|恢复|快照|检查点|报告|只从/.test(normalized)
+    || /恢复|快照|检查点|报告|只从/.test(text)
+}
+
 function buildToolExecutionPlan(
   blocks: AnthropicToolUseBlock[],
   mode: TurnRequestMode,
   convergence: ConvergenceRuntimeState,
 ): ToolExecutionPlan {
   if (mode === 'task_realign' && blocks.length > 2) {
+    const executeBlocks = blocks.slice(0, 2)
+    const notice = `Task realign: keeping 2 tool calls and deferring ${blocks.length - 2} extra calls until the model re-centers on the contract`
     return {
-      executeBlocks: blocks.slice(0, 2),
+      executeBlocks,
       runtimeBlocks: [],
-      notices: [`Task realign: keeping 2 tool calls and deferring ${blocks.length - 2} extra calls until the model re-centers on the contract`],
+      notices: [notice],
+      runtimeInterventionPayload: buildToolExecutionDeferralPayload({
+        planKind: 'task_realign',
+        originalBlocks: blocks,
+        executedBlocks: executeBlocks,
+        notice,
+        requiresNextResponseSummary: false,
+      }),
       summaryGateTriggered: false,
       targetedCheckConsumed: false,
     }
   }
 
   if (mode === 'targeted_check' && blocks.length > TARGETED_CHECK_TOOL_LIMIT) {
+    const executeBlocks = blocks.slice(0, TARGETED_CHECK_TOOL_LIMIT)
+    const notice = `Targeted check: keeping one focused verification and deferring ${blocks.length - TARGETED_CHECK_TOOL_LIMIT} extra tool calls`
     return {
-      executeBlocks: blocks.slice(0, TARGETED_CHECK_TOOL_LIMIT),
+      executeBlocks,
       runtimeBlocks: [],
-      notices: [`Targeted check: keeping one focused verification and deferring ${blocks.length - TARGETED_CHECK_TOOL_LIMIT} extra tool calls`],
+      notices: [notice],
+      runtimeInterventionPayload: buildToolExecutionDeferralPayload({
+        planKind: 'targeted_check',
+        originalBlocks: blocks,
+        executedBlocks: executeBlocks,
+        notice,
+        requiresNextResponseSummary: false,
+      }),
       summaryGateTriggered: false,
       targetedCheckConsumed: true,
     }
@@ -3424,13 +4060,21 @@ function buildToolExecutionPlan(
   if (exploratoryOnly && blocks.length > exploratoryFanoutLimit) {
     const allowed = blocks.slice(0, exploratoryFanoutLimit)
     const deferredCount = blocks.length - allowed.length
+    const notice = `Summary gate: batched ${allowed.length} exploratory tools and deferred ${deferredCount} more until the assistant summarizes`
     return {
       executeBlocks: allowed,
       runtimeBlocks: [{
         type: 'text',
         text: `[Runtime summary gate] You already explored ${allowed.length} file/search actions in this batch and ${deferredCount} more exploratory calls were deferred. Before asking for more tools, write a concise summary of the files inspected, the relevant signals, your dominant hypothesis, and the next best action. Do not call tools in your next response.`,
       }],
-      notices: [`Summary gate: batched ${allowed.length} exploratory tools and deferred ${deferredCount} more until the assistant summarizes`],
+      notices: [notice],
+      runtimeInterventionPayload: buildToolExecutionDeferralPayload({
+        planKind: 'summary_gate',
+        originalBlocks: blocks,
+        executedBlocks: allowed,
+        notice,
+        requiresNextResponseSummary: true,
+      }),
       summaryGateTriggered: true,
       targetedCheckConsumed: false,
     }
@@ -3442,6 +4086,166 @@ function buildToolExecutionPlan(
     notices: [],
     summaryGateTriggered: false,
     targetedCheckConsumed: false,
+  }
+}
+
+function buildToolExecutionDeferralPayload(input: {
+  planKind: 'task_realign' | 'targeted_check' | 'summary_gate'
+  originalBlocks: AnthropicToolUseBlock[]
+  executedBlocks: AnthropicToolUseBlock[]
+  notice: string
+  requiresNextResponseSummary: boolean
+}): Record<string, unknown> {
+  const executedIds = new Set(input.executedBlocks.map((block) => block.id))
+  const deferredBlocks = input.originalBlocks.filter((block) => !executedIds.has(block.id))
+  return {
+    intervention_kind: 'tool_execution_plan_deferral',
+    action: 'deferred_tool_calls',
+    plan_kind: input.planKind,
+    original_tool_count: input.originalBlocks.length,
+    executed_tool_count: input.executedBlocks.length,
+    deferred_tool_count: deferredBlocks.length,
+    executed_tools: input.executedBlocks.map(summarizeToolPlanBlock),
+    deferred_tools: deferredBlocks.map(summarizeToolPlanBlock),
+    requires_next_response_summary: input.requiresNextResponseSummary,
+    reason: input.notice,
+  }
+}
+
+function summarizeToolPlanBlock(block: AnthropicToolUseBlock): Record<string, unknown> {
+  const input = block.input && typeof block.input === 'object' && !Array.isArray(block.input)
+    ? block.input as Record<string, unknown>
+    : {}
+  return {
+    tool_use_id: block.id,
+    tool_name: block.name,
+    input_keys: Object.keys(input).slice(0, 12),
+  }
+}
+
+function buildTaskNoProgressDecisionPayload(input: {
+  decision: 'hard_stop' | 'suppressed_advisory'
+  action: 'stopped' | 'continued_with_advisory'
+  stopReason?: string
+  iteration: number
+  reason: string
+  deliverable: DeliverableContractClassification
+  wouldHaveHardStopped: boolean
+  hardStopEnabled: boolean
+  operatingMode: string
+  touchedPathCount: number
+}): Record<string, unknown> {
+  return {
+    intervention_kind: 'task_no_progress_decision',
+    action: input.action,
+    decision: input.decision,
+    ...(input.stopReason ? { stop_reason: input.stopReason } : {}),
+    iteration: input.iteration,
+    touched_path_count: input.touchedPathCount,
+    reason: input.reason,
+    deliverable_mode: input.deliverable.mode,
+    deliverable_confidence: input.deliverable.confidence,
+    requires_durable_artifact: input.deliverable.requiresDurableArtifact,
+    allows_chat_final: input.deliverable.allowsChatFinal,
+    hard_stop_on_no_touched_paths: input.deliverable.hardStopOnNoTouchedPaths,
+    would_have_hard_stopped: input.wouldHaveHardStopped,
+    hard_stop_enabled: input.hardStopEnabled,
+    operating_mode: input.operatingMode,
+  }
+}
+
+function buildProductionGateNudgePayload(input: {
+  distinctFilesRead: number
+  iteration: number
+  taskWriteScopePresent: boolean
+  touchedPathCount: number
+  deliverable: DeliverableContractClassification
+}): Record<string, unknown> {
+  return {
+    intervention_kind: 'production_gate_nudge',
+    action: 'injected_runtime_prompt',
+    gate_kind: 'production_gate',
+    prompt_marker: '[Runtime production gate]',
+    iteration: input.iteration,
+    distinct_files_read: input.distinctFilesRead,
+    touched_path_count: input.touchedPathCount,
+    task_write_scope_present: input.taskWriteScopePresent,
+    deliverable_mode: input.deliverable.mode,
+    deliverable_confidence: input.deliverable.confidence,
+    requires_durable_artifact: input.deliverable.requiresDurableArtifact,
+    allows_chat_final: input.deliverable.allowsChatFinal,
+    hard_stop_on_no_touched_paths: input.deliverable.hardStopOnNoTouchedPaths,
+    reason:
+      `${input.distinctFilesRead} distinct files read across ${input.iteration} iterations ` +
+      'under a durable-artifact task with 0 touched paths.',
+  }
+}
+
+function buildContextPressureNudgePayload(input: {
+  threshold: number
+  usageRatio: number
+  totalTokens: number
+  contextWindow: number
+}): Record<string, unknown> {
+  const thresholdPercent = Math.round(input.threshold * 100)
+  const usagePercent = Math.round(input.usageRatio * 100)
+  return {
+    intervention_kind: 'context_pressure_nudge',
+    action: 'injected_runtime_prompt',
+    prompt_marker: '[Runtime context-pressure check]',
+    context_pressure_mode: input.threshold >= 0.85 ? 'strict' : 'soft',
+    context_pressure_threshold: input.threshold,
+    threshold_percent: thresholdPercent,
+    usage_ratio: Number(input.usageRatio.toFixed(4)),
+    usage_percent: usagePercent,
+    total_tokens: input.totalTokens,
+    context_window: input.contextWindow,
+    reason:
+      `Context usage crossed ${thresholdPercent}% ` +
+      `(${usagePercent}% of ${formatTokenCount(input.contextWindow)}).`,
+  }
+}
+
+function buildSchemaFailShortCircuitPayload(input: {
+  toolName: string
+  toolUseId: string
+  schemaFailureKey: string
+  missingFields: string[]
+  priorFailureCount: number
+  reason: string
+}): Record<string, unknown> {
+  return {
+    intervention_kind: 'schema_fail_short_circuit',
+    action: 'stopped',
+    stop_reason: 'tool_loop',
+    tool_name: input.toolName,
+    tool_use_id: input.toolUseId,
+    schema_failure_key: input.schemaFailureKey,
+    missing_fields: input.missingFields,
+    prior_failure_count: input.priorFailureCount,
+    current_failure_count: input.priorFailureCount + 1,
+    reason: input.reason,
+  }
+}
+
+function buildMaxTokensContinuationNudgePayload(input: {
+  consecutiveTruncations: number
+  injectCount: number
+  injectLimit: number
+  responseTextChars: number
+}): Record<string, unknown> {
+  return {
+    intervention_kind: 'max_tokens_continuation_nudge',
+    action: 'injected_runtime_prompt',
+    prompt_marker: '[Runtime max-tokens continuation]',
+    stop_reason: 'max_tokens',
+    consecutive_truncations: input.consecutiveTruncations,
+    inject_count: input.injectCount,
+    inject_limit: input.injectLimit,
+    response_text_chars: input.responseTextChars,
+    reason:
+      `Assistant response hit stop_reason=max_tokens; injected continuation prompt ` +
+      `${input.injectCount}/${input.injectLimit}.`,
   }
 }
 
@@ -3473,6 +4277,8 @@ async function settleSynthesisResponse(
   convergence: ConvergenceRuntimeState,
   taskState: ActiveTaskState,
   totalUsage: { inputTokens: number; outputTokens: number; requestCount: number },
+  turnResponseSummary: TurnResponseSummary,
+  recordAssistantResponseEvent: (response: AssistantResponse, phase: AssistantResponseRuntimePhase) => void,
   opts: ConversationLoopOptions,
 ): Promise<{ response?: AssistantResponse; stopReason: string }> {
   const validation = validateFinalAnswerContract(response)
@@ -3502,6 +4308,8 @@ async function settleSynthesisResponse(
   }
 
   recordResponseUsage(totalUsage, convergence, fallbackResponse)
+  recordTurnResponseObserved(turnResponseSummary, fallbackResponse)
+  recordAssistantResponseEvent(fallbackResponse, 'synthesis_fallback')
   const fallbackValidation = validateFinalAnswerContract(fallbackResponse)
   if (fallbackValidation.ok) {
     convergence.phase = 'exploring'
@@ -4275,16 +5083,27 @@ async function sendRequest(
             // callback so interactive UIs still render the assistant reply.
             opts.callbacks?.onText?.(response.text)
           }
+          response.streamSummary = buildJsonStreamFallbackSummary(response)
           recordAdaptiveSuccess(adaptiveKey)
           return response
         }
         let streamedResponse: AssistantResponse
+        const streamSummary = createAssistantStreamSummary('sse')
         try {
           streamedResponse = await consumeStream(
             res.body,
-            opts.callbacks?.onText,
-            opts.callbacks?.onUsage,
-            opts.callbacks?.onThinking,
+            (text) => {
+              recordAssistantStreamText(streamSummary, text)
+              opts.callbacks?.onText?.(text)
+            },
+            (tokens) => {
+              recordAssistantStreamUsage(streamSummary, tokens)
+              opts.callbacks?.onUsage?.(tokens)
+            },
+            (event, text) => {
+              recordAssistantStreamThinking(streamSummary, event, text)
+              opts.callbacks?.onThinking?.(event, text)
+            },
             opts.signal,
           )
         } catch (err: unknown) {
@@ -4311,6 +5130,7 @@ async function sendRequest(
           recordAdaptiveSuccess(adaptiveKey)
           return fallbackResponse
         }
+        streamedResponse.streamSummary = streamSummary
         recordAdaptiveSuccess(adaptiveKey)
         return streamedResponse
       }
@@ -4360,6 +5180,67 @@ async function sendRequest(
   }
 
   throw lastError ?? new Error('Request failed after retries')
+}
+
+function createAssistantStreamSummary(source: AssistantStreamSummary['source']): AssistantStreamSummary {
+  return {
+    source,
+    textDeltaCount: 0,
+    textChars: 0,
+    thinkingStartCount: 0,
+    thinkingDeltaCount: 0,
+    thinkingChars: 0,
+    thinkingEndCount: 0,
+    usageUpdateCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+  }
+}
+
+function buildJsonStreamFallbackSummary(response: AssistantResponse): AssistantStreamSummary {
+  return {
+    source: 'json_stream_fallback',
+    textDeltaCount: response.text ? 1 : 0,
+    textChars: response.text.length,
+    thinkingStartCount: response.thinkingBlocks.length > 0 ? 1 : 0,
+    thinkingDeltaCount: response.thinkingBlocks.length,
+    thinkingChars: response.thinkingBlocks.reduce((sum, block) => sum + block.thinking.length, 0),
+    thinkingEndCount: response.thinkingBlocks.length > 0 ? 1 : 0,
+    usageUpdateCount: response.usage.inputTokens > 0 || response.usage.outputTokens > 0 ? 1 : 0,
+    inputTokens: response.usage.inputTokens,
+    outputTokens: response.usage.outputTokens,
+  }
+}
+
+function recordAssistantStreamText(summary: AssistantStreamSummary, text: string): void {
+  summary.textDeltaCount += 1
+  summary.textChars += text.length
+}
+
+function recordAssistantStreamThinking(
+  summary: AssistantStreamSummary,
+  event: 'start' | 'delta' | 'end',
+  text: string | undefined,
+): void {
+  if (event === 'start') {
+    summary.thinkingStartCount += 1
+  } else if (event === 'delta') {
+    summary.thinkingDeltaCount += 1
+    summary.thinkingChars += text?.length ?? 0
+  } else {
+    summary.thinkingEndCount += 1
+  }
+}
+
+function recordAssistantStreamUsage(
+  summary: AssistantStreamSummary,
+  tokens: { input: number; output: number },
+): void {
+  if (tokens.input !== summary.inputTokens || tokens.output !== summary.outputTokens) {
+    summary.usageUpdateCount += 1
+    summary.inputTokens = tokens.input
+    summary.outputTokens = tokens.output
+  }
 }
 
 function shouldRetryEmptyStream(response: AssistantResponse): boolean {
@@ -5070,6 +5951,24 @@ export interface AutoCompactDecision {
   reason: 'no_context_window' | 'below_threshold' | 'too_few_turns' | 'threshold'
 }
 
+function getUncompactableContextOverflowPreflight(
+  conversation: Conversation,
+  contextWindow?: number,
+): { contextWindow: number; totalTokens: number } | null {
+  const window = contextWindow ?? 0
+  if (window <= 0) return null
+  if (conversation.turns.length > 2) return null
+
+  const snapshot = buildContextBudgetSnapshot(conversation, window, {
+    thresholdRatio: AUTO_COMPACT_THRESHOLD,
+  })
+  if (snapshot.usedTokens <= window) return null
+  return {
+    contextWindow: window,
+    totalTokens: snapshot.usedTokens,
+  }
+}
+
 export function getAutoCompactDecision(conversation: Conversation, contextWindow?: number): AutoCompactDecision {
   const window = contextWindow ?? 0
   const turnCount = conversation.turns.length
@@ -5722,9 +6621,18 @@ function resolveLongTaskReplacementCheckpointsFromToolResults(
 function resolveReportedChildRunRecoveryCheckpoints(
   conversation: Conversation,
   reportText: string,
+  opts: { turnId?: string } = {},
 ): number {
   const normalizedReport = reportText.trim()
   if (!normalizedReport) return 0
+  const structuredReport = parseRuntimeReportObject(reportText)
+  const structuredReportKind = stringValue(structuredReport?.['kind'])
+  const structuredAgentIds = structuredReportKind === 'child_run_synthesis_report'
+    ? childRunAgentIdsFromStructuredReport(structuredReport)
+    : []
+  const structuredCheckpointId = structuredReportKind === 'child_run_synthesis_report'
+    ? stringValue(structuredReport?.['checkpoint_id']) ?? stringValue(structuredReport?.['checkpointId'])
+    : undefined
 
   let updatedTotal = 0
   const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
@@ -5732,10 +6640,186 @@ function resolveReportedChildRunRecoveryCheckpoints(
     if (checkpoint.kind !== 'child_run_synthesis_checkpoint') continue
     const agentIds = childRunAgentIdsFromPayload(checkpoint.payload)
     if (agentIds.length === 0) continue
-    if (!agentIds.every((agentId) => normalizedReport.includes(agentId))) continue
+    if (structuredReportKind === 'child_run_synthesis_report') {
+      if (structuredCheckpointId && structuredCheckpointId !== checkpoint.id) continue
+      if (!agentIds.every((agentId) => structuredAgentIds.includes(agentId))) continue
+      recordRuntimeRecoveryReportEvent(conversation, {
+        turnId: opts.turnId,
+        checkpointId: checkpoint.id,
+        checkpointKind: checkpoint.kind,
+        reportSource: 'assistant_text',
+        text: reportText,
+      })
+      updatedTotal += markChildRunSynthesisCheckpointResolved(conversation, {
+        agentIds,
+        reason: `Structured child-run synthesis report covered all child agent ids for checkpoint ${checkpoint.id}.`,
+      })
+      continue
+    }
+    if (!agentIds.every((agentId) => reportTextContainsRuntimeToken(normalizedReport, agentId))) continue
+    recordRuntimeRecoveryTextFallbackReportEvent(conversation, {
+      turnId: opts.turnId,
+      checkpointId: checkpoint.id,
+      checkpointKind: checkpoint.kind,
+      reportKind: 'child_run_synthesis_checkpoint_text_fallback',
+      text: reportText,
+      coveredIds: agentIds,
+      inspectCommands: checkpoint.inspectCommands,
+    })
     updatedTotal += markChildRunSynthesisCheckpointResolved(conversation, {
       agentIds,
-      reason: `Text report covered all child-run agent ids for checkpoint ${checkpoint.id}.`,
+      reason: `Text child-run synthesis report covered all child-run agent ids for checkpoint ${checkpoint.id}.`,
+    })
+  }
+  return updatedTotal
+}
+
+function acknowledgeReportedBlockedTaskRecoveryCheckpoints(
+  conversation: Conversation,
+  reportText: string,
+  opts: { turnId?: string } = {},
+): number {
+  const normalizedReport = reportText.trim()
+  if (!normalizedReport) return 0
+  const structuredReport = parseRuntimeReportObject(reportText)
+  const structuredReportKind = stringValue(structuredReport?.['kind'])
+  const structuredBlockedTask = structuredReportKind === 'blocked_task_report'
+    ? (structuredReport ? blockedTaskCheckpointFromPayload(structuredReport) : null)
+    : null
+  const structuredCheckpointId = structuredReportKind === 'blocked_task_report'
+    ? stringValue(structuredReport?.['checkpoint_id']) ?? stringValue(structuredReport?.['checkpointId'])
+    : undefined
+
+  let updatedTotal = 0
+  const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.kind !== 'blocked_task_checkpoint') continue
+    if ((checkpoint.disposition ?? 'active') !== 'active') continue
+    const blockedTask = blockedTaskCheckpointFromPayload(checkpoint.payload)
+    if (!blockedTask) continue
+    if (structuredReportKind === 'blocked_task_report') {
+      if (structuredCheckpointId && structuredCheckpointId !== checkpoint.id) continue
+      if (!structuredBlockedTask) continue
+      if (structuredBlockedTask.taskId !== blockedTask.taskId) continue
+      if (structuredBlockedTask.stepId !== blockedTask.stepId) continue
+      recordRuntimeRecoveryReportEvent(conversation, {
+        turnId: opts.turnId,
+        checkpointId: checkpoint.id,
+        checkpointKind: checkpoint.kind,
+        reportSource: 'assistant_text',
+        text: reportText,
+      })
+      updatedTotal += markBlockedTaskRecoveryCheckpointAcknowledged(conversation, {
+        taskId: blockedTask.taskId,
+        stepId: blockedTask.stepId,
+        reason: `Structured blocked-task report covered task ${blockedTask.taskId} step ${blockedTask.stepId} for checkpoint ${checkpoint.id}.`,
+      })
+      continue
+    }
+    if (!reportTextContainsRuntimeToken(normalizedReport, blockedTask.taskId)) continue
+    if (!reportTextContainsRuntimeToken(normalizedReport, blockedTask.stepId)) continue
+    recordRuntimeRecoveryTextFallbackReportEvent(conversation, {
+      turnId: opts.turnId,
+      checkpointId: checkpoint.id,
+      checkpointKind: checkpoint.kind,
+      reportKind: 'blocked_task_checkpoint_text_fallback',
+      text: reportText,
+      coveredIds: [blockedTask.taskId, blockedTask.stepId],
+      inspectCommands: checkpoint.inspectCommands,
+    })
+    updatedTotal += markBlockedTaskRecoveryCheckpointAcknowledged(conversation, {
+      taskId: blockedTask.taskId,
+      stepId: blockedTask.stepId,
+      reason: `Text blocked-task report covered task ${blockedTask.taskId} step ${blockedTask.stepId} for checkpoint ${checkpoint.id}.`,
+    })
+  }
+  return updatedTotal
+}
+
+function recordBlockedTaskTextFallbackReport(
+  conversation: Conversation,
+  blockedTask: BlockedTaskCheckpoint,
+  reportText: string,
+  opts: { turnId?: string } = {},
+): void {
+  const checkpoint = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
+    .find((candidate) => {
+      if (candidate.kind !== 'blocked_task_checkpoint') return false
+      if ((candidate.disposition ?? 'active') !== 'active') return false
+      const candidateBlockedTask = blockedTaskCheckpointFromPayload(candidate.payload)
+      return candidateBlockedTask?.taskId === blockedTask.taskId
+        && candidateBlockedTask.stepId === blockedTask.stepId
+    })
+  if (!checkpoint) return
+  recordRuntimeRecoveryTextFallbackReportEvent(conversation, {
+    turnId: opts.turnId,
+    checkpointId: checkpoint.id,
+    checkpointKind: checkpoint.kind,
+    reportKind: 'blocked_task_checkpoint_text_fallback',
+    text: reportText,
+    coveredIds: [blockedTask.taskId, blockedTask.stepId],
+    inspectCommands: checkpoint.inspectCommands,
+  })
+}
+
+function acknowledgeReportedVerificationRepairCheckpoints(
+  conversation: Conversation,
+  reportText: string,
+  opts: { turnId?: string } = {},
+): number {
+  const normalizedReport = reportText.trim()
+  if (!normalizedReport) return 0
+  const structuredReport = parseRuntimeReportObject(reportText)
+  const structuredReportKind = stringValue(structuredReport?.['kind'])
+  const structuredCheckpointId = structuredReportKind === 'verification_repair_report'
+    ? stringValue(structuredReport?.['checkpoint_id']) ?? stringValue(structuredReport?.['checkpointId'])
+    : undefined
+  const structuredRepair = structuredReportKind === 'verification_repair_report'
+    ? (structuredReport ? verificationRepairCheckpointFromPayload(structuredReport) : null)
+    : null
+
+  let updatedTotal = 0
+  const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
+  for (const checkpoint of checkpoints) {
+    if (checkpoint.kind !== 'verification_repair_checkpoint') continue
+    if ((checkpoint.disposition ?? 'active') !== 'active') continue
+    const repair = verificationRepairCheckpointFromPayload(checkpoint.payload)
+    if (!repair) continue
+    if (structuredReportKind === 'verification_repair_report') {
+      if (structuredCheckpointId && structuredCheckpointId !== checkpoint.id) continue
+      if (!structuredRepair) continue
+      if (structuredRepair.taskId !== repair.taskId || structuredRepair.stepId !== repair.stepId) continue
+      if (!verificationRepairCheckIdsCovered(repair, structuredRepair)) continue
+      recordRuntimeRecoveryReportEvent(conversation, {
+        turnId: opts.turnId,
+        checkpointId: checkpoint.id,
+        checkpointKind: checkpoint.kind,
+        reportSource: 'assistant_text',
+        text: reportText,
+      })
+      updatedTotal += markVerificationRepairCheckpointAcknowledged(conversation, {
+        taskId: repair.taskId,
+        stepId: repair.stepId,
+        reason: `Structured verification repair report covered task ${repair.taskId} step ${repair.stepId} for checkpoint ${checkpoint.id}.`,
+      })
+      continue
+    }
+    if (!reportTextContainsRuntimeToken(normalizedReport, repair.taskId)) continue
+    if (!reportTextContainsRuntimeToken(normalizedReport, repair.stepId)) continue
+    if (!verificationRepairTextCoversCheckIds(repair, normalizedReport)) continue
+    recordRuntimeRecoveryTextFallbackReportEvent(conversation, {
+      turnId: opts.turnId,
+      checkpointId: checkpoint.id,
+      checkpointKind: checkpoint.kind,
+      reportKind: 'verification_repair_checkpoint_text_fallback',
+      text: reportText,
+      coveredIds: [repair.taskId, repair.stepId, ...repair.failedChecks.map((check) => check.checkId)],
+      inspectCommands: checkpoint.inspectCommands,
+    })
+    updatedTotal += markVerificationRepairCheckpointAcknowledged(conversation, {
+      taskId: repair.taskId,
+      stepId: repair.stepId,
+      reason: `Text verification repair report covered task ${repair.taskId} step ${repair.stepId} for checkpoint ${checkpoint.id}.`,
     })
   }
   return updatedTotal
@@ -5744,9 +6828,18 @@ function resolveReportedChildRunRecoveryCheckpoints(
 function resolveReportedLongTaskRecoveryCheckpoints(
   conversation: Conversation,
   reportText: string,
+  opts: { turnId?: string } = {},
 ): number {
   const normalizedReport = reportText.trim()
   if (!normalizedReport) return 0
+  const structuredReport = parseRuntimeReportObject(reportText)
+  const structuredReportKind = stringValue(structuredReport?.['kind'])
+  const structuredLongTaskIds = structuredReportKind === 'long_task_checkpoint_report'
+    ? longTaskIdsFromStructuredRecoveryReport(structuredReport)
+    : []
+  const structuredCheckpointId = structuredReportKind === 'long_task_checkpoint_report'
+    ? stringValue(structuredReport?.['checkpoint_id']) ?? stringValue(structuredReport?.['checkpointId'])
+    : undefined
 
   let updatedTotal = 0
   const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
@@ -5754,10 +6847,35 @@ function resolveReportedLongTaskRecoveryCheckpoints(
     if (checkpoint.kind !== 'long_task_checkpoint') continue
     const longTaskIds = longTaskIdsFromPayload(checkpoint.payload)
     if (longTaskIds.length === 0) continue
-    if (!longTaskIds.every((longTaskId) => normalizedReport.includes(longTaskId))) continue
+    if (structuredReportKind === 'long_task_checkpoint_report') {
+      if (structuredCheckpointId && structuredCheckpointId !== checkpoint.id) continue
+      if (!longTaskIds.every((longTaskId) => structuredLongTaskIds.includes(longTaskId))) continue
+      recordRuntimeRecoveryReportEvent(conversation, {
+        turnId: opts.turnId,
+        checkpointId: checkpoint.id,
+        checkpointKind: checkpoint.kind,
+        reportSource: 'assistant_text',
+        text: reportText,
+      })
+      updatedTotal += markLongTaskRecoveryCheckpointResolved(conversation, {
+        longTaskIds,
+        reason: `Structured long-task checkpoint report covered all long task ids for checkpoint ${checkpoint.id}.`,
+      })
+      continue
+    }
+    if (!longTaskIds.every((longTaskId) => reportTextContainsRuntimeToken(normalizedReport, longTaskId))) continue
+    recordRuntimeRecoveryTextFallbackReportEvent(conversation, {
+      turnId: opts.turnId,
+      checkpointId: checkpoint.id,
+      checkpointKind: checkpoint.kind,
+      reportKind: 'long_task_checkpoint_text_fallback',
+      text: reportText,
+      coveredIds: longTaskIds,
+      inspectCommands: checkpoint.inspectCommands,
+    })
     updatedTotal += markLongTaskRecoveryCheckpointResolved(conversation, {
       longTaskIds,
-      reason: `Text report covered all long task ids for checkpoint ${checkpoint.id}.`,
+      reason: `Text long-task checkpoint report covered all long task ids for checkpoint ${checkpoint.id}.`,
     })
   }
   return updatedTotal
@@ -5766,9 +6884,18 @@ function resolveReportedLongTaskRecoveryCheckpoints(
 function resolveReportedLongTaskSynthesisCheckpoints(
   conversation: Conversation,
   reportText: string,
+  opts: { turnId?: string } = {},
 ): number {
   const normalizedReport = reportText.trim()
   if (!normalizedReport) return 0
+  const structuredReport = parseRuntimeReportObject(reportText)
+  const structuredReportKind = stringValue(structuredReport?.['kind'])
+  const structuredLongTaskIds = structuredReportKind === 'long_task_synthesis_report'
+    ? longTaskIdsFromStructuredRecoveryReport(structuredReport)
+    : []
+  const structuredCheckpointId = structuredReportKind === 'long_task_synthesis_report'
+    ? stringValue(structuredReport?.['checkpoint_id']) ?? stringValue(structuredReport?.['checkpointId'])
+    : undefined
 
   let updatedTotal = 0
   const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
@@ -5776,7 +6903,32 @@ function resolveReportedLongTaskSynthesisCheckpoints(
     if (checkpoint.kind !== 'long_task_synthesis_checkpoint') continue
     const longTaskIds = longTaskIdsFromPayload(checkpoint.payload)
     if (longTaskIds.length === 0) continue
-    if (!longTaskIds.every((longTaskId) => normalizedReport.includes(longTaskId))) continue
+    if (structuredReportKind === 'long_task_synthesis_report') {
+      if (structuredCheckpointId && structuredCheckpointId !== checkpoint.id) continue
+      if (!longTaskIds.every((longTaskId) => structuredLongTaskIds.includes(longTaskId))) continue
+      recordRuntimeRecoveryReportEvent(conversation, {
+        turnId: opts.turnId,
+        checkpointId: checkpoint.id,
+        checkpointKind: checkpoint.kind,
+        reportSource: 'assistant_text',
+        text: reportText,
+      })
+      updatedTotal += markLongTaskSynthesisCheckpointResolved(conversation, {
+        longTaskIds,
+        reason: `Structured long-task synthesis report covered all synthesized long task ids for checkpoint ${checkpoint.id}.`,
+      })
+      continue
+    }
+    if (!longTaskIds.every((longTaskId) => reportTextContainsRuntimeToken(normalizedReport, longTaskId))) continue
+    recordRuntimeRecoveryTextFallbackReportEvent(conversation, {
+      turnId: opts.turnId,
+      checkpointId: checkpoint.id,
+      checkpointKind: checkpoint.kind,
+      reportKind: 'long_task_synthesis_checkpoint_text_fallback',
+      text: reportText,
+      coveredIds: longTaskIds,
+      inspectCommands: checkpoint.inspectCommands,
+    })
     updatedTotal += markLongTaskSynthesisCheckpointResolved(conversation, {
       longTaskIds,
       reason: `Text report covered all synthesized long task ids for checkpoint ${checkpoint.id}.`,
@@ -5788,9 +6940,18 @@ function resolveReportedLongTaskSynthesisCheckpoints(
 function resolveReportedLongTaskReplacementCheckpoints(
   conversation: Conversation,
   reportText: string,
+  opts: { turnId?: string } = {},
 ): number {
   const normalizedReport = reportText.trim()
   if (!normalizedReport) return 0
+  const structuredReport = parseRuntimeReportObject(reportText)
+  const structuredReportKind = stringValue(structuredReport?.['kind'])
+  const structuredReplacement = structuredReportKind === 'long_task_replacement_report'
+    ? (structuredReport ? longTaskReplacementFromPayload(structuredReport) : null)
+    : null
+  const structuredCheckpointId = structuredReportKind === 'long_task_replacement_report'
+    ? stringValue(structuredReport?.['checkpoint_id']) ?? stringValue(structuredReport?.['checkpointId'])
+    : undefined
 
   let updatedTotal = 0
   const checkpoints = getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
@@ -5798,8 +6959,46 @@ function resolveReportedLongTaskReplacementCheckpoints(
     if (checkpoint.kind !== 'long_task_replacement_checkpoint') continue
     const replacement = longTaskReplacementFromPayload(checkpoint.payload)
     if (!replacement) continue
-    if (!normalizedReport.includes(replacement.originalLongTaskId)) continue
-    if (!normalizedReport.includes(replacement.replacementLongTaskId)) continue
+    if (structuredReportKind === 'long_task_replacement_report') {
+      if (structuredCheckpointId && structuredCheckpointId !== checkpoint.id) continue
+      if (!structuredReplacement) continue
+      if (structuredReplacement.originalLongTaskId !== replacement.originalLongTaskId) continue
+      if (structuredReplacement.replacementLongTaskId !== replacement.replacementLongTaskId) continue
+      if (
+        replacement.replacementTaskId
+        && structuredReplacement.replacementTaskId !== replacement.replacementTaskId
+      ) {
+        continue
+      }
+      recordRuntimeRecoveryReportEvent(conversation, {
+        turnId: opts.turnId,
+        checkpointId: checkpoint.id,
+        checkpointKind: checkpoint.kind,
+        reportSource: 'assistant_text',
+        text: reportText,
+      })
+      updatedTotal += markLongTaskReplacementCheckpointResolved(conversation, {
+        originalLongTaskId: replacement.originalLongTaskId,
+        replacementLongTaskId: replacement.replacementLongTaskId,
+        reason: `Structured long-task replacement report covered replacement ${replacement.originalLongTaskId} -> ${replacement.replacementLongTaskId} for checkpoint ${checkpoint.id}.`,
+      })
+      continue
+    }
+    if (!reportTextContainsRuntimeToken(normalizedReport, replacement.originalLongTaskId)) continue
+    if (!reportTextContainsRuntimeToken(normalizedReport, replacement.replacementLongTaskId)) continue
+    recordRuntimeRecoveryTextFallbackReportEvent(conversation, {
+      turnId: opts.turnId,
+      checkpointId: checkpoint.id,
+      checkpointKind: checkpoint.kind,
+      reportKind: 'long_task_replacement_checkpoint_text_fallback',
+      text: reportText,
+      coveredIds: [
+        replacement.originalLongTaskId,
+        replacement.replacementLongTaskId,
+        ...(replacement.replacementTaskId ? [replacement.replacementTaskId] : []),
+      ],
+      inspectCommands: checkpoint.inspectCommands,
+    })
     updatedTotal += markLongTaskReplacementCheckpointResolved(conversation, {
       originalLongTaskId: replacement.originalLongTaskId,
       replacementLongTaskId: replacement.replacementLongTaskId,
@@ -5868,6 +7067,44 @@ function verificationRepairCheckpointFromPayload(
   }
 }
 
+function verificationRepairCheckIdsCovered(
+  expected: VerificationRepairCheckpoint,
+  reported: VerificationRepairCheckpoint,
+): boolean {
+  if (expected.failedChecks.length === 0) return true
+  const reportedIds = new Set(reported.failedChecks.map((check) => check.checkId))
+  return expected.failedChecks.every((check) => reportedIds.has(check.checkId))
+}
+
+function verificationRepairTextCoversCheckIds(
+  expected: VerificationRepairCheckpoint,
+  reportText: string,
+): boolean {
+  return expected.failedChecks.every((check) => reportTextContainsRuntimeToken(reportText, check.checkId))
+}
+
+function reportTextContainsRuntimeToken(reportText: string, token: string): boolean {
+  if (!token) return false
+  return reportText.includes(token)
+    || reportText.toLowerCase().includes(token.toLowerCase())
+}
+
+function blockedTaskCheckpointFromPayload(payload: Record<string, unknown>): BlockedTaskCheckpoint | null {
+  const blocked = objectValue(payload['blocked_task'])
+  const taskId = stringValue(blocked?.['task_id'])
+    ?? stringValue(blocked?.['taskId'])
+  const stepId = stringValue(blocked?.['step_id'])
+    ?? stringValue(blocked?.['stepId'])
+  if (!taskId || !stepId) return null
+  return {
+    taskId,
+    stepId,
+    ...(stringValue(blocked?.['failure_reason'])
+      ? { failureReason: stringValue(blocked?.['failure_reason']) }
+      : {}),
+  }
+}
+
 function longTaskIdsFromPayload(payload: Record<string, unknown>): string[] {
   const tasks = Array.isArray(payload['long_tasks']) ? payload['long_tasks'] : []
   const ids: string[] = []
@@ -5878,6 +7115,28 @@ function longTaskIdsFromPayload(payload: Record<string, unknown>): string[] {
       ?? stringValue(record['longTaskId'])
     if (longTaskId) ids.push(longTaskId)
   }
+  return [...new Set(ids)].sort()
+}
+
+function longTaskIdsFromStructuredRecoveryReport(report: Record<string, unknown> | undefined): string[] {
+  const ids: string[] = []
+  const tasks = Array.isArray(report?.['long_tasks'])
+    ? report['long_tasks']
+    : objectValue(report?.['long_tasks'])
+      ? [report?.['long_tasks']]
+      : []
+  for (const task of tasks) {
+    const record = objectValue(task)
+    if (!record) continue
+    const longTaskId = stringValue(record['long_task_id'])
+      ?? stringValue(record['longTaskId'])
+    if (longTaskId) ids.push(longTaskId)
+  }
+  const flattenedLongTaskId = stringValue(report?.['long_task_id'])
+    ?? stringValue(report?.['longTaskId'])
+    ?? stringValue(report?.['task_id'])
+    ?? stringValue(report?.['taskId'])
+  if (flattenedLongTaskId?.includes(':')) ids.push(flattenedLongTaskId)
   return [...new Set(ids)].sort()
 }
 
@@ -5925,6 +7184,19 @@ function childRunAgentIdsFromPayload(payload: Record<string, unknown>): string[]
   return [...new Set(ids)].sort()
 }
 
+function childRunAgentIdsFromStructuredReport(report: Record<string, unknown> | undefined): string[] {
+  const children = Array.isArray(report?.['children']) ? report['children'] : []
+  const ids: string[] = []
+  for (const child of children) {
+    const record = objectValue(child)
+    if (!record) continue
+    const agentId = stringValue(record['agent_id'])
+      ?? stringValue(record['agentId'])
+    if (agentId) ids.push(agentId)
+  }
+  return [...new Set(ids)].sort()
+}
+
 function longTaskReplacementFromPayload(payload: Record<string, unknown>): {
   originalLongTaskId: string
   replacementLongTaskId: string
@@ -5954,24 +7226,31 @@ function createBlockedTaskCheckpointBlock(checkpoint: BlockedTaskCheckpoint): An
 
 function buildBlockedTaskCheckpointPrompt(checkpoint: BlockedTaskCheckpoint): string {
   const reason = checkpoint.failureReason?.trim() || 'No failureReason was recorded.'
+  const payload = buildBlockedTaskCheckpointPayload(checkpoint)
   return [
     '[Runtime blocked-task checkpoint]',
     `Task ${checkpoint.taskId} step ${checkpoint.stepId} is now blocked.`,
     `Recorded blocker: ${reason}`,
     '',
-    formatBlockedTaskCheckpointPayloadForPrompt(checkpoint),
+    formatBlockedTaskCheckpointPayloadForPrompt(payload),
     '',
-    'Your next reply MUST be plain text with no tool_use blocks.',
-    'Report the blocker, the evidence already observed, and the smallest user action or artifact/spec change needed to resume.',
+    formatStructuredRecoveryReportContract({
+      schema_version: 1,
+      kind: 'blocked_task_report',
+      checkpoint_id: null,
+      source: 'runtime_recovery_ledger',
+      blocked_task: payload['blocked_task'],
+      next_action: 'smallest user action or artifact/spec change needed to resume',
+    }),
     'Do not call TaskVerify, TaskUpdate, bash, Sleep, Agent, or other tools until the user replies.',
   ].join('\n')
 }
 
-function formatBlockedTaskCheckpointPayloadForPrompt(checkpoint: BlockedTaskCheckpoint): string {
+function formatBlockedTaskCheckpointPayloadForPrompt(payload: Record<string, unknown>): string {
   return [
     '[Runtime blocked-task checkpoint payload]',
     '```json',
-    JSON.stringify(buildBlockedTaskCheckpointPayload(checkpoint), null, 2),
+    JSON.stringify(payload, null, 2),
     '```',
   ].join('\n')
 }
@@ -6030,24 +7309,31 @@ function createVerificationRepairCheckpointBlock(checkpoint: VerificationRepairC
 }
 
 function buildVerificationRepairCheckpointPrompt(checkpoint: VerificationRepairCheckpoint): string {
+  const payload = buildVerificationRepairCheckpointPayload(checkpoint)
   return [
     '[Runtime verification-repair checkpoint]',
     `Task ${checkpoint.taskId} step ${checkpoint.stepId} has failed verification.`,
     'Do not turn this into workaround completion, and do not keep re-running the same verification before repair.',
     '',
-    formatVerificationRepairCheckpointPayloadForPrompt(checkpoint),
+    formatVerificationRepairCheckpointPayloadForPrompt(payload),
     '',
-    'Your next reply MUST be plain text with no tool_use blocks.',
-    'Report the failed checks, the evidence already observed, whether the artifact or verification spec needs repair, and the exact next TaskVerify command to run after repair.',
+    formatStructuredRecoveryReportContract({
+      schema_version: 1,
+      kind: 'verification_repair_report',
+      checkpoint_id: null,
+      source: 'runtime_recovery_ledger',
+      verification_repair: payload['verification_repair'],
+      next_action: 'repair artifact or verification spec, then run the exact verify_command once',
+    }),
     'Do not call TaskVerify, bash, Sleep, Agent, or other tools until the user replies. The only allowed tool escape is TaskUpdate for the same task/step with stepStatus="blocked" or "failed" and a concrete failureReason.',
   ].join('\n')
 }
 
-function formatVerificationRepairCheckpointPayloadForPrompt(checkpoint: VerificationRepairCheckpoint): string {
+function formatVerificationRepairCheckpointPayloadForPrompt(payload: Record<string, unknown>): string {
   return [
     '[Runtime verification-repair checkpoint payload]',
     '```json',
-    JSON.stringify(buildVerificationRepairCheckpointPayload(checkpoint), null, 2),
+    JSON.stringify(payload, null, 2),
     '```',
   ].join('\n')
 }
@@ -6169,23 +7455,42 @@ function createChildRunSynthesisCheckpointBlock(checkpoint: ChildRunSynthesisChe
 }
 
 function buildChildRunSynthesisCheckpointPrompt(checkpoint: ChildRunSynthesisCheckpoint): string {
+  const payload = buildChildRunSynthesisPayload(checkpoint)
   return [
     '[Runtime child-run synthesis checkpoint]',
     `${checkpoint.childCount} child Agent runs failed or timed out in the same tool batch.`,
     '',
-    formatChildRunSynthesisPayloadForPrompt(checkpoint),
+    formatChildRunSynthesisPayloadForPrompt(payload),
     '',
-    'Your next reply MUST be plain text with no tool_use blocks.',
-    'Report one line per child run. For each child, include agent_id, status, failure_category, evidence already observed, inspect_command, and the smallest next action.',
+    formatStructuredRecoveryReportContract({
+      schema_version: 1,
+      kind: 'child_run_synthesis_report',
+      checkpoint_id: null,
+      source: 'runtime_recovery_ledger',
+      children: payload['children'],
+      next_action: 'smallest safe parent action across these child runs',
+    }),
     'Do not collapse these children into a single vague summary, and do not call Agent, bash, Sleep, TaskUpdate, or other tools until the user replies.',
   ].join('\n')
 }
 
-function formatChildRunSynthesisPayloadForPrompt(checkpoint: ChildRunSynthesisCheckpoint): string {
+function formatChildRunSynthesisPayloadForPrompt(payload: Record<string, unknown>): string {
   return [
     '[Runtime child-run synthesis payload]',
     '```json',
-    JSON.stringify(buildChildRunSynthesisPayload(checkpoint), null, 2),
+    JSON.stringify(payload, null, 2),
+    '```',
+  ].join('\n')
+}
+
+function formatStructuredRecoveryReportContract(reportShape: Record<string, unknown>): string {
+  return [
+    '[Runtime structured recovery report contract]',
+    'Your next reply MUST be a single JSON object in assistant text content with no markdown fence and no tool_use blocks.',
+    'Use this report shape. Copy facts from the runtime checkpoint payload; do not invent missing status.',
+    'Keep any array field shown below, such as long_tasks or children, as a top-level array; do not flatten it into task_id/status fields.',
+    '```json',
+    JSON.stringify(reportShape, null, 2),
     '```',
   ].join('\n')
 }
@@ -6465,6 +7770,7 @@ async function executeTools(
   taskState?: ActiveTaskState,
   latestUserText?: string | null,
   conversationForGuard?: Conversation,
+  runtimeTurnId?: string,
   interceptedIntents?: Set<string>,
   schemaFailCounts?: Map<string, number>,
   crossTurnFailureClasses?: Map<string, number>,
@@ -6492,10 +7798,25 @@ async function executeTools(
       const key = `${block.name}:${[...schemaForecast.missingFields].sort().join(',')}`
       const priorCount = schemaFailCounts.get(key) ?? 0
       if (priorCount >= 1) {
+        const missingFields = [...schemaForecast.missingFields].sort()
         const reason =
           `task stuck on repeated schema failures: tool ${block.name} called ` +
-          `with the same missing required field(s) [${schemaForecast.missingFields.join(', ')}] ` +
+          `with the same missing required field(s) [${missingFields.join(', ')}] ` +
           `${priorCount + 1} time(s). Hard-terminating to break the empty-input retry loop.`
+        if (conversationForGuard) {
+          appendRuntimeEvent(conversationForGuard, {
+            kind: 'runtime_intervention',
+            itemId: block.id,
+            payload: buildSchemaFailShortCircuitPayload({
+              toolName: block.name,
+              toolUseId: block.id,
+              schemaFailureKey: key,
+              missingFields,
+              priorFailureCount: priorCount,
+              reason,
+            }),
+          })
+        }
         callbacks?.onError?.(reason)
         return { results, loopError: reason, runtimeRecoveryDispositionNotices }
       }
@@ -6525,6 +7846,17 @@ async function executeTools(
               payload: payload as unknown as Record<string, unknown>,
             })
           }
+        } else if (conversationForGuard) {
+          appendRuntimeRecoveryCheckpoint(conversationForGuard, {
+            kind: 'loop_intercept_closeout_checkpoint',
+            payload: buildLoopInterceptCloseoutCheckpointPayload({
+              conversation: conversationForGuard,
+              loopReason: loopError,
+              attempt: nextAttempt,
+              input: block.input,
+            }),
+            inspectCommands: [],
+          })
         }
         // Record the attempt so subsequent loop-guard checks see it
         // and so the second-hit hard-terminate can fire.
@@ -6942,6 +8274,7 @@ async function executeTools(
     if (conversationForGuard) {
       appendRuntimeEvent(conversationForGuard, {
         kind: 'item_started',
+        turnId: runtimeTurnId,
         itemId: block.id,
         payload: {
           tool_name: block.name,
@@ -6992,6 +8325,7 @@ async function executeTools(
     if (conversationForGuard) {
       appendRuntimeEvent(conversationForGuard, {
         kind: 'item_completed',
+        turnId: runtimeTurnId,
         itemId: block.id,
         payload: {
           tool_name: block.name,

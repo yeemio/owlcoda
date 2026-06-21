@@ -58,8 +58,8 @@ describe('classifyDeliverableContract — spec case 4: write tech plan TO a file
 })
 
 describe('classifyDeliverableContract — spec case 5: generate 46-page PPT to explicit path', () => {
-  it('生成 46 页 PPT 到 /Users/publicuser/work/ppt/output/owlcoda/ → file_artifact_delivery/high', () => {
-    const result = classifyDeliverableContract('生成 46 页 PPT 到 /Users/publicuser/work/ppt/output/owlcoda/')
+  it('生成 46 页 PPT 到 /Users/yeemio/work/ppt/output/owlcoda/ → file_artifact_delivery/high', () => {
+    const result = classifyDeliverableContract('生成 46 页 PPT 到 /Users/yeemio/work/ppt/output/owlcoda/')
     expect(result.mode).toBe('file_artifact_delivery')
     expect(result.confidence).toBe('high')
     expect(shouldHardStopOnNoTouchedPaths(result)).toBe(true)
@@ -126,6 +126,13 @@ describe('classifyDeliverableContract — spec case 9: look at design, what is w
     expect(shouldHardStopOnNoTouchedPaths(result)).toBe(false)
     expect(allowsChatFinal(result)).toBe(true)
   })
+
+  it('只需要分析潜在缺陷并列举 → read_only_review/text_deliverable, no hard stop', () => {
+    const result = classifyDeliverableContract('你只需要分析出来 Owlcoda 潜在的缺陷，一一列举出来')
+    expect(['read_only_review', 'text_deliverable']).toContain(result.mode)
+    expect(shouldHardStopOnNoTouchedPaths(result)).toBe(false)
+    expect(allowsChatFinal(result)).toBe(true)
+  })
 })
 
 describe('classifyDeliverableContract — spec case 10: fix bug in src + write analysis to docs', () => {
@@ -162,9 +169,9 @@ describe('classifyDeliverableContract — spec case 12: backtick path artifact s
   // Pinned case from spec lines 381-388 and task brief:
   // Path inside backticks with artifact suffix + output-ish path → file_artifact_delivery/high
   // even without explicit "write to" verb.
-  it('请围绕 `/Users/publicuser/work/ppt/output/owlcoda/deck.html` 完成交付 → file_artifact_delivery/high', () => {
+  it('请围绕 `/Users/yeemio/work/ppt/output/owlcoda/deck.html` 完成交付 → file_artifact_delivery/high', () => {
     const result = classifyDeliverableContract(
-      '请围绕 `/Users/publicuser/work/ppt/output/owlcoda/deck.html` 完成交付',
+      '请围绕 `/Users/yeemio/work/ppt/output/owlcoda/deck.html` 完成交付',
     )
     expect(result.mode).toBe('file_artifact_delivery')
     expect(result.confidence).toBe('high')
@@ -215,11 +222,11 @@ describe('compound-intent pinned: review + write to docs/review.md → file_arti
 })
 
 describe('compound-intent pinned: deck.html output path — high confidence without explicit verb', () => {
-  // "请围绕 `/Users/publicuser/work/ppt/output/owlcoda/deck.html` 完成交付"
+  // "请围绕 `/Users/yeemio/work/ppt/output/owlcoda/deck.html` 完成交付"
   // → file_artifact_delivery/high (artifact suffix + output-ish path, no ALLOW verb needed)
   it('artifact suffix + output-ish path in backticks → high confidence even without write verb', () => {
     const result = classifyDeliverableContract(
-      '请围绕 `/Users/publicuser/work/ppt/output/owlcoda/deck.html` 完成交付',
+      '请围绕 `/Users/yeemio/work/ppt/output/owlcoda/deck.html` 完成交付',
     )
     expect(result.mode).toBe('file_artifact_delivery')
     expect(result.confidence).toBe('high')
@@ -312,7 +319,7 @@ describe('external_reference origin does not drive deliverable mode', () => {
   // The deliverable classifier is text-only and must not be influenced by origin labels.
   it('plain text with external path but no artifact signal → not file_artifact_delivery/high', () => {
     // A path that looks like an external reference but has no artifact suffix or output path shape
-    const result = classifyDeliverableContract('Look at /Users/publicuser/projects/data and tell me what you see')
+    const result = classifyDeliverableContract('Look at /Users/yeemio/projects/data and tell me what you see')
     // Should NOT be high confidence file_artifact_delivery — no artifact suffix or output path
     const isHighDurable = result.mode === 'file_artifact_delivery' && result.confidence === 'high'
     expect(isHighDurable).toBe(false)

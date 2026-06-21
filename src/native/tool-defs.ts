@@ -246,6 +246,28 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
     required: ['checkpointId'],
     description: 'Read one durable runtime recovery checkpoint by ID. Read-only; this does not resume, retry, or mutate tasks or agents.',
   },
+  JudgeBackendProbe: {
+    type: 'object',
+    properties: {
+      endpoint: { type: 'string', description: 'OpenAI-compatible chat/completions endpoint or base URL to probe.' },
+      models: {
+        type: 'array',
+        description: 'Backend model ids to compare for judge reliability.',
+        items: { type: 'string' },
+      },
+      prompts: {
+        type: 'array',
+        description: 'Optional fixed judge prompts. Omit to use the built-in three-prompt probe set.',
+        items: { type: 'string' },
+      },
+      timeoutMs: { type: 'number', description: 'Per-call timeout in milliseconds. Defaults to 45000.' },
+      minJsonSuccessRate: { type: 'number', description: 'Required JSON success rate between 0 and 1. Defaults to 1.' },
+      apiKey: { type: 'string', description: 'Optional bearer token for the endpoint.' },
+      headers: { type: 'object', description: 'Optional additional request headers.' },
+      maxTokens: { type: 'number', description: 'Max tokens for each probe call. Defaults to 256.' },
+    },
+    required: ['endpoint', 'models'],
+  },
   EnterPlanMode: {
     type: 'object',
     properties: {},
@@ -358,7 +380,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
                 type: 'object',
                 properties: {
                   id: { type: 'string' },
-                  kind: { type: 'string', enum: ['file_exists', 'file_contains', 'artifact_count', 'command', 'verification_pack', 'none'] },
+                  kind: { type: 'string', enum: ['file_exists', 'file_contains', 'artifact_count', 'command', 'verification_pack', 'run_verdict_gate', 'none'] },
                   path: { type: 'string' },
                   pattern: { type: 'string' },
                   root: { type: 'string' },
@@ -443,7 +465,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
           type: 'object',
           properties: {
             id: { type: 'string' },
-            kind: { type: 'string', enum: ['file_exists', 'file_contains', 'artifact_count', 'verification_pack', 'command', 'none'] },
+            kind: { type: 'string', enum: ['file_exists', 'file_contains', 'artifact_count', 'verification_pack', 'run_verdict_gate', 'command', 'none'] },
             packId: { type: 'string' },
             path: { type: 'string' },
             pattern: { type: 'string' },

@@ -68,6 +68,7 @@ export type TaskVerificationKind =
   | 'file_contains'
   | 'artifact_count'
   | 'verification_pack'
+  | 'run_verdict_gate'
   | 'command'
   | 'none'
 
@@ -269,7 +270,9 @@ export function getTaskStep(taskId: string, stepId: string): TaskStep | undefine
 export function updateTaskStep(
   taskId: string,
   stepId: string,
-  updates: Partial<Pick<TaskStep, 'status' | 'touchedPaths' | 'verification' | 'verificationResults' | 'failureReason'>>,
+  updates: Partial<Pick<TaskStep, 'status' | 'touchedPaths' | 'verification' | 'verificationResults' | 'failureReason'>> & {
+    stepStatus?: TaskStepStatus
+  },
 ): TaskStepUpdateResult {
   const task = tasks.get(taskId)
   if (!task) return { ok: false, reason: `Task "${taskId}" not found.` }
@@ -281,7 +284,7 @@ export function updateTaskStep(
     return { ok: false, reason: `Step "${stepId}" not found in task "${taskId}". Available steps: ${available}.` }
   }
 
-  const newStatus = updates.status
+  const newStatus = updates.status ?? updates.stepStatus
   const effectiveVerification = updates.verification ?? step.verification
   const effectiveResults = updates.verificationResults ?? step.verificationResults
 

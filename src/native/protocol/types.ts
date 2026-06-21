@@ -53,6 +53,11 @@ export type RuntimeRecoveryCheckpointKind =
   | 'long_task_replacement_checkpoint'
   | 'context_replacement_checkpoint'
   | 'verification_repair_checkpoint'
+  | 'loop_intercept_closeout_checkpoint'
+
+export type RuntimeEventCheckpointKind =
+  | RuntimeRecoveryCheckpointKind
+  | 'runtime_event_log_snapshot'
 
 export type RuntimeRecoveryCheckpointDisposition =
   | 'active'
@@ -81,10 +86,16 @@ export interface RuntimeRecoveryLedger {
 
 export type RuntimeEventKind =
   | 'turn_started'
+  | 'assistant_stream_recorded'
+  | 'assistant_response_recorded'
   | 'item_started'
   | 'item_completed'
   | 'checkpoint_installed'
+  | 'checkpoint_disposition_changed'
   | 'checkpoint_resolved'
+  | 'runtime_intervention'
+  | 'runtime_truth_report_recorded'
+  | 'runtime_recovery_report_recorded'
   | 'turn_completed'
 
 export interface RuntimeEventRecord {
@@ -96,8 +107,17 @@ export interface RuntimeEventRecord {
   turnId?: string
   itemId?: string
   checkpointId?: string
-  checkpointKind?: RuntimeRecoveryCheckpointKind
+  checkpointKind?: RuntimeEventCheckpointKind
+  contract?: RuntimeEventContract
   payload?: Record<string, unknown>
+}
+
+export interface RuntimeEventContract {
+  schema_version: 1
+  kind: 'runtime_event_contract'
+  event_kind: RuntimeEventKind
+  payload_schema: string
+  validation_status: 'valid'
 }
 
 export interface RuntimeEventLog {
@@ -105,6 +125,12 @@ export interface RuntimeEventLog {
   updatedAt: string
   nextSeq: number
   events: RuntimeEventRecord[]
+}
+
+export interface RuntimeTruthResumeState {
+  checkpointId: string
+  promptInjectedAt: string
+  reportGate: 'pending' | 'satisfied' | 'ignored'
 }
 
 export type TaskPathScopeKind = 'file' | 'directory'
@@ -280,6 +306,8 @@ export interface ConversationOptions {
   runtimeRecoveryLedger?: RuntimeRecoveryLedger
   /** Minimal runtime truth event stream used by checkpoint reconstruction. */
   runtimeEventLog?: RuntimeEventLog
+  /** Pending runtime-truth resume snapshot grounding state for no-tool reports. */
+  runtimeTruthResume?: RuntimeTruthResumeState
   /**
    * Active probe plans registered via the `ProbePlan` tool (0.13.51).
    * The conversation loop scans tool executions to mark each probe
@@ -444,6 +472,21 @@ export interface AssistantResponse {
   hasToolUse: boolean
   /** Combined text content */
   text: string
+  /** Compact summary of streaming callbacks observed while receiving this response. */
+  streamSummary?: AssistantStreamSummary
+}
+
+export interface AssistantStreamSummary {
+  source: 'sse' | 'json_stream_fallback'
+  textDeltaCount: number
+  textChars: number
+  thinkingStartCount: number
+  thinkingDeltaCount: number
+  thinkingChars: number
+  thinkingEndCount: number
+  usageUpdateCount: number
+  inputTokens: number
+  outputTokens: number
 }
 
 /** SSE event from the streaming API */

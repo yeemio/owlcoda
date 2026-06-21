@@ -135,6 +135,10 @@ import {
 } from './slash-commands.js'
 import { updateLiveReplClientSession } from '../repl-lease.js'
 import { saveSession, loadSession, listSessions, restoreConversation } from './session.js'
+import {
+  recordRuntimeAutoRetrySuppressionEvent,
+  type RuntimeAutoRetrySuppressionReason,
+} from './runtime-events.js'
 import { buildSystemPrompt } from './system-prompt.js'
 import {
   markTaskBlocked,
@@ -334,6 +338,36 @@ function hydrateRetryFailureStub(): ConversationRuntimeFailure {
     message: 'Last request failed before producing any output. Use /retry to force a resend, or send a smaller batched request.',
     retryable: true,
   }
+}
+
+function classifyRuntimeAutoRetrySuppression(input: {
+  runtimeFailure: ConversationRuntimeFailure | null
+  taskAborted: boolean
+  clearEpochUnchanged: boolean
+  currentRetryCount: number
+  retryLimit: number
+  hasQueuedInput: boolean
+  recentRetryKinds: readonly string[]
+}): RuntimeAutoRetrySuppressionReason | null {
+  const failure = input.runtimeFailure
+  if (failure === null) return null
+  if (failure.retryable !== true) return 'non_retryable_failure'
+  if (
+    failure.kind === 'timeout'
+    || failure.kind === 'pre_first_token_stream_close'
+    || failure.kind === 'empty_provider_response'
+  ) {
+    return 'failure_kind_suppressed'
+  }
+  if (input.taskAborted) return 'task_aborted'
+  if (!input.clearEpochUnchanged) return 'clear_epoch_changed'
+  if (input.currentRetryCount >= input.retryLimit) return 'retry_limit_exhausted'
+  if (input.hasQueuedInput) return 'queued_input_present'
+  const tail = input.recentRetryKinds.slice(-2)
+  if (tail.length >= 2 && tail.every((kind) => kind === failure.kind)) {
+    return 'same_kind_retry_window'
+  }
+  return null
 }
 
 function nextId(prefix: string): string {
@@ -1455,8 +1489,8 @@ function NativeReplApp({
       : effectiveDecision === 'deny' ? 'Denied'
       : effectiveDecision === 'always' ? 'Allowed (always for this tool)'
       : 'Allowed (rest of this turn)'
-    appendTranscript(`  ${dim(`↳ ${verb}: ${toolDisplay}`)}`)
-  }, [permissionPrompt, appendTranscript])
+    setFooterNotice(dim(`↳ ${verb}: ${toolDisplay}`))
+  }, [permissionPrompt])
 
   const withTaskCallbacks = useCallback((
     base: ConversationCallbacks,
@@ -1631,6 +1665,7 @@ function NativeReplApp({
     const requestStartMs = Date.now()
     let taskFailed = false
     let autoRetryFailure: ConversationRuntimeFailure | null = null
+    let runtimeRetrySuppressionFailure: ConversationRuntimeFailure | null = null
     const contextWindow = resolveModelContextWindow(configRef.current, conversation.model)
 
     try {
@@ -1669,6 +1704,7 @@ function NativeReplApp({
             appendTranscript(`${themeColor('warning')}⚠ ${guidance}${sgr.reset}`)
             setFooterNotice(dim(guidance))
             syncPendingRetry(false, failedContinuationAttemptCountRef.current)
+            runtimeRetrySuppressionFailure = runtimeFailure
           } else if (failedContinuationAttemptCountRef.current >= 2) {
             appendTranscript(
               `${themeColor('warning')}⚠ ${formatRepeatedContinuationRetryGuidance(
@@ -1855,6 +1891,7 @@ function NativeReplApp({
       const queued = queuedPeek?.text ?? null
       const autoRetryLimit = resolveReplRuntimeAutoRetryLimit()
       const schedulableAutoRetryFailure = autoRetryFailure as ConversationRuntimeFailure | null
+      const runtimeRetryFailure = (schedulableAutoRetryFailure ?? runtimeRetrySuppressionFailure) as ConversationRuntimeFailure | null
       const shouldAutoRetry = shouldScheduleRuntimeAutoRetry({
         runtimeFailure: schedulableAutoRetryFailure,
         taskAborted: task.aborted,
@@ -1866,6 +1903,36 @@ function NativeReplApp({
       })
       const autoRetryAttempt = shouldAutoRetry ? runtimeAutoRetryCountRef.current + 1 : runtimeAutoRetryCountRef.current
       const autoRetryDelayMs = shouldAutoRetry ? resolveReplRuntimeAutoRetryDelayMs(autoRetryAttempt) : 0
+      const autoRetrySuppressionReason = !shouldAutoRetry
+        ? classifyRuntimeAutoRetrySuppression({
+          runtimeFailure: runtimeRetryFailure,
+          taskAborted: task.aborted,
+          clearEpochUnchanged: turnClearEpoch === clearEpochRef.current,
+          currentRetryCount: runtimeAutoRetryCountRef.current,
+          retryLimit: autoRetryLimit,
+          hasQueuedInput: Boolean(queued),
+          recentRetryKinds: recentRetryKindsRef.current,
+        })
+        : null
+      if (runtimeRetryFailure && autoRetrySuppressionReason) {
+        recordRuntimeAutoRetrySuppressionEvent(conversation, {
+          surface: 'interactive_repl_auto_retry',
+          runtimeFailure: runtimeRetryFailure,
+          suppressionReason: autoRetrySuppressionReason,
+          runtimeRetries: runtimeAutoRetryCountRef.current,
+          retryLimit: autoRetryLimit,
+          suppressedAutoResumeKind: autoRetrySuppressionReason === 'failure_kind_suppressed'
+            ? runtimeRetryFailure.kind
+            : null,
+          hasQueuedInput: Boolean(queued),
+          taskAborted: task.aborted,
+          clearEpochUnchanged: turnClearEpoch === clearEpochRef.current,
+          recentRetryKinds: recentRetryKindsRef.current,
+        })
+        try {
+          saveSession(conversation)
+        } catch { /* non-fatal */ }
+      }
       if (shouldAutoRetry) {
         runtimeAutoRetryCountRef.current = autoRetryAttempt
         // 0.13.63 (C): record this failure's kind into the rolling
@@ -1949,16 +2016,15 @@ function NativeReplApp({
 
       // Drain queued input — auto-send if user submitted while task was running.
       //
-      // We drain on aborted tasks too: user's real-world flow is "type
-      // next message while bash runs → Ctrl+C bash → expect next
-      // message to process". Only taskFailed blocks the drain (an
-      // exception path usually means the user should review before
-      // re-submitting; auto-running a queued message on top of an
-      // error state is noisy and hard to reason about).
+      // Do not drain after an explicit interrupt: Ctrl+C means the user
+      // intentionally stopped the active task, so queued text should wait
+      // for a deliberate next submit instead of auto-running behind the abort.
+      // Non-aborted failures only drain when runtime auto-retry remains eligible.
       if (shouldDrainQueuedInputAfterTurn({
         hasQueuedInput: Boolean(queued),
         taskFailed,
         autoRetryFailure: schedulableAutoRetryFailure,
+        taskAborted: task.aborted,
       }) && queued) {
         // 0.14.0: dequeue the head item we're about to run. Keeps tail
         // items in the queue for the next drain pass.
@@ -2528,16 +2594,11 @@ function NativeReplApp({
         })
         activeAbortRef.current?.abort()
         setSpinnerState(null)
-        // Intentionally keep queuedInputRef: the user's mental model
-        // of Ctrl+C during a queued-message flow is "cancel current,
-        // run the next one" — matching how shell job control behaves.
-        // The queue is drained below (see the finally block in
-        // runConversationTurn) even on aborted tasks. If the user
-        // wants to also drop the queue, they can wait ~3s for the
-        // task to unwind, at which point queue auto-drains anyway.
+        // Keep queued submissions, but do not auto-drain them after a user
+        // interrupt. The user can press Enter again when they want to resume.
         const queuedSize = submissionQueueRef.current.size
         const queuedHint = queuedSize > 0
-          ? `\n${dim(`  ${queuedSize} queued message${queuedSize > 1 ? 's' : ''} will run after cancel completes.`)}`
+          ? `\n${dim(`  ${queuedSize} queued message${queuedSize > 1 ? 's are' : ' is'} paused after cancel completes.`)}`
           : ''
         setFooterNotice(`${themeColor('warning')}⚡ Interrupt requested${sgr.reset}`)
         // Lifecycle event → marker (em-dash gutter). Caps in the body are

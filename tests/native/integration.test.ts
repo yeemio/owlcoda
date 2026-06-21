@@ -94,16 +94,16 @@ describe('Native Layer Integration', () => {
 })
 
 describe('Full Stack: tool-defs → dispatch → conversation', () => {
-  it('dispatcher registers all 51 native tools', () => {
+  it('dispatcher registers all 52 native tools', () => {
     const dispatcher = new ToolDispatcher()
     const names = dispatcher.getToolNames()
-    expect(names).toEqual(['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'AgentRunList', 'AgentRunGet', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TaskVerify', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'DeliveryAudit', 'SkillRoutePreview', 'RunWorkspace', 'ProjectMap', 'ArtifactVerify', 'ProbePlan'])
+    expect(names).toEqual(['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'AgentRunList', 'AgentRunGet', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TaskVerify', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'DeliveryAudit', 'SkillRoutePreview', 'RunWorkspace', 'ProjectMap', 'ArtifactVerify', 'ProbePlan', 'JudgeBackendProbe'])
   })
 
   it('tool-defs produces Anthropic-format tool definitions', () => {
     const dispatcher = new ToolDispatcher()
     const defs = buildNativeToolDefs(dispatcher)
-    expect(defs).toHaveLength(51)
+    expect(defs).toHaveLength(52)
     for (const def of defs) {
       expect(def).toHaveProperty('name')
       expect(def).toHaveProperty('description')
@@ -121,7 +121,7 @@ describe('Full Stack: tool-defs → dispatch → conversation', () => {
     })
     expect(conv.id).toMatch(/^conv-/)
     expect(conv.model).toBe('test-model')
-    expect(conv.tools.length).toBe(51)
+    expect(conv.tools.length).toBe(52)
     expect(conv.turns).toHaveLength(0)
   })
 
@@ -157,7 +157,7 @@ describe('Full Stack: tool-defs → dispatch → conversation', () => {
     expect(request.stream).toBe(true)
     expect(request.messages).toHaveLength(1)
     expect(request.messages[0]!.role).toBe('user')
-    expect(request.tools).toHaveLength(51)
+    expect(request.tools).toHaveLength(52)
   })
 })
 

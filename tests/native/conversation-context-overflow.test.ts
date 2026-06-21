@@ -22,5 +22,6 @@ describe('conversation: refuse-to-send on context overflow reports a stop reason
 
     expect(result.stopReason).toBe('hard_stop')
     expect(fetchSpy).not.toHaveBeenCalled() // refused before any network send
+    expect(conv.turns).toHaveLength(1) // no context-pressure nudge for an unsendable turn
   })
 })

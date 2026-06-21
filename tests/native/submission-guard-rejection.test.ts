@@ -64,3 +64,12 @@ describe('ink-repl guard-rejection wiring (source lock)', () => {
     expect(calls.length).toBeGreaterThanOrEqual(2)
   })
 })
+
+describe('ink-repl runtime retry suppression event wiring (source lock)', () => {
+  const src = readFileSync(join(__dirname, '../../src/native/ink-repl.tsx'), 'utf8')
+
+  it('records event-backed runtime auto-retry suppression before user-facing stop notices', () => {
+    expect(src).toContain('recordRuntimeAutoRetrySuppressionEvent(')
+    expect(src).toContain("surface: 'interactive_repl_auto_retry'")
+  })
+})

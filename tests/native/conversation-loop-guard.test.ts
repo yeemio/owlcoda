@@ -14,6 +14,7 @@ import { buildToolDef } from '../../src/native/protocol/request.js'
 import { shouldScheduleRuntimeAutoRetry } from '../../src/native/repl-shared.js'
 import { ensureTaskExecutionState } from '../../src/native/task-state.js'
 import { recordLongTaskSnapshot, resetLongTaskLifecycleForTesting } from '../../src/native/long-task-lifecycle.js'
+import { buildRuntimeEventContractDiagnostics } from '../../src/native/runtime-events.js'
 import { recordReadAndBuildNudge } from '../../src/native/tools/read.js'
 import { createTask, resetTaskStore, updateTaskStep } from '../../src/native/tools/task-store.js'
 import { createTaskUpdateTool } from '../../src/native/tools/task-update.js'
@@ -119,6 +120,29 @@ function toolUseResponse(
   })
 }
 
+function textAndToolUseResponse(
+  text: string,
+  toolName: string,
+  toolId: string,
+  input: Record<string, unknown>,
+): Response {
+  return new Response(JSON.stringify({
+    type: 'message',
+    role: 'assistant',
+    model: 'test-model',
+    content: [
+      { type: 'text', text },
+      { type: 'tool_use', id: toolId, name: toolName, input },
+    ],
+    stop_reason: 'tool_use',
+    stop_sequence: null,
+    usage: { input_tokens: 1, output_tokens: 1 },
+  }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
 function textResponse(text: string): Response {
   return new Response(JSON.stringify({
     type: 'message',
@@ -131,6 +155,28 @@ function textResponse(text: string): Response {
   }), {
     status: 200,
     headers: { 'content-type': 'application/json' },
+  })
+}
+
+function streamingTextResponse(chunks: string[]): Response {
+  const encoder = new TextEncoder()
+  const sse = [
+    'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3}}}\n\n',
+    'event: content_block_start\ndata: {"type":"content_block_start","content_block":{"type":"text","text":""}}\n\n',
+    ...chunks.map((text) =>
+      `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text } })}\n\n`),
+    'event: content_block_stop\ndata: {"type":"content_block_stop"}\n\n',
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}\n\n',
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+  ].join('')
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(sse))
+      controller.close()
+    },
+  }), {
+    status: 200,
+    headers: { 'content-type': 'text/event-stream' },
   })
 }
 
@@ -209,19 +255,165 @@ describe('runtime event envelope', () => {
     expect(result.stopReason).toBe('end_turn')
     expect(events.map((event) => event.kind)).toEqual([
       'turn_started',
+      'assistant_stream_recorded',
+      'assistant_response_recorded',
       'item_started',
       'item_completed',
+      'assistant_stream_recorded',
+      'assistant_response_recorded',
       'turn_completed',
     ])
     expect(events[1]).toMatchObject({
+      kind: 'assistant_stream_recorded',
+      payload: {
+        response_index: 1,
+        source: 'json_stream_fallback',
+        text_delta_count: 0,
+        text_chars: 0,
+        usage_update_count: 1,
+        input_tokens: 1,
+        output_tokens: 1,
+      },
+    })
+    expect(events[2]).toMatchObject({
+      kind: 'assistant_response_recorded',
+      payload: {
+        response_index: 1,
+        phase: 'main',
+        stop_reason: 'tool_use',
+        text_chars: 0,
+        tool_use_count: 1,
+        has_tool_use: true,
+        thinking_block_count: 0,
+        input_tokens: 1,
+        output_tokens: 1,
+        is_empty_response: false,
+      },
+    })
+    expect(String(events[2]?.payload?.['text_digest'] ?? '')).toMatch(/^sha256:[a-f0-9]{64}$/)
+    expect(events[3]?.turnId).toBe(events[0]?.turnId)
+    expect(events[4]?.turnId).toBe(events[0]?.turnId)
+    expect(events[3]).toMatchObject({
       kind: 'item_started',
       itemId: 'probe-tool-1',
       payload: { tool_name: 'ProbeTool' },
     })
-    expect(events[2]).toMatchObject({
+    expect(events[4]).toMatchObject({
       kind: 'item_completed',
       itemId: 'probe-tool-1',
       payload: { tool_name: 'ProbeTool', is_error: false },
+    })
+    expect(events[5]).toMatchObject({
+      kind: 'assistant_stream_recorded',
+      payload: {
+        response_index: 2,
+        source: 'json_stream_fallback',
+        text_delta_count: 1,
+        text_chars: 'Probe complete.'.length,
+        usage_update_count: 1,
+        input_tokens: 1,
+        output_tokens: 1,
+      },
+    })
+    expect(events[6]).toMatchObject({
+      kind: 'assistant_response_recorded',
+      payload: {
+        response_index: 2,
+        phase: 'main',
+        stop_reason: 'end_turn',
+        text_chars: 'Probe complete.'.length,
+        tool_use_count: 0,
+        has_tool_use: false,
+        thinking_block_count: 0,
+        input_tokens: 1,
+        output_tokens: 1,
+        is_empty_response: false,
+      },
+    })
+    expect(String(events[6]?.payload?.['text_digest'] ?? '')).toMatch(/^sha256:[a-f0-9]{64}$/)
+    expect(events[7]).toMatchObject({
+      kind: 'turn_completed',
+      payload: {
+        stop_reason: 'end_turn',
+        iterations: 2,
+        request_count: 2,
+        input_tokens: 2,
+        output_tokens: 2,
+        assistant_response_count: 2,
+        assistant_text_chars: 'Probe complete.'.length,
+        final_text_chars: 'Probe complete.'.length,
+        tool_use_count: 1,
+        executed_tool_count: 1,
+        empty_response_count: 0,
+      },
+    })
+    expect(buildRuntimeEventContractDiagnostics(events, { limit: null })).toMatchObject({
+      valid_event_count: 8,
+      legacy_event_count: 0,
+      malformed_event_count: 0,
+    })
+  })
+
+  it('records compact stream callback summaries in the runtime log', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Stream a short answer.')
+
+    const dispatcher = new ToolDispatcher()
+    const streamedText: string[] = []
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(streamingTextResponse(['Hello', ' stream']))
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 1,
+      callbacks: {
+        onText(text) {
+          streamedText.push(text)
+        },
+      },
+    })
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    expect(result.finalText).toBe('Hello stream')
+    expect(streamedText.join('')).toBe('Hello stream')
+    expect(events.map((event) => event.kind)).toEqual([
+      'turn_started',
+      'assistant_stream_recorded',
+      'assistant_response_recorded',
+      'turn_completed',
+    ])
+    expect(events[1]).toMatchObject({
+      kind: 'assistant_stream_recorded',
+      turnId: events[0]?.turnId,
+      payload: {
+        response_index: 1,
+        source: 'sse',
+        text_delta_count: 2,
+        text_chars: 'Hello stream'.length,
+        thinking_start_count: 0,
+        thinking_delta_count: 0,
+        thinking_chars: 0,
+        thinking_end_count: 0,
+        usage_update_count: 2,
+        input_tokens: 3,
+        output_tokens: 5,
+      },
+    })
+    expect(events[2]).toMatchObject({
+      kind: 'assistant_response_recorded',
+      payload: {
+        response_index: 1,
+        phase: 'main',
+        stop_reason: 'end_turn',
+        text_chars: 'Hello stream'.length,
+        input_tokens: 3,
+        output_tokens: 5,
+      },
+    })
+    expect(buildRuntimeEventContractDiagnostics(events, { limit: null })).toMatchObject({
+      valid_event_count: 4,
+      legacy_event_count: 0,
+      malformed_event_count: 0,
     })
   })
 })
@@ -372,7 +564,7 @@ describe('native conversation free-mode long task loop policy', () => {
     const responses = [
       ...remoteCmds.map((cmd, index) =>
         toolUseResponse('bash', `tool-${index + 1}`, {
-          cwd: '/Users/publicuser/AI/project/sieracMes-AI',
+          cwd: '/Users/yeemio/AI/project/sieracMes-AI',
           command: `${sshPrefix}${cmd}'`,
         }),
       ),
@@ -925,6 +1117,19 @@ describe('native conversation tool loop guard', () => {
     expect(conv.turns[1]!.content.filter((block: any) => block.type === 'tool_use')).toHaveLength(4)
     expect(conv.turns[2]!.content.some((block: any) => block.type === 'text' && String(block.text).includes('Runtime summary gate'))).toBe(true)
     expect(requestBodies[1].messages.at(-2).content.filter((block: any) => block.type === 'tool_use')).toHaveLength(4)
+    expect(conv.options?.runtimeEventLog?.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'runtime_intervention',
+        payload: expect.objectContaining({
+          intervention_kind: 'tool_execution_plan_deferral',
+          plan_kind: 'summary_gate',
+          original_tool_count: 6,
+          executed_tool_count: 4,
+          deferred_tool_count: 2,
+          requires_next_response_summary: true,
+        }),
+      }),
+    ]))
   })
 
   it('treats repeatedly-ignored summary-gate exploration as a tool loop (counter-based)', async () => {
@@ -1552,7 +1757,10 @@ describe('native conversation tool loop guard default (cost-burn protection)', (
     expect(checkpointText).toContain('"child_count": 4')
     expect(checkpointText).toContain('"agent_id": "agent-D1"')
     expect(checkpointText).toContain('"inspect_command": "AgentRunGet agentId=agent-D4"')
-    expect(checkpointText).toContain('Your next reply MUST be plain text')
+    expect(checkpointText).toContain('Your next reply MUST be a single JSON object')
+    expect(checkpointText).toContain('"kind": "child_run_synthesis_report"')
+    expect(checkpointText).toContain('"children":')
+    expect(checkpointText).not.toContain('Your next reply MUST be plain text')
   })
 
   it('records child-run synthesis checkpoint payload in the runtime recovery ledger', async () => {
@@ -2013,6 +2221,117 @@ describe('native conversation tool loop guard default (cost-burn protection)', (
     expect(JSON.stringify(secondRequestBodies[0]?.['messages']).replace(/\\"/g, '"')).not.toContain('[Runtime long-task synthesis checkpoint]')
   })
 
+  it('records structured long-task synthesis reports as runtime recovery events', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-19T01:10:00.000Z',
+        checkpoints: [{
+          id: 'long_task_checkpoint-1',
+          kind: 'long_task_checkpoint',
+          generatedAt: '2026-06-19T01:00:00.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['TaskOutput task_id=task-1 block=false'],
+          payload: {
+            schema_version: 1,
+            kind: 'long_task_checkpoint',
+            generated_at: '2026-06-19T01:00:00.000Z',
+            long_tasks: [{
+              long_task_id: 'task:task-1',
+              source: 'task_command',
+              status: 'incomplete',
+              objective: 'detached command',
+              inspect_command: 'TaskOutput task_id=task-1 block=false',
+            }],
+          },
+        }, {
+          id: 'child_run_synthesis_checkpoint-2',
+          kind: 'child_run_synthesis_checkpoint',
+          generatedAt: '2026-06-19T01:05:00.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['AgentRunGet agentId=agent-D1'],
+          payload: {
+            schema_version: 1,
+            kind: 'child_run_synthesis_checkpoint',
+            generated_at: '2026-06-19T01:05:00.000Z',
+            child_count: 1,
+            children: [{
+              agent_id: 'agent-D1',
+              status: 'timeout',
+              failure_category: 'agent:watchdog_timeout',
+              inspect_command: 'AgentRunGet agentId=agent-D1',
+            }],
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Resume and return the structured long-task synthesis report.')
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return textResponse(JSON.stringify({
+        schema_version: 1,
+        kind: 'long_task_synthesis_report',
+        checkpoint_id: 'long_task_synthesis_checkpoint-3',
+        source: 'runtime_recovery_ledger',
+        long_tasks: [{
+          long_task_id: 'task:task-1',
+          source: 'task_command',
+          status: 'incomplete',
+          inspect_command: 'TaskOutput task_id=task-1 block=false',
+          next_action: 'rerun or replace command',
+        }, {
+          long_task_id: 'agent:agent-D1',
+          source: 'agent',
+          status: 'timeout',
+          inspect_command: 'AgentRunGet agentId=agent-D1',
+          next_action: 'retry narrower',
+        }],
+        next_action: 'stop and ask the parent to decide replacement/retry',
+      }))
+    })
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(JSON.stringify(requestBodies[0]?.['messages']).replace(/\\"/g, '"')).toContain('[Runtime long-task synthesis checkpoint]')
+
+    const checkpoints = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints ?? []
+    const synthesis = checkpoints.find((checkpoint: any) => checkpoint.kind === 'long_task_synthesis_checkpoint')
+    expect(synthesis?.disposition).toBe('resolved')
+    expect(synthesis?.dispositionReason).toContain('Structured long-task synthesis report')
+
+    const reportEvent = result.conversation.options?.runtimeEventLog?.events
+      ?.find((event) => (event.kind as string) === 'runtime_recovery_report_recorded')
+    expect(reportEvent).toMatchObject({
+      checkpointId: synthesis?.id,
+      checkpointKind: 'long_task_synthesis_checkpoint',
+      payload: {
+        report_kind: 'long_task_synthesis_report',
+        report_source: 'assistant_text',
+        report: {
+          kind: 'long_task_synthesis_report',
+          checkpoint_id: synthesis?.id,
+          long_tasks: [{
+            long_task_id: 'task:task-1',
+            inspect_command: 'TaskOutput task_id=task-1 block=false',
+          }, {
+            long_task_id: 'agent:agent-D1',
+            inspect_command: 'AgentRunGet agentId=agent-D1',
+          }],
+        },
+      },
+    })
+  })
+
   it('resolves a blocked-task recovery checkpoint after the matching task step completes', async () => {
     const conv = createConversation({ system: 'test', model: 'test-model' })
     ;(conv as any).options = {
@@ -2096,6 +2415,89 @@ describe('native conversation tool loop guard default (cost-burn protection)', (
     expect(JSON.stringify(requestBodies[0]?.['messages']).replace(/\\"/g, '"')).not.toContain('[Runtime recovery ledger]')
   })
 
+  it('records structured blocked-task reports as runtime recovery events on resume', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-19T09:00:01.000Z',
+        checkpoints: [{
+          id: 'blocked_task_checkpoint-1',
+          kind: 'blocked_task_checkpoint',
+          generatedAt: '2026-06-19T09:00:01.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['TaskGet taskId=task-1'],
+          payload: {
+            schema_version: 1,
+            kind: 'blocked_task_checkpoint',
+            blocked_task: {
+              task_id: 'task-1',
+              step_id: 'prove-blocked',
+              status: 'blocked',
+              failure_reason: 'verification fixture cannot be satisfied without user input',
+              inspect_command: 'TaskGet taskId=task-1',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Resume and return the structured blocked-task report.')
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return textResponse(JSON.stringify({
+        schema_version: 1,
+        kind: 'blocked_task_report',
+        checkpoint_id: 'blocked_task_checkpoint-1',
+        source: 'runtime_recovery_ledger',
+        blocked_task: {
+          task_id: 'task-1',
+          step_id: 'prove-blocked',
+          status: 'blocked',
+          failure_reason: 'verification fixture cannot be satisfied without user input',
+          inspect_command: 'TaskGet taskId=task-1',
+          next_action: 'ask user for the missing artifact or update the verification spec',
+        },
+      }))
+    })
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(JSON.stringify(requestBodies[0]?.['messages']).replace(/\\"/g, '"')).toContain('[Runtime recovery ledger]')
+
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.kind).toBe('blocked_task_checkpoint')
+    expect(checkpoint?.disposition).toBe('acknowledged')
+    expect(checkpoint?.dispositionReason).toContain('Structured blocked-task report')
+
+    const reportEvent = result.conversation.options?.runtimeEventLog?.events
+      ?.find((event) => (event.kind as string) === 'runtime_recovery_report_recorded')
+    expect(reportEvent).toMatchObject({
+      checkpointId: 'blocked_task_checkpoint-1',
+      checkpointKind: 'blocked_task_checkpoint',
+      payload: {
+        report_kind: 'blocked_task_report',
+        report_source: 'assistant_text',
+        report: {
+          kind: 'blocked_task_report',
+          checkpoint_id: 'blocked_task_checkpoint-1',
+          blocked_task: {
+            task_id: 'task-1',
+            step_id: 'prove-blocked',
+            inspect_command: 'TaskGet taskId=task-1',
+          },
+        },
+      },
+    })
+  })
+
   it('resolves a resumed child-run checkpoint after a complete text report so later resumes stay quiet', async () => {
     const conv = createConversation({ system: 'test', model: 'test-model' })
     ;(conv as any).options = {
@@ -2163,6 +2565,97 @@ describe('native conversation tool loop guard default (cost-burn protection)', (
 
     expect(second.stopReason).toBe('end_turn')
     expect(JSON.stringify(secondRequestBodies[0]?.['messages']).replace(/\\"/g, '"')).not.toContain('[Runtime recovery ledger]')
+  })
+
+  it('records structured child-run synthesis reports as runtime recovery events on resume', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-17T00:10:00.000Z',
+        checkpoints: [{
+          id: 'child_run_synthesis_checkpoint-1',
+          kind: 'child_run_synthesis_checkpoint',
+          generatedAt: '2026-06-17T00:10:00.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['AgentRunGet agentId=agent-D1', 'AgentRunGet agentId=agent-D2'],
+          payload: {
+            schema_version: 1,
+            kind: 'child_run_synthesis_checkpoint',
+            generated_at: '2026-06-17T00:10:00.000Z',
+            child_count: 2,
+            children: [{
+              agent_id: 'agent-D1',
+              status: 'timeout',
+              failure_category: 'agent:watchdog_timeout',
+              inspect_command: 'AgentRunGet agentId=agent-D1',
+            }, {
+              agent_id: 'agent-D2',
+              status: 'timeout',
+              failure_category: 'agent:watchdog_timeout',
+              inspect_command: 'AgentRunGet agentId=agent-D2',
+            }],
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Resume and return the structured child-run synthesis report.')
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      textResponse(JSON.stringify({
+        schema_version: 1,
+        kind: 'child_run_synthesis_report',
+        checkpoint_id: 'child_run_synthesis_checkpoint-1',
+        source: 'runtime_recovery_ledger',
+        children: [{
+          agent_id: 'agent-D1',
+          status: 'timeout',
+          failure_category: 'agent:watchdog_timeout',
+          inspect_command: 'AgentRunGet agentId=agent-D1',
+          next_action: 'retry narrower',
+        }, {
+          agent_id: 'agent-D2',
+          status: 'timeout',
+          failure_category: 'agent:watchdog_timeout',
+          inspect_command: 'AgentRunGet agentId=agent-D2',
+          next_action: 'retry narrower',
+        }],
+        next_action: 'stop and ask the parent to decide retries',
+      })))
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.disposition).toBe('resolved')
+    expect(checkpoint?.dispositionReason).toContain('Structured child-run synthesis report')
+
+    const reportEvent = result.conversation.options?.runtimeEventLog?.events
+      ?.find((event) => (event.kind as string) === 'runtime_recovery_report_recorded')
+    expect(reportEvent).toMatchObject({
+      checkpointId: 'child_run_synthesis_checkpoint-1',
+      checkpointKind: 'child_run_synthesis_checkpoint',
+      payload: {
+        report_kind: 'child_run_synthesis_report',
+        report_source: 'assistant_text',
+        report: {
+          kind: 'child_run_synthesis_report',
+          checkpoint_id: 'child_run_synthesis_checkpoint-1',
+          children: [{
+            agent_id: 'agent-D1',
+            inspect_command: 'AgentRunGet agentId=agent-D1',
+          }, {
+            agent_id: 'agent-D2',
+            inspect_command: 'AgentRunGet agentId=agent-D2',
+          }],
+        },
+      },
+    })
   })
 
   it('hard-stops when the model ignores child-run synthesis and keeps calling tools', async () => {
@@ -2701,6 +3194,14 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
       )
     )
     expect(sawIntercept).toBe(true)
+
+    const closeout = (result.conversation.options?.runtimeRecoveryLedger?.checkpoints ?? [])
+      .find((checkpoint: any) => checkpoint.kind === 'loop_intercept_closeout_checkpoint') as any
+    expect(closeout).toBeTruthy()
+    expect(closeout.payload.loop_intercept_closeout.loop_reason).toMatch(/task stuck in tool loop/)
+    expect(closeout.payload.loop_intercept_closeout.last_attempt.tool).toBe('Skill')
+    expect(closeout.payload.loop_intercept_closeout.last_error).toContain('Skill "nonexistent" not found')
+    expect(closeout.payload.loop_intercept_closeout.resume_packet.next_action).toContain('closeout')
   })
 
   it('turns repeated sleep/bash monitoring into a long-task checkpoint prompt', async () => {
@@ -2749,7 +3250,10 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
       .find((b: any) => b?.type === 'tool_result' && /Runtime long-task checkpoint/.test(String(b?.content ?? ''))) as any
     expect(interceptBlock).toBeTruthy()
     expect(interceptBlock.content).toContain('Do not keep polling')
-    expect(interceptBlock.content).toContain('inspection or verification command')
+    expect(interceptBlock.content).toContain('Your next reply MUST be a single JSON object')
+    expect(interceptBlock.content).toContain('"kind": "long_task_checkpoint_report"')
+    expect(interceptBlock.content).toContain('"long_tasks":')
+    expect(interceptBlock.content).not.toContain('Your next reply MUST be plain text')
     expect(interceptBlock.content).not.toContain('resume command')
   })
 
@@ -3100,6 +3604,98 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
     expect(checkpoint?.dispositionReason).toContain('terminal replacement long-task inspect result')
   })
 
+  it('records structured long-task replacement reports as runtime recovery events', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-19T08:10:01.000Z',
+        checkpoints: [{
+          id: 'long_task_replacement_checkpoint-1',
+          kind: 'long_task_replacement_checkpoint',
+          generatedAt: '2026-06-19T08:10:01.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: [
+            'LongTaskGet longTaskId=task:task-1',
+            'LongTaskGet longTaskId=task:task-2',
+            'TaskOutput task_id=task-2 block=false',
+          ],
+          payload: {
+            schema_version: 1,
+            kind: 'long_task_replacement_checkpoint',
+            replacement: {
+              original_long_task_id: 'task:task-1',
+              replacement_long_task_id: 'task:task-2',
+              replacement_task_id: 'task-2',
+              status: 'started',
+              reason: 'lost process handle after resume',
+              original_inspect_command: 'LongTaskGet longTaskId=task:task-1',
+              inspect_command: 'LongTaskGet longTaskId=task:task-2',
+              output_command: 'TaskOutput task_id=task-2 block=false',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Resume and return the structured long-task replacement report.')
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return textResponse(JSON.stringify({
+        schema_version: 1,
+        kind: 'long_task_replacement_report',
+        checkpoint_id: 'long_task_replacement_checkpoint-1',
+        source: 'runtime_recovery_ledger',
+        replacement: {
+          original_long_task_id: 'task:task-1',
+          replacement_long_task_id: 'task:task-2',
+          replacement_task_id: 'task-2',
+          status: 'started',
+          inspect_command: 'LongTaskGet longTaskId=task:task-2',
+          output_command: 'TaskOutput task_id=task-2 block=false',
+          next_action: 'inspect replacement task before claiming completion',
+        },
+      }))
+    })
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(JSON.stringify(requestBodies[0]?.['messages']).replace(/\\"/g, '"')).toContain('[Runtime recovery ledger]')
+
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.kind).toBe('long_task_replacement_checkpoint')
+    expect(checkpoint?.disposition).toBe('resolved')
+    expect(checkpoint?.dispositionReason).toContain('Structured long-task replacement report')
+
+    const reportEvent = result.conversation.options?.runtimeEventLog?.events
+      ?.find((event) => (event.kind as string) === 'runtime_recovery_report_recorded')
+    expect(reportEvent).toMatchObject({
+      checkpointId: 'long_task_replacement_checkpoint-1',
+      checkpointKind: 'long_task_replacement_checkpoint',
+      payload: {
+        report_kind: 'long_task_replacement_report',
+        report_source: 'assistant_text',
+        report: {
+          kind: 'long_task_replacement_report',
+          checkpoint_id: 'long_task_replacement_checkpoint-1',
+          replacement: {
+            original_long_task_id: 'task:task-1',
+            replacement_long_task_id: 'task:task-2',
+            replacement_task_id: 'task-2',
+            output_command: 'TaskOutput task_id=task-2 block=false',
+          },
+        },
+      },
+    })
+  })
+
   it('intercepts Sleep after a surfaced runtime_await wait policy', async () => {
     resetLongTaskLifecycleForTesting()
     try {
@@ -3151,6 +3747,24 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
       expect(toolResultsText).toContain('task:task-1')
       expect(toolResultsText).toContain('LongTaskAwait longTaskId=task:task-1 timeoutMs=5000')
       expect(toolResultsText).not.toContain('Slept for 5.0s')
+
+      const events = result.conversation.options?.runtimeEventLog?.events ?? []
+      const intervention = events.find((event) =>
+        event.kind === 'runtime_intervention' && event.itemId === 'sleep-policy-violation')
+      expect(intervention).toMatchObject({
+        kind: 'runtime_intervention',
+        itemId: 'sleep-policy-violation',
+        payload: {
+          intervention_kind: 'long_task_wait_policy',
+          action: 'skipped_tool_use',
+          tool_name: 'Sleep',
+          violation_kind: 'sleep_polling',
+          long_task_id: 'task:task-1',
+          task_id: 'task-1',
+          wait_strategy: 'runtime_await',
+          next_check_command: 'LongTaskAwait longTaskId=task:task-1 timeoutMs=5000',
+        },
+      })
     } finally {
       resetLongTaskLifecycleForTesting()
     }
@@ -3204,6 +3818,24 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
       expect(toolResultsText).toContain('task:task-1')
       expect(toolResultsText).toContain('LongTaskAwait longTaskId=task:task-1 timeoutMs=5000')
       expect(toolResultsText).not.toContain('Timeout waiting for task task-1')
+
+      const events = result.conversation.options?.runtimeEventLog?.events ?? []
+      const intervention = events.find((event) =>
+        event.kind === 'runtime_intervention' && event.itemId === 'task-output-policy-violation')
+      expect(intervention).toMatchObject({
+        kind: 'runtime_intervention',
+        itemId: 'task-output-policy-violation',
+        payload: {
+          intervention_kind: 'long_task_wait_policy',
+          action: 'skipped_tool_use',
+          tool_name: 'TaskOutput',
+          violation_kind: 'blocking_task_output',
+          long_task_id: 'task:task-1',
+          task_id: 'task-1',
+          wait_strategy: 'runtime_await',
+          next_check_command: 'LongTaskAwait longTaskId=task:task-1 timeoutMs=5000',
+        },
+      })
     } finally {
       resetLongTaskLifecycleForTesting()
     }
@@ -3245,7 +3877,11 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
         toolUseResponse('Sleep', 'sleep-resolve-3', { durationSeconds: 120 }),
         textResponse('long_task_checkpoint report: task:task-1 status=running inspect_command=TaskOutput task_id=task-1 block=false next_action=resume from this checkpoint later; do not poll now.'),
       ]
-      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+      const requestBodies: Array<Record<string, unknown>> = []
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+        requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+        return responses.shift()!
+      })
 
       const result = await runConversationLoop(conv, dispatcher, {
         apiBaseUrl: 'http://localhost:0',
@@ -3257,6 +3893,12 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
       expect(checkpoint?.kind).toBe('long_task_checkpoint')
       expect(checkpoint?.disposition).toBe('resolved')
       expect(checkpoint?.dispositionReason).toContain('long-task checkpoint report')
+      const requestText = JSON.stringify(requestBodies).replace(/\\"/g, '"')
+      expect(requestText).toContain('[Runtime long-task checkpoint]')
+      expect(requestText).toContain('Your next reply MUST be a single JSON object')
+      expect(requestText).toContain('"kind": "long_task_checkpoint_report"')
+      expect(requestText).toContain('"long_tasks":')
+      expect(requestText).not.toContain('Your next reply MUST be plain text')
     } finally {
       resetTaskStore()
       resetLongTaskLifecycleForTesting()
@@ -3309,7 +3951,7 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
     const firstRequestBodies: Array<Record<string, unknown>> = []
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
       firstRequestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
-      return textResponse('long_task_checkpoint report: task:task-1 status=running inspect_command=TaskOutput task_id=task-1 block=false next_action=inspect once later; agent:agent-D1 status=timeout inspect_command=AgentRunGet agentId=agent-D1 next_action=retry narrower.')
+      return textResponse('long_task_checkpoint report: Task:task-1 status=running inspect_command=TaskOutput task_id=task-1 block=false next_action=inspect once later; Agent:agent-D1 status=timeout inspect_command=AgentRunGet agentId=agent-D1 next_action=retry narrower.')
     })
 
     const first = await runConversationLoop(conv, new ToolDispatcher(), {
@@ -3322,6 +3964,34 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
     expect(JSON.stringify(firstRequestBodies[0]?.['messages']).replace(/\\"/g, '"')).toContain('[Runtime recovery ledger]')
     const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
     expect(checkpoint?.disposition).toBe('resolved')
+    const reportEvent = first.conversation.options?.runtimeEventLog?.events
+      ?.find((event) => (event.kind as string) === 'runtime_recovery_report_recorded')
+    expect(reportEvent).toMatchObject({
+      checkpointId: 'long_task_checkpoint-1',
+      checkpointKind: 'long_task_checkpoint',
+      payload: {
+        report_kind: 'long_task_checkpoint_text_fallback',
+        report_source: 'assistant_text_fallback',
+        normalized_report: {
+          schema_version: 1,
+          kind: 'normalized_runtime_recovery_report',
+          checkpoint_id: 'long_task_checkpoint-1',
+          checkpoint_kind: 'long_task_checkpoint',
+          report_kind: 'long_task_checkpoint_text_fallback',
+          report_source: 'assistant_text_fallback',
+          confidence: 'low',
+          covered_ids: ['agent:agent-D1', 'task:task-1'],
+          recovery_command: 'TaskOutput task_id=task-1 block=false',
+        },
+        report: {
+          kind: 'long_task_checkpoint_text_fallback',
+          checkpoint_id: 'long_task_checkpoint-1',
+          confidence: 'low',
+          covered_ids: ['agent:agent-D1', 'task:task-1'],
+          inspect_command: 'TaskOutput task_id=task-1 block=false',
+        },
+      },
+    })
 
     addUserMessage(conv, 'Resume again after the long-task report.')
     const secondRequestBodies: Array<Record<string, unknown>> = []
@@ -3338,6 +4008,1211 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
 
     expect(second.stopReason).toBe('end_turn')
     expect(JSON.stringify(secondRequestBodies[0]?.['messages']).replace(/\\"/g, '"')).not.toContain('[Runtime recovery ledger]')
+  })
+
+  it('records structured long-task checkpoint reports as runtime recovery events on resume', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-17T00:20:00.000Z',
+        checkpoints: [{
+          id: 'long_task_checkpoint-1',
+          kind: 'long_task_checkpoint',
+          generatedAt: '2026-06-17T00:20:00.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['TaskOutput task_id=task-1 block=false'],
+          payload: {
+            schema_version: 1,
+            kind: 'long_task_checkpoint',
+            generated_at: '2026-06-17T00:20:00.000Z',
+            long_tasks: [{
+              long_task_id: 'task:task-1',
+              source: 'task_command',
+              status: 'running',
+              inspect_command: 'TaskOutput task_id=task-1 block=false',
+            }],
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Resume and return the structured long-task checkpoint report.')
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      textResponse(JSON.stringify({
+        schema_version: 1,
+        kind: 'long_task_checkpoint_report',
+        checkpoint_id: 'long_task_checkpoint-1',
+        source: 'runtime_recovery_ledger',
+        long_tasks: [{
+          long_task_id: 'task:task-1',
+          status: 'running',
+          inspect_command: 'TaskOutput task_id=task-1 block=false',
+          next_action: 'inspect once later',
+        }],
+        next_action: 'stop polling and resume from the runtime checkpoint later',
+      })))
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.disposition).toBe('resolved')
+    expect(checkpoint?.dispositionReason).toContain('Structured long-task checkpoint report')
+
+    const reportEvent = result.conversation.options?.runtimeEventLog?.events
+      ?.find((event) => (event.kind as string) === 'runtime_recovery_report_recorded')
+    expect(reportEvent).toMatchObject({
+      checkpointId: 'long_task_checkpoint-1',
+      checkpointKind: 'long_task_checkpoint',
+      payload: {
+        report_kind: 'long_task_checkpoint_report',
+        report_source: 'assistant_text',
+        normalized_report: {
+          schema_version: 1,
+          kind: 'normalized_runtime_recovery_report',
+          checkpoint_id: 'long_task_checkpoint-1',
+          checkpoint_kind: 'long_task_checkpoint',
+          report_kind: 'long_task_checkpoint_report',
+          report_source: 'assistant_text',
+          confidence: 'high',
+          covered_ids: ['task:task-1'],
+          recovery_command: 'TaskOutput task_id=task-1 block=false',
+        },
+        report: {
+          kind: 'long_task_checkpoint_report',
+          checkpoint_id: 'long_task_checkpoint-1',
+          long_tasks: [{
+            long_task_id: 'task:task-1',
+            inspect_command: 'TaskOutput task_id=task-1 block=false',
+          }],
+        },
+      },
+    })
+  })
+
+  it('records flattened structured long-task checkpoint reports from dogfood models', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-19T07:40:00.000Z',
+        checkpoints: [{
+          id: 'long_task_checkpoint-dogfood-prompt-1',
+          kind: 'long_task_checkpoint',
+          generatedAt: '2026-06-19T07:40:00.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['TaskOutput task_id=task-dogfood block=false'],
+          payload: {
+            schema_version: 1,
+            kind: 'long_task_checkpoint',
+            generated_at: '2026-06-19T07:40:00.000Z',
+            long_tasks: [{
+              long_task_id: 'task:task-dogfood',
+              source: 'task_command',
+              status: 'running',
+              inspect_command: 'TaskOutput task_id=task-dogfood block=false',
+            }],
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Resume and return the structured long-task checkpoint report.')
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      textResponse(JSON.stringify({
+        schema_version: 1,
+        kind: 'long_task_checkpoint_report',
+        checkpoint_id: 'long_task_checkpoint-dogfood-prompt-1',
+        source: 'runtime_recovery_ledger',
+        task_id: 'task:task-dogfood',
+        task_status: 'running',
+        inspect_command: 'TaskOutput task_id=task-dogfood block=false',
+        smallest_next_action: 'Poll task output once later',
+      })))
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.disposition).toBe('resolved')
+    expect(checkpoint?.dispositionReason).toContain('Structured long-task checkpoint report')
+
+    const reportEvent = result.conversation.options?.runtimeEventLog?.events
+      ?.find((event) => (event.kind as string) === 'runtime_recovery_report_recorded')
+    expect(reportEvent).toMatchObject({
+      checkpointId: 'long_task_checkpoint-dogfood-prompt-1',
+      checkpointKind: 'long_task_checkpoint',
+      payload: {
+        report_kind: 'long_task_checkpoint_report',
+        report_source: 'assistant_text',
+        report: {
+          kind: 'long_task_checkpoint_report',
+          checkpoint_id: 'long_task_checkpoint-dogfood-prompt-1',
+          task_id: 'task:task-dogfood',
+        },
+      },
+    })
+  })
+
+  function installRuntimeTruthResumeValidatorFixture(conv: ReturnType<typeof createConversation>): void {
+    ;(conv as any).options = {
+      runtimeTruthResume: {
+        checkpointId: 'context_replacement_checkpoint-1',
+        promptInjectedAt: '2026-06-18T00:00:01.000Z',
+        reportGate: 'pending',
+      },
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-18T00:00:09.000Z',
+        checkpoints: [{
+          id: 'context_replacement_checkpoint-1',
+          kind: 'context_replacement_checkpoint',
+          generatedAt: '2026-06-18T00:00:01.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['RuntimeRecoveryList unresolved=true'],
+          payload: {
+            context_replacement: {
+              input_history_digest: 'sha256:runtime-truth-validator-digest',
+              reason: 'runtime truth validator dogfood',
+              window_id: 'window-runtime-truth-validator',
+              source_turn_id: 'turn-before-validator',
+              ledger_status: 'active',
+              replacement_history: [{
+                role: 'user',
+                content: [{ type: 'text', text: 'runtime-owned validator replacement goal' }],
+                timestamp: 1,
+              }],
+            },
+          },
+        }, {
+          id: 'long_task_checkpoint-1',
+          kind: 'long_task_checkpoint',
+          generatedAt: '2026-06-18T00:00:06.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['LongTaskGet longTaskId=task:resume-validator'],
+          payload: {
+            long_tasks: [{
+              long_task_id: 'task:resume-validator',
+              status: 'running',
+              inspect_command: 'LongTaskGet longTaskId=task:resume-validator',
+            }],
+          },
+        }],
+      },
+      runtimeEventLog: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-18T00:00:09.000Z',
+        nextSeq: 4,
+        events: [{
+          id: 'runtime_event-1',
+          seq: 1,
+          kind: 'checkpoint_installed',
+          at: '2026-06-18T00:00:01.000Z',
+          conversationId: conv.id,
+          checkpointId: 'context_replacement_checkpoint-1',
+          checkpointKind: 'context_replacement_checkpoint',
+          payload: { checkpoint_id: 'context_replacement_checkpoint-1' },
+        }, {
+          id: 'runtime_event-2',
+          seq: 2,
+          kind: 'runtime_intervention',
+          at: '2026-06-18T00:00:07.000Z',
+          conversationId: conv.id,
+          itemId: 'sleep-policy-violation',
+          payload: {
+            intervention_kind: 'long_task_wait_policy',
+            action: 'skipped_tool_use',
+            next_check_command: 'LongTaskAwait longTaskId=task:resume-validator timeoutMs=5000',
+          },
+        }, {
+          id: 'runtime_event-3',
+          seq: 3,
+          kind: 'runtime_intervention',
+          at: '2026-06-18T00:00:08.000Z',
+          conversationId: conv.id,
+          itemId: 'tool-redundant-update',
+          payload: {
+            intervention_kind: 'post_recovery_overrun_guard',
+            action: 'skipped_redundant_task_update',
+            checkpoint_id: 'verification_repair_checkpoint-1',
+          },
+        }],
+      },
+    }
+  }
+
+  function installEventOnlyRuntimeTruthResumeValidatorFixture(conv: ReturnType<typeof createConversation>): void {
+    ;(conv as any).options = {
+      runtimeTruthResume: {
+        checkpointId: 'runtime_event_log_snapshot',
+        promptInjectedAt: '2026-06-21T00:00:01.000Z',
+        reportGate: 'pending',
+      },
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-21T00:00:04.000Z',
+        checkpoints: [{
+          id: 'long_task_checkpoint-event-only-1',
+          kind: 'long_task_checkpoint',
+          generatedAt: '2026-06-21T00:00:01.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['LongTaskGet longTaskId=task:event-only-resume'],
+          payload: {
+            long_tasks: [{
+              long_task_id: 'task:event-only-resume',
+              status: 'incomplete',
+              inspect_command: 'LongTaskGet longTaskId=task:event-only-resume',
+            }],
+          },
+        }],
+      },
+      runtimeEventLog: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-21T00:00:04.000Z',
+        nextSeq: 2,
+        events: [{
+          id: 'runtime_event-1',
+          seq: 1,
+          kind: 'runtime_intervention',
+          at: '2026-06-21T00:00:03.000Z',
+          conversationId: conv.id,
+          itemId: 'sleep-policy-violation',
+          payload: {
+            intervention_kind: 'long_task_wait_policy',
+            action: 'skipped_tool_use',
+            next_check_command: 'LongTaskAwait longTaskId=task:event-only-resume timeoutMs=5000',
+          },
+        }],
+      },
+    }
+  }
+
+  function installRuntimeTruthResumeCheckpointDispositionFixture(conv: ReturnType<typeof createConversation>): void {
+    ;(conv as any).options = {
+      runtimeTruthResume: {
+        checkpointId: 'context_replacement_checkpoint-1',
+        promptInjectedAt: '2026-06-18T00:00:01.000Z',
+        reportGate: 'pending',
+      },
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-18T00:00:09.000Z',
+        checkpoints: [{
+          id: 'context_replacement_checkpoint-1',
+          kind: 'context_replacement_checkpoint',
+          generatedAt: '2026-06-18T00:00:01.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['RuntimeRecoveryList unresolved=true'],
+          payload: {
+            context_replacement: {
+              input_history_digest: 'sha256:runtime-truth-disposition-digest',
+              reason: 'runtime truth disposition dogfood',
+              window_id: 'window-runtime-truth-disposition',
+              source_turn_id: 'turn-before-disposition',
+              ledger_status: 'active',
+              replacement_history: [{
+                role: 'user',
+                content: [{ type: 'text', text: 'runtime-owned disposition replacement goal' }],
+                timestamp: 1,
+              }],
+            },
+          },
+        }, {
+          id: 'verification_repair_checkpoint-1',
+          kind: 'verification_repair_checkpoint',
+          generatedAt: '2026-06-18T00:00:06.000Z',
+          conversationId: conv.id,
+          disposition: 'acknowledged',
+          dispositionUpdatedAt: '2026-06-18T00:00:08.000Z',
+          dispositionReason: 'Model produced the required text-only verification repair report.',
+          inspectCommands: [
+            'TaskGet taskId=task-1',
+            'TaskVerify taskId=task-1 stepId=prove-verify',
+          ],
+          payload: {
+            required_report: {
+              task_id: 'task-1',
+              step_id: 'prove-verify',
+              reason: 'verification repair report required before further tools',
+            },
+          },
+        }],
+      },
+      runtimeEventLog: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-18T00:00:09.000Z',
+        nextSeq: 3,
+        events: [{
+          id: 'runtime_event-1',
+          seq: 1,
+          kind: 'checkpoint_installed',
+          at: '2026-06-18T00:00:01.000Z',
+          conversationId: conv.id,
+          checkpointId: 'context_replacement_checkpoint-1',
+          checkpointKind: 'context_replacement_checkpoint',
+          payload: { checkpoint_id: 'context_replacement_checkpoint-1' },
+        }, {
+          id: 'runtime_event-2',
+          seq: 2,
+          kind: 'checkpoint_disposition_changed',
+          at: '2026-06-18T00:00:08.000Z',
+          conversationId: conv.id,
+          checkpointId: 'verification_repair_checkpoint-1',
+          checkpointKind: 'verification_repair_checkpoint',
+          payload: {
+            checkpoint_id: 'verification_repair_checkpoint-1',
+            checkpoint_kind: 'verification_repair_checkpoint',
+            previous_disposition: 'active',
+            disposition: 'acknowledged',
+            reason: 'Model produced the required text-only verification repair report.',
+            inspect_commands: [
+              'TaskGet taskId=task-1',
+              'TaskVerify taskId=task-1 stepId=prove-verify',
+            ],
+          },
+        }],
+      },
+    }
+  }
+
+  it('replaces under-covered runtime-truth resume text with a runtime snapshot report', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    installRuntimeTruthResumeValidatorFixture(conv)
+    addUserMessage(
+      conv,
+      'No tools. From runtime truth only, report checkpoint_id, input_history_digest, intervention kinds, unresolved checkpoint id, inspect command, and stale transcript trust.',
+    )
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      textResponse('checkpoint_id=context_replacement_checkpoint-1; stale transcript is not trusted.'))
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('Runtime truth resume report')
+    expect(result.finalText).toContain('context_replacement_checkpoint-1')
+    expect(result.finalText).toContain('sha256:runtime-truth-validator-digest')
+    expect(result.finalText).toContain('long_task_checkpoint-1')
+    expect(result.finalText).toContain('LongTaskGet longTaskId=task:resume-validator')
+    expect(result.finalText).toContain('long_task_wait_policy')
+    expect(result.finalText).toContain('post_recovery_overrun_guard')
+    expect(result.finalText).toContain('LongTaskAwait longTaskId=task:resume-validator timeoutMs=5000')
+    expect(result.finalText).toContain('verification_repair_checkpoint-1')
+    expect((conv.options as any)?.runtimeTruthResume?.reportGate).toBe('satisfied')
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    const intervention = events.find((event) =>
+      event.kind === 'runtime_intervention'
+      && (event.payload as any)?.intervention_kind === 'runtime_truth_resume_report_gate')
+    expect(intervention).toMatchObject({
+      checkpointId: 'context_replacement_checkpoint-1',
+      checkpointKind: 'context_replacement_checkpoint',
+      payload: {
+        intervention_kind: 'runtime_truth_resume_report_gate',
+        action: 'replaced_incomplete_report_with_synthetic_report',
+        report_source: 'runtime_synthetic',
+        original_report_source: 'assistant_text',
+      },
+    })
+    expect((intervention?.payload as any)?.missing_report_fields).toEqual(expect.arrayContaining([
+      'input_history_digest:sha256:runtime-truth-validator-digest',
+      'unresolved_checkpoint:long_task_checkpoint-1',
+      'inspect_command:LongTaskGet longTaskId=task:resume-validator',
+      'runtime_intervention:long_task_wait_policy',
+      'runtime_intervention:post_recovery_overrun_guard',
+      'runtime_intervention_next_check:LongTaskAwait longTaskId=task:resume-validator timeoutMs=5000',
+      'runtime_intervention_checkpoint:verification_repair_checkpoint-1',
+    ]))
+  })
+
+  it('anchors event-only runtime-truth resume gate events to the event-log snapshot', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    installEventOnlyRuntimeTruthResumeValidatorFixture(conv)
+    addUserMessage(
+      conv,
+      'No tools. From runtime truth only, report checkpoint_id, intervention kind, unresolved checkpoint id, inspect command, and stale transcript trust.',
+    )
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      textResponse('checkpoint_id=runtime_event_log_snapshot; stale transcript is not trusted.'))
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('runtime_event_log_snapshot')
+    expect(result.finalText).toContain('long_task_wait_policy')
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    const intervention = events.find((event) =>
+      event.kind === 'runtime_intervention'
+      && (event.payload as any)?.intervention_kind === 'runtime_truth_resume_report_gate')
+    expect(intervention).toMatchObject({
+      checkpointId: 'runtime_event_log_snapshot',
+      checkpointKind: 'runtime_event_log_snapshot',
+      payload: {
+        intervention_kind: 'runtime_truth_resume_report_gate',
+        report_source: 'runtime_synthetic',
+      },
+    })
+
+    const reportEvent = events.find((event) => event.kind === 'runtime_truth_report_recorded')
+    expect(reportEvent).toMatchObject({
+      checkpointId: 'runtime_event_log_snapshot',
+      checkpointKind: 'runtime_event_log_snapshot',
+      payload: {
+        report_kind: 'runtime_truth_resume_report',
+        report_source: 'runtime_synthetic',
+      },
+    })
+  })
+
+  it('replaces prose-only runtime-truth resume text even when it mentions required facts', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    installRuntimeTruthResumeValidatorFixture(conv)
+    addUserMessage(
+      conv,
+      'No tools. From runtime truth only, report checkpoint_id, input_history_digest, intervention kinds, unresolved checkpoint id, inspect command, and stale transcript trust as a structured runtime report.',
+    )
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      textResponse([
+        'Runtime truth source is runtime_event_log and stale transcript is not trusted.',
+        'checkpoint context_replacement_checkpoint-1 has digest sha256:runtime-truth-validator-digest.',
+        'unresolved long_task_checkpoint-1 must be inspected with LongTaskGet longTaskId=task:resume-validator.',
+        'interventions long_task_wait_policy and post_recovery_overrun_guard require LongTaskAwait longTaskId=task:resume-validator timeoutMs=5000 and checkpoint verification_repair_checkpoint-1.',
+      ].join(' ')))
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('Runtime truth resume report')
+    expect(result.finalText).toContain('"kind": "runtime_truth_resume_report"')
+    expect(result.finalText).toContain('"source": "runtime_event_log"')
+    expect(result.finalText).toContain('"checkpoint_id": "context_replacement_checkpoint-1"')
+    expect(result.finalText).toContain('"input_history_digest": "sha256:runtime-truth-validator-digest"')
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    const intervention = events.find((event) =>
+      event.kind === 'runtime_intervention'
+      && (event.payload as any)?.intervention_kind === 'runtime_truth_resume_report_gate')
+    expect(intervention).toMatchObject({
+      checkpointId: 'context_replacement_checkpoint-1',
+      checkpointKind: 'context_replacement_checkpoint',
+      payload: {
+        intervention_kind: 'runtime_truth_resume_report_gate',
+        action: 'replaced_incomplete_report_with_synthetic_report',
+        report_source: 'runtime_synthetic',
+        original_report_source: 'assistant_text',
+      },
+    })
+    expect((intervention?.payload as any)?.missing_report_fields).toEqual(expect.arrayContaining([
+      'runtime_truth_report_schema',
+    ]))
+  })
+
+  it('records accepted structured runtime-truth resume reports as runtime events', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    installRuntimeTruthResumeValidatorFixture(conv)
+    addUserMessage(
+      conv,
+      'No tools. From runtime truth only, return the structured runtime_truth_resume_report JSON.',
+    )
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      textResponse(JSON.stringify({
+        schema_version: 1,
+        kind: 'runtime_truth_resume_report',
+        source: 'runtime_event_log',
+        checkpoint_id: 'context_replacement_checkpoint-1',
+        input_history_digest: 'sha256:runtime-truth-validator-digest',
+        ignored_stale_transcript: true,
+        stale_transcript_trusted: false,
+        unresolved_checkpoints: [{
+          checkpoint_id: 'long_task_checkpoint-1',
+          inspect_command: 'LongTaskGet longTaskId=task:resume-validator',
+        }],
+        runtime_interventions: [{
+          intervention_kind: 'long_task_wait_policy',
+          next_check_command: 'LongTaskAwait longTaskId=task:resume-validator timeoutMs=5000',
+        }, {
+          intervention_kind: 'post_recovery_overrun_guard',
+          checkpoint_id: 'verification_repair_checkpoint-1',
+        }],
+        runtime_closures: [],
+        checkpoint_dispositions: [],
+        next_action: 'inspect LongTaskGet longTaskId=task:resume-validator',
+      })))
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect((conv.options as any)?.runtimeTruthResume?.reportGate).toBe('satisfied')
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    const reportEvent = events.find((event) => (event.kind as string) === 'runtime_truth_report_recorded')
+    expect(reportEvent).toMatchObject({
+      checkpointId: 'context_replacement_checkpoint-1',
+      checkpointKind: 'context_replacement_checkpoint',
+      payload: {
+        report_kind: 'runtime_truth_resume_report',
+        report_source: 'assistant_text',
+        report: {
+          kind: 'runtime_truth_resume_report',
+          source: 'runtime_event_log',
+          checkpoint_id: 'context_replacement_checkpoint-1',
+          input_history_digest: 'sha256:runtime-truth-validator-digest',
+          unresolved_checkpoints: [{
+            checkpoint_id: 'long_task_checkpoint-1',
+            inspect_command: 'LongTaskGet longTaskId=task:resume-validator',
+          }],
+        },
+      },
+    })
+  })
+
+  it('treats user-quoted runtime snapshot markers as external no-tools report requests', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeTruthResume: {
+        checkpointId: 'context_replacement_checkpoint-quoted-marker',
+        promptInjectedAt: '2026-06-19T00:00:01.000Z',
+        reportGate: 'pending',
+      },
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-19T00:00:02.000Z',
+        checkpoints: [{
+          id: 'context_replacement_checkpoint-quoted-marker',
+          kind: 'context_replacement_checkpoint',
+          generatedAt: '2026-06-19T00:00:01.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: [],
+          payload: {
+            context_replacement: {
+              input_history_digest: 'sha256:quoted-marker-digest',
+              reason: 'quoted marker report request',
+              replacement_history: [{
+                role: 'user',
+                content: [{ type: 'text', text: 'runtime-owned quoted marker goal' }],
+                timestamp: 1,
+              }],
+            },
+          },
+        }],
+      },
+      runtimeEventLog: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-19T00:00:02.000Z',
+        nextSeq: 2,
+        events: [{
+          id: 'runtime_event-1',
+          seq: 1,
+          kind: 'checkpoint_installed',
+          at: '2026-06-19T00:00:01.000Z',
+          conversationId: conv.id,
+          checkpointId: 'context_replacement_checkpoint-quoted-marker',
+          checkpointKind: 'context_replacement_checkpoint',
+          payload: { checkpoint_id: 'context_replacement_checkpoint-quoted-marker' },
+        }],
+      },
+    }
+    addUserMessage(
+      conv,
+      'No tools. Use the [Runtime truth resume snapshot] that runtime injected and return the structured runtime_truth_resume_report JSON.',
+    )
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      textResponse(JSON.stringify({
+        schema_version: 1,
+        kind: 'runtime_truth_resume_report',
+        source: 'runtime_event_log',
+        checkpoint_id: 'context_replacement_checkpoint-quoted-marker',
+        input_history_digest: 'sha256:quoted-marker-digest',
+        ignored_stale_transcript: true,
+        stale_transcript_trusted: false,
+        unresolved_checkpoints: [],
+        runtime_interventions: [],
+        runtime_closures: [],
+        runtime_recovery_reports: [],
+        checkpoint_dispositions: [],
+        next_action: 'continue from runtime_event_log',
+      })))
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect((conv.options as any)?.runtimeTruthResume?.reportGate).toBe('satisfied')
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    expect(events.find((event) => (event.kind as string) === 'runtime_truth_report_recorded')).toMatchObject({
+      checkpointId: 'context_replacement_checkpoint-quoted-marker',
+      checkpointKind: 'context_replacement_checkpoint',
+      payload: {
+        report_kind: 'runtime_truth_resume_report',
+        report_source: 'assistant_text',
+      },
+    })
+    expect(events.find((event) =>
+      event.kind === 'turn_completed'
+      && (event.payload as any)?.closure_reason === 'runtime_truth_resume_report_satisfied',
+    )).toBeTruthy()
+  })
+
+  it('replaces runtime-truth resume reports that omit saved runtime recovery reports', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeTruthResume: {
+        checkpointId: 'context_replacement_checkpoint-1',
+        promptInjectedAt: '2026-06-19T00:00:01.000Z',
+        reportGate: 'pending',
+      },
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-19T00:00:04.000Z',
+        checkpoints: [{
+          id: 'context_replacement_checkpoint-1',
+          kind: 'context_replacement_checkpoint',
+          generatedAt: '2026-06-19T00:00:01.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['RuntimeRecoveryList unresolved=true'],
+          payload: {
+            context_replacement: {
+              input_history_digest: 'sha256:runtime-recovery-report-validator-digest',
+              reason: 'runtime recovery report validator dogfood',
+              replacement_history: [{
+                role: 'user',
+                content: [{ type: 'text', text: 'runtime-owned recovery report validator goal' }],
+                timestamp: 1,
+              }],
+            },
+          },
+        }, {
+          id: 'child_run_synthesis_checkpoint-1',
+          kind: 'child_run_synthesis_checkpoint',
+          generatedAt: '2026-06-19T00:00:02.000Z',
+          conversationId: conv.id,
+          disposition: 'acknowledged',
+          dispositionUpdatedAt: '2026-06-19T00:00:03.000Z',
+          dispositionReason: 'Model produced the required child-run synthesis report.',
+          inspectCommands: ['AgentRunGet agentId=agent-D2'],
+          payload: {
+            child_run: {
+              agent_id: 'agent-D2',
+              status: 'timeout_incomplete',
+              recovery_command: 'AgentRunGet agentId=agent-D2',
+            },
+          },
+        }],
+      },
+      runtimeEventLog: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-19T00:00:04.000Z',
+        nextSeq: 3,
+        events: [{
+          id: 'runtime_event-1',
+          seq: 1,
+          kind: 'checkpoint_installed',
+          at: '2026-06-19T00:00:01.000Z',
+          conversationId: conv.id,
+          checkpointId: 'context_replacement_checkpoint-1',
+          checkpointKind: 'context_replacement_checkpoint',
+          payload: { checkpoint_id: 'context_replacement_checkpoint-1' },
+        }, {
+          id: 'runtime_event-2',
+          seq: 2,
+          kind: 'runtime_recovery_report_recorded',
+          at: '2026-06-19T00:00:04.000Z',
+          conversationId: conv.id,
+          turnId: 'turn-child-run-report',
+          checkpointId: 'child_run_synthesis_checkpoint-1',
+          checkpointKind: 'child_run_synthesis_checkpoint',
+          payload: {
+            report_kind: 'child_run_synthesis_report',
+            report_source: 'assistant_text',
+            normalized_report: {
+              schema_version: 1,
+              kind: 'normalized_runtime_recovery_report',
+              checkpoint_id: 'child_run_synthesis_checkpoint-1',
+              checkpoint_kind: 'child_run_synthesis_checkpoint',
+              report_kind: 'child_run_synthesis_report',
+              report_source: 'assistant_text',
+              confidence: 'high',
+              covered_ids: ['agent-D2'],
+              recovery_command: 'AgentRunGet agentId=agent-D2',
+            },
+            report: {
+              kind: 'child_run_synthesis_report',
+              agent_id: 'agent-D2',
+              checkpoint_id: 'child_run_synthesis_checkpoint-1',
+              status: 'timeout_incomplete',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(
+      conv,
+      'No tools. From runtime truth only, return the structured runtime_truth_resume_report JSON.',
+    )
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      textResponse(JSON.stringify({
+        schema_version: 1,
+        kind: 'runtime_truth_resume_report',
+        source: 'runtime_event_log',
+        checkpoint_id: 'context_replacement_checkpoint-1',
+        input_history_digest: 'sha256:runtime-recovery-report-validator-digest',
+        ignored_stale_transcript: true,
+        stale_transcript_trusted: false,
+        unresolved_checkpoints: [{
+          checkpoint_id: 'child_run_synthesis_checkpoint-1',
+          inspect_command: 'AgentRunGet agentId=agent-D2',
+        }],
+        runtime_interventions: [],
+        runtime_closures: [],
+        checkpoint_dispositions: [],
+        next_action: 'inspect AgentRunGet agentId=agent-D2',
+      })))
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('Runtime truth resume report')
+    expect(result.finalText).toContain('"runtime_recovery_reports"')
+    expect(result.finalText).toContain('child_run_synthesis_report')
+    expect(result.finalText).toContain('child_run_synthesis_checkpoint-1')
+    expect(result.finalText).toContain('AgentRunGet agentId=agent-D2')
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    const intervention = events.find((event) =>
+      event.kind === 'runtime_intervention'
+      && (event.payload as any)?.intervention_kind === 'runtime_truth_resume_report_gate')
+    expect(intervention).toMatchObject({
+      checkpointId: 'context_replacement_checkpoint-1',
+      checkpointKind: 'context_replacement_checkpoint',
+      payload: {
+        intervention_kind: 'runtime_truth_resume_report_gate',
+        action: 'replaced_incomplete_report_with_synthetic_report',
+      },
+    })
+    expect((intervention?.payload as any)?.missing_report_fields).toEqual(expect.arrayContaining([
+      'runtime_recovery_report:child_run_synthesis_report',
+      'runtime_recovery_report_checkpoint:child_run_synthesis_checkpoint-1',
+      'runtime_recovery_report_recovery_command:AgentRunGet agentId=agent-D2',
+    ]))
+  })
+
+  it('replaces under-covered runtime-truth resume text when checkpoint disposition facts are missing', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    installRuntimeTruthResumeCheckpointDispositionFixture(conv)
+    addUserMessage(
+      conv,
+      'No tools. From runtime truth only, report checkpoint_id, input_history_digest, checkpoint disposition, previous disposition, reason, inspect command, and stale transcript trust.',
+    )
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      textResponse([
+        'checkpoint_id=context_replacement_checkpoint-1',
+        'input_history_digest=sha256:runtime-truth-disposition-digest',
+        'unresolved_checkpoint=verification_repair_checkpoint-1',
+        'inspect_command=TaskGet taskId=task-1',
+        'stale transcript is not trusted',
+      ].join('; ')))
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('Runtime truth resume report')
+    expect(result.finalText).toContain('checkpoint_disposition_id: verification_repair_checkpoint-1')
+    expect(result.finalText).toContain('checkpoint_disposition: acknowledged')
+    expect(result.finalText).toContain('previous_checkpoint_disposition: active')
+    expect(result.finalText).toContain('checkpoint_disposition_reason: Model produced the required text-only verification repair report.')
+    expect(result.finalText).toContain('TaskGet taskId=task-1')
+    expect((conv.options as any)?.runtimeTruthResume?.reportGate).toBe('satisfied')
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    const intervention = events.find((event) =>
+      event.kind === 'runtime_intervention'
+      && (event.payload as any)?.intervention_kind === 'runtime_truth_resume_report_gate')
+    expect(intervention).toMatchObject({
+      checkpointId: 'context_replacement_checkpoint-1',
+      checkpointKind: 'context_replacement_checkpoint',
+      payload: {
+        intervention_kind: 'runtime_truth_resume_report_gate',
+        action: 'replaced_incomplete_report_with_synthetic_report',
+        report_source: 'runtime_synthetic',
+        original_report_source: 'assistant_text',
+      },
+    })
+    expect((intervention?.payload as any)?.missing_report_fields).toEqual(expect.arrayContaining([
+      'checkpoint_disposition:verification_repair_checkpoint-1:acknowledged',
+      'checkpoint_previous_disposition:verification_repair_checkpoint-1:active',
+      'checkpoint_disposition_reason:verification_repair_checkpoint-1',
+    ]))
+  })
+
+  it('replaces under-covered runtime-truth resume text and still drops same-response tools', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    installRuntimeTruthResumeValidatorFixture(conv)
+    addUserMessage(
+      conv,
+      'No tools. From runtime truth only, report checkpoint_id, input_history_digest, intervention kinds, unresolved checkpoint id, inspect command, and stale transcript trust.',
+    )
+
+    let longTaskGetCalls = 0
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'LongTaskGet',
+      description: 'fake long task get',
+      async execute(_input: any) {
+        longTaskGetCalls += 1
+        return { output: 'should not execute', isError: false }
+      },
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      textAndToolUseResponse(
+        'checkpoint_id=context_replacement_checkpoint-1; stale transcript is not trusted.',
+        'LongTaskGet',
+        'tool-longtask-get-undercovered',
+        { longTaskId: 'task:resume-validator' },
+      ))
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('Runtime truth resume report')
+    expect(result.finalText).toContain('sha256:runtime-truth-validator-digest')
+    expect(result.finalText).toContain('long_task_checkpoint-1')
+    expect(result.finalText).toContain('LongTaskGet longTaskId=task:resume-validator')
+    expect(result.finalText).toContain('long_task_wait_policy')
+    expect(result.finalText).toContain('post_recovery_overrun_guard')
+    expect(result.finalText).toContain('LongTaskAwait longTaskId=task:resume-validator timeoutMs=5000')
+    expect(result.finalText).toContain('verification_repair_checkpoint-1')
+    expect(longTaskGetCalls).toBe(0)
+    expect((conv.options as any)?.runtimeTruthResume?.reportGate).toBe('satisfied')
+    expect(JSON.stringify(conv.turns)).not.toContain('tool-longtask-get-undercovered')
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    const intervention = events.find((event) =>
+      event.kind === 'runtime_intervention'
+      && (event.payload as any)?.intervention_kind === 'runtime_truth_resume_report_gate')
+    expect(intervention).toMatchObject({
+      checkpointId: 'context_replacement_checkpoint-1',
+      checkpointKind: 'context_replacement_checkpoint',
+      payload: {
+        intervention_kind: 'runtime_truth_resume_report_gate',
+        action: 'replaced_incomplete_report_with_synthetic_report',
+        report_source: 'runtime_synthetic',
+        original_report_source: 'assistant_text',
+        ignored_tool_count: 1,
+        ignored_tools: [{
+          tool_use_id: 'tool-longtask-get-undercovered',
+          tool_name: 'LongTaskGet',
+        }],
+      },
+    })
+  })
+
+  it('keeps runtime-truth resume report text and drops same-response tools', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeTruthResume: {
+        checkpointId: 'context_replacement_checkpoint-1',
+        promptInjectedAt: '2026-06-18T00:00:01.000Z',
+        reportGate: 'pending',
+      },
+    }
+    addUserMessage(
+      conv,
+      'No tools. From the runtime truth resume snapshot only, report checkpoint_id and stop.',
+    )
+
+    let longTaskGetCalls = 0
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'LongTaskGet',
+      description: 'fake long task get',
+      async execute(_input: any) {
+        longTaskGetCalls += 1
+        return { output: 'should not execute', isError: false }
+      },
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      textAndToolUseResponse(
+        'checkpoint_id=context_replacement_checkpoint-1; stale transcript is not trusted.',
+        'LongTaskGet',
+        'tool-longtask-get',
+        { longTaskId: 'task:resume-truth-audit' },
+      ))
+
+    const errors: string[] = []
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+      callbacks: {
+        onError(message) {
+          errors.push(message)
+        },
+      },
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('checkpoint_id=context_replacement_checkpoint-1')
+    expect(longTaskGetCalls).toBe(0)
+    expect(errors).toHaveLength(0)
+    expect((conv.options as any)?.runtimeTruthResume?.reportGate).toBe('satisfied')
+    expect(JSON.stringify(conv.turns)).not.toContain('tool-longtask-get')
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    const intervention = events.find((event) => event.kind === 'runtime_intervention')
+    expect(intervention).toMatchObject({
+      checkpointId: 'context_replacement_checkpoint-1',
+      checkpointKind: 'context_replacement_checkpoint',
+      payload: {
+        intervention_kind: 'runtime_truth_resume_report_gate',
+        action: 'dropped_tool_use_preserved_text',
+        report_source: 'assistant_text',
+        ignored_tool_count: 1,
+        ignored_tools: [{
+          tool_use_id: 'tool-longtask-get',
+          tool_name: 'LongTaskGet',
+        }],
+      },
+    })
+    expect(events.at(-1)).toMatchObject({
+      kind: 'turn_completed',
+      payload: {
+        stop_reason: 'end_turn',
+        closure_reason: 'runtime_truth_resume_report_satisfied',
+        runtime_truth_resume_checkpoint_id: 'context_replacement_checkpoint-1',
+      },
+    })
+  })
+
+  it('synthesizes runtime-truth resume report when a no-tools response is tool-only', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeTruthResume: {
+        checkpointId: 'context_replacement_checkpoint-1',
+        promptInjectedAt: '2026-06-18T00:00:01.000Z',
+        reportGate: 'pending',
+      },
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-18T00:00:07.000Z',
+        checkpoints: [{
+          id: 'context_replacement_checkpoint-1',
+          kind: 'context_replacement_checkpoint',
+          generatedAt: '2026-06-18T00:00:01.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['RuntimeRecoveryList unresolved=true'],
+          payload: {
+            context_replacement: {
+              input_history_digest: 'sha256:runtime-truth-gate-digest',
+              reason: 'dogfood resume compaction',
+              window_id: 'window-runtime-truth-gate',
+              source_turn_id: 'turn-before-compact',
+              ledger_status: 'active',
+              replacement_history: [{
+                role: 'user',
+                content: [{ type: 'text', text: 'runtime-owned replacement goal' }],
+                timestamp: 1,
+              }],
+            },
+          },
+        }, {
+          id: 'long_task_checkpoint-1',
+          kind: 'long_task_checkpoint',
+          generatedAt: '2026-06-18T00:00:06.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['LongTaskGet longTaskId=task:resume-truth-audit'],
+          payload: {
+            long_tasks: [{
+              long_task_id: 'task:resume-truth-audit',
+              status: 'running',
+              inspect_command: 'LongTaskGet longTaskId=task:resume-truth-audit',
+            }],
+          },
+        }],
+      },
+      runtimeEventLog: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-18T00:00:07.000Z',
+        nextSeq: 3,
+        events: [{
+          id: 'runtime_event-1',
+          seq: 1,
+          kind: 'checkpoint_installed',
+          at: '2026-06-18T00:00:01.000Z',
+          conversationId: conv.id,
+          checkpointId: 'context_replacement_checkpoint-1',
+          checkpointKind: 'context_replacement_checkpoint',
+          payload: { checkpoint_id: 'context_replacement_checkpoint-1' },
+        }, {
+          id: 'runtime_event-2',
+          seq: 2,
+          kind: 'item_completed',
+          at: '2026-06-18T00:00:07.000Z',
+          conversationId: conv.id,
+          itemId: 'tool-longtask-background',
+          payload: { summary: 'background long task still running' },
+        }],
+      },
+    }
+    addUserMessage(
+      conv,
+      'No tools. From the runtime truth resume snapshot only, report checkpoint_id, input_history_digest, one suffix event kind, unresolved checkpoint id, and whether stale transcript completion should be trusted.',
+    )
+
+    let longTaskGetCalls = 0
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'LongTaskGet',
+      description: 'fake long task get',
+      async execute(_input: any) {
+        longTaskGetCalls += 1
+        return { output: 'should not execute', isError: false }
+      },
+    })
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      toolUseResponse('LongTaskGet', 'tool-longtask-get-only', { longTaskId: 'task:resume-truth-audit' }))
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('Runtime truth resume report')
+    expect(result.finalText).toContain('context_replacement_checkpoint-1')
+    expect(result.finalText).toContain('sha256:runtime-truth-gate-digest')
+    expect(result.finalText).toContain('item_completed')
+    expect(result.finalText).toContain('long_task_checkpoint-1')
+    expect(result.finalText).toContain('LongTaskGet longTaskId=task:resume-truth-audit')
+    expect(result.finalText).toMatch(/stale transcript.*not trusted/i)
+    expect(longTaskGetCalls).toBe(0)
+    expect((conv.options as any)?.runtimeTruthResume?.reportGate).toBe('satisfied')
+    expect(JSON.stringify(conv.turns)).not.toContain('tool-longtask-get-only')
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    const intervention = events.find((event) => event.kind === 'runtime_intervention')
+    expect(intervention).toMatchObject({
+      checkpointId: 'context_replacement_checkpoint-1',
+      checkpointKind: 'context_replacement_checkpoint',
+      payload: {
+        intervention_kind: 'runtime_truth_resume_report_gate',
+        action: 'dropped_tool_use_synthesized_report',
+        report_source: 'runtime_synthetic',
+        ignored_tool_count: 1,
+        ignored_tools: [{
+          tool_use_id: 'tool-longtask-get-only',
+          tool_name: 'LongTaskGet',
+        }],
+      },
+    })
+    expect(events.at(-1)).toMatchObject({
+      kind: 'turn_completed',
+      payload: {
+        stop_reason: 'end_turn',
+        closure_reason: 'runtime_truth_resume_report_satisfied',
+        runtime_truth_resume_checkpoint_id: 'context_replacement_checkpoint-1',
+      },
+    })
+  })
+
+  it('allows runtime-truth resume tool use when the user asks to inspect next state', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeTruthResume: {
+        checkpointId: 'context_replacement_checkpoint-1',
+        promptInjectedAt: '2026-06-18T00:00:01.000Z',
+        reportGate: 'pending',
+      },
+    }
+    addUserMessage(conv, 'Use tools to inspect the next state from this resume snapshot.')
+
+    let longTaskGetCalls = 0
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'LongTaskGet',
+      description: 'fake long task get',
+      async execute(_input: any) {
+        longTaskGetCalls += 1
+        return { output: 'Lifecycle: status=incomplete', isError: false }
+      },
+    })
+
+    const responses = [
+      toolUseResponse('LongTaskGet', 'tool-longtask-get-ok', { longTaskId: 'task:resume-truth-audit' }),
+      textResponse('Inspected task:resume-truth-audit; status=incomplete.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 3,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(longTaskGetCalls).toBe(1)
+    expect(JSON.stringify(conv.turns)).toContain('tool-longtask-get-ok')
   })
 
   it('resolves long-task checkpoint when TaskOutput inspects a terminal matching snapshot', async () => {
@@ -3626,6 +5501,50 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
   })
 })
 
+describe('context-pressure runtime intervention events', () => {
+  it('records [Runtime context-pressure check] injection as replayable runtime truth', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, `Keep the long investigation terse.\n${'x '.repeat(12_000)}`)
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      textResponse('One fact: context pressure was acknowledged; next action is to continue tersely.')
+    )
+
+    const notices: string[] = []
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      contextWindow: 10_000,
+      maxIterations: 1,
+      callbacks: { onNotice(n) { notices.push(n) } },
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(notices.some((n) => /^Context pressure \(60%\):/.test(n))).toBe(true)
+    expect(conv.turns.some((turn) =>
+      turn.role === 'user'
+      && turn.content.some((block: any) =>
+        block.type === 'text'
+        && String(block.text).includes('[Runtime context-pressure check]'),
+      ),
+    )).toBe(true)
+    expect(conv.options?.runtimeEventLog?.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'runtime_intervention',
+        payload: expect.objectContaining({
+          intervention_kind: 'context_pressure_nudge',
+          action: 'injected_runtime_prompt',
+          prompt_marker: '[Runtime context-pressure check]',
+          context_pressure_mode: 'soft',
+          context_pressure_threshold: 0.6,
+          threshold_percent: 60,
+          context_window: 10_000,
+        }),
+      }),
+    ]))
+  })
+})
+
 // 0.13.70 execution_economics_v1 — production_gate_v1 inject. Fires
 // once per task when the model has read >=3 distinct files across
 // >=5 lifetime iterations under a write-required task contract with
@@ -3697,6 +5616,23 @@ describe('production gate v1 (0.13.70)', () => {
     expect(injectedUserTurns).toHaveLength(1)
     // One-shot flag is set.
     expect(taskState.run.productionGateFired).toBe(true)
+    expect(conv.options?.runtimeEventLog?.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'runtime_intervention',
+        payload: expect.objectContaining({
+          intervention_kind: 'production_gate_nudge',
+          action: 'injected_runtime_prompt',
+          gate_kind: 'production_gate',
+          prompt_marker: '[Runtime production gate]',
+          iteration: 5,
+          distinct_files_read: 3,
+          touched_path_count: 0,
+          deliverable_mode: 'file_artifact_delivery',
+          deliverable_confidence: 'high',
+          requires_durable_artifact: true,
+        }),
+      }),
+    ]))
     // Did NOT break the loop — final text response was processed.
     expect(result.stopReason).not.toBe('task_no_progress')
   })
@@ -3706,8 +5642,8 @@ describe('production gate v1 (0.13.70)', () => {
     addUserMessage(
       conv,
       [
-        '先读 /Users/publicuser/AI/OwlManage/docs/prompts/industrial-ai-agent-ppt-v1.4-new-executor-full-rebuild-prompt-20260514.md',
-        '再读 /Users/publicuser/work/ppt/claude-design-input-v1.3.1/06-new-executor-v1.4-full-rebuild.md',
+        '先读 /Users/yeemio/AI/OwlManage/docs/prompts/industrial-ai-agent-ppt-v1.4-new-executor-full-rebuild-prompt-20260514.md',
+        '再读 /Users/yeemio/work/ppt/claude-design-input-v1.3.1/06-new-executor-v1.4-full-rebuild.md',
         '目标产物：46 页 HTML PPT + build notes',
         '只交付：',
         '1. HTML',
@@ -3754,8 +5690,8 @@ describe('production gate v1 (0.13.70)', () => {
     )
     expect(injectedUserTurns).toHaveLength(1)
     const injectedText = JSON.stringify(injectedUserTurns[0].content)
-    expect(injectedText).not.toContain('/Users/publicuser/AI/OwlManage/docs/prompts/')
-    expect(injectedText).not.toContain('/Users/publicuser/work/ppt/claude-design-input-v1.3.1/')
+    expect(injectedText).not.toContain('/Users/yeemio/AI/OwlManage/docs/prompts/')
+    expect(injectedText).not.toContain('/Users/yeemio/work/ppt/claude-design-input-v1.3.1/')
     expect(injectedText).not.toContain('build-notes-v1.4-content-rebuild-46p.md')
     expect(injectedText).toContain('path scoped by the task contract')
   })
@@ -3834,6 +5770,63 @@ describe('production gate v1 (0.13.70)', () => {
 
     expect(notices.some((n) => /^Production gate:/.test(n))).toBe(false)
     expect(taskState.run.productionGateFired).toBeFalsy()
+  })
+
+  it('does NOT fire while the active structured step is a read-only truth audit', async () => {
+    resetTaskStore()
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Write the repair dataset to docs/repair.md')
+    if (!conv.options) conv.options = {}
+    const taskState = ensureTaskExecutionState(conv)
+    conv.options.taskState = taskState
+
+    const task = createTask({
+      subject: 'Repair dataset',
+      description: 'Follow the wave plan.',
+      steps: [{
+        id: 'wave-0',
+        title: 'Wave 0 current truth audit',
+        description: 'Read disk truth and report inconsistencies before writing anything.',
+      }, {
+        id: 'wave-1',
+        title: 'Write repair dataset report',
+        description: 'Create the durable report after the audit step.',
+        expectedArtifacts: [{ path: '/abs/docs/repair.md', kind: 'file', origin: 'user' }],
+      }],
+    })
+    updateTaskStep(task.id, 'wave-0', { stepStatus: 'in_progress' })
+
+    recordReadAndBuildNudge(taskState, '/abs/file-1.md', 'full', 1000, 100)
+    recordReadAndBuildNudge(taskState, '/abs/file-2.md', 'full', 1000, 100)
+    recordReadAndBuildNudge(taskState, '/abs/file-3.md', 'full', 1000, 100)
+
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'read',
+      description: 'test read',
+      async execute(_input: any) {
+        return { output: 'truth', isError: false }
+      },
+    })
+
+    const responses = [
+      ...Array.from({ length: 6 }, (_, i) =>
+        toolUseResponse('read', `tool-${i + 1}`, { path: `/abs/file-${(i % 3) + 1}.md` })
+      ),
+      textResponse('Wave 0 audit complete.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const notices: string[] = []
+    await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      callbacks: { onNotice(n) { notices.push(n) } },
+    })
+
+    expect(notices.some((n) => /^Production gate:/.test(n))).toBe(false)
+    expect(taskState.run.productionGateFired).toBeFalsy()
+    resetTaskStore()
   })
 
   it('is one-shot per task: subsequent iterations do not re-inject', async () => {
@@ -4131,12 +6124,29 @@ describe('task execution nudge wiring (Slice 4)', () => {
     expect(result.stopReason).toBe('end_turn')
     expect(result.finalText).toContain('Blocked report')
     expect(notices.some((n) => /^Blocked-task checkpoint:/.test(n))).toBe(true)
+    const reportEvent = result.conversation.options?.runtimeEventLog?.events
+      ?.find((event) => (event.kind as string) === 'runtime_recovery_report_recorded')
+    expect(reportEvent).toMatchObject({
+      checkpointKind: 'blocked_task_checkpoint',
+      payload: {
+        report_kind: 'blocked_task_checkpoint_text_fallback',
+        report_source: 'assistant_text_fallback',
+        report: {
+          kind: 'blocked_task_checkpoint_text_fallback',
+          confidence: 'low',
+          covered_ids: ['task-1', 'prove-guard'],
+        },
+      },
+    })
 
     const checkpointMessages = requestBodies[4]?.['messages'] as Array<Record<string, unknown>>
     const checkpointText = JSON.stringify(checkpointMessages).replace(/\\"/g, '"')
     expect(checkpointText).toContain('[Runtime blocked-task checkpoint]')
     expect(checkpointText).toContain('Task task-1 step prove-guard is now blocked')
-    expect(checkpointText).toContain('Your next reply MUST be plain text')
+    expect(checkpointText).toContain('Your next reply MUST be a single JSON object')
+    expect(checkpointText).toContain('"kind": "blocked_task_report"')
+    expect(checkpointText).toContain('"blocked_task":')
+    expect(checkpointText).not.toContain('Your next reply MUST be plain text')
     expect(checkpointText).toContain('Do not call TaskVerify, bash, Sleep, Agent, or other tools')
     expect(checkpointText).toContain('only allowed tool escape is TaskUpdate')
     expect(checkpointText).toContain('[Runtime blocked-task checkpoint payload]')
@@ -4321,12 +6331,29 @@ describe('task execution nudge wiring (Slice 4)', () => {
     expect(result.stopReason).toBe('end_turn')
     expect(result.finalText).toContain('Verification repair report')
     expect(notices.some((n) => /^Verification-repair checkpoint:/.test(n))).toBe(true)
+    const reportEvent = result.conversation.options?.runtimeEventLog?.events
+      ?.find((event) => (event.kind as string) === 'runtime_recovery_report_recorded')
+    expect(reportEvent).toMatchObject({
+      checkpointKind: 'verification_repair_checkpoint',
+      payload: {
+        report_kind: 'verification_repair_checkpoint_text_fallback',
+        report_source: 'assistant_text_fallback',
+        report: {
+          kind: 'verification_repair_checkpoint_text_fallback',
+          confidence: 'low',
+          covered_ids: ['task-1', 'prove-verify', 'v1'],
+        },
+      },
+    })
 
     const checkpointMessages = requestBodies[3]?.['messages'] as Array<Record<string, unknown>>
     const checkpointText = JSON.stringify(checkpointMessages).replace(/\\"/g, '"')
     expect(checkpointText).toContain('[Runtime verification-repair checkpoint]')
     expect(checkpointText).toContain('Task task-1 step prove-verify has failed verification')
-    expect(checkpointText).toContain('Your next reply MUST be plain text')
+    expect(checkpointText).toContain('Your next reply MUST be a single JSON object')
+    expect(checkpointText).toContain('"kind": "verification_repair_report"')
+    expect(checkpointText).toContain('"verification_repair":')
+    expect(checkpointText).not.toContain('Your next reply MUST be plain text')
     expect(checkpointText).toContain('Do not call TaskVerify, bash, Sleep, Agent, or other tools')
     expect(checkpointText).toContain('only allowed tool escape is TaskUpdate')
     expect(checkpointText).toContain('[Runtime verification-repair checkpoint payload]')
@@ -4341,6 +6368,92 @@ describe('task execution nudge wiring (Slice 4)', () => {
     expect(checkpoint?.payload?.verification_repair?.failed_checks?.[0]).toMatchObject({
       check_id: 'v1',
       passed: false,
+    })
+  })
+
+  it('records structured verification-repair reports as runtime recovery events when acknowledged', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-18T00:00:00.000Z',
+        checkpoints: [{
+          id: 'verification_repair_checkpoint-1',
+          kind: 'verification_repair_checkpoint',
+          generatedAt: '2026-06-18T00:00:00.000Z',
+          conversationId: conv.id,
+          disposition: 'active',
+          inspectCommands: ['TaskVerify taskId=task-1 stepId=prove-verify'],
+          payload: {
+            schema_version: 1,
+            kind: 'verification_repair_checkpoint',
+            generated_at: '2026-06-18T00:00:00.000Z',
+            verification_repair: {
+              task_id: 'task-1',
+              step_id: 'prove-verify',
+              status: 'failed_verification',
+              passed_count: 0,
+              total_count: 1,
+              failed_checks: [{
+                check_id: 'v1',
+                passed: false,
+                detail: 'missing file',
+              }],
+              next_verify_command: 'TaskVerify taskId=task-1 stepId=prove-verify',
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'Resume and return the structured verification repair report.')
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      textResponse(JSON.stringify({
+        schema_version: 1,
+        kind: 'verification_repair_report',
+        checkpoint_id: 'verification_repair_checkpoint-1',
+        source: 'runtime_recovery_ledger',
+        verification_repair: {
+          task_id: 'task-1',
+          step_id: 'prove-verify',
+          status: 'failed_verification',
+          failed_checks: [{
+            check_id: 'v1',
+            detail: 'missing file',
+          }],
+          next_verify_command: 'TaskVerify taskId=task-1 stepId=prove-verify',
+          next_action: 'create the missing artifact, then verify once',
+        },
+      })))
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 2,
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
+    expect(checkpoint?.disposition).toBe('acknowledged')
+    expect(checkpoint?.dispositionReason).toContain('Structured verification repair report')
+
+    const reportEvent = result.conversation.options?.runtimeEventLog?.events
+      ?.find((event) => (event.kind as string) === 'runtime_recovery_report_recorded')
+    expect(reportEvent).toMatchObject({
+      checkpointId: 'verification_repair_checkpoint-1',
+      checkpointKind: 'verification_repair_checkpoint',
+      payload: {
+        report_kind: 'verification_repair_report',
+        report_source: 'assistant_text',
+        report: {
+          kind: 'verification_repair_report',
+          checkpoint_id: 'verification_repair_checkpoint-1',
+          verification_repair: {
+            task_id: 'task-1',
+            step_id: 'prove-verify',
+          },
+        },
+      },
     })
   })
 
@@ -4689,6 +6802,36 @@ describe('task execution nudge wiring (Slice 4)', () => {
     expect(toolResultsText).not.toContain('Tool execution denied by user.')
     expect(result.finalText).not.toMatch(/\bretry\b/i)
     expect(result.conversation.options?.taskState?.run.status).toBe('completed')
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    const overrunEvents = events.filter((event) =>
+      event.kind === 'runtime_intervention'
+      && event.payload?.['intervention_kind'] === 'post_recovery_overrun_guard')
+    expect(overrunEvents.map((event) => event.itemId)).toEqual([
+      'tool-redundant-update',
+      'tool-blocked-workaround',
+      'tool-task-complete-workaround',
+    ])
+    expect(overrunEvents[0]).toMatchObject({
+      payload: {
+        action: 'skipped_redundant_task_update',
+        tool_name: 'TaskUpdate',
+        task_id: 'task-1',
+        step_id: 'prove-verify',
+        checkpoint_id: 'verification_repair_checkpoint-1',
+        requested_status_field: 'stepStatus',
+        requested_status: 'completed',
+      },
+    })
+    expect(overrunEvents[2]).toMatchObject({
+      payload: {
+        action: 'skipped_redundant_task_update',
+        task_id: 'task-1',
+        checkpoint_step_id: 'prove-verify',
+        requested_status_field: 'status',
+        requested_status: 'completed',
+      },
+    })
   })
 
   it('suppresses redundant TaskUpdate overrun inside the same tool batch that resolves recovery', async () => {
@@ -4776,6 +6919,23 @@ describe('task execution nudge wiring (Slice 4)', () => {
     expect(toolResultsText).toContain('tool-same-batch-overrun')
     expect(toolResultsText).not.toContain('Tool execution denied by user.')
     expect(result.conversation.options?.taskState?.run.status).toBe('completed')
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    const intervention = events.find((event) =>
+      event.kind === 'runtime_intervention'
+      && event.itemId === 'tool-same-batch-overrun')
+    expect(intervention).toMatchObject({
+      payload: {
+        intervention_kind: 'post_recovery_overrun_guard',
+        action: 'skipped_redundant_task_update',
+        tool_name: 'TaskUpdate',
+        task_id: 'task-1',
+        step_id: 'prove-verify',
+        checkpoint_id: 'verification_repair_checkpoint-1',
+        requested_status_field: 'stepStatus',
+        requested_status: 'completed',
+      },
+    })
   })
 
   it('does not let a trailing denied tool pollute a clean verification-repair closure', async () => {
@@ -5113,6 +7273,20 @@ describe('task-no-progress advisory / legacy hard ceiling', () => {
     expect(result.stopReason).not.toBe('task_no_progress')
     expect(errors.some((e) => /task no-progress hard stop/.test(e))).toBe(false)
     expect(notices.some((n) => /No-progress is advisory by default/.test(n))).toBe(true)
+    expect(conv.options?.runtimeEventLog?.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'runtime_intervention',
+        payload: expect.objectContaining({
+          intervention_kind: 'task_no_progress_decision',
+          decision: 'suppressed_advisory',
+          action: 'continued_with_advisory',
+          iteration: 9,
+          touched_path_count: 0,
+          hard_stop_enabled: false,
+          would_have_hard_stopped: true,
+        }),
+      }),
+    ]))
   })
 
   it('legacy env hard-stops at iter 9 when task requires writes and 0 paths touched', async () => {
@@ -5150,6 +7324,21 @@ describe('task-no-progress advisory / legacy hard ceiling', () => {
     // legitimately long-setup task can raise the budget instead of being stuck.
     expect(errors.some((e) => /written or edited/.test(e))).toBe(true)
     expect(errors.some((e) => /OWLCODA_TASK_NO_PROGRESS_ITER_LIMIT/.test(e))).toBe(true)
+    expect(conv.options?.runtimeEventLog?.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'runtime_intervention',
+        payload: expect.objectContaining({
+          intervention_kind: 'task_no_progress_decision',
+          decision: 'hard_stop',
+          action: 'stopped',
+          stop_reason: 'task_no_progress',
+          iteration: 9,
+          touched_path_count: 0,
+          hard_stop_enabled: true,
+          would_have_hard_stopped: true,
+        }),
+      }),
+    ]))
   })
 
   it('clears the no-progress budget when it hard-stops, so an inherited count cannot re-kill a follow-up turn', async () => {
@@ -5700,6 +7889,21 @@ describe('max-tokens continuation nudge (0.13.64)', () => {
       )
     )
     expect(sawInject).toBe(true)
+    expect(conv.options?.runtimeEventLog?.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'runtime_intervention',
+        payload: expect.objectContaining({
+          intervention_kind: 'max_tokens_continuation_nudge',
+          action: 'injected_runtime_prompt',
+          prompt_marker: '[Runtime max-tokens continuation]',
+          stop_reason: 'max_tokens',
+          consecutive_truncations: 1,
+          inject_count: 1,
+          inject_limit: 2,
+          response_text_chars: 'Partial content cut off here'.length,
+        }),
+      }),
+    ]))
   })
 
   it('escalates wording on second consecutive truncation', async () => {
@@ -5868,6 +8072,23 @@ describe('schema-fail dispatcher short-circuit (0.13.62)', () => {
     // priorCount is 1 → short-circuit, tool NOT run. So mock execute
     // is called exactly once.
     expect(writeCalls).toBe(1)
+    expect(conv.options?.runtimeEventLog?.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'runtime_intervention',
+        itemId: 'tool-2',
+        payload: expect.objectContaining({
+          intervention_kind: 'schema_fail_short_circuit',
+          action: 'stopped',
+          stop_reason: 'tool_loop',
+          tool_name: 'write',
+          tool_use_id: 'tool-2',
+          schema_failure_key: 'write:content,path',
+          missing_fields: ['content', 'path'],
+          prior_failure_count: 1,
+          current_failure_count: 2,
+        }),
+      }),
+    ]))
   })
 
   it('does NOT short-circuit on first write({}) — only on the second-strike', async () => {
@@ -5995,7 +8216,7 @@ describe('contract.confidence fail-open gate (0.14.18)', () => {
     // Prompt uses "write" to trigger taskHasWriteRequiredContract=true.
     addUserMessage(
       conv,
-      'Write the slide deck referencing `/Users/publicuser/work/ppt/deck-stage.js`',
+      'Write the slide deck referencing `/Users/yeemio/work/ppt/deck-stage.js`',
     )
 
     const dispatcher = new ToolDispatcher()
@@ -6037,7 +8258,7 @@ describe('contract.confidence fail-open gate (0.14.18)', () => {
     const conv = createConversation({ system: 'test', model: 'test-model' })
     // Write-required contract. The advisory fires on the demoted (default) path
     // regardless of scope confidence.
-    addUserMessage(conv, 'Write the slide deck referencing `/Users/publicuser/work/ppt/deck-stage.js`')
+    addUserMessage(conv, 'Write the slide deck referencing `/Users/yeemio/work/ppt/deck-stage.js`')
 
     const dispatcher = new ToolDispatcher()
     dispatcher.register({
@@ -6211,8 +8432,8 @@ describe('Slice 0 deliverable contract: file artifact legacy hard-stop', () => {
     addUserMessage(
       conv,
       [
-        '先读 /Users/publicuser/AI/OwlManage/docs/prompts/industrial-ai-agent-ppt-v1.4-new-executor-full-rebuild-prompt-20260514.md',
-        '再读 /Users/publicuser/work/ppt/claude-design-input-v1.3.1/06-new-executor-v1.4-full-rebuild.md',
+        '先读 /Users/yeemio/AI/OwlManage/docs/prompts/industrial-ai-agent-ppt-v1.4-new-executor-full-rebuild-prompt-20260514.md',
+        '再读 /Users/yeemio/work/ppt/claude-design-input-v1.3.1/06-new-executor-v1.4-full-rebuild.md',
         '目标产物：46 页 HTML PPT + build notes',
         '只交付：',
         '1. HTML',
@@ -6260,7 +8481,7 @@ describe('Slice 0 deliverable contract: file artifact legacy hard-stop', () => {
     process.env['OWLCODA_TASK_NO_PROGRESS_HARD_STOP'] = '1'
     const conv = createConversation({ system: 'test', model: 'test-model' })
     // Explicit write to file: file_artifact_delivery/high
-    addUserMessage(conv, 'Write the deck to /Users/publicuser/work/ppt/output/owlcoda/deck.html')
+    addUserMessage(conv, 'Write the deck to /Users/yeemio/work/ppt/output/owlcoda/deck.html')
 
     const dispatcher = new ToolDispatcher()
     dispatcher.register({
