@@ -16,32 +16,56 @@
 
 <p>All notable changes to OwlCoda public releases are documented here.</p>
 
-<h2>[0.15.9] — 2026-06-21</h2>
+<h2>[0.15.10] — 2026-06-22</h2>
 
-<p>Runtime Truth Spine reliability release.</p>
+<p>Runtime truth + multimodal routing reliability release.</p>
 
 <h3>Added</h3>
 
 <ul>
-<li>Added fuller runtime event logging for assistant streams, assistant responses,</li>
-<p>  turn response summaries, compaction results, context replacement metadata, and</p>
-<p>  item-to-turn linkage.</p>
-<li>Added release smoke coverage that probes runtime event contracts and audits</li>
-<p>  full runtime event logs.</p>
+<li>Added image input handling for local paths, <code>@image.png</code>, Markdown image</li>
+<p>  references, and <code>file://</code> image links, converting them into multimodal</p>
+<p>  content blocks when the selected model is image-capable.</p>
+<li>Added provider capability routing and probe support so Kimi K2.7 / Moonshot</li>
+<p>  and other OpenAI-compatible providers can enable image recognition through</p>
+<p>  model capabilities instead of a hard-coded provider branch.</p>
+<li>Added runtime lifecycle tools for task commands, Agent runs, supervisor</li>
+<p>  processes, and mailbox messages: <code>RuntimeLifecycleList/Get</code>,</p>
+<p>  <code>RuntimeSupervisorList/Get</code>, <code>AgentControlList/Get</code>, and</p>
+<p>  <code>AgentMailboxSend/List/Get/Resolve</code>.</p>
 </ul>
 <h3>Changed</h3>
 
 <ul>
-<li>Strengthened saved-session event trails so long-running and resumed sessions</li>
-<p>  have more inspectable runtime evidence.</p>
+<li>Command-style long tasks now record supervisor-process snapshots with process</li>
+<p>  identity, parent run linkage, and inspect/recovery policy.</p>
+<li>Agent run history now exposes parent/child run views and inspect-before-retry</li>
+<p>  recovery state outside of the transcript.</p>
+<li>Parent/child agent messages now flow through a mailbox queue and runtime</li>
+<p>  lifecycle snapshots instead of living only in conversation text.</p>
+<li><code>TaskVerify</code> safe-readonly classification now allows read-only process and</li>
+<p>  hashing checks such as <code>ps</code>, <code>pgrep</code>, <code>shasum</code>, and <code>sha256sum</code>.</p>
+</ul>
+<h3>Fixed</h3>
+
+<ul>
+<li>Fixed runtime recovery / task-state divergence after a</li>
+<p>  verification-repair checkpoint resolves: the post-recovery-overrun guard now</p>
+<p>  checks the real task-store step state before skipping <code>TaskUpdate(completed)</code>,</p>
+<p>  so a step that is still <code>in_progress</code> can converge to <code>completed</code>.</p>
+<li>Kept the verification-repair hard-stop guard strict; the release does not</li>
+<p>  weaken checkpoint or overrun protections.</p>
+<li>Fixed the runtime event contract so legal <code>long_task_wait_policy</code></li>
+<p>  interventions do not require <code>violation_kind</code> when the event is a wait-policy</p>
+<p>  record rather than a violation.</p>
 </ul>
 <h3>Notes</h3>
 
 <ul>
-<li>This release improves reliability evidence and observability for long-run</li>
-<p>  diagnosis. It does not claim long-run degradation is completely eliminated.</p>
-<li>The npm package remains the public install surface and is paired with public</li>
-<p>  GPL source tag <code>v0.15.9</code>.</p>
+<li>Published as npm <code>owlcoda@0.15.10</code> with GitHub source tag <code>v0.15.10</code>.</li>
+<li>This release improves runtime evidence, recovery convergence, and multimodal</li>
+<p>  routing. It is not a claim that long-running degradation is permanently or</p>
+<p>  completely solved.</p>
 </ul>
 <h2>[0.15.8] — 2026-06-18</h2>
 
@@ -51,7 +75,8 @@
 
 <ul>
 <li>Added runtime recovery ledger surfaces and inspection tools so long-running</li>
-<p>  sessions can expose unresolved checkpoints instead of losing recovery context.</p>
+<p>  sessions can expose unresolved checkpoints instead of losing them behind</p>
+<p>  generic completion or retry output.</p>
 <li>Added long-task lifecycle tracking and tools for inspecting, waiting on, and</li>
 <p>  replacing managed long tasks.</p>
 <li>Added runtime event persistence into saved sessions so recovery context can</li>
@@ -67,8 +92,9 @@
 <h3>Notes</h3>
 
 <ul>
-<li>The npm package remains the public install surface and is paired with public</li>
-<p>  GPL source tag <code>v0.15.8</code>.</p>
+<li>The npm package remains the public install surface; the <code>demo/</code> World Cup</li>
+<p>  predictor and private execution prompts are excluded from the npm tarball.</p>
+<li>This release is intended to be paired with public source tag <code>v0.15.8</code>.</li>
 </ul>
 <h2>[0.15.7] — 2026-06-14</h2>
 
@@ -298,4 +324,4 @@
 <h2>Older Releases</h2>
 
 <p>Historical package versions remain under the license terms that accompanied those versions when they were published.</p>
-</div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>A local-first AI coding workbench</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/docs/install" data-astro-cid-sz7xmlte>Docs</a></li> <li data-astro-cid-sz7xmlte><a href="/architect/" data-astro-cid-sz7xmlte>Architecture Board</a></li> <li data-astro-cid-sz7xmlte><a href="/changelog" data-astro-cid-sz7xmlte>Changelog</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.15.9</li> <li class="pill" data-astro-cid-sz7xmlte>GPL source</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>Local diagnostics</li> </ul> </div> </footer>  </body></html>
+</div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>A local-first AI coding workbench</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/docs/install" data-astro-cid-sz7xmlte>Docs</a></li> <li data-astro-cid-sz7xmlte><a href="/architect/" data-astro-cid-sz7xmlte>Architecture Board</a></li> <li data-astro-cid-sz7xmlte><a href="/changelog" data-astro-cid-sz7xmlte>Changelog</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.15.10</li> <li class="pill" data-astro-cid-sz7xmlte>GPL source</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>Local diagnostics</li> </ul> </div> </footer>  </body></html>
