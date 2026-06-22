@@ -45,10 +45,8 @@ export {
   renderMcpPanel,
   renderSessionInfoPanel,
   renderSessionsPanel,
-  renderSettingsPanel,
   type McpPanelServer,
   type SessionPanelItem,
-  type SettingsPanelOptions,
 } from './panel.js'
 export {
   PermissionCard,

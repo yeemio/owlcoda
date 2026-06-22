@@ -32,6 +32,38 @@ export interface LongTaskSnapshot {
   timeoutKind?: string
   lastProgress?: string
   outputSnippet?: string
+  processIdentity?: LongTaskProcessIdentity
+}
+
+export interface LongTaskProcessIdentity {
+  schema_version: 1
+  pid: number
+  command: string
+  cwd: string
+  spawnedAt: string
+}
+
+export interface LongTaskVerdictProcessIdentity {
+  schema_version: 1
+  pid: number
+  command: string
+  cwd: string
+  spawned_at: string
+}
+
+export type LongTaskProcessLivenessStatus =
+  | 'alive'
+  | 'not_running'
+  | 'permission_unknown'
+  | 'unknown'
+
+export interface LongTaskProcessLiveness {
+  schema_version: 1
+  pid: number
+  status: LongTaskProcessLivenessStatus
+  confidence: 'pid_only'
+  next_action: 'inspect_process_before_replace' | 'replace_or_retry'
+  reason: string
 }
 
 export type LongTaskSupervisionState =
@@ -95,6 +127,8 @@ export interface LongTaskLifecycleVerdict {
   agent_id?: string
   conversation_id?: string
   timeout_kind?: string
+  process_identity?: LongTaskVerdictProcessIdentity
+  reattach_hint?: 'inspect_process_before_replace'
 }
 
 const MAX_LONG_TASK_SNAPSHOTS = 50
@@ -137,6 +171,7 @@ export interface LongTaskCheckpointPayloadEntry {
   timeout_kind?: string
   last_progress?: string
   output_snippet?: string
+  process_identity?: LongTaskVerdictProcessIdentity
 }
 
 export function recordLongTaskSnapshot(
@@ -258,6 +293,8 @@ export function buildLongTaskLifecycleVerdict(
     ...(snapshot.agentId ? { agent_id: snapshot.agentId } : {}),
     ...(snapshot.conversationId ? { conversation_id: snapshot.conversationId } : {}),
     ...(snapshot.timeoutKind ? { timeout_kind: snapshot.timeoutKind } : {}),
+    ...(snapshot.processIdentity ? { process_identity: toVerdictProcessIdentity(snapshot.processIdentity) } : {}),
+    ...(snapshot.processIdentity ? { reattach_hint: 'inspect_process_before_replace' as const } : {}),
   }
 }
 
@@ -314,6 +351,7 @@ function formatLongTaskSnapshotLine(snapshot: LongTaskSnapshot): string {
     `objective="${compact(snapshot.objective, 90)}"`,
   ]
   if (snapshot.command) fields.push(`command="${compact(snapshot.command, 120)}"`)
+  if (snapshot.processIdentity) fields.push(`pid=${snapshot.processIdentity.pid}`)
   if (snapshot.promptSnippet) fields.push(`prompt="${compact(snapshot.promptSnippet, 120)}"`)
   if (snapshot.lastProgress) fields.push(`lastProgress="${compact(snapshot.lastProgress, 90)}"`)
   if (snapshot.timeoutKind) fields.push(`timeout=${snapshot.timeoutKind}`)
@@ -345,7 +383,88 @@ function toLongTaskCheckpointPayloadEntry(snapshot: LongTaskSnapshot): LongTaskC
     ...(snapshot.timeoutKind ? { timeout_kind: snapshot.timeoutKind } : {}),
     ...(snapshot.lastProgress ? { last_progress: snapshot.lastProgress } : {}),
     ...(snapshot.outputSnippet ? { output_snippet: snapshot.outputSnippet } : {}),
+    ...(snapshot.processIdentity ? { process_identity: toVerdictProcessIdentity(snapshot.processIdentity) } : {}),
   }
+}
+
+export function formatLongTaskProcessIdentityLine(
+  snapshot: LongTaskSnapshot | undefined,
+): string {
+  if (!snapshot?.processIdentity) return ''
+  const identity = snapshot.processIdentity
+  return [
+    'ProcessIdentity:',
+    `pid=${identity.pid}`,
+    `command="${compact(identity.command, 120)}"`,
+    `cwd="${compact(identity.cwd, 120)}"`,
+    `spawned_at=${identity.spawnedAt}`,
+    'reattach_hint="inspect_process_before_replace"',
+  ].join(' ')
+}
+
+export function buildLongTaskProcessLiveness(
+  snapshot: LongTaskSnapshot | undefined,
+): LongTaskProcessLiveness | undefined {
+  const identity = snapshot?.processIdentity
+  if (!identity) return undefined
+
+  try {
+    process.kill(identity.pid, 0)
+    return {
+      schema_version: 1,
+      pid: identity.pid,
+      status: 'alive',
+      confidence: 'pid_only',
+      next_action: 'inspect_process_before_replace',
+      reason: 'The OS still reports this PID as alive. PID reuse is possible, so inspect the process before replacing the work.',
+    }
+  } catch (err) {
+    const code = typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code?: unknown }).code)
+      : ''
+    if (code === 'ESRCH') {
+      return {
+        schema_version: 1,
+        pid: identity.pid,
+        status: 'not_running',
+        confidence: 'pid_only',
+        next_action: 'replace_or_retry',
+        reason: 'The OS reports no process for this PID. Replacement may be appropriate after inspecting captured output.',
+      }
+    }
+    if (code === 'EPERM') {
+      return {
+        schema_version: 1,
+        pid: identity.pid,
+        status: 'permission_unknown',
+        confidence: 'pid_only',
+        next_action: 'inspect_process_before_replace',
+        reason: 'The OS refused the liveness probe. Inspect the process before replacing the work.',
+      }
+    }
+    return {
+      schema_version: 1,
+      pid: identity.pid,
+      status: 'unknown',
+      confidence: 'pid_only',
+      next_action: 'inspect_process_before_replace',
+      reason: 'The runtime could not classify this PID liveness probe. Inspect the process before replacing the work.',
+    }
+  }
+}
+
+export function formatLongTaskProcessLivenessLine(
+  snapshot: LongTaskSnapshot | undefined,
+): string {
+  const liveness = buildLongTaskProcessLiveness(snapshot)
+  if (!liveness) return ''
+  return [
+    'ProcessLiveness:',
+    `status=${liveness.status}`,
+    `confidence=${liveness.confidence}`,
+    `pid=${liveness.pid}`,
+    `next_action=${liveness.next_action}`,
+  ].join(' ')
 }
 
 function inferSupervisionState(snapshot: LongTaskSnapshot): LongTaskSupervisionState {
@@ -478,6 +597,18 @@ function isTerminalLongTaskStatus(status: LongTaskStatus): boolean {
     || status === 'cancelled'
     || status === 'partial'
     || status === 'inferred'
+}
+
+function toVerdictProcessIdentity(
+  identity: LongTaskProcessIdentity,
+): LongTaskVerdictProcessIdentity {
+  return {
+    schema_version: 1,
+    pid: identity.pid,
+    command: identity.command,
+    cwd: identity.cwd,
+    spawned_at: identity.spawnedAt,
+  }
 }
 
 export function compactLongTaskText(value: string, limit = 500): string {

@@ -2,14 +2,13 @@
  * Bash risk classifier — single shared truth source for command-level risk.
  *
  * Background — issue #2 (private):
- *   Three independent bash heuristics existed today and could drift:
+ *   Independent bash heuristics existed and could drift:
  *     - src/native/tui/permission.ts::detectDestructiveCommand (TUI warning)
- *     - src/runtime/tools.ts::isDangerousBash (legacy runtime)
  *     - src/native/headless-approval.ts (treated ALL bash as unsafe)
  *   None shared a contract. Updating one without the others meant the
- *   interactive UI could call a command "destructive", the headless path
- *   could call it "needs approval", and the legacy runtime could call it
- *   "fine" — pick a surface, get a different policy.
+ *   interactive UI could call a command "destructive" while the headless
+ *   path called it merely "needs approval" — pick a surface, get a
+ *   different policy.
  *
  *   This module replaces the three heuristics with one structured
  *   classifier. Each surface now consults the same function and surfaces
@@ -512,19 +511,4 @@ function tokenize(chunk: string): string[] {
   }
   if (buf) out.push(buf)
   return out
-}
-
-/**
- * Convenience boolean for legacy bridge call sites that only need to know
- * "should we ask first?". Treats `unknown` and `dangerous` and
- * `needs_approval` as true (i.e. ask). Safe-read returns false.
- *
- * Don't use this in new code — prefer the structured `classifyBashCommand`
- * so callers can render real reasons. This exists so the legacy
- * `runtime/tools.ts::isDangerousBash` and the TUI's
- * `detectDestructiveCommand` can collapse to the shared truth source
- * without changing their public signature.
- */
-export function isUnsafeBashCommand(command: unknown): boolean {
-  return classifyBashCommand(command).level !== 'safe_readonly'
 }

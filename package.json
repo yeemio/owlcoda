@@ -1,6 +1,6 @@
 {
   "name": "owlcoda",
-  "version": "0.15.9",
+  "version": "0.15.10",
   "description": "OwlCoda — independent local-first AI coding platform with a native REPL, 42+ tools, and local model routing.",
   "license": "GPL-3.0-or-later",
   "author": "yeemio <yeemio@gmail.com>",
@@ -56,6 +56,12 @@
     "build": "tsc && npm --prefix admin ci && npm --prefix admin run build && node scripts/postbuild.mjs",
     "dev": "node --import tsx src/cli.ts",
     "smoke": "bash scripts/smoke-test.sh",
+    "release:decision-packet": "npx tsx scripts/release-decision-packet.ts",
+    "release:install-smoke": "npx tsx scripts/release-install-smoke.ts",
+    "release:package-audit": "npx tsx scripts/release-package-audit.ts",
+    "release:prepublish-gate": "npm run build && npm run release:smoke && rm -rf .tmp/release-prepublish-gate && mkdir -p .tmp/release-prepublish-gate && npm pack --ignore-scripts --pack-destination .tmp/release-prepublish-gate --json > .tmp/release-prepublish-gate/pack.json && npm run release:package-audit -- --tarball=.tmp/release-prepublish-gate/owlcoda-$npm_package_version.tgz && npm run release:install-smoke -- --tarball=.tmp/release-prepublish-gate/owlcoda-$npm_package_version.tgz",
+    "release:readiness": "npx tsx scripts/release-readiness.ts",
+    "release:surface-readiness": "npx tsx scripts/release-surface-readiness.ts",
     "release:smoke": "npx tsx scripts/release-smoke.ts",
     "test": "vitest run",
     "test:serial": "vitest run --maxWorkers=1",
@@ -64,7 +70,7 @@
     "smoke:fast": "OWLCODA_SMOKE_FAST=1 bash scripts/smoke-test.sh",
     "blackbox": "bash scripts/smoke-longtask-blackbox.sh",
     "blackbox:build": "OWLCODA_QA_BUILD=1 bash scripts/smoke-longtask-blackbox.sh",
-    "prepublishOnly": "npm run release:smoke"
+    "prepublishOnly": "npm run release:prepublish-gate"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.104.2",

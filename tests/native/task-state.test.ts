@@ -2130,7 +2130,7 @@ describe('external_reference origin — P1 regression (0.14.18)', () => {
       const taskState = ensureTaskExecutionState(conversation, '/Users/publicuser/AI/OwlManage')
 
       expect(taskState.contract.allowedWritePaths.some(
-        (s) => s.origin === 'user-external' && s.path.toLowerCase().includes('/work/ppt/output/owlcoda'),
+        (s) => s.origin === 'user-external' && s.path.includes('/work/ppt/output/owlcoda'),
       )).toBe(true)
     }
   })

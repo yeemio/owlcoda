@@ -52,7 +52,7 @@ export const CAPABILITIES: Capability[] = [
 
   // ── DX / Debug ──
   { name: 'Request/response tracing', status: 'supported', detail: 'OWLCODA_TRACE=1 or /trace command writes JSON to ~/.owlcoda/trace/' },
-  { name: '/tokens usage display', status: 'supported', detail: '/tokens shows cumulative input/output/total token counts for session' },
+  { name: '/cost usage display', status: 'supported', detail: '/cost shows cumulative input/output/total token counts for session' },
   { name: '/budget context window', status: 'supported', detail: '/budget shows used vs estimated context window with percentage' },
   { name: '/config runtime view', status: 'supported', detail: '/config shows active model, proxy, router, flags, session info' },
   { name: 'Plugin system', status: 'supported', detail: 'Plugins in ~/.owlcoda/plugins/<name>/index.js. Hooks: onRequest, onResponse, onToolCall, onError, onLoad, onUnload. /plugins to list/reload.' },
@@ -138,8 +138,7 @@ export const CAPABILITIES: Capability[] = [
   { name: 'Admin API: view config', status: 'supported', detail: 'GET /admin/config — current effective config (apiKeys redacted)' },
   { name: 'Admin API: request traces', status: 'supported', detail: 'GET /admin/requests?count=N — recent request traces' },
   { name: 'Admin API: audit log', status: 'supported', detail: 'GET /admin/audit?count=N — recent audit log entries' },
-  { name: '/reset-circuits command', status: 'supported', detail: 'Reset all circuit breakers from REPL' },
-  { name: '/reset-budgets command', status: 'supported', detail: 'Reset all error budget windows from REPL' },
+  { name: '/reset command', status: 'supported', detail: '/reset [circuits|budgets|all] from the REPL' },
 
   // Round 21 — Prometheus metrics, log file rotation, admin auth, deep healthz, config validation
   { name: 'Prometheus /metrics endpoint', status: 'supported', detail: 'OpenMetrics text format with 11 metric families: uptime, requests, by-model, by-status, duration, tokens, rate-limits, circuits, budgets, errors' },

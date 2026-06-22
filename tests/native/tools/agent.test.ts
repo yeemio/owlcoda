@@ -28,6 +28,10 @@ import {
 import {
   __resetAdaptiveConcurrencyForTesting,
 } from '../../../src/native/adaptive-concurrency.js'
+import {
+  getRunLifecycleSnapshot,
+  resetRunLifecycleForTesting,
+} from '../../../src/native/run-lifecycle.js'
 
 describe('Agent Tool', () => {
   beforeEach(() => {
@@ -36,6 +40,7 @@ describe('Agent Tool', () => {
     delete process.env['OWLCODA_SUBAGENT_MODEL']
     __resetAdaptiveConcurrencyForTesting()
     __resetAgentRunHistoryForTesting()
+    resetRunLifecycleForTesting()
 
     createConversationMock.mockReset()
     addUserMessageMock.mockReset()
@@ -759,6 +764,16 @@ describe('Agent Tool', () => {
         parentStepId: 'step-4',
       })
       const agentId = String(result.metadata?.['agentId'])
+      expect(result.output).toContain('AgentRecoveryPolicy: strategy=inspect_before_retry retry_allowed=manual_only')
+      expect(result.output).toContain(`inspect="AgentRunGet agentId=${agentId}"`)
+      expect(result.output).toContain('verbatim_retry_allowed=false')
+      expect(result.metadata?.['agent_recovery_policy']).toMatchObject({
+        schema_version: 1,
+        strategy: 'inspect_before_retry',
+        retry_allowed: 'manual_only',
+        verbatim_retry_allowed: false,
+        inspect_commands: [`AgentRunGet agentId=${agentId}`, `LongTaskGet longTaskId=agent:${agentId}`],
+      })
       expect(result.metadata?.['longTaskSnapshot']).toMatchObject({
         longTaskId: `agent:${agentId}`,
         source: 'agent',
@@ -778,6 +793,15 @@ describe('Agent Tool', () => {
       expect(get.output).toContain('failureCategory=agent:watchdog_timeout')
       expect(get.output).toContain('timeoutKind=idle')
       expect(get.output).toContain('lastProgress=tool_start:bash')
+      expect(get.output).toContain('AgentRecoveryPolicy: strategy=inspect_before_retry retry_allowed=manual_only')
+      expect(get.output).toContain('verbatim_retry_allowed=false')
+      expect(get.metadata?.['agent_recovery_policy']).toMatchObject({
+        schema_version: 1,
+        strategy: 'inspect_before_retry',
+        retry_allowed: 'manual_only',
+        verbatim_retry_allowed: false,
+        inspect_commands: [`AgentRunGet agentId=${agentId}`, `LongTaskGet longTaskId=agent:${agentId}`],
+      })
       expect(get.metadata?.['record']).toMatchObject({
         agentId,
         status: 'failed',
@@ -791,7 +815,35 @@ describe('Agent Tool', () => {
         source: 'agent',
         status: 'timeout',
       })
+      expect(getRunLifecycleSnapshot(`agent:${agentId}`)).toMatchObject({
+        runId: `agent:${agentId}`,
+        kind: 'agent_run',
+        status: 'timeout',
+        owner: 'agent_control',
+        parentRunId: 'task:task-9',
+        inspectCommand: `AgentRunGet agentId=${agentId}`,
+        recoveryPolicy: expect.objectContaining({
+          strategy: 'inspect_before_retry',
+          next_command: `AgentRunGet agentId=${agentId}`,
+        }),
+        evidence: expect.objectContaining({
+          timeout_kind: 'idle',
+          last_progress: 'tool_start:bash',
+        }),
+      })
       expect((get.metadata?.['record'] as any).longTaskSnapshot.resumeCommand).toBeUndefined()
+
+      const snapshot = snapshotAgentRunHistory()
+      __resetAgentRunHistoryForTesting()
+      restoreAgentRunHistory(snapshot)
+      const restored = await createAgentRunGetTool().execute({ agentId })
+      expect(restored.isError).toBe(false)
+      expect(restored.output).toContain('AgentRecoveryPolicy: strategy=inspect_before_retry retry_allowed=manual_only')
+      expect(restored.metadata?.['agent_recovery_policy']).toMatchObject({
+        strategy: 'inspect_before_retry',
+        retry_allowed: 'manual_only',
+        verbatim_retry_allowed: false,
+      })
     } finally {
       if (prevIdle === undefined) delete process.env['OWLCODA_AGENT_IDLE_TIMEOUT_MS']
       else process.env['OWLCODA_AGENT_IDLE_TIMEOUT_MS'] = prevIdle
@@ -997,7 +1049,7 @@ describe('Agent Tool', () => {
   it('uses 80 iterations as the default Explore sub-agent budget', async () => {
     // Explore agents are read-only and used for fast scoped lookups —
     // their natural budget is smaller than the general-purpose 200,
-    // matching the upstream Claude Code Explore preset and the cmux
+    // matching the upstream external coding-assistant Explore preset and the cmux
     // 0.13.20 evidence (live run reported "80 iterations,
     // stop_reason=max_iterations" for an Explore call).
     const tool = createAgentTool({

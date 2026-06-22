@@ -6,7 +6,7 @@ vi.mock('../../src/native/dispatch.js', () => {
     McpAuth: '[stub] tokens are NOT validated',
   }
   class MockDispatcher {
-    getToolNames() { return ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'JudgeBackendProbe'] }
+    getToolNames() { return ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'RuntimeLifecycleList', 'RuntimeLifecycleGet', 'RuntimeSupervisorList', 'RuntimeSupervisorGet', 'AgentControlList', 'AgentControlGet', 'AgentMailboxSend', 'AgentMailboxList', 'AgentMailboxGet', 'AgentMailboxResolve', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'JudgeBackendProbe'] }
     getToolDescription(name: string): string | undefined { return STUB_DESCRIPTIONS[name] }
   }
   return { ToolDispatcher: MockDispatcher }
@@ -97,6 +97,27 @@ describe('NATIVE_TOOL_SCHEMAS', () => {
     expect(get.description).toContain('does not resume')
   })
 
+  it('Runtime truth spine schemas expose lifecycle, supervisor, AgentControl, and mailbox tools', () => {
+    const lifecycleList = NATIVE_TOOL_SCHEMAS['RuntimeLifecycleList'] as Record<string, any>
+    const lifecycleGet = NATIVE_TOOL_SCHEMAS['RuntimeLifecycleGet'] as Record<string, any>
+    expect(lifecycleList.description).toContain('unified runtime truth spine')
+    expect(lifecycleGet.required).toEqual(['runId'])
+
+    const supervisorGet = NATIVE_TOOL_SCHEMAS['RuntimeSupervisorGet'] as Record<string, any>
+    expect(supervisorGet.required).toEqual(['processId'])
+    expect(supervisorGet.description).toContain('Read-only')
+
+    const agentControlGet = NATIVE_TOOL_SCHEMAS['AgentControlGet'] as Record<string, any>
+    expect(agentControlGet.required).toEqual(['agentId'])
+    expect(agentControlGet.description).toContain('does not spawn')
+
+    const mailboxSend = NATIVE_TOOL_SCHEMAS['AgentMailboxSend'] as Record<string, any>
+    const mailboxResolve = NATIVE_TOOL_SCHEMAS['AgentMailboxResolve'] as Record<string, any>
+    expect(mailboxSend.required).toEqual(['author', 'recipient', 'body'])
+    expect(mailboxSend.description).toContain('Internal-state only')
+    expect(mailboxResolve.required).toEqual(['messageId'])
+  })
+
   it('LongTask lifecycle inspection schemas are read-only and queryable', () => {
     const list = NATIVE_TOOL_SCHEMAS['LongTaskList'] as Record<string, any>
     const get = NATIVE_TOOL_SCHEMAS['LongTaskGet'] as Record<string, any>
@@ -132,9 +153,9 @@ describe('buildNativeToolDefs', () => {
     const dispatcher = new ToolDispatcher()
     const defs = buildNativeToolDefs(dispatcher)
 
-    expect(defs).toHaveLength(43)
+    expect(defs).toHaveLength(53)
     const names = defs.map((d: { name: string }) => d.name)
-    expect(names).toEqual(['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'JudgeBackendProbe'])
+    expect(names).toEqual(['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'RuntimeLifecycleList', 'RuntimeLifecycleGet', 'RuntimeSupervisorList', 'RuntimeSupervisorGet', 'AgentControlList', 'AgentControlGet', 'AgentMailboxSend', 'AgentMailboxList', 'AgentMailboxGet', 'AgentMailboxResolve', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'JudgeBackendProbe'])
   })
 
   it('each def has name, description, and input_schema', () => {

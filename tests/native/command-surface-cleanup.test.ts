@@ -158,6 +158,44 @@ describe('hard-removed duplicate commands redirect to their replacement', () => 
   })
 })
 
+// The whole point of DEMOTING (vs deleting) is that these commands keep
+// working when typed. This locks that contract: every hidden command must still
+// be dispatched by a real handler — never fall through to "Unknown command" or
+// the removed-command redirect. (Args chosen to avoid interactive pickers /
+// destructive paths; an unreachable proxy makes the observability fetches fail
+// fast to their local fallback.)
+describe('every demoted command still dispatches (demoted ≠ deleted)', () => {
+  const SAFE_ARG: Record<string, string> = {
+    '/themes': 'dark',   // bare /themes opens an interactive picker
+    '/yolo': 'off',
+    '/approve': 'off',
+    '/plan': 'off',
+  }
+  let logSpy: ReturnType<typeof vi.spyOn>
+  let usage: UsageTracker
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    usage = new UsageTracker()
+  })
+  afterEach(() => logSpy.mockRestore())
+
+  for (const cmd of Object.keys(SLASH_PICKER_HIDDEN)) {
+    it(`${cmd} is handled by a real case`, async () => {
+      const input = SAFE_ARG[cmd] ? `${cmd} ${SAFE_ARG[cmd]}` : cmd
+      const conversation = createConversation({ system: 'test', model: 'minimax-m27' })
+      const handled = await handleSlashCommand(
+        input, conversation, usage,
+        { apiBaseUrl: 'http://127.0.0.1:1' } as never,
+        { autoApprove: false },
+      )
+      const out = stripAnsi(logSpy.mock.calls.flat().join('\n'))
+      expect(handled).toBe(true)
+      expect(out).not.toContain('Unknown command')
+      expect(out).not.toContain('was removed')
+    })
+  }
+})
+
 describe('/status surfaces the demoted diagnostics for discovery', () => {
   it('lists /dashboard and the demoted observability slices', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})

@@ -323,14 +323,14 @@ describe('buildCompactionRequest', () => {
   it('includes task contract anchor when latest user text is only runtime recovery', () => {
     const initialPrompt = [
       '请并发 subagent 生成四个 1200-1500 字段落。',
-      '只能输出到 /Users/yeemio/AI/gitrep/owlmodel/out/full。',
+      '只能输出到 /Users/publicuser/AI/gitrep/owlmodel/out/full。',
       '不碰 8066/8029 cutover。',
       '最终报告必须列出证据路径。',
     ].join('\n')
     const conv = makeConv([
       userTurn(initialPrompt),
       assistantTurn('开始核对代理和目录。'),
-      toolUseTurn('Read', { path: '/Users/yeemio/AI/gitrep/owlmodel/README.md' }, 'read-1'),
+      toolUseTurn('Read', { path: '/Users/publicuser/AI/gitrep/owlmodel/README.md' }, 'read-1'),
       toolResultTurn('read-1', 'README body'),
       assistantTurn('发现已有污染，需要分片生成。'),
       userTurn('你一直在忙活什么？'),
@@ -346,11 +346,11 @@ describe('buildCompactionRequest', () => {
           sourceText: initialPrompt,
           objective: initialPrompt,
           dominantGap: 'produce shard files and evidence report',
-          cwd: '/Users/yeemio/AI/gitrep/owlmodel',
+          cwd: '/Users/publicuser/AI/gitrep/owlmodel',
           scopeMode: 'explicit_paths',
-          explicitWriteTargets: ['/Users/yeemio/AI/gitrep/owlmodel/out/full'],
+          explicitWriteTargets: ['/Users/publicuser/AI/gitrep/owlmodel/out/full'],
           allowedWritePaths: [{
-            path: '/Users/yeemio/AI/gitrep/owlmodel/out/full',
+            path: '/Users/publicuser/AI/gitrep/owlmodel/out/full',
             kind: 'directory',
             origin: 'explicit',
           }],
@@ -367,11 +367,11 @@ describe('buildCompactionRequest', () => {
           scratchArtifactPaths: [],
           currentFocus: 'waiting on write-scope approval for shard outputs',
           lastProgressAt: 0,
-          lastGuardReason: 'Task contract blocked write to /Users/yeemio/AI/gitrep/owlmodel/out/full/shard-01.md.',
+          lastGuardReason: 'Task contract blocked write to /Users/publicuser/AI/gitrep/owlmodel/out/full/shard-01.md.',
           pendingWriteApproval: {
             attemptedPaths: [
-              '/Users/yeemio/AI/gitrep/owlmodel/out/full/shard-01.md',
-              '/Users/yeemio/AI/gitrep/owlmodel/out/full/shard-02.md',
+              '/Users/publicuser/AI/gitrep/owlmodel/out/full/shard-01.md',
+              '/Users/publicuser/AI/gitrep/owlmodel/out/full/shard-02.md',
             ],
             requestedAt: 0,
           },
@@ -388,8 +388,8 @@ describe('buildCompactionRequest', () => {
     expect(req.prompt).toContain('[task_contract_anchor]')
     expect(req.prompt).toContain('请并发 subagent')
     expect(req.prompt).toContain('1200-1500')
-    expect(req.prompt).toContain('/Users/yeemio/AI/gitrep/owlmodel/out/full')
-    expect(req.prompt).toContain('/Users/yeemio/AI/gitrep/owlmodel/out/full/shard-02.md')
+    expect(req.prompt).toContain('/Users/publicuser/AI/gitrep/owlmodel/out/full')
+    expect(req.prompt).toContain('/Users/publicuser/AI/gitrep/owlmodel/out/full/shard-02.md')
     expect(req.prompt).toContain('Task contract blocked write')
   })
 })

@@ -26,6 +26,15 @@ import {
   createLongTaskReplaceTool,
 } from './tools/long-task.js'
 import { createRuntimeRecoveryGetTool, createRuntimeRecoveryListTool } from './tools/runtime-recovery.js'
+import { createRuntimeLifecycleGetTool, createRuntimeLifecycleListTool } from './tools/run-lifecycle.js'
+import { createRuntimeSupervisorGetTool, createRuntimeSupervisorListTool } from './tools/runtime-supervisor.js'
+import { createAgentControlGetTool, createAgentControlListTool } from './tools/agent-control.js'
+import {
+  createAgentMailboxGetTool,
+  createAgentMailboxListTool,
+  createAgentMailboxResolveTool,
+  createAgentMailboxSendTool,
+} from './tools/agent-mailbox.js'
 import { createEnterPlanModeTool, type PlanModeState } from './tools/enter-plan-mode.js'
 import { createExitPlanModeTool } from './tools/exit-plan-mode.js'
 import { createConfigTool } from './tools/config.js'
@@ -271,6 +280,16 @@ export class ToolDispatcher {
     this.register(createLongTaskReplaceTool())
     this.register(createRuntimeRecoveryListTool())
     this.register(createRuntimeRecoveryGetTool())
+    this.register(createRuntimeLifecycleListTool())
+    this.register(createRuntimeLifecycleGetTool())
+    this.register(createRuntimeSupervisorListTool())
+    this.register(createRuntimeSupervisorGetTool())
+    this.register(createAgentControlListTool())
+    this.register(createAgentControlGetTool())
+    this.register(createAgentMailboxSendTool())
+    this.register(createAgentMailboxListTool())
+    this.register(createAgentMailboxGetTool())
+    this.register(createAgentMailboxResolveTool())
     this.register(createEnterPlanModeTool(planState))
     this.register(createExitPlanModeTool(planState))
     this.register(createConfigTool())

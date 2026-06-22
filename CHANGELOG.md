@@ -2,29 +2,28 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
-## [0.15.9] — 2026-06-21
+## [0.15.10] — 2026-06-21
 
-Runtime Truth Spine reliability release.
+Release-candidate gate hardening.
 
 ### Added
 
-- Added fuller runtime event logging for assistant streams, assistant responses,
-  turn response summaries, compaction results, context replacement metadata, and
-  item-to-turn linkage.
-- Added release smoke coverage that probes runtime event contracts and audits
-  full runtime event logs.
+- Added a release decision packet that separates npm/package, public source, and
+  website surfaces before any publish, source tag, mirror sync, or site deploy.
+- Added an isolated install smoke to the prepublish gate so generated tarballs
+  must install and run `owlcoda --version` before npm publish can proceed.
 
 ### Changed
 
-- Strengthened saved-session event trails so long-running and resumed sessions
-  have more inspectable runtime evidence.
+- The npm release candidate version now advances past the live npm `latest`
+  version so the decision packet can distinguish a publishable package surface
+  from still-manual public source and website surfaces.
 
 ### Notes
 
-- This release improves reliability evidence and observability for long-run
-  diagnosis. It does not claim long-run degradation is completely eliminated.
-- The npm package remains the public install surface and is paired with public
-  GPL source tag `v0.15.9`.
+- This entry records the release candidate state only. It does not mean npm
+  publish, public source tag push, public mirror sync, or website deploy has
+  already happened.
 
 ## [0.15.8] — 2026-06-18
 
@@ -33,7 +32,8 @@ Long-run reliability release.
 ### Added
 
 - Added runtime recovery ledger surfaces and inspection tools so long-running
-  sessions can expose unresolved checkpoints instead of losing recovery context.
+  sessions can expose unresolved checkpoints instead of losing them behind
+  generic completion or retry output.
 - Added long-task lifecycle tracking and tools for inspecting, waiting on, and
   replacing managed long tasks.
 - Added runtime event persistence into saved sessions so recovery context can
@@ -47,8 +47,9 @@ Long-run reliability release.
 
 ### Notes
 
-- The npm package remains the public install surface and is paired with public
-  GPL source tag `v0.15.8`.
+- The npm package remains the public install surface; the `demo/` World Cup
+  predictor and private execution prompts are excluded from the npm tarball.
+- This release is intended to be paired with public source tag `v0.15.8`.
 
 ## [0.15.7] — 2026-06-14
 

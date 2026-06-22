@@ -4,7 +4,6 @@
  * The classifier is the single source of truth consumed by:
  *   - src/native/headless-approval.ts (deny gate)
  *   - src/native/tui/permission.ts (warning copy + border color)
- *   - src/runtime/tools.ts (legacy bridge)
  *
  * Surface-level tests live in their own files; this file pins the
  * classification taxonomy itself.
@@ -12,7 +11,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   classifyBashCommand,
-  isUnsafeBashCommand,
   type BashRiskLevel,
 } from '../../src/native/bash-risk.js'
 
@@ -236,19 +234,5 @@ describe('classifyBashCommand — /dev/null & std-stream redirects are not works
 
   it('a real write mixed with a /dev/null sink is still mutating', () => {
     expect(classifyBashCommand('cmd 2>/dev/null > out.txt').mutatesFilesystem).toBe(true)
-  })
-})
-
-describe('isUnsafeBashCommand (legacy convenience)', () => {
-  it('false only for safe_readonly', () => {
-    expect(isUnsafeBashCommand('pwd')).toBe(false)
-    expect(isUnsafeBashCommand('ls')).toBe(false)
-    expect(isUnsafeBashCommand('git status')).toBe(false)
-  })
-  it('true for needs_approval / dangerous / unknown', () => {
-    expect(isUnsafeBashCommand('rm foo')).toBe(true)
-    expect(isUnsafeBashCommand('rm -rf /')).toBe(true)
-    expect(isUnsafeBashCommand('docker run x')).toBe(true)
-    expect(isUnsafeBashCommand('')).toBe(true)
   })
 })

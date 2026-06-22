@@ -159,14 +159,19 @@ describe('release smoke runtime event audit', () => {
         passed: true,
         currentRuntimeContractProbe: {
           passed: true,
-          event_count: 6,
-          contract_valid: 6,
+          event_count: 11,
+          contract_valid: 11,
           legacy_replay_compatible: 0,
           malformed_saved_event: 0,
           event_kinds: [
             'turn_started',
             'assistant_stream_recorded',
             'assistant_response_recorded',
+            'assistant_response_disposition_recorded',
+            'runtime_intervention',
+            'runtime_intervention',
+            'runtime_intervention',
+            'runtime_intervention',
             'item_started',
             'item_completed',
             'turn_completed',
@@ -220,7 +225,7 @@ describe('release smoke runtime event audit', () => {
         },
         currentRuntimeContractProbe: {
           passed: true,
-          contract_valid: 6,
+          contract_valid: 11,
         },
       })
     } finally {

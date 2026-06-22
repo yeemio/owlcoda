@@ -12,7 +12,10 @@
 import type { NativeToolDef, ToolResult } from './types.js'
 import {
   buildLongTaskLifecycleVerdict,
+  buildLongTaskProcessLiveness,
   formatLongTaskLifecycleVerdictLine,
+  formatLongTaskProcessIdentityLine,
+  formatLongTaskProcessLivenessLine,
   formatLongTaskWaitPolicyLine,
 } from '../long-task-lifecycle.js'
 import {
@@ -124,6 +127,10 @@ function formatTaskOutput(task: Task): string {
     lines.push(`Command: ${task.command}`)
     const lifecycleLine = formatLongTaskLifecycleVerdictLine(task.longTaskSnapshot)
     if (lifecycleLine) lines.push(lifecycleLine)
+    const processIdentityLine = formatLongTaskProcessIdentityLine(task.longTaskSnapshot)
+    if (processIdentityLine) lines.push(processIdentityLine)
+    const processLivenessLine = formatLongTaskProcessLivenessLine(task.longTaskSnapshot)
+    if (processLivenessLine) lines.push(processLivenessLine)
     const waitPolicyLine = formatLongTaskWaitPolicyLine(task.longTaskSnapshot)
     if (waitPolicyLine) lines.push(waitPolicyLine)
     if (task.exitCode !== undefined) lines.push(`ExitCode: ${task.exitCode}`)
@@ -182,7 +189,11 @@ function buildTaskMeta(task: Task): Record<string, unknown> {
 
 function taskLifecycleMetadata(task: Task): Record<string, unknown> {
   const verdict = buildLongTaskLifecycleVerdict(task.longTaskSnapshot)
-  return verdict ? { long_task_lifecycle: verdict } : {}
+  const liveness = buildLongTaskProcessLiveness(task.longTaskSnapshot)
+  return {
+    ...(verdict ? { long_task_lifecycle: verdict } : {}),
+    ...(liveness ? { process_liveness: liveness } : {}),
+  }
 }
 
 export function createTaskOutputTool(): NativeToolDef<TaskOutputInput> {

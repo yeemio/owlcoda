@@ -17,6 +17,8 @@ import type {
   AssistantResponse,
   AssistantStreamSummary,
   RuntimeRecoveryLedger,
+  RuntimeEventCheckpointKind,
+  RuntimeRecoveryCheckpointKind,
 } from './protocol/types.js'
 import type { AnthropicMessagesRequest } from './protocol/types.js'
 import { computeAdaptiveTimeoutMs } from '../middleware/adaptive-timeout.js'
@@ -1921,9 +1923,31 @@ export async function runConversationLoop(
         })
         finalText = settled.response.text
         lastStopReason = settled.response.stopReason
+        recordAssistantResponseDispositionEvent(conversation, runtimeTurnId, {
+          responseIndex: assistantResponseEventIndex,
+          phase: 'synthesis',
+          action: 'accept_synthesis_text',
+          stopReason: settled.response.stopReason ?? 'end_turn',
+          textChars: settled.response.text.length,
+          originalToolUseCount: response.toolUseBlocks.length,
+          executedToolCount: 0,
+          deferredToolCount: 0,
+          runtimeToolCount: 0,
+        })
         break
       }
       lastStopReason = settled.stopReason
+      recordAssistantResponseDispositionEvent(conversation, runtimeTurnId, {
+        responseIndex: assistantResponseEventIndex,
+        phase: 'synthesis',
+        action: 'synthesis_hard_stop',
+        stopReason: settled.stopReason,
+        textChars: response.text.length,
+        originalToolUseCount: response.toolUseBlocks.length,
+        executedToolCount: 0,
+        deferredToolCount: 0,
+        runtimeToolCount: 0,
+      })
       break
     }
 
@@ -1971,6 +1995,7 @@ export async function runConversationLoop(
               intervention_kind: 'runtime_truth_resume_report_gate',
               action,
               report_source: reportSource,
+              checkpoint_id: runtimeTruthResumeReportPending.checkpointId,
               ...(assistantHasReportText && !assistantReportSatisfied
                 ? {
                     original_report_source: 'assistant_text',
@@ -2010,6 +2035,14 @@ export async function runConversationLoop(
             'Stopping before tool execution so saved runtime truth is not overwritten by speculative recovery.'
           opts.callbacks?.onError?.(loopReason)
           markRuntimeTruthResumeReportGate(conversation, 'ignored')
+          recordRecoveryGuardHardStopEvent(conversation, runtimeTurnId, {
+            checkpointId: runtimeTruthResumeReportPending.checkpointId,
+            checkpointKind: runtimeTruthResumeCheckpointKind,
+            guardKind: 'runtime_truth_resume_report_gate',
+            reason: loopReason,
+            ignoredToolCount: response.toolUseBlocks.length > 0 ? response.toolUseBlocks.length : 1,
+            responseIndex: assistantResponseEventIndex,
+          })
           recordGateEvent({
             ts: Date.now(),
             kind: 'tool_loop',
@@ -2048,6 +2081,7 @@ export async function runConversationLoop(
                 intervention_kind: 'runtime_truth_resume_report_gate',
                 action: 'replaced_incomplete_report_with_synthetic_report',
                 report_source: 'runtime_synthetic',
+                checkpoint_id: runtimeTruthResumeReportPending.checkpointId,
                 original_report_source: 'assistant_text',
                 missing_report_fields: reportValidation.missingReportFields,
               },
@@ -2078,6 +2112,14 @@ export async function runConversationLoop(
           'Model ignored the long-task synthesis checkpoint and attempted tool use instead of a structured JSON recovery synthesis report. ' +
           'Stopping to avoid reconstructing scattered long-task state from memory.'
         opts.callbacks?.onError?.(loopReason)
+        recordRecoveryGuardHardStopEvent(conversation, runtimeTurnId, {
+          checkpointId: latestActiveRecoveryCheckpointId(conversation, 'long_task_synthesis_checkpoint'),
+          checkpointKind: 'long_task_synthesis_checkpoint',
+          guardKind: 'long_task_synthesis_checkpoint',
+          reason: loopReason,
+          ignoredToolCount: response.toolUseBlocks.length > 0 ? response.toolUseBlocks.length : 1,
+          responseIndex: assistantResponseEventIndex,
+        })
         recordGateEvent({
           ts: Date.now(),
           kind: 'tool_loop',
@@ -2101,6 +2143,14 @@ export async function runConversationLoop(
           'Model ignored the long-task checkpoint and attempted tool use instead of a structured JSON checkpoint report. ' +
           'Stopping to avoid continued no-value polling.'
         opts.callbacks?.onError?.(loopReason)
+        recordRecoveryGuardHardStopEvent(conversation, runtimeTurnId, {
+          checkpointId: latestActiveRecoveryCheckpointId(conversation, 'long_task_checkpoint'),
+          checkpointKind: 'long_task_checkpoint',
+          guardKind: 'long_task_checkpoint',
+          reason: loopReason,
+          ignoredToolCount: response.toolUseBlocks.length > 0 ? response.toolUseBlocks.length : 1,
+          responseIndex: assistantResponseEventIndex,
+        })
         recordGateEvent({
           ts: Date.now(),
           kind: 'tool_loop',
@@ -2132,6 +2182,14 @@ export async function runConversationLoop(
           `step ${blockedTaskFinalizationPending.stepId} and attempted tool use instead of a structured JSON blocked report. ` +
           'Stopping to avoid continued no-value task churn.'
         opts.callbacks?.onError?.(loopReason)
+        recordRecoveryGuardHardStopEvent(conversation, runtimeTurnId, {
+          checkpointId: latestActiveRecoveryCheckpointId(conversation, 'blocked_task_checkpoint'),
+          checkpointKind: 'blocked_task_checkpoint',
+          guardKind: 'blocked_task_checkpoint',
+          reason: loopReason,
+          ignoredToolCount: response.toolUseBlocks.length > 0 ? response.toolUseBlocks.length : 1,
+          responseIndex: assistantResponseEventIndex,
+        })
         recordGateEvent({
           ts: Date.now(),
           kind: 'tool_loop',
@@ -2169,6 +2227,14 @@ export async function runConversationLoop(
           `Model ignored the child-run synthesis checkpoint for ${childRunSynthesisPending.childCount} child runs ` +
           'and attempted tool use instead of a structured JSON per-child report. Stopping to avoid hiding child failures.'
         opts.callbacks?.onError?.(loopReason)
+        recordRecoveryGuardHardStopEvent(conversation, runtimeTurnId, {
+          checkpointId: latestActiveRecoveryCheckpointId(conversation, 'child_run_synthesis_checkpoint'),
+          checkpointKind: 'child_run_synthesis_checkpoint',
+          guardKind: 'child_run_synthesis_checkpoint',
+          reason: loopReason,
+          ignoredToolCount: response.toolUseBlocks.length > 0 ? response.toolUseBlocks.length : 1,
+          responseIndex: assistantResponseEventIndex,
+        })
         recordGateEvent({
           ts: Date.now(),
           kind: 'tool_loop',
@@ -2205,6 +2271,14 @@ export async function runConversationLoop(
             `step ${pending.stepId} and attempted tool use instead of a structured JSON repair report. ` +
             'Stopping to avoid repeated verification churn or workaround completion.'
           opts.callbacks?.onError?.(loopReason)
+          recordRecoveryGuardHardStopEvent(conversation, runtimeTurnId, {
+            checkpointId: latestActiveRecoveryCheckpointId(conversation, 'verification_repair_checkpoint'),
+            checkpointKind: 'verification_repair_checkpoint',
+            guardKind: 'verification_repair_checkpoint',
+            reason: loopReason,
+            ignoredToolCount: response.toolUseBlocks.length > 0 ? response.toolUseBlocks.length : 1,
+            responseIndex: assistantResponseEventIndex,
+          })
           recordGateEvent({
             ts: Date.now(),
             kind: 'tool_loop',
@@ -2288,6 +2362,17 @@ export async function runConversationLoop(
     }
 
     const effectiveResponse = applyToolExecutionPlan(response, toolPlan.executeBlocks)
+    recordAssistantResponseDispositionEvent(conversation, runtimeTurnId, {
+      responseIndex: assistantResponseEventIndex,
+      phase: 'main',
+      action: assistantResponseDispositionAction(effectiveResponse),
+      stopReason: effectiveResponse.stopReason ?? 'unknown',
+      textChars: effectiveResponse.text.length,
+      originalToolUseCount: response.toolUseBlocks.length,
+      executedToolCount: toolPlan.executeBlocks.length,
+      deferredToolCount: Math.max(0, response.toolUseBlocks.length - toolPlan.executeBlocks.length),
+      runtimeToolCount: toolPlan.runtimeBlocks.length,
+    })
     opts.callbacks?.onResponse?.(effectiveResponse)
 
     // Detect stall: tool_use with no blocks, or empty response entirely
@@ -3201,6 +3286,76 @@ function buildAssistantStreamRecordedPayload(
     input_tokens: summary.inputTokens,
     output_tokens: summary.outputTokens,
   }
+}
+
+function recordAssistantResponseDispositionEvent(
+  conversation: Conversation,
+  turnId: string,
+  input: {
+    responseIndex: number
+    phase: 'main' | 'synthesis'
+    action: string
+    stopReason: string
+    textChars: number
+    originalToolUseCount: number
+    executedToolCount: number
+    deferredToolCount: number
+    runtimeToolCount: number
+  },
+): void {
+  appendRuntimeEvent(conversation, {
+    kind: 'assistant_response_disposition_recorded',
+    turnId,
+    payload: {
+      response_index: input.responseIndex,
+      phase: input.phase,
+      action: input.action,
+      stop_reason: input.stopReason,
+      text_chars: input.textChars,
+      original_tool_use_count: input.originalToolUseCount,
+      executed_tool_count: input.executedToolCount,
+      deferred_tool_count: input.deferredToolCount,
+      runtime_tool_count: input.runtimeToolCount,
+    },
+  })
+}
+
+function recordRecoveryGuardHardStopEvent(
+  conversation: Conversation,
+  turnId: string,
+  input: {
+    checkpointId?: string
+    checkpointKind: RuntimeEventCheckpointKind
+    guardKind: string
+    reason: string
+    ignoredToolCount: number
+    responseIndex: number
+  },
+): void {
+  appendRuntimeEvent(conversation, {
+    kind: 'runtime_intervention',
+    turnId,
+    ...(input.checkpointId ? { checkpointId: input.checkpointId } : {}),
+    checkpointKind: input.checkpointKind,
+    payload: {
+      intervention_kind: 'recovery_guard_hard_stop',
+      action: 'hard_stop',
+      guard_kind: input.guardKind,
+      gate_kind: input.guardKind,
+      stop_reason: 'tool_loop',
+      ignored_tool_count: input.ignoredToolCount,
+      response_index: input.responseIndex,
+      reason: input.reason,
+      ...(input.checkpointId ? { checkpoint_id: input.checkpointId } : {}),
+    },
+  })
+}
+
+function assistantResponseDispositionAction(response: AssistantResponse): string {
+  if (response.toolUseBlocks.length > 0) return 'execute_tools'
+  if (response.text.trim()) return 'accept_final_text'
+  if (response.stopReason === 'tool_use' && response.hasToolUse) return 'stalled_tool_use_without_blocks'
+  return 'empty_response'
 }
 
 function digestRuntimeEventText(text: string): string {
@@ -7026,6 +7181,19 @@ function activeLongTaskSynthesisIdsFromRecoveryLedger(conversation: Conversation
   return latest ? longTaskIdsFromPayload(latest.payload) : []
 }
 
+function latestActiveRecoveryCheckpointId(
+  conversation: Conversation,
+  kind: RuntimeRecoveryCheckpointKind,
+): string | undefined {
+  return getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
+    .filter((checkpoint) =>
+      checkpoint.kind === kind
+      && (checkpoint.disposition ?? 'active') === 'active'
+    )
+    .at(-1)
+    ?.id
+}
+
 function activeVerificationRepairCheckpointFromRecoveryLedger(
   conversation: Conversation,
 ): VerificationRepairCheckpoint | null {
@@ -8929,12 +9097,12 @@ export function createConversation(opts: {
  * being too long for one turn — heap pressure, output bloat, max-
  * tokens continuation handling. Then a 2026-05-07 industry survey
  * exposed the upstream cause: owlcoda's default of 4096 was an
- * outlier on the low end. Claude Code uses 32K, Aider 8K-32K per
+ * outlier on the low end. external coding-assistant uses 32K, Aider 8K-32K per
  * model, opencode 32K. Every model in our supported matrix
  * (Claude 4.x, DeepSeek V4, Kimi K2, GPT-5, Gemini 2.5, Qwen 3)
  * supports ≥16K output natively; many support 32K-128K.
  *
- * 0.13.65 raises the default to 32,768 (matches Claude Code) and
+ * 0.13.65 raises the default to 32,768 (matches external coding-assistant) and
  * exposes `OWLCODA_MAX_OUTPUT_TOKENS` as a per-session override.
  * Callers passing an explicit `opts.maxTokens` still win — the
  * resolver only applies to call sites that previously used the

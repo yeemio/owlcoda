@@ -88,6 +88,7 @@ export type RuntimeEventKind =
   | 'turn_started'
   | 'assistant_stream_recorded'
   | 'assistant_response_recorded'
+  | 'assistant_response_disposition_recorded'
   | 'item_started'
   | 'item_completed'
   | 'checkpoint_installed'

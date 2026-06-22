@@ -3,7 +3,6 @@ import {
   renderMcpPanel,
   renderSessionInfoPanel,
   renderSessionsPanel,
-  renderSettingsPanel,
 } from '../../../src/native/tui/panel.js'
 import { stripAnsi, visibleWidth } from '../../../src/native/tui/colors.js'
 
@@ -52,24 +51,4 @@ describe('fullscreen panel renderers', () => {
     expect(plain).toContain('/mcp reconnect')
   })
 
-  it('renders settings panel with commands and approval mode', () => {
-    const result = renderSettingsPanel({
-      version: '0.12.30',
-      model: 'minimax-m27',
-      maxTokens: 4096,
-      mode: 'native',
-      trace: false,
-      owlcodaHome: '~/.owlcoda',
-      apiBaseUrl: 'http://127.0.0.1:9999',
-      approveMode: 'ask-before-execute',
-      theme: 'dark',
-      alwaysApprovedTools: ['read'],
-      columns: 80,
-    })
-    const plain = stripAnsi(result)
-    expect(plain).toContain('OC /settings')
-    expect(plain).toContain('ask-before-execute')
-    expect(plain).toContain('/theme')
-    expect(plain).toContain('read')
-  })
 })

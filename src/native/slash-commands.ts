@@ -546,7 +546,6 @@ export async function handleSlashCommand(input: string, conversation: Conversati
   ${sgr.bold}Configuration:${sgr.reset}
     /init             Create OWLCODA.md project instructions
     /theme [name]     Switch color theme (${THEME_NAMES.join(', ')})
-    /color [name]     Alias for /theme
     /approve [on|off] Toggle auto-approve mode
     /yolo [on|off]    Toggle YOLO mode (= /approve, but with dangerous-bash warning)
     /verbose [on|off] Toggle verbose tool output

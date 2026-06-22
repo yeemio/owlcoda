@@ -1,17 +1,16 @@
 /**
  * Full-screen panels — terminal port of the design's `oc-panel` blocks.
  *
- * Three panels share a common chrome:
+ * The panels share a common chrome:
  *   {accent}OC{reset} {ink-hi bold}{title}{reset}  {ink-dim}{subtitle}
  *   {hairFaint horizontal rule}
  *
  * Sessions panel maps to `oc-sess` (5-col row: mark / title / repo / time / turns).
- * Settings panel maps to `oc-set` (label : value rows + a dashed group separator).
  * MCP panel maps to `oc-mcp` (●/✗/◌ dot + name + desc + tools + act).
  */
 
-import { dim, sgr, stripAnsi, themeColor, themed, visibleWidth } from './colors.js'
-import { padRight, truncate, truncateMiddle } from './text.js'
+import { sgr, stripAnsi, themeColor, visibleWidth } from './colors.js'
+import { padRight, truncate } from './text.js'
 
 export interface SessionPanelItem {
   id: string
@@ -32,20 +31,6 @@ export interface McpPanelServer {
   tools: Array<{ name: string }>
   resources: unknown[]
   error?: string
-}
-
-export interface SettingsPanelOptions {
-  version: string
-  model: string
-  maxTokens: number
-  mode: string
-  trace: boolean
-  owlcodaHome: string
-  apiBaseUrl?: string
-  approveMode: 'auto-approve' | 'ask-before-execute'
-  theme: string
-  alwaysApprovedTools: string[]
-  columns?: number
 }
 
 function columnsOrDefault(columns?: number): number {
@@ -78,15 +63,6 @@ function renderPanelHeader(title: string, subtitle: string, columns: number): st
  * `oc-set-group-title { letter-spacing: 0.14em; text-transform: uppercase;
  * border-bottom: 1px dashed var(--hair-faint); }`.
  */
-function renderGroupTitle(title: string, columns: number): string[] {
-  const ruleWidth = Math.min(columns, 96)
-  const dash = `${themeColor('hairFaint')}${'┄'.repeat(ruleWidth)}${sgr.reset}`
-  return [
-    `${themeColor('textDim')}${title.toUpperCase()}${sgr.reset}`,
-    dash,
-  ]
-}
-
 function formatDate(value: string | number | Date): string {
   return new Date(value).toLocaleString()
 }
@@ -223,60 +199,4 @@ export function renderMcpPanel(servers: McpPanelServer[], columns?: number): str
   lines.push('')
   lines.push(`${themeColor('textDim')}Usage: /mcp reconnect${sgr.reset}`)
   return lines.join('\n')
-}
-
-// ─── Settings ────────────────────────────────────────────────
-
-export function renderSettingsPanel(opts: SettingsPanelOptions): string {
-  const width = columnsOrDefault(opts.columns)
-
-  // Two row groups separated by a dashed divider — mirrors the design's
-  // `oc-set` group title pattern.
-  const runtimeRows: Array<[string, string]> = [
-    ['Version',    `v${opts.version}`],
-    ['Mode',       opts.mode],
-    ['Model',      opts.model],
-    ['Max tokens', String(opts.maxTokens)],
-  ]
-  if (opts.apiBaseUrl) {
-    runtimeRows.push(['Proxy', opts.apiBaseUrl])
-  }
-  const uiRows: Array<[string, string]> = [
-    ['Theme',   opts.theme],
-    ['Trace',   opts.trace ? 'on' : 'off'],
-    ['Approve', opts.approveMode],
-    ['Home',    opts.owlcodaHome],
-  ]
-
-  const lines = [
-    ...renderPanelHeader('/settings', 'runtime and UI controls', width),
-    ...renderGroupTitle('Runtime', width),
-    ...runtimeRows.map(([key, value]) => renderSettingsRow(key, value, width)),
-    '',
-    ...renderGroupTitle('UI', width),
-    ...uiRows.map(([key, value]) => renderSettingsRow(key, value, width)),
-    '',
-    `${themeColor('textHi')}${sgr.bold}Commands${sgr.reset}`,
-    `${themeColor('textDim')}/theme <name> · /approve on|off · /permissions · /config · /login${sgr.reset}`,
-  ]
-
-  if (opts.alwaysApprovedTools.length > 0) {
-    lines.push('')
-    lines.push(`${themeColor('textHi')}${sgr.bold}Always-approved tools${sgr.reset}`)
-    lines.push(`${themeColor('textDim')}${truncate(opts.alwaysApprovedTools.join(', '), width)}${sgr.reset}`)
-  }
-
-  return lines.map((line) => clip(line, width)).join('\n')
-}
-
-function renderSettingsRow(key: string, value: string, width: number): string {
-  const labelWidth = 14
-  const labelCell = `${themeColor('text')}${padRight(`${key}:`, labelWidth)}${sgr.reset}`
-  // Values render in the accent color (mono) to match the design's
-  // `.oc-set-row .value { color: var(--accent); font-family: mono }`.
-  const valueCell = `${themeColor('owl')}${truncateMiddle(value, Math.max(10, width - labelWidth - 2))}${sgr.reset}`
-  // Reference dim alias to keep import live during incremental rollout.
-  void dim
-  void themed
-  return clip(`${labelCell} ${valueCell}`, width)
 }

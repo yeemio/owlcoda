@@ -6,6 +6,7 @@ const RUNTIME_EVENT_KINDS = [
   'turn_started',
   'assistant_stream_recorded',
   'assistant_response_recorded',
+  'assistant_response_disposition_recorded',
   'item_started',
   'item_completed',
   'checkpoint_installed',
@@ -110,6 +111,27 @@ describe('runtime event contract JSON schema', () => {
         }),
       }),
       expect.objectContaining({
+        if: { properties: { kind: { const: 'assistant_response_disposition_recorded' } } },
+        then: expect.objectContaining({
+          required: expect.arrayContaining(['turnId', 'payload']),
+          properties: expect.objectContaining({
+            payload: expect.objectContaining({
+              required: expect.arrayContaining([
+                'response_index',
+                'phase',
+                'action',
+                'stop_reason',
+                'text_chars',
+                'original_tool_use_count',
+                'executed_tool_count',
+                'deferred_tool_count',
+                'runtime_tool_count',
+              ]),
+            }),
+          }),
+        }),
+      }),
+      expect.objectContaining({
         if: { properties: { kind: { const: 'item_started' } } },
         then: expect.objectContaining({
           required: expect.arrayContaining(['turnId', 'itemId', 'payload']),
@@ -149,6 +171,91 @@ describe('runtime event contract JSON schema', () => {
           properties: expect.objectContaining({
             payload: expect.objectContaining({
               required: expect.arrayContaining(['normalized_report']),
+            }),
+          }),
+        }),
+      }),
+      expect.objectContaining({
+        if: { properties: { kind: { const: 'runtime_intervention' } } },
+        then: expect.objectContaining({
+          required: expect.arrayContaining(['payload']),
+          properties: expect.objectContaining({
+            payload: expect.objectContaining({
+              required: expect.arrayContaining(['intervention_kind']),
+              allOf: expect.arrayContaining([
+                expect.objectContaining({
+                  if: {
+                    properties: {
+                      intervention_kind: { const: 'recovery_guard_hard_stop' },
+                    },
+                  },
+                  then: expect.objectContaining({
+                    required: expect.arrayContaining([
+                      'action',
+                      'guard_kind',
+                      'stop_reason',
+                      'ignored_tool_count',
+                      'response_index',
+                      'reason',
+                    ]),
+                  }),
+                }),
+                expect.objectContaining({
+                  if: {
+                    properties: {
+                      intervention_kind: { const: 'long_task_wait_policy' },
+                    },
+                  },
+                  then: expect.objectContaining({
+                    required: expect.arrayContaining([
+                      'action',
+                      'tool_use_id',
+                      'tool_name',
+                      'long_task_id',
+                      'wait_strategy',
+                      'stop_polling',
+                      'next_check_command',
+                      'reason',
+                    ]),
+                  }),
+                }),
+                expect.objectContaining({
+                  if: {
+                    properties: {
+                      intervention_kind: { const: 'post_recovery_overrun_guard' },
+                    },
+                  },
+                  then: expect.objectContaining({
+                    required: expect.arrayContaining([
+                      'action',
+                      'tool_use_id',
+                      'tool_name',
+                      'task_id',
+                      'checkpoint_id',
+                      'requested_status_field',
+                      'requested_status',
+                      'ledger_status',
+                      'recovery_resolved_this_run',
+                      'scope',
+                      'reason',
+                    ]),
+                  }),
+                }),
+                expect.objectContaining({
+                  if: {
+                    properties: {
+                      intervention_kind: { const: 'runtime_truth_resume_report_gate' },
+                    },
+                  },
+                  then: expect.objectContaining({
+                    required: expect.arrayContaining([
+                      'action',
+                      'report_source',
+                      'checkpoint_id',
+                    ]),
+                  }),
+                }),
+              ]),
             }),
           }),
         }),

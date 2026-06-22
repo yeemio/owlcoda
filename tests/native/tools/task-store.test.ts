@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import * as taskStore from '../../../src/native/tools/task-store.js'
 import {
+  getRunLifecycleSnapshot,
+  resetRunLifecycleForTesting,
+} from '../../../src/native/run-lifecycle.js'
+import {
   createTask,
   getTask,
   listTasks,
@@ -19,7 +23,10 @@ import {
 } from '../../../src/native/tools/task-store.js'
 
 describe('TaskStore', () => {
-  beforeEach(() => resetTaskStore())
+  beforeEach(() => {
+    resetTaskStore()
+    resetRunLifecycleForTesting()
+  })
 
   it('creates a task with auto-incremented ID', () => {
     const t = createTask({ subject: 'Build feature', description: 'Do the thing' })
@@ -163,6 +170,90 @@ describe('TaskStore', () => {
     expect(restored.longTaskSnapshot?.status).toBe('incomplete')
     expect(restored.longTaskSnapshot?.timeoutKind).toBe('process_handle_missing_after_resume')
     expect(restored.longTaskSnapshot?.inspectCommand).toBe(`TaskOutput task_id=${task.id} block=false`)
+  })
+
+  it('persists command process identity across snapshots without reviving the process handle', () => {
+    const task = createTask({
+      subject: 'Long command identity',
+      description: 'Command process identity should survive session restore',
+      conversationId: 'conv-command-identity',
+      command: 'sleep 60; echo done',
+      cwd: '/tmp',
+    })
+    taskStore.spawnTaskCommand(task.id)
+
+    const live = getTask(task.id)!
+    expect(live.processIdentity).toMatchObject({
+      schema_version: 1,
+      command: 'sleep 60; echo done',
+      cwd: '/tmp',
+    })
+    expect(live.processIdentity?.pid).toEqual(expect.any(Number))
+    expect(live.processIdentity!.pid).toBeGreaterThan(0)
+    expect(live.processIdentity?.spawnedAt).toEqual(expect.any(String))
+    expect(live.longTaskSnapshot?.processIdentity?.pid).toBe(live.processIdentity?.pid)
+
+    const snapshot = (taskStore as any).snapshotTaskStore('conv-command-identity')
+    expect(snapshot.tasks[0].processIdentity?.pid).toBe(live.processIdentity?.pid)
+
+    resetTaskStore()
+    ;(taskStore as any).restoreTaskStore(snapshot)
+
+    const restored = getTask(task.id)!
+    expect(hasRunningProcess(task.id)).toBe(false)
+    expect(restored.longTaskSnapshot?.status).toBe('incomplete')
+    expect(restored.processIdentity?.pid).toBe(live.processIdentity?.pid)
+    expect(restored.longTaskSnapshot?.processIdentity?.pid).toBe(live.processIdentity?.pid)
+  })
+
+  it('mirrors command task lifecycle into the unified run lifecycle registry', () => {
+    const task = createTask({
+      subject: 'Lifecycle command',
+      description: 'Command should appear in run lifecycle',
+      conversationId: 'conv-run-lifecycle',
+      command: 'sleep 60; echo done',
+      cwd: '/tmp',
+    })
+    taskStore.spawnTaskCommand(task.id)
+
+    expect(getRunLifecycleSnapshot(`task:${task.id}`)).toMatchObject({
+      runId: `task:${task.id}`,
+      kind: 'task_command',
+      status: 'running',
+      owner: 'runtime_supervisor',
+      inspectCommand: `TaskOutput task_id=${task.id} block=false`,
+      recoveryPolicy: expect.objectContaining({
+        strategy: 'runtime_await',
+        next_command: `LongTaskAwait longTaskId=task:${task.id} timeoutMs=5000`,
+      }),
+    })
+  })
+
+  it('mirrors restored lost-handle command tasks into run lifecycle as incomplete', () => {
+    const task = createTask({
+      subject: 'Restored lifecycle command',
+      description: 'Missing child handle should be inspectable',
+      conversationId: 'conv-run-lifecycle-restore',
+      command: 'sleep 60; echo done',
+      cwd: '/tmp',
+    })
+    updateTask(task.id, { status: 'in_progress' })
+    const snapshot = (taskStore as any).snapshotTaskStore('conv-run-lifecycle-restore')
+    resetTaskStore()
+    ;(taskStore as any).restoreTaskStore(snapshot)
+
+    expect(getRunLifecycleSnapshot(`task:${task.id}`)).toMatchObject({
+      runId: `task:${task.id}`,
+      kind: 'task_command',
+      status: 'incomplete',
+      recoveryPolicy: expect.objectContaining({
+        strategy: 'replace_or_retry',
+        next_command: `LongTaskReplace longTaskId=task:${task.id}`,
+      }),
+      evidence: expect.objectContaining({
+        timeout_kind: 'process_handle_missing_after_resume',
+      }),
+    })
   })
 })
 

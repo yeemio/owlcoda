@@ -1,11 +1,11 @@
 # OwlCoda Tools — Maturity Matrix
 
-> Refreshed 2026-05-30, owlcoda 0.14.46
+> Refreshed 2026-06-22, owlcoda 0.15.10
 > Source of truth: `src/native/dispatch.ts` default registration,
 > `src/native/tool-defs.ts` schemas, and `src/native/tools/*.ts`
 > behavioral audit (not comments).
-> Scope: 53 native tool schemas/factories are tracked below. The default
-> dispatcher currently advertises **52 registered tool_defs** through
+> Scope: 63 native tool schemas/factories are tracked below. The default
+> dispatcher currently advertises **62 registered tool_defs** through
 > `buildNativeToolDefs(new ToolDispatcher())`. `Agent` is host-wired by
 > `ink-repl.tsx` because it needs provider deps and is the only remaining
 > schema-only surface. The "42+ tools" headline is therefore a
@@ -16,10 +16,14 @@
 - **production**: 13
   bash, read, write, edit, glob, grep, NotebookEdit, WebFetch, WebSearch,
   EnterWorktree, ExitWorktree, TeamCreate, TeamDelete
-- **beta**: 34
+- **beta**: 44
   Agent, AgentRunList, AgentRunGet, LongTaskList, LongTaskGet, LongTaskAwait,
   LongTaskReplace,
   RuntimeRecoveryList, RuntimeRecoveryGet,
+  RuntimeLifecycleList, RuntimeLifecycleGet,
+  RuntimeSupervisorList, RuntimeSupervisorGet,
+  AgentControlList, AgentControlGet,
+  AgentMailboxSend, AgentMailboxList, AgentMailboxGet, AgentMailboxResolve,
   AskUserQuestion, Sleep,
   EnterPlanMode, ExitPlanMode, Config,
   TodoWrite, Skill, ToolSearch, StructuredOutput, Brief, PowerShell,
@@ -31,7 +35,7 @@
 - **experimental**: 5
   RemoteTrigger, LSP, MCPTool, ListMcpResources, ReadMcpResource
 
-Default registration truth: 52 registered tool_defs, 53 schema rows.
+Default registration truth: 62 registered tool_defs, 63 schema rows.
 Schema-only / host-wired surfaces: Agent (registered by `ink-repl.tsx`
 with live provider deps). Tungsten and Workflow were removed in 0.13.32 —
 they were upstream-cloud-only placeholders that returned "not available"
@@ -74,6 +78,16 @@ in local mode and had no realistic local implementation path.
 | LongTaskReplace | 417 | beta | creates a classified replacement TaskCreate-style command task from a replace_or_retry lifecycle record | long-task.test.ts + dispatch/tool-risk/tool-defs/headless-approval coverage | first-class replacement gate for lost-handle command tasks; refuses unsafe commands and does not auto-replay Agent records |
 | RuntimeRecoveryList | 96 | beta | reads conversation-local runtime recovery ledger from ToolExecutionContext | runtime-recovery.test.ts + conversation-loop-guard/tool-risk/tool-defs coverage | read-only durable recovery checkpoint list; no resume/retry/background scheduler |
 | RuntimeRecoveryGet | 96 | beta | reads one conversation-local runtime recovery checkpoint from ToolExecutionContext | runtime-recovery.test.ts + conversation-loop-guard/tool-risk/tool-defs coverage | read-only checkpoint payload/detail inspection; no resume/retry/task or agent mutation |
+| RuntimeLifecycleList | 116 | beta | reads unified runtime lifecycle registry | run-lifecycle-tools.test.ts + run-lifecycle.test.ts + dispatch/tool-risk/tool-defs coverage | read-only truth spine list across task commands, agent runs, supervisor processes, mailbox messages, and checkpoints; no wait/resume/retry/mutation |
+| RuntimeLifecycleGet | 116 | beta | reads one unified runtime lifecycle record | run-lifecycle-tools.test.ts + run-lifecycle.test.ts + dispatch/tool-risk/tool-defs coverage | read-only detail inspection by runId; gives inspect command and recovery policy so resume does not rely on transcript memory |
+| RuntimeSupervisorList | 68 | beta | reads runtime-supervised command process snapshots | runtime-supervisor.test.ts + dispatch/tool-risk/tool-defs coverage | read-only process snapshot list for TaskCreate(command) work; not a daemon/job supervisor and does not kill/wait/retry work |
+| RuntimeSupervisorGet | 68 | beta | reads one runtime-supervised command process snapshot | runtime-supervisor.test.ts + dispatch/tool-risk/tool-defs coverage | read-only detail inspection by processId; exposes process identity, parent run, inspect command, and replacement caution |
+| AgentControlList | 68 | beta | projects Agent run history into parent/child control records | agent-control.test.ts + agent.test.ts + dispatch/tool-risk/tool-defs coverage | read-only AgentControl view with parent run links and recovery policy; does not spawn/resume/retry agents |
+| AgentControlGet | 68 | beta | reads one AgentControl record by agentId | agent-control.test.ts + agent.test.ts + dispatch/tool-risk/tool-defs coverage | read-only detail inspection by agentId; points back to AgentRunGet and inspect-before-retry recovery |
+| AgentMailboxSend | 150 | beta | mutates in-memory runtime mailbox queue | agent-mailbox.test.ts + dispatch/tool-risk/tool-defs coverage | queues structured parent/agent messages and mirrors them to run lifecycle; v1 does not directly wake a sub-agent turn |
+| AgentMailboxList | 150 | beta | reads in-memory runtime mailbox queue | agent-mailbox.test.ts + dispatch/tool-risk/tool-defs coverage | read-only mailbox inspection with recipient/status filters; prevents duplicate transcript-only instructions |
+| AgentMailboxGet | 150 | beta | reads one runtime mailbox message | agent-mailbox.test.ts + dispatch/tool-risk/tool-defs coverage | read-only detail by messageId; body is preserved outside free-form transcript |
+| AgentMailboxResolve | 150 | beta | marks a runtime mailbox message resolved | agent-mailbox.test.ts + dispatch/tool-risk/tool-defs coverage | internal-state resolution only; records terminal lifecycle evidence but does not deliver/resume agents |
 | AskUserQuestion | 173 | beta | host UI callback or readline fallback on stdin | none directly (covered indirectly) | depends on ToolExecutionContext.askUserQuestion |
 | Sleep | 45 | beta | setTimeout | none (no test file) | trivial; works |
 | EnterPlanMode | 59 | beta | mutates shared PlanModeState | enter-plan-mode.test.ts (52) | state-only; no enforcement of "no writes during plan mode" inside the tool itself |
@@ -91,7 +105,7 @@ in local mode and had no realistic local implementation path.
 | ProjectMap | 136 | beta | bounded default-on project scan plus optional `.owlcoda-run/project-map.json` persistence | project-map.test.ts + project-map-dogfood-acceptance.test.ts | Runtime Control Plane snapshot surface; `OWLCODA_PROJECT_MAP=0` is the rollback override; not a full-repo index, does not execute commands, and does not bypass write gates |
 | ArtifactVerify | 108 | beta | runs supported artifact verification packs | artifact-verify.test.ts | currently supports `html_deck`; narrow verification helper |
 | ProbePlan | 376 | beta | stores probe plans and optionally mutates live conversation options | probe-plan.test.ts | default dispatcher has no live-conversation accessor; ink-repl re-registers it with one |
-| JudgeBackendProbe | 37 | beta | sends fixed-prompt HTTP chat-completions probes to a configured backend | judge-backend-probe.test.ts + tool-risk/tool-defs coverage | release/operator diagnostic for backend health; external-effect gated and not an autonomous judge |
+| JudgeBackendProbe | 37 | beta | probes OpenAI-compatible chat/completions endpoints with fixed prompts | judge-backend-probe.test.ts + tools/judge-backend-probe.test.ts + dispatch/tool-risk/tool-defs coverage | real local/remote HTTP calls; useful for checking model/backend JSON reliability, not a release gate |
 | TaskCreate | 49 | beta | in-memory task entry; optional safe_readonly bash child via task-store | task-create.test.ts (163) — behavior + safety gates | pure-TODO mode is still manual; command mode only spawns after bash-risk + headless-approval + direct safe_readonly recheck |
 | TaskList | 59 | beta | reads in-memory Map | task-list.test.ts | in-memory session task list; not a process/job discovery tool |
 | TaskGet | 57 | beta | reads in-memory Map | task-get.test.ts (48) | returns task record fields; command output is surfaced by TaskOutput |
@@ -143,7 +157,7 @@ in local mode and had no realistic local implementation path.
 ## False advertising risk
 
 The headline "42+ native tools" is still a defensible lower-bound
-because the default dispatcher advertises 52 registered tool_defs. The
+because the default dispatcher advertises 62 registered tool_defs. The
 risk is in the *implication* that all advertised tools are production
 features:
 
@@ -181,7 +195,7 @@ features:
   with a real provider.
 
 Recommendation: keep the headline "42+ tools" only when paired with an
-honest split such as "13 production, 34 beta, 1 stub, 5 experimental;
-52 default-registered tool_defs; 1 schema-only/host-wired surface".
+honest split such as "13 production, 33 beta, 1 stub, 5 experimental;
+51 default-registered tool_defs; 1 schema-only/host-wired surface".
 For user-facing marketing, lead with the production/beta capabilities
 and hide or gate the remaining stubs behind an experimental surface.

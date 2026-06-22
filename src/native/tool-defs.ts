@@ -246,6 +246,90 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
     required: ['checkpointId'],
     description: 'Read one durable runtime recovery checkpoint by ID. Read-only; this does not resume, retry, or mutate tasks or agents.',
   },
+  RuntimeLifecycleList: {
+    type: 'object',
+    properties: {
+      limit: { type: 'number', description: 'Maximum recent runtime lifecycle records to return. Defaults to 20.' },
+      kind: { type: 'string', description: 'Optional run kind filter: task_command, agent_run, supervisor_process, mailbox_message, or runtime_checkpoint.' },
+    },
+    description: 'Read-only inspection of the unified runtime truth spine: task commands, agent runs, supervisor processes, mailbox messages, and checkpoints. This does not wait, resume, retry, or mutate work.',
+  },
+  RuntimeLifecycleGet: {
+    type: 'object',
+    properties: {
+      runId: { type: 'string', description: 'Unified runtime lifecycle run ID returned by RuntimeLifecycleList, such as task:task-1, agent:agent-D1, process:task-1, or mailbox:mailbox-1.' },
+    },
+    required: ['runId'],
+    description: 'Read one unified runtime lifecycle record by runId. Read-only; this does not wait, resume, retry, or mutate work.',
+  },
+  RuntimeSupervisorList: {
+    type: 'object',
+    properties: {
+      limit: { type: 'number', description: 'Maximum recent runtime-supervised process snapshots to return. Defaults to 20.' },
+    },
+    description: 'Read-only inspection of runtime-supervised process snapshots for command-backed long tasks. This does not wait, kill, resume, retry, or mutate work.',
+  },
+  RuntimeSupervisorGet: {
+    type: 'object',
+    properties: {
+      processId: { type: 'string', description: 'Runtime supervisor process ID returned by RuntimeSupervisorList, such as process:task-1.' },
+    },
+    required: ['processId'],
+    description: 'Read one runtime-supervised process snapshot by processId. Read-only; this does not wait, kill, resume, retry, or mutate work.',
+  },
+  AgentControlList: {
+    type: 'object',
+    properties: {
+      limit: { type: 'number', description: 'Maximum recent AgentControl records to return. Defaults to 20.' },
+    },
+    description: 'Read-only inspection of AgentControl records with parent run links, status, inspect commands, and recovery policy. This does not spawn, resume, retry, or mutate agents.',
+  },
+  AgentControlGet: {
+    type: 'object',
+    properties: {
+      agentId: { type: 'string', description: 'Agent ID returned by AgentControlList or AgentRunList.' },
+    },
+    required: ['agentId'],
+    description: 'Read one AgentControl record by agentId. Read-only; this does not spawn, resume, retry, or mutate agents.',
+  },
+  AgentMailboxSend: {
+    type: 'object',
+    properties: {
+      author: { type: 'string', description: 'Mailbox author, for example root or agent:agent-D1.' },
+      recipient: { type: 'string', description: 'Mailbox recipient, for example root or agent:agent-D1.' },
+      body: { type: 'string', description: 'Structured message body to preserve outside the free-form transcript.' },
+      parentRunId: { type: 'string', description: 'Optional parent runtime run ID that this message belongs to.' },
+      triggerTurn: { type: 'boolean', description: 'Whether this message should be treated as turn-triggering intent by future AgentControl implementations. This v1 tool queues the intent but does not directly resume a sub-agent.' },
+    },
+    required: ['author', 'recipient', 'body'],
+    description: 'Queue a structured parent/agent mailbox message in runtime state. Internal-state only; this does not directly resume a sub-agent turn.',
+  },
+  AgentMailboxList: {
+    type: 'object',
+    properties: {
+      recipient: { type: 'string', description: 'Optional recipient filter.' },
+      status: { type: 'string', enum: ['queued', 'delivered', 'acknowledged', 'resolved'], description: 'Optional mailbox status filter.' },
+      limit: { type: 'number', description: 'Maximum recent mailbox messages to return. Defaults to 20.' },
+    },
+    description: 'Read-only inspection of structured parent/agent mailbox messages. This does not deliver, resume, retry, or mutate agents.',
+  },
+  AgentMailboxGet: {
+    type: 'object',
+    properties: {
+      messageId: { type: 'string', description: 'Mailbox message ID returned by AgentMailboxSend or AgentMailboxList.' },
+    },
+    required: ['messageId'],
+    description: 'Read one structured parent/agent mailbox message by messageId. Read-only; this does not deliver, resume, retry, or mutate agents.',
+  },
+  AgentMailboxResolve: {
+    type: 'object',
+    properties: {
+      messageId: { type: 'string', description: 'Mailbox message ID to mark resolved.' },
+      reason: { type: 'string', description: 'Optional resolution reason recorded into runtime lifecycle evidence.' },
+    },
+    required: ['messageId'],
+    description: 'Mark a structured parent/agent mailbox message as resolved in runtime state. Internal-state only; this does not deliver, resume, retry, or mutate agents.',
+  },
   JudgeBackendProbe: {
     type: 'object',
     properties: {

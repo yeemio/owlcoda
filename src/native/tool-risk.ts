@@ -44,6 +44,11 @@ const SAFE_TOOLS = new Set<string>([
   'LongTaskList', 'LongTaskGet', 'LongTaskAwait',
   // Runtime recovery ledger inspection is read-only over conversation state.
   'RuntimeRecoveryList', 'RuntimeRecoveryGet',
+  // Unified runtime truth spine and read-only control-plane inspections.
+  'RuntimeLifecycleList', 'RuntimeLifecycleGet',
+  'RuntimeSupervisorList', 'RuntimeSupervisorGet',
+  'AgentControlList', 'AgentControlGet',
+  'AgentMailboxList', 'AgentMailboxGet',
 ])
 
 const INTERNAL_STATE_TOOLS = new Set<string>([
@@ -65,6 +70,8 @@ const INTERNAL_STATE_TOOLS = new Set<string>([
   'RunWorkspace',
   // Runtime harness snapshot — bounded repo scan plus OwlCoda run metadata
   'ProjectMap',
+  // Mailbox queue mutations are session/runtime state only.
+  'AgentMailboxSend', 'AgentMailboxResolve',
 ])
 
 const FILE_TOOLS = new Set<string>(['edit', 'write', 'NotebookEdit'])

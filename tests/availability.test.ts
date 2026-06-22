@@ -9,7 +9,6 @@ import * as http from 'node:http'
 import { startServer } from '../src/server.js'
 import { overlayAvailability, probeRouterModels } from '../src/config.js'
 import type { OwlCodaConfig } from '../src/config.js'
-import { handleCommand, type CommandContext, type CommandResult } from '../src/frontend/commands.js'
 
 // ─── Fake router that mimics real live router /v1/models ───
 
@@ -190,51 +189,5 @@ describe('server /v1/models availability truth', () => {
     // Not in router → unavailable
     const qwen122 = body.data.find(m => m.id === 'Qwen3.5-122B-A10B-4bit')
     expect(qwen122?.availability).toBe('unavailable')
-  })
-})
-
-// ─── Frontend /model command availability truth ───
-
-describe('frontend /model availability display', () => {
-  function makeContext(config: OwlCodaConfig): CommandContext {
-    return {
-      config,
-      currentModel: config.models[0]!.id,
-      sessionId: null,
-      messageCount: 0,
-      autoApprove: false,
-      setModel: () => {},
-      setAutoApprove: () => {},
-      clearMessages: () => {},
-      quit: () => {},
-      resumeSession: async () => null,
-    }
-  }
-
-  it('/model shows ✓ for available models and ✗ unavailable for missing', async () => {
-    const cfg = makeTestConfig()
-    const routerIds = await probeRouterModels(cfg.routerUrl)
-    overlayAvailability(cfg, routerIds)
-
-    const result = await handleCommand('/model', makeContext(cfg))
-    // Available models should have ✓
-    expect(result.output).toContain('✓')
-    // Qwen 122B is not in router → should show unavailable
-    expect(result.output).toContain('unavailable')
-  })
-
-  it('/model and /v1/models share same availability truth', async () => {
-    const cfg = makeTestConfig()
-    const routerIds = await probeRouterModels(cfg.routerUrl)
-    overlayAvailability(cfg, routerIds)
-
-    // Both read from the same config.models[].availability
-    const result = await handleCommand('/model', makeContext(cfg))
-    const availableInFrontend = cfg.models.filter(m => m.availability === 'available').length
-    const unavailableInFrontend = cfg.models.filter(m => m.availability === 'unavailable').length
-
-    // Verify counts match what we expect from the fake router
-    expect(availableInFrontend).toBe(6) // 6 models in fake router
-    expect(unavailableInFrontend).toBe(1) // Qwen 122B not in router
   })
 })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { renderWelcome } from '../../../src/native/tui/welcome.js'
-import { renderSessionsPanel, renderSettingsPanel } from '../../../src/native/tui/panel.js'
+import { renderSessionsPanel } from '../../../src/native/tui/panel.js'
 import { renderToolRow } from '../../../src/native/tui/tool-row.js'
 import { renderBanner } from '../../../src/native/tui/banner.js'
 import { renderComposerRail } from '../../../src/native/tui/message.js'
@@ -36,20 +36,6 @@ describe('terminal width regression surfaces', () => {
           updatedAt: '2026-04-24T01:00:00.000Z',
         },
       ], { columns }), columns)
-
-      expectWithinColumns(renderSettingsPanel({
-        version: '0.12.30',
-        model: 'minimax-m27',
-        maxTokens: 4096,
-        mode: 'native',
-        trace: false,
-        owlcodaHome: '/Users/test/.owlcoda',
-        apiBaseUrl: 'http://127.0.0.1:9999',
-        approveMode: 'ask-before-execute',
-        theme: 'dark',
-        alwaysApprovedTools: ['bash', 'edit', 'write'],
-        columns,
-      }), columns)
 
       expectWithinColumns(renderToolRow({
         verb: 'bash',

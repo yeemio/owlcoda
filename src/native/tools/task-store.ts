@@ -36,7 +36,18 @@ import {
   forgetLongTaskSnapshotsBySource,
   recordLongTaskSnapshot,
   type LongTaskSnapshot,
+  type LongTaskProcessIdentity,
 } from '../long-task-lifecycle.js'
+import {
+  forgetRunLifecycleSnapshotsByKind,
+  recordRunLifecycleSnapshot,
+  type RunLifecycleStatus,
+  type RunRecoveryPolicy,
+} from '../run-lifecycle.js'
+import {
+  forgetRuntimeSupervisorProcessesByRunPrefix,
+  recordRuntimeSupervisorProcessFromLongTaskSnapshot,
+} from '../runtime-supervisor.js'
 
 /** Task status values matching upstream TaskStatusSchema. */
 export type TaskStatus =
@@ -172,6 +183,8 @@ export interface Task {
   currentStepId?: string
   /** Runtime lifecycle snapshot for command-backed long tasks. */
   longTaskSnapshot?: LongTaskSnapshot
+  /** Serializable identity for the spawned command process. Handles are never restored. */
+  processIdentity?: LongTaskProcessIdentity
 }
 
 let nextId = 1
@@ -658,6 +671,8 @@ export function resetTaskStore(): void {
   runningProcesses.clear()
   tasks.clear()
   forgetLongTaskSnapshotsBySource('task_command')
+  forgetRunLifecycleSnapshotsByKind('task_command')
+  forgetRuntimeSupervisorProcessesByRunPrefix('task:')
   nextId = 1
 }
 
@@ -698,6 +713,16 @@ export function spawnTaskCommand(taskId: string): void {
     return
   }
 
+  if (typeof child.pid === 'number' && child.pid > 0) {
+    task.processIdentity = {
+      schema_version: 1,
+      pid: child.pid,
+      command: task.command,
+      cwd: task.cwd ?? process.cwd(),
+      spawnedAt: new Date().toISOString(),
+    }
+    recordTaskLongTaskSnapshot(task, 'running')
+  }
   runningProcesses.set(taskId, child)
 
   // Cap captured I/O to keep a runaway `cat /dev/zero`-style command
@@ -781,9 +806,66 @@ function recordTaskLongTaskSnapshot(
     ...(extra.timeoutKind ? { timeoutKind: extra.timeoutKind } : {}),
     ...(extra.lastProgress ? { lastProgress: extra.lastProgress } : {}),
     ...(outputSnippet ? { outputSnippet } : {}),
+    ...(task.processIdentity ? { processIdentity: task.processIdentity } : {}),
   })
   task.longTaskSnapshot = snapshot
+  recordTaskRunLifecycleSnapshot(snapshot)
+  recordRuntimeSupervisorProcessFromLongTaskSnapshot(snapshot)
   return snapshot
+}
+
+function recordTaskRunLifecycleSnapshot(snapshot: LongTaskSnapshot): void {
+  recordRunLifecycleSnapshot({
+    runId: snapshot.longTaskId,
+    kind: 'task_command',
+    status: mapTaskLongStatusToRunStatus(snapshot.status),
+    objective: snapshot.objective,
+    startedAt: snapshot.startedAt,
+    updatedAt: snapshot.updatedAt,
+    ...(snapshot.finishedAt ? { finishedAt: snapshot.finishedAt } : {}),
+    owner: 'runtime_supervisor',
+    inspectCommand: snapshot.inspectCommand,
+    recoveryPolicy: taskRunRecoveryPolicy(snapshot),
+    evidence: {
+      ...(snapshot.lastProgress ? { last_progress: snapshot.lastProgress } : {}),
+      ...(snapshot.outputSnippet ? { last_output_summary: snapshot.outputSnippet } : {}),
+      ...(snapshot.timeoutKind ? { timeout_kind: snapshot.timeoutKind } : {}),
+    },
+  })
+}
+
+function mapTaskLongStatusToRunStatus(status: LongTaskSnapshot['status']): RunLifecycleStatus {
+  if (status === 'completed') return 'completed'
+  if (status === 'failed') return 'failed'
+  if (status === 'cancelled') return 'cancelled'
+  if (status === 'timeout') return 'timeout'
+  if (status === 'incomplete' || status === 'partial' || status === 'inferred') return 'incomplete'
+  return 'running'
+}
+
+function taskRunRecoveryPolicy(snapshot: LongTaskSnapshot): RunRecoveryPolicy {
+  if (snapshot.status === 'running') {
+    return {
+      schema_version: 1,
+      strategy: 'runtime_await',
+      next_command: `LongTaskAwait longTaskId=${snapshot.longTaskId} timeoutMs=5000`,
+      reason: 'Runtime has a live command task handle and can perform bounded awaits.',
+    }
+  }
+  if (snapshot.status === 'incomplete' || snapshot.status === 'timeout') {
+    return {
+      schema_version: 1,
+      strategy: 'replace_or_retry',
+      next_command: `LongTaskReplace longTaskId=${snapshot.longTaskId}`,
+      reason: 'Runtime cannot make progress by waiting; inspect captured output before replacing or retrying.',
+    }
+  }
+  return {
+    schema_version: 1,
+    strategy: 'report_terminal',
+    next_command: snapshot.inspectCommand,
+    reason: 'The command task is terminal; report the terminal evidence instead of waiting or replacing.',
+  }
 }
 
 /** True iff this task currently has a live child process. */

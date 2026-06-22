@@ -8,6 +8,7 @@ import {
   snapshotTaskStore,
   restoreTaskStore,
   spawnTaskCommand,
+  getTask,
 } from '../../../src/native/tools/task-store.js'
 
 describe('TaskOutput tool', () => {
@@ -109,6 +110,70 @@ describe('TaskOutput tool', () => {
         strategy: 'replace_or_retry',
         stop_polling: true,
       }),
+    })
+  })
+
+  it('surfaces restored command process identity after the live handle is gone', async () => {
+    const task = createTask({
+      subject: 'Detached identity command',
+      description: 'command identity should remain after process restart',
+      conversationId: 'conv-task-output-identity',
+      command: 'sleep 60; echo done',
+      cwd: '/tmp',
+    })
+    spawnTaskCommand(task.id)
+    const livePid = (snapshotTaskStore('conv-task-output-identity').tasks[0] as any).processIdentity.pid
+
+    const snapshot = snapshotTaskStore('conv-task-output-identity')
+    resetTaskStore()
+    restoreTaskStore(snapshot)
+
+    const r = await tool.execute({ task_id: task.id, block: true, timeout: 600 })
+
+    expect(r.isError).toBe(false)
+    expect(r.output).toContain(`ProcessIdentity: pid=${livePid}`)
+    expect(r.output).toContain('reattach_hint="inspect_process_before_replace"')
+    expect((r.metadata as any).long_task_lifecycle.process_identity).toMatchObject({
+      schema_version: 1,
+      pid: livePid,
+      command: 'sleep 60; echo done',
+      cwd: '/tmp',
+    })
+    expect((r.metadata as any).task.longTaskSnapshot.processIdentity.pid).toBe(livePid)
+  })
+
+  it('surfaces process liveness for restored command process identity', async () => {
+    const task = createTask({
+      subject: 'Detached liveness command',
+      description: 'command liveness should be inspectable after process restart',
+      conversationId: 'conv-task-output-liveness',
+      command: 'sleep 60; echo done',
+      cwd: '/tmp',
+    })
+    updateTask(task.id, { status: 'in_progress' })
+    const live = getTask(task.id)!
+    live.processIdentity = {
+      schema_version: 1,
+      pid: process.pid,
+      command: 'sleep 60; echo done',
+      cwd: '/tmp',
+      spawnedAt: '2026-06-18T00:00:00.000Z',
+    }
+    const snapshot = snapshotTaskStore('conv-task-output-liveness')
+    resetTaskStore()
+    restoreTaskStore(snapshot)
+
+    const r = await tool.execute({ task_id: task.id, block: true, timeout: 600 })
+
+    expect(r.isError).toBe(false)
+    expect(r.output).toContain(`ProcessIdentity: pid=${process.pid}`)
+    expect(r.output).toContain('ProcessLiveness: status=alive confidence=pid_only')
+    expect((r.metadata as any).process_liveness).toMatchObject({
+      schema_version: 1,
+      pid: process.pid,
+      status: 'alive',
+      confidence: 'pid_only',
+      next_action: 'inspect_process_before_replace',
     })
   })
 

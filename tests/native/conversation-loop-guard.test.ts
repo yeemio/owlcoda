@@ -257,10 +257,12 @@ describe('runtime event envelope', () => {
       'turn_started',
       'assistant_stream_recorded',
       'assistant_response_recorded',
+      'assistant_response_disposition_recorded',
       'item_started',
       'item_completed',
       'assistant_stream_recorded',
       'assistant_response_recorded',
+      'assistant_response_disposition_recorded',
       'turn_completed',
     ])
     expect(events[1]).toMatchObject({
@@ -291,19 +293,33 @@ describe('runtime event envelope', () => {
       },
     })
     expect(String(events[2]?.payload?.['text_digest'] ?? '')).toMatch(/^sha256:[a-f0-9]{64}$/)
-    expect(events[3]?.turnId).toBe(events[0]?.turnId)
-    expect(events[4]?.turnId).toBe(events[0]?.turnId)
     expect(events[3]).toMatchObject({
+      kind: 'assistant_response_disposition_recorded',
+      payload: {
+        response_index: 1,
+        phase: 'main',
+        action: 'execute_tools',
+        stop_reason: 'tool_use',
+        text_chars: 0,
+        original_tool_use_count: 1,
+        executed_tool_count: 1,
+        deferred_tool_count: 0,
+        runtime_tool_count: 0,
+      },
+    })
+    expect(events[4]?.turnId).toBe(events[0]?.turnId)
+    expect(events[5]?.turnId).toBe(events[0]?.turnId)
+    expect(events[4]).toMatchObject({
       kind: 'item_started',
       itemId: 'probe-tool-1',
       payload: { tool_name: 'ProbeTool' },
     })
-    expect(events[4]).toMatchObject({
+    expect(events[5]).toMatchObject({
       kind: 'item_completed',
       itemId: 'probe-tool-1',
       payload: { tool_name: 'ProbeTool', is_error: false },
     })
-    expect(events[5]).toMatchObject({
+    expect(events[6]).toMatchObject({
       kind: 'assistant_stream_recorded',
       payload: {
         response_index: 2,
@@ -315,7 +331,7 @@ describe('runtime event envelope', () => {
         output_tokens: 1,
       },
     })
-    expect(events[6]).toMatchObject({
+    expect(events[7]).toMatchObject({
       kind: 'assistant_response_recorded',
       payload: {
         response_index: 2,
@@ -330,8 +346,22 @@ describe('runtime event envelope', () => {
         is_empty_response: false,
       },
     })
-    expect(String(events[6]?.payload?.['text_digest'] ?? '')).toMatch(/^sha256:[a-f0-9]{64}$/)
-    expect(events[7]).toMatchObject({
+    expect(String(events[7]?.payload?.['text_digest'] ?? '')).toMatch(/^sha256:[a-f0-9]{64}$/)
+    expect(events[8]).toMatchObject({
+      kind: 'assistant_response_disposition_recorded',
+      payload: {
+        response_index: 2,
+        phase: 'main',
+        action: 'accept_final_text',
+        stop_reason: 'end_turn',
+        text_chars: 'Probe complete.'.length,
+        original_tool_use_count: 0,
+        executed_tool_count: 0,
+        deferred_tool_count: 0,
+        runtime_tool_count: 0,
+      },
+    })
+    expect(events[9]).toMatchObject({
       kind: 'turn_completed',
       payload: {
         stop_reason: 'end_turn',
@@ -348,7 +378,7 @@ describe('runtime event envelope', () => {
       },
     })
     expect(buildRuntimeEventContractDiagnostics(events, { limit: null })).toMatchObject({
-      valid_event_count: 8,
+      valid_event_count: 10,
       legacy_event_count: 0,
       malformed_event_count: 0,
     })
@@ -380,6 +410,7 @@ describe('runtime event envelope', () => {
       'turn_started',
       'assistant_stream_recorded',
       'assistant_response_recorded',
+      'assistant_response_disposition_recorded',
       'turn_completed',
     ])
     expect(events[1]).toMatchObject({
@@ -410,8 +441,22 @@ describe('runtime event envelope', () => {
         output_tokens: 5,
       },
     })
+    expect(events[3]).toMatchObject({
+      kind: 'assistant_response_disposition_recorded',
+      payload: {
+        response_index: 1,
+        phase: 'main',
+        action: 'accept_final_text',
+        stop_reason: 'end_turn',
+        text_chars: 'Hello stream'.length,
+        original_tool_use_count: 0,
+        executed_tool_count: 0,
+        deferred_tool_count: 0,
+        runtime_tool_count: 0,
+      },
+    })
     expect(buildRuntimeEventContractDiagnostics(events, { limit: null })).toMatchObject({
-      valid_event_count: 4,
+      valid_event_count: 5,
       legacy_event_count: 0,
       malformed_event_count: 0,
     })
@@ -553,7 +598,7 @@ describe('native conversation free-mode long task loop policy', () => {
       'curl -fsS http://127.0.0.1:8001/mes/health',
       'docker compose -f deploy/p0.yml restart middleware',
       'docker compose ps --format json',
-      "grep MES_CLIENT_KEY /home/sieracclaw/sieracMes-AI/deploy/env/mes.env",
+      "grep MES_CLIENT_KEY /home/publicuser/sieracMes-AI/deploy/env/mes.env",
       'docker compose -f deploy/p0.yml exec middleware env',
       'curl -fsS http://127.0.0.1:8001/mes/admin/stats -H "X-MES-Client-Key: ..."',
       'docker compose -f deploy/p0.yml stop middleware',
@@ -564,7 +609,7 @@ describe('native conversation free-mode long task loop policy', () => {
     const responses = [
       ...remoteCmds.map((cmd, index) =>
         toolUseResponse('bash', `tool-${index + 1}`, {
-          cwd: '/Users/yeemio/AI/project/sieracMes-AI',
+          cwd: '/Users/publicuser/AI/project/sieracMes-AI',
           command: `${sshPrefix}${cmd}'`,
         }),
       ),
@@ -2725,6 +2770,18 @@ describe('native conversation tool loop guard default (cost-burn protection)', (
     expect(result.stopReason).toBe('tool_loop')
     expect(errors.some((message) => message.includes('ignored the child-run synthesis checkpoint'))).toBe(true)
     expect(JSON.stringify(conv.turns)).not.toContain('agent-5')
+    const guardEvent = result.conversation.options?.runtimeEventLog?.events
+      ?.find((event) => event.kind === 'runtime_intervention'
+        && event.payload?.['intervention_kind'] === 'recovery_guard_hard_stop')
+    expect(guardEvent).toMatchObject({
+      checkpointKind: 'child_run_synthesis_checkpoint',
+      payload: {
+        action: 'hard_stop',
+        guard_kind: 'child_run_synthesis_checkpoint',
+        ignored_tool_count: 1,
+        stop_reason: 'tool_loop',
+      },
+    })
   })
 
   it('2026-05-28: parent re-issuing the SAME Agent prompt 3x still trips loop guard (intentKey-based)', async () => {
@@ -5422,6 +5479,18 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
     expect(result.stopReason).toBe('tool_loop')
     expect(errors.at(-1)).toMatch(/ignored the long-task checkpoint/i)
     expect(bashExecutions).toBe(2)
+    const guardEvent = result.conversation.options?.runtimeEventLog?.events
+      ?.find((event) => event.kind === 'runtime_intervention'
+        && event.payload?.['intervention_kind'] === 'recovery_guard_hard_stop')
+    expect(guardEvent).toMatchObject({
+      checkpointKind: 'long_task_checkpoint',
+      payload: {
+        action: 'hard_stop',
+        guard_kind: 'long_task_checkpoint',
+        ignored_tool_count: 1,
+        stop_reason: 'tool_loop',
+      },
+    })
   })
 
   it('escalates to hard terminate on the SECOND loop trigger for the same intentKey', async () => {
@@ -5642,8 +5711,8 @@ describe('production gate v1 (0.13.70)', () => {
     addUserMessage(
       conv,
       [
-        '先读 /Users/yeemio/AI/OwlManage/docs/prompts/industrial-ai-agent-ppt-v1.4-new-executor-full-rebuild-prompt-20260514.md',
-        '再读 /Users/yeemio/work/ppt/claude-design-input-v1.3.1/06-new-executor-v1.4-full-rebuild.md',
+        '先读 /Users/publicuser/AI/OwlManage/docs/prompts/industrial-ai-agent-ppt-v1.4-new-executor-full-rebuild-prompt-20260514.md',
+        '再读 /Users/publicuser/work/ppt/claude-design-input-v1.3.1/06-new-executor-v1.4-full-rebuild.md',
         '目标产物：46 页 HTML PPT + build notes',
         '只交付：',
         '1. HTML',
@@ -5690,8 +5759,8 @@ describe('production gate v1 (0.13.70)', () => {
     )
     expect(injectedUserTurns).toHaveLength(1)
     const injectedText = JSON.stringify(injectedUserTurns[0].content)
-    expect(injectedText).not.toContain('/Users/yeemio/AI/OwlManage/docs/prompts/')
-    expect(injectedText).not.toContain('/Users/yeemio/work/ppt/claude-design-input-v1.3.1/')
+    expect(injectedText).not.toContain('/Users/publicuser/AI/OwlManage/docs/prompts/')
+    expect(injectedText).not.toContain('/Users/publicuser/work/ppt/claude-design-input-v1.3.1/')
     expect(injectedText).not.toContain('build-notes-v1.4-content-rebuild-46p.md')
     expect(injectedText).toContain('path scoped by the task contract')
   })
@@ -6515,6 +6584,18 @@ describe('task execution nudge wiring (Slice 4)', () => {
     const checkpointMessages = requestBodies[3]?.['messages'] as Array<Record<string, unknown>>
     expect(JSON.stringify(checkpointMessages)).toContain('[Runtime verification-repair checkpoint]')
     expect(JSON.stringify(conv.turns)).not.toContain('tool-verify-again')
+    const guardEvent = result.conversation.options?.runtimeEventLog?.events
+      ?.find((event) => event.kind === 'runtime_intervention'
+        && event.payload?.['intervention_kind'] === 'recovery_guard_hard_stop')
+    expect(guardEvent).toMatchObject({
+      checkpointKind: 'verification_repair_checkpoint',
+      payload: {
+        action: 'hard_stop',
+        guard_kind: 'verification_repair_checkpoint',
+        ignored_tool_count: 1,
+        stop_reason: 'tool_loop',
+      },
+    })
   })
 
   it('allows a user-requested reverify after a verification-repair checkpoint is acknowledged', async () => {
@@ -8216,7 +8297,7 @@ describe('contract.confidence fail-open gate (0.14.18)', () => {
     // Prompt uses "write" to trigger taskHasWriteRequiredContract=true.
     addUserMessage(
       conv,
-      'Write the slide deck referencing `/Users/yeemio/work/ppt/deck-stage.js`',
+      'Write the slide deck referencing `/Users/publicuser/work/ppt/deck-stage.js`',
     )
 
     const dispatcher = new ToolDispatcher()
@@ -8258,7 +8339,7 @@ describe('contract.confidence fail-open gate (0.14.18)', () => {
     const conv = createConversation({ system: 'test', model: 'test-model' })
     // Write-required contract. The advisory fires on the demoted (default) path
     // regardless of scope confidence.
-    addUserMessage(conv, 'Write the slide deck referencing `/Users/yeemio/work/ppt/deck-stage.js`')
+    addUserMessage(conv, 'Write the slide deck referencing `/Users/publicuser/work/ppt/deck-stage.js`')
 
     const dispatcher = new ToolDispatcher()
     dispatcher.register({
@@ -8432,8 +8513,8 @@ describe('Slice 0 deliverable contract: file artifact legacy hard-stop', () => {
     addUserMessage(
       conv,
       [
-        '先读 /Users/yeemio/AI/OwlManage/docs/prompts/industrial-ai-agent-ppt-v1.4-new-executor-full-rebuild-prompt-20260514.md',
-        '再读 /Users/yeemio/work/ppt/claude-design-input-v1.3.1/06-new-executor-v1.4-full-rebuild.md',
+        '先读 /Users/publicuser/AI/OwlManage/docs/prompts/industrial-ai-agent-ppt-v1.4-new-executor-full-rebuild-prompt-20260514.md',
+        '再读 /Users/publicuser/work/ppt/claude-design-input-v1.3.1/06-new-executor-v1.4-full-rebuild.md',
         '目标产物：46 页 HTML PPT + build notes',
         '只交付：',
         '1. HTML',
@@ -8481,7 +8562,7 @@ describe('Slice 0 deliverable contract: file artifact legacy hard-stop', () => {
     process.env['OWLCODA_TASK_NO_PROGRESS_HARD_STOP'] = '1'
     const conv = createConversation({ system: 'test', model: 'test-model' })
     // Explicit write to file: file_artifact_delivery/high
-    addUserMessage(conv, 'Write the deck to /Users/yeemio/work/ppt/output/owlcoda/deck.html')
+    addUserMessage(conv, 'Write the deck to /Users/publicuser/work/ppt/output/owlcoda/deck.html')
 
     const dispatcher = new ToolDispatcher()
     dispatcher.register({

@@ -2706,7 +2706,7 @@ function NativeReplApp({
     }
 
     // Shift+Tab cycles the operating mode (normal → auto → plan → normal), like
-    // Claude Code. yolo is excluded from the casual cycle (enter it explicitly).
+    // external coding-assistant. yolo is excluded from the casual cycle (enter it explicitly).
     // useTextInput treats tab as a no-op, so there's no double-handling.
     if (isModesEnabled()) {
       const nextMode = resolveModeCycleKey(

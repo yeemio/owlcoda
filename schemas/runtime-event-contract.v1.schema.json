@@ -14,6 +14,7 @@
         "turn_started",
         "assistant_stream_recorded",
         "assistant_response_recorded",
+        "assistant_response_disposition_recorded",
         "item_started",
         "item_completed",
         "checkpoint_installed",
@@ -45,6 +46,7 @@
             "turn_started",
             "assistant_stream_recorded",
             "assistant_response_recorded",
+            "assistant_response_disposition_recorded",
             "item_started",
             "item_completed",
             "checkpoint_installed",
@@ -62,6 +64,7 @@
             "turn_started.v1",
             "assistant_stream_recorded.v1",
             "assistant_response_recorded.v1",
+            "assistant_response_disposition_recorded.v1",
             "item_started.v1",
             "item_completed.v1",
             "checkpoint_installed.v1",
@@ -256,6 +259,45 @@
       }
     },
     {
+      "if": { "properties": { "kind": { "const": "assistant_response_disposition_recorded" } } },
+      "then": {
+        "required": ["turnId", "payload"],
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "response_index",
+              "phase",
+              "action",
+              "stop_reason",
+              "text_chars",
+              "original_tool_use_count",
+              "executed_tool_count",
+              "deferred_tool_count",
+              "runtime_tool_count"
+            ],
+            "properties": {
+              "response_index": { "type": "number" },
+              "phase": { "$ref": "#/$defs/non_empty_string" },
+              "action": { "$ref": "#/$defs/non_empty_string" },
+              "stop_reason": { "$ref": "#/$defs/non_empty_string" },
+              "text_chars": { "type": "number" },
+              "original_tool_use_count": { "type": "number" },
+              "executed_tool_count": { "type": "number" },
+              "deferred_tool_count": { "type": "number" },
+              "runtime_tool_count": { "type": "number" }
+            }
+          },
+          "contract": {
+            "properties": {
+              "event_kind": { "const": "assistant_response_disposition_recorded" },
+              "payload_schema": { "const": "assistant_response_disposition_recorded.v1" }
+            }
+          }
+        }
+      }
+    },
+    {
       "if": { "properties": { "kind": { "const": "assistant_stream_recorded" } } },
       "then": {
         "required": ["turnId", "payload"],
@@ -423,8 +465,107 @@
             "type": "object",
             "required": ["intervention_kind"],
             "properties": {
-              "intervention_kind": { "$ref": "#/$defs/non_empty_string" }
-            }
+              "intervention_kind": { "$ref": "#/$defs/non_empty_string" },
+              "action": { "$ref": "#/$defs/non_empty_string" },
+              "guard_kind": { "$ref": "#/$defs/non_empty_string" },
+              "stop_reason": { "$ref": "#/$defs/non_empty_string" },
+              "ignored_tool_count": { "type": "number" },
+              "response_index": { "type": "number" },
+              "reason": { "$ref": "#/$defs/non_empty_string" },
+              "checkpoint_id": { "$ref": "#/$defs/non_empty_string" },
+              "tool_use_id": { "$ref": "#/$defs/non_empty_string" },
+              "tool_name": { "$ref": "#/$defs/non_empty_string" },
+              "violation_kind": { "$ref": "#/$defs/non_empty_string" },
+              "long_task_id": { "$ref": "#/$defs/non_empty_string" },
+              "wait_strategy": { "$ref": "#/$defs/non_empty_string" },
+              "stop_polling": { "type": "boolean" },
+              "next_check_command": { "$ref": "#/$defs/non_empty_string" },
+              "task_id": { "$ref": "#/$defs/non_empty_string" },
+              "step_id": { "$ref": "#/$defs/non_empty_string" },
+              "checkpoint_step_id": { "$ref": "#/$defs/non_empty_string" },
+              "requested_status_field": { "$ref": "#/$defs/non_empty_string" },
+              "requested_status": { "$ref": "#/$defs/non_empty_string" },
+              "ledger_status": { "$ref": "#/$defs/non_empty_string" },
+              "recovery_resolved_this_run": { "type": "boolean" },
+              "scope": { "$ref": "#/$defs/non_empty_string" },
+              "report_source": { "$ref": "#/$defs/non_empty_string" },
+              "original_report_source": { "$ref": "#/$defs/non_empty_string" }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "intervention_kind": { "const": "recovery_guard_hard_stop" }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "action",
+                    "guard_kind",
+                    "stop_reason",
+                    "ignored_tool_count",
+                    "response_index",
+                    "reason"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "intervention_kind": { "const": "long_task_wait_policy" }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "action",
+                    "tool_use_id",
+                    "tool_name",
+                    "violation_kind",
+                    "long_task_id",
+                    "wait_strategy",
+                    "stop_polling",
+                    "next_check_command",
+                    "reason"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "intervention_kind": { "const": "post_recovery_overrun_guard" }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "action",
+                    "tool_use_id",
+                    "tool_name",
+                    "task_id",
+                    "checkpoint_id",
+                    "requested_status_field",
+                    "requested_status",
+                    "ledger_status",
+                    "recovery_resolved_this_run",
+                    "scope",
+                    "reason"
+                  ]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "intervention_kind": { "const": "runtime_truth_resume_report_gate" }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "action",
+                    "report_source",
+                    "checkpoint_id"
+                  ]
+                }
+              }
+            ]
           },
           "contract": {
             "properties": {
