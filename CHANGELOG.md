@@ -2,28 +2,52 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
-## [0.15.10] — 2026-06-21
+## [0.15.10] — 2026-06-22
 
-Release-candidate gate hardening.
+Runtime truth + multimodal routing reliability release.
 
 ### Added
 
-- Added a release decision packet that separates npm/package, public source, and
-  website surfaces before any publish, source tag, mirror sync, or site deploy.
-- Added an isolated install smoke to the prepublish gate so generated tarballs
-  must install and run `owlcoda --version` before npm publish can proceed.
+- Added image input handling for local paths, `@image.png`, Markdown image
+  references, and `file://` image links, converting them into multimodal
+  content blocks when the selected model is image-capable.
+- Added provider capability routing and probe support so Kimi K2.7 / Moonshot
+  and other OpenAI-compatible providers can enable image recognition through
+  model capabilities instead of a hard-coded provider branch.
+- Added runtime lifecycle tools for task commands, Agent runs, supervisor
+  processes, and mailbox messages: `RuntimeLifecycleList/Get`,
+  `RuntimeSupervisorList/Get`, `AgentControlList/Get`, and
+  `AgentMailboxSend/List/Get/Resolve`.
 
 ### Changed
 
-- The npm release candidate version now advances past the live npm `latest`
-  version so the decision packet can distinguish a publishable package surface
-  from still-manual public source and website surfaces.
+- Command-style long tasks now record supervisor-process snapshots with process
+  identity, parent run linkage, and inspect/recovery policy.
+- Agent run history now exposes parent/child run views and inspect-before-retry
+  recovery state outside of the transcript.
+- Parent/child agent messages now flow through a mailbox queue and runtime
+  lifecycle snapshots instead of living only in conversation text.
+- `TaskVerify` safe-readonly classification now allows read-only process and
+  hashing checks such as `ps`, `pgrep`, `shasum`, and `sha256sum`.
+
+### Fixed
+
+- Fixed runtime recovery / task-state divergence after a
+  verification-repair checkpoint resolves: the post-recovery-overrun guard now
+  checks the real task-store step state before skipping `TaskUpdate(completed)`,
+  so a step that is still `in_progress` can converge to `completed`.
+- Kept the verification-repair hard-stop guard strict; the release does not
+  weaken checkpoint or overrun protections.
+- Fixed the runtime event contract so legal `long_task_wait_policy`
+  interventions do not require `violation_kind` when the event is a wait-policy
+  record rather than a violation.
 
 ### Notes
 
-- This entry records the release candidate state only. It does not mean npm
-  publish, public source tag push, public mirror sync, or website deploy has
-  already happened.
+- Published as npm `owlcoda@0.15.10` with GitHub source tag `v0.15.10`.
+- This release improves runtime evidence, recovery convergence, and multimodal
+  routing. It is not a claim that long-running degradation is permanently or
+  completely solved.
 
 ## [0.15.8] — 2026-06-18
 
