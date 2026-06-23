@@ -367,6 +367,147 @@ describe('evaluateCompletionClaim', () => {
     }))
   })
 
+  it('blocks runtime-sensitive completion reports without required evidence layers', () => {
+    const taskState = state({
+      touchedPaths: ['/tmp/project/src/native/job-supervisor.ts'],
+      events: [
+        event('post_grant_evidence', 'execute'),
+        event('verification_evidence', 'verify', { tool: 'TaskVerify' }),
+        event('completion_claim', 'report'),
+      ],
+    })
+
+    expect(evaluateCompletionClaim({
+      taskState,
+      finalText: 'Final report: runtime supervisor bug fixed and tests passed.',
+      deliverable: deliverable('code_change'),
+      legacyCompletionAccepted: true,
+    })).toEqual(expect.objectContaining({
+      status: 'blocked',
+      reason: expect.stringContaining('runtime-sensitive final report missing evidence layers'),
+      verificationEvidenceCount: 1,
+    }))
+  })
+
+  it('does not treat runtime in a file path as a runtime-sensitive final report subject', () => {
+    const taskState = state({
+      touchedPaths: ['/tmp/project/docs/phase-runtime-report.md'],
+      events: [
+        event('post_grant_evidence', 'execute'),
+        event('verification_evidence', 'verify', { tool: 'TaskVerify' }),
+        event('completion_claim', 'report'),
+      ],
+    })
+
+    expect(evaluateCompletionClaim({
+      taskState,
+      finalText: 'Final report: task complete. docs/phase-runtime-report.md was written and all tests passed.',
+      deliverable: deliverable('file_artifact_delivery'),
+      legacyCompletionAccepted: true,
+    })).toEqual(expect.objectContaining({
+      status: 'accepted',
+      verificationEvidenceCount: 1,
+    }))
+  })
+
+  it('accepts runtime-sensitive completion reports with incident/code/verified/not-fixed layers', () => {
+    const taskState = state({
+      touchedPaths: ['/tmp/project/src/native/job-supervisor.ts'],
+      events: [
+        event('post_grant_evidence', 'execute'),
+        event('verification_evidence', 'verify', { tool: 'TaskVerify' }),
+        event('completion_claim', 'report'),
+      ],
+    })
+
+    expect(evaluateCompletionClaim({
+      taskState,
+      finalText: [
+        'Final report: runtime supervisor fix complete.',
+        'Status layers:',
+        '- incident_mitigated: no live incident action was needed.',
+        '- code_changed: src/native/job-supervisor.ts.',
+        '- verified: command `npm test` observed result 10 passed, 0 failed.',
+        '- not_fixed: agent/api daemon adapters remain pending.',
+        'Changed files: src/native/job-supervisor.ts.',
+        'Verification command: npm test.',
+        'Observed result: 10 passed, 0 failed.',
+        'Remaining risk: agent/api daemon adapters remain pending.',
+      ].join('\n'),
+      deliverable: deliverable('code_change'),
+      legacyCompletionAccepted: true,
+    })).toEqual(expect.objectContaining({
+      status: 'accepted',
+      verificationEvidenceCount: 1,
+    }))
+  })
+
+  it('blocks runtime-sensitive reports that require user replay but do not mark it pending', () => {
+    const taskState = state({
+      touchedPaths: ['/tmp/project/src/native/tools/browser-job.ts'],
+      events: [
+        event('post_grant_evidence', 'execute'),
+        event('verification_evidence', 'verify', { tool: 'TaskVerify' }),
+        event('completion_claim', 'report'),
+      ],
+    })
+
+    expect(evaluateCompletionClaim({
+      taskState,
+      finalText: [
+        'Final report: browser capture code change complete.',
+        'Status layers:',
+        '- incident_mitigated: no live incident action was needed.',
+        '- code_changed: src/native/tools/browser-job.ts.',
+        '- verified: command `npm test` observed result 10 passed, 0 failed.',
+        '- not_fixed: no known issue remains in code.',
+        'Changed files: src/native/tools/browser-job.ts.',
+        'Verification command: npm test.',
+        'Observed result: 10 passed, 0 failed.',
+        'Remaining risk: user must refresh the page and click auto capture to verify the real business loop.',
+      ].join('\n'),
+      deliverable: deliverable('code_change'),
+      legacyCompletionAccepted: true,
+    })).toEqual(expect.objectContaining({
+      status: 'blocked',
+      reason: expect.stringContaining('business replay pending status'),
+      verificationEvidenceCount: 1,
+    }))
+  })
+
+  it('accepts runtime-sensitive reports that explicitly mark user replay as pending instead of done', () => {
+    const taskState = state({
+      touchedPaths: ['/tmp/project/src/native/tools/browser-job.ts'],
+      events: [
+        event('post_grant_evidence', 'execute'),
+        event('verification_evidence', 'verify', { tool: 'TaskVerify' }),
+        event('completion_claim', 'report'),
+      ],
+    })
+
+    expect(evaluateCompletionClaim({
+      taskState,
+      finalText: [
+        'Final report: browser capture code change ready, runtime replay pending.',
+        'Status layers:',
+        '- incident_mitigated: no live incident action was needed.',
+        '- code_changed: src/native/tools/browser-job.ts.',
+        '- verified: command `npm test` observed result 10 passed, 0 failed.',
+        '- not_fixed: business replay remains pending until the user refreshes and clicks auto capture.',
+        '- pending_user_replay: user must refresh the page and click auto capture to verify the real business loop.',
+        'Changed files: src/native/tools/browser-job.ts.',
+        'Verification command: npm test.',
+        'Observed result: 10 passed, 0 failed.',
+        'Remaining risk: pending_user_replay until manual refresh/click replay is observed.',
+      ].join('\n'),
+      deliverable: deliverable('code_change'),
+      legacyCompletionAccepted: true,
+    })).toEqual(expect.objectContaining({
+      status: 'accepted',
+      verificationEvidenceCount: 1,
+    }))
+  })
+
   it('accepts chat-final deliverables without artifact evidence', () => {
     const taskState = state({
       events: [event('completion_claim', 'report')],

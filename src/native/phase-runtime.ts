@@ -268,6 +268,17 @@ export function evaluateCompletionClaim(
     }
   }
 
+  const reportContract = evaluateRuntimeSensitiveFinalReportContract(text)
+  if (reportContract.applies && reportContract.missing.length > 0) {
+    return {
+      status: 'blocked',
+      reason: `runtime-sensitive final report missing evidence layers: ${reportContract.missing.join(', ')}`,
+      artifactEvidenceCount,
+      verificationEvidenceCount,
+      pendingRiskyGrantCount,
+    }
+  }
+
   return {
     status: 'accepted',
     reason: `phase=${phaseVerdict.phase}/${phaseVerdict.confidence} completion has evidence`,
@@ -316,6 +327,66 @@ function claimsVerification(text: string): boolean {
   return /\b(?:verified|verification|audit|audited|DeliveryAudit|TaskVerify|tests?\s+(?:pass|passed|green)|all tests pass|0 failed)\b/i.test(text)
     || /\b(?:dry[- ]?run|smoke|sanity|verification|tests?|checks?|audit)\b[^.!?\n]{0,100}\b(?:proves?|proved|confirms?|confirmed|works?|clean|passes?|passed|green|ok)\b/i.test(text)
     || /(?:验证|校验|审计|测试)[^。！？\n]{0,80}(?:通过|完成|确认|全绿)/i.test(text)
+}
+
+interface RuntimeSensitiveFinalReportContract {
+  applies: boolean
+  missing: string[]
+}
+
+function evaluateRuntimeSensitiveFinalReportContract(text: string): RuntimeSensitiveFinalReportContract {
+  if (!isRuntimeSensitiveCompletion(text)) {
+    return { applies: false, missing: [] }
+  }
+
+  const missing: string[] = []
+  const requiredLayers = [
+    ['incident_mitigated', /\bincident[_ -]?mitigated\b|\bincident\b[^.!?\n]{0,80}\b(?:mitigated|none|n\/a|not needed|no live)\b/i],
+    ['code_changed', /\bcode[_ -]?changed\b|\bchanged files?\b|\bfiles? changed\b|\bno[- ]?code[- ]?change\b/i],
+    ['verified', /\bverified\b|\bverification\b|\btests?\b[^.!?\n]{0,80}\b(?:pass|passed|green|0 failed)\b/i],
+    ['not_fixed', /\bnot[_ -]?fixed\b|\bknown (?:gap|defect|issue)\b|\bremain(?:s|ing)? pending\b|\bstill pending\b/i],
+  ] as const
+
+  const missingStatusLayers = requiredLayers
+    .filter(([, pattern]) => !pattern.test(text))
+    .map(([label]) => label)
+  if (missingStatusLayers.length > 0) {
+    missing.push(`status layers(${missingStatusLayers.join('/')})`)
+  }
+  if (!/\bchanged files?\b|\bfiles? changed\b|\bno[- ]?code[- ]?change\b|\bno files? changed\b/i.test(text)) {
+    missing.push('changed files or no-code-change')
+  }
+  if (!/\bverification command\b|\bcommands? run\b|\bcommand\b[^.!?\n]{0,80}\b(?:npm|npx|vitest|pytest|pnpm|yarn|cargo|go test)\b|\b(?:npm|npx|vitest|pytest|pnpm|yarn|cargo|go test)\b/i.test(text)) {
+    missing.push('verification command')
+  }
+  if (!/\bobserved result\b|\bresult\b[^.!?\n]{0,80}\b(?:pass|passed|green|0 failed|exit code|ok)\b|\b\d+\s+passed\b|\b0 failed\b/i.test(text)) {
+    missing.push('observed result')
+  }
+  if (!/\bremaining risks?\b|\bresidual risks?\b|\bknown (?:gap|defect|issue)\b|\brisk\b|\bnot[_ -]?fixed\b/i.test(text)) {
+    missing.push('remaining risk')
+  }
+  if (mentionsManualRuntimeReplayPending(text) && !hasExplicitBusinessReplayPendingStatus(text)) {
+    missing.push('business replay pending status')
+  }
+
+  return { applies: true, missing }
+}
+
+function isRuntimeSensitiveCompletion(text: string): boolean {
+  return /\b(?:runtime[- ]?(?:supervisor|truth|recovery|lifecycle|gate|bug|fix|state|contract|tool)|long[- ]?tasks?|watchdogs?|supervisors?|jobs?|browser|playwright|chrome|process(?:es)?|pids?|daemon|agents?|subagents?|external tools?|TaskVerify|TaskUpdate|recovery|checkpoint|resume|timeout|deadline)\b/i.test(text)
+}
+
+function mentionsManualRuntimeReplayPending(text: string): boolean {
+  return /\b(?:user|manual|operator|product|business)\b[^.!?\n]{0,100}\b(?:refresh|click|replay|re-run|rerun|recapture|capture|verify|validate|sign[ -]?off)\b/i.test(text)
+    || /\b(?:refresh|click|replay|re-run|rerun|recapture|capture)\b[^.!?\n]{0,100}\b(?:manually|by the user|user must|user needs|business loop|acceptance|sign[ -]?off)\b/i.test(text)
+    || /(?:需要|仍需|需|请|等待|待)[^。！？\n]{0,60}(?:用户|人工|手动)[^。！？\n]{0,100}(?:刷新|点击|复测|重跑|重新抓取|再次抓取|回放|验收|确认|验证)/i.test(text)
+    || /(?:业务闭环|业务验收|真实业务|线上页面)[^。！？\n]{0,100}(?:待|需要|仍需|未完成|pending|复测|验收|确认|验证)/i.test(text)
+}
+
+function hasExplicitBusinessReplayPendingStatus(text: string): boolean {
+  return /\b(?:business_acceptance_pending|pending_user_replay|needs_runtime_replay|runtime_replay_pending|manual_replay_pending|business_replay_pending)\b/i.test(text)
+    || /\b(?:runtime|business|user|manual)[-_ ]?(?:replay|acceptance|signoff|sign[ -]?off)[-_ ]?pending\b/i.test(text)
+    || /(?:业务验收|业务闭环|用户复测|人工复测|手动复测|刷新点击复测|真实业务回放)[^。！？\n]{0,100}(?:pending|待|未完成|仍需|需要|未验证)/i.test(text)
 }
 
 function findLastPhaseEvent(

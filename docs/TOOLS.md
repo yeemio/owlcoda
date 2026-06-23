@@ -1,11 +1,11 @@
 # OwlCoda Tools — Maturity Matrix
 
-> Refreshed 2026-06-22, owlcoda 0.15.10
+> Refreshed 2026-06-23, owlcoda 0.15.12
 > Source of truth: `src/native/dispatch.ts` default registration,
 > `src/native/tool-defs.ts` schemas, and `src/native/tools/*.ts`
 > behavioral audit (not comments).
-> Scope: 63 native tool schemas/factories are tracked below. The default
-> dispatcher currently advertises **62 registered tool_defs** through
+> Scope: 69 native tool schemas/factories are tracked below. The default
+> dispatcher currently advertises **68 registered tool_defs** through
 > `buildNativeToolDefs(new ToolDispatcher())`. `Agent` is host-wired by
 > `ink-repl.tsx` because it needs provider deps and is the only remaining
 > schema-only surface. The "42+ tools" headline is therefore a
@@ -16,7 +16,7 @@
 - **production**: 13
   bash, read, write, edit, glob, grep, NotebookEdit, WebFetch, WebSearch,
   EnterWorktree, ExitWorktree, TeamCreate, TeamDelete
-- **beta**: 44
+- **beta**: 50
   Agent, AgentRunList, AgentRunGet, LongTaskList, LongTaskGet, LongTaskAwait,
   LongTaskReplace,
   RuntimeRecoveryList, RuntimeRecoveryGet,
@@ -24,6 +24,7 @@
   RuntimeSupervisorList, RuntimeSupervisorGet,
   AgentControlList, AgentControlGet,
   AgentMailboxSend, AgentMailboxList, AgentMailboxGet, AgentMailboxResolve,
+  JobList, JobGet, JobCancel, BrowserJob, ApiJob, ServiceJob,
   AskUserQuestion, Sleep,
   EnterPlanMode, ExitPlanMode, Config,
   TodoWrite, Skill, ToolSearch, StructuredOutput, Brief, PowerShell,
@@ -35,7 +36,7 @@
 - **experimental**: 5
   RemoteTrigger, LSP, MCPTool, ListMcpResources, ReadMcpResource
 
-Default registration truth: 62 registered tool_defs, 63 schema rows.
+Default registration truth: 68 registered tool_defs, 69 schema rows.
 Schema-only / host-wired surfaces: Agent (registered by `ink-repl.tsx`
 with live provider deps). Tungsten and Workflow were removed in 0.13.32 —
 they were upstream-cloud-only placeholders that returned "not available"
@@ -88,6 +89,12 @@ in local mode and had no realistic local implementation path.
 | AgentMailboxList | 150 | beta | reads in-memory runtime mailbox queue | agent-mailbox.test.ts + dispatch/tool-risk/tool-defs coverage | read-only mailbox inspection with recipient/status filters; prevents duplicate transcript-only instructions |
 | AgentMailboxGet | 150 | beta | reads one runtime mailbox message | agent-mailbox.test.ts + dispatch/tool-risk/tool-defs coverage | read-only detail by messageId; body is preserved outside free-form transcript |
 | AgentMailboxResolve | 150 | beta | marks a runtime mailbox message resolved | agent-mailbox.test.ts + dispatch/tool-risk/tool-defs coverage | internal-state resolution only; records terminal lifecycle evidence but does not deliver/resume agents |
+| JobList | 324 | beta | reads in-memory platform job supervisor records | job.test.ts + dispatch/tool-risk/tool-defs coverage | read-only job registry list for command, browser, API, and service jobs; no mutation |
+| JobGet | 324 | beta | reads one platform job supervisor record | job.test.ts + dispatch/tool-risk/tool-defs coverage | read-only detail by jobId; exposes status, artifacts, external handle, and recovery hints |
+| JobCancel | 324 | beta | mutates platform job supervisor state and invokes registered cleanup | job.test.ts + dispatch/tool-risk/tool-defs coverage | cancels command-backed jobs through the task cleanup path; non-command jobs are marked cancelled without pretending an unknown external handle was killed |
+| BrowserJob | 1139 | beta | fetch/Chrome/CDP browser replay and artifact capture | browser-job.test.ts + job-supervisor.test.ts + dispatch/tool-risk/tool-defs coverage | supervised browser capture with fetch_html, chrome_headless, and chrome_cdp providers; records screenshot/DOM/text/console/network artifacts where supported |
+| ApiJob | 310 | beta | HTTP(S) API request with response artifacts | api-job.test.ts + dispatch/tool-risk/tool-defs coverage | supervised API probe job with timeout, artifact registry integration, and live cancellation surface |
+| ServiceJob | 496 | beta | child_process spawn/stop/restart plus optional health probe | service-job.test.ts + dispatch/tool-risk/tool-defs coverage | supervised local dev service lifecycle with PID, port, log artifacts, health URL, graceful stop, and recovery hints |
 | AskUserQuestion | 173 | beta | host UI callback or readline fallback on stdin | none directly (covered indirectly) | depends on ToolExecutionContext.askUserQuestion |
 | Sleep | 45 | beta | setTimeout | none (no test file) | trivial; works |
 | EnterPlanMode | 59 | beta | mutates shared PlanModeState | enter-plan-mode.test.ts (52) | state-only; no enforcement of "no writes during plan mode" inside the tool itself |
@@ -157,7 +164,7 @@ in local mode and had no realistic local implementation path.
 ## False advertising risk
 
 The headline "42+ native tools" is still a defensible lower-bound
-because the default dispatcher advertises 62 registered tool_defs. The
+because the default dispatcher advertises 68 registered tool_defs. The
 risk is in the *implication* that all advertised tools are production
 features:
 
@@ -195,7 +202,7 @@ features:
   with a real provider.
 
 Recommendation: keep the headline "42+ tools" only when paired with an
-honest split such as "13 production, 33 beta, 1 stub, 5 experimental;
-51 default-registered tool_defs; 1 schema-only/host-wired surface".
+honest split such as "13 production, 50 beta, 1 stub, 5 experimental;
+68 default-registered tool_defs; 1 schema-only/host-wired surface".
 For user-facing marketing, lead with the production/beta capabilities
 and hide or gate the remaining stubs behind an experimental surface.

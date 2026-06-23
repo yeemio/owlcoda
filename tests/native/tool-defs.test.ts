@@ -6,7 +6,7 @@ vi.mock('../../src/native/dispatch.js', () => {
     McpAuth: '[stub] tokens are NOT validated',
   }
   class MockDispatcher {
-    getToolNames() { return ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'RuntimeLifecycleList', 'RuntimeLifecycleGet', 'RuntimeSupervisorList', 'RuntimeSupervisorGet', 'AgentControlList', 'AgentControlGet', 'AgentMailboxSend', 'AgentMailboxList', 'AgentMailboxGet', 'AgentMailboxResolve', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'JudgeBackendProbe'] }
+    getToolNames() { return ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'AgentRunList', 'AgentRunGet', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'RuntimeLifecycleList', 'RuntimeLifecycleGet', 'RuntimeSupervisorList', 'RuntimeSupervisorGet', 'AgentControlList', 'AgentControlGet', 'AgentMailboxSend', 'AgentMailboxList', 'AgentMailboxGet', 'AgentMailboxResolve', 'JobList', 'JobGet', 'JobCancel', 'BrowserJob', 'ApiJob', 'ServiceJob', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TaskVerify', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'DeliveryAudit', 'SkillRoutePreview', 'RunWorkspace', 'ProjectMap', 'ArtifactVerify', 'ProbePlan', 'JudgeBackendProbe'] }
     getToolDescription(name: string): string | undefined { return STUB_DESCRIPTIONS[name] }
   }
   return { ToolDispatcher: MockDispatcher }
@@ -146,6 +146,29 @@ describe('NATIVE_TOOL_SCHEMAS', () => {
     expect(schema.properties.models.items.type).toBe('string')
     expect(schema.properties.prompts.description).toContain('fixed judge prompts')
   })
+
+  it('runtime job schemas expose cancellation, API, browser replay, and service control surfaces', () => {
+    const list = NATIVE_TOOL_SCHEMAS['JobList'] as Record<string, any>
+    const get = NATIVE_TOOL_SCHEMAS['JobGet'] as Record<string, any>
+    const cancel = NATIVE_TOOL_SCHEMAS['JobCancel'] as Record<string, any>
+    const browser = NATIVE_TOOL_SCHEMAS['BrowserJob'] as Record<string, any>
+    const api = NATIVE_TOOL_SCHEMAS['ApiJob'] as Record<string, any>
+    const service = NATIVE_TOOL_SCHEMAS['ServiceJob'] as Record<string, any>
+
+    expect(list.description).toContain('Read-only')
+    expect(get.required).toEqual(['jobId'])
+    expect(cancel.required).toEqual(['jobId'])
+    expect(cancel.description).toContain('Cancel one platform job')
+    expect(browser.required).toEqual(['url'])
+    expect(browser.properties.provider.enum).toEqual(['fetch_html', 'chrome_headless', 'chrome_cdp'])
+    expect(browser.properties.runRef.description).toContain('RunWorkspace')
+    expect(api.required).toEqual(['url'])
+    expect(api.properties.method.enum).toEqual(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'])
+    expect(api.properties.runRef.description).toContain('RunWorkspace')
+    expect(service.required).toEqual(['action', 'serviceName'])
+    expect(service.properties.action.enum).toEqual(['start', 'status', 'stop', 'restart'])
+    expect(service.description).toContain('local dev service')
+  })
 })
 
 describe('buildNativeToolDefs', () => {
@@ -153,9 +176,9 @@ describe('buildNativeToolDefs', () => {
     const dispatcher = new ToolDispatcher()
     const defs = buildNativeToolDefs(dispatcher)
 
-    expect(defs).toHaveLength(53)
+    expect(defs).toHaveLength(68)
     const names = defs.map((d: { name: string }) => d.name)
-    expect(names).toEqual(['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'RuntimeLifecycleList', 'RuntimeLifecycleGet', 'RuntimeSupervisorList', 'RuntimeSupervisorGet', 'AgentControlList', 'AgentControlGet', 'AgentMailboxSend', 'AgentMailboxList', 'AgentMailboxGet', 'AgentMailboxResolve', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'JudgeBackendProbe'])
+    expect(names).toEqual(['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'AgentRunList', 'AgentRunGet', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'RuntimeLifecycleList', 'RuntimeLifecycleGet', 'RuntimeSupervisorList', 'RuntimeSupervisorGet', 'AgentControlList', 'AgentControlGet', 'AgentMailboxSend', 'AgentMailboxList', 'AgentMailboxGet', 'AgentMailboxResolve', 'JobList', 'JobGet', 'JobCancel', 'BrowserJob', 'ApiJob', 'ServiceJob', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TaskVerify', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'DeliveryAudit', 'SkillRoutePreview', 'RunWorkspace', 'ProjectMap', 'ArtifactVerify', 'ProbePlan', 'JudgeBackendProbe'])
   })
 
   it('each def has name, description, and input_schema', () => {

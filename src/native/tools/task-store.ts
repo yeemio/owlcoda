@@ -31,6 +31,15 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import type { BashRiskClassification } from '../bash-risk.js'
 import type { TaskPathScope } from '../protocol/types.js'
 import {
+  appendJobOutput,
+  createJob,
+  finishJob,
+  getJob,
+  recordJobCleanup,
+  resetJobSupervisor,
+  startJob,
+} from '../job-supervisor.js'
+import {
   compactLongTaskText,
   forgetLongTaskSnapshot,
   forgetLongTaskSnapshotsBySource,
@@ -83,6 +92,14 @@ export type TaskVerificationKind =
   | 'command'
   | 'none'
 
+export type TaskVerificationStrength =
+  | 'none'
+  | 'weak_text_match'
+  | 'compile_only'
+  | 'unit_behavior'
+  | 'integration_behavior'
+  | 'runtime_replay'
+
 export interface TaskVerificationRequiredMarker {
   marker: string
   label?: string
@@ -112,6 +129,7 @@ export interface TaskVerificationCheck {
 export interface TaskVerificationResult {
   checkId: string
   passed: boolean
+  strength?: TaskVerificationStrength
   detail?: string
   checkedAt: string
   /**
@@ -185,6 +203,8 @@ export interface Task {
   longTaskSnapshot?: LongTaskSnapshot
   /** Serializable identity for the spawned command process. Handles are never restored. */
   processIdentity?: LongTaskProcessIdentity
+  /** Platform job supervisor record id for command-backed work. */
+  jobId?: string
 }
 
 let nextId = 1
@@ -339,7 +359,7 @@ export function updateTaskStep(
 
     // completed requires all verification results passed (if any exist)
     if (newStatus === 'completed') {
-      const verificationBlocker = verificationCompletionBlocker(stepId, effectiveVerification, effectiveResults)
+      const verificationBlocker = verificationCompletionBlocker(stepId, step, effectiveVerification, effectiveResults)
       if (verificationBlocker) {
         return {
           ok: false,
@@ -398,6 +418,7 @@ export function updateTaskStep(
 
 function verificationCompletionBlocker(
   stepId: string,
+  step: TaskStep,
   checks: TaskVerificationCheck[],
   results: TaskVerificationResult[],
 ): string | null {
@@ -418,7 +439,49 @@ function verificationCompletionBlocker(
   if (missing.length > 0) {
     return `Cannot complete step "${stepId}": missing passing verification result(s) for check(s): ${missing.join(', ')}. Run TaskVerify after updating the artifact or verification spec.`
   }
+  const requiredStrength = requiredCompletionStrength(step)
+  if (requiredStrength) {
+    const highest = highestVerificationStrength(results)
+    if (verificationStrengthRank(highest) < verificationStrengthRank(requiredStrength)) {
+      return `Cannot complete step "${stepId}": this parser/snapshot/browser/replay-sensitive step requires behavioral verification (${requiredStrength} or stronger). Current highest verification strength is ${highest}. Add a focused unit test, integration test, verification pack, or runtime replay evidence before marking completed.`
+    }
+  }
   return null
+}
+
+const VERIFICATION_STRENGTH_RANK: Record<TaskVerificationStrength, number> = {
+  none: 0,
+  weak_text_match: 1,
+  compile_only: 2,
+  unit_behavior: 3,
+  integration_behavior: 4,
+  runtime_replay: 5,
+}
+
+function verificationStrengthRank(strength: TaskVerificationStrength): number {
+  return VERIFICATION_STRENGTH_RANK[strength] ?? 0
+}
+
+function highestVerificationStrength(results: TaskVerificationResult[]): TaskVerificationStrength {
+  let highest: TaskVerificationStrength = 'none'
+  for (const result of results) {
+    const strength = result.strength ?? 'none'
+    if (verificationStrengthRank(strength) > verificationStrengthRank(highest)) highest = strength
+  }
+  return highest
+}
+
+function requiredCompletionStrength(step: TaskStep): TaskVerificationStrength | null {
+  const text = [
+    step.title,
+    step.description,
+    ...step.touchedPaths,
+    ...step.expectedArtifacts.map(artifact => artifact.path ?? ''),
+    ...step.verification.flatMap(check => [check.path ?? '', check.root ?? '', check.deckPath ?? '', check.command ?? '']),
+  ].join(' ')
+  return /(?:parse|parser|normalize|snapshot|browser|capture|scrape|crawler|dom|selector|fixture|replay|qiutan|odds|竞彩|赔率|解析|归一化|快照|抓取|浏览器)/i.test(text)
+    ? 'unit_behavior'
+    : null
 }
 
 function verificationSpecWeakeningBlocker(
@@ -660,6 +723,17 @@ export function stopTask(id: string): Task | undefined {
     try { child.kill('SIGTERM') } catch { /* ignore */ }
   }
   if (updated?.command) recordTaskLongTaskSnapshot(updated, 'cancelled')
+  if (updated?.jobId) {
+    finishJob(updated.jobId, 'cancelled', {
+      stage: 'cancelled',
+      terminationReason: 'user_cancel',
+    })
+    recordJobCleanup(updated.jobId, {
+      attempted: Boolean(child),
+      succeeded: true,
+      remainingPids: [],
+    })
+  }
   return updated
 }
 
@@ -673,6 +747,7 @@ export function resetTaskStore(): void {
   forgetLongTaskSnapshotsBySource('task_command')
   forgetRunLifecycleSnapshotsByKind('task_command')
   forgetRuntimeSupervisorProcessesByRunPrefix('task:')
+  resetJobSupervisor()
   nextId = 1
 }
 
@@ -695,6 +770,17 @@ export function spawnTaskCommand(taskId: string): void {
   task.updatedAt = new Date().toISOString()
   task.stdout = ''
   task.stderr = ''
+  task.jobId = task.jobId ?? `job:task:${task.id}`
+  const jobId = task.jobId
+  createJob({
+    jobId,
+    type: 'command',
+    stage: 'queued',
+    cwd: task.cwd ?? process.cwd(),
+    command: task.command,
+    recoveryHint: `TaskOutput task_id=${task.id} block=false`,
+    source: { kind: 'task', id: task.id },
+  })
   recordTaskLongTaskSnapshot(task, 'running')
 
   let child: ChildProcess
@@ -709,6 +795,11 @@ export function spawnTaskCommand(taskId: string): void {
     task.error = err instanceof Error ? err.message : String(err)
     task.exitCode = -1
     task.updatedAt = new Date().toISOString()
+    finishJob(jobId, 'failed', {
+      stage: 'spawn_failed',
+      error: task.error,
+      terminationReason: 'spawn_error',
+    })
     recordTaskLongTaskSnapshot(task, 'failed')
     return
   }
@@ -724,6 +815,11 @@ export function spawnTaskCommand(taskId: string): void {
     recordTaskLongTaskSnapshot(task, 'running')
   }
   runningProcesses.set(taskId, child)
+  startJob(jobId, {
+    pid: child.pid,
+    processGroup: child.pid,
+    stage: 'running',
+  })
 
   // Cap captured I/O to keep a runaway `cat /dev/zero`-style command
   // from ballooning memory. 1 MiB per stream is plenty for an audit
@@ -732,8 +828,10 @@ export function spawnTaskCommand(taskId: string): void {
   child.stdout?.on('data', (chunk: Buffer) => {
     const cur = task.stdout?.length ?? 0
     if (cur >= MAX_BUF) return
-    task.stdout = (task.stdout ?? '') + chunk.toString('utf8')
+    const text = chunk.toString('utf8')
+    task.stdout = (task.stdout ?? '') + text
     task.updatedAt = new Date().toISOString()
+    appendJobOutput(jobId, text)
     recordTaskLongTaskSnapshot(task, 'running')
     if (task.stdout!.length > MAX_BUF) {
       task.stdout = task.stdout!.slice(0, MAX_BUF) + '\n[truncated]'
@@ -744,8 +842,10 @@ export function spawnTaskCommand(taskId: string): void {
   child.stderr?.on('data', (chunk: Buffer) => {
     const cur = task.stderr?.length ?? 0
     if (cur >= MAX_BUF) return
-    task.stderr = (task.stderr ?? '') + chunk.toString('utf8')
+    const text = chunk.toString('utf8')
+    task.stderr = (task.stderr ?? '') + text
     task.updatedAt = new Date().toISOString()
+    appendJobOutput(jobId, text)
     recordTaskLongTaskSnapshot(task, 'running')
     if (task.stderr!.length > MAX_BUF) {
       task.stderr = task.stderr!.slice(0, MAX_BUF) + '\n[truncated]'
@@ -754,6 +854,11 @@ export function spawnTaskCommand(taskId: string): void {
   })
   child.on('error', (err) => {
     task.error = err instanceof Error ? err.message : String(err)
+    finishJob(jobId, 'failed', {
+      stage: 'process_error',
+      error: task.error,
+      terminationReason: 'process_error',
+    })
     recordTaskLongTaskSnapshot(task, 'failed')
   })
   child.on('exit', (code, signal) => {
@@ -767,6 +872,16 @@ export function spawnTaskCommand(taskId: string): void {
     }
     task.exitCode = typeof code === 'number' ? code : (signal ? -1 : 0)
     task.updatedAt = new Date().toISOString()
+    const job = getJob(jobId)
+    if (job?.status === 'cancelled') {
+      recordJobCleanup(jobId, { attempted: true, succeeded: true, remainingPids: [] })
+    } else {
+      finishJob(jobId, task.exitCode === 0 ? 'done' : 'failed', {
+        stage: 'exited',
+        ...(task.exitCode === 0 ? {} : { error: `exit code ${task.exitCode}` }),
+        terminationReason: 'process_exit',
+      })
+    }
     const status = task.status === 'cancelled'
       ? 'cancelled'
       : task.exitCode === 0

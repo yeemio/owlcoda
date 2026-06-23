@@ -24,6 +24,7 @@ import {
   updateTaskStep,
   type TaskVerificationCheck,
   type TaskVerificationResult,
+  type TaskVerificationStrength,
 } from './task-store.js'
 import { classifyBashCommand } from '../bash-risk.js'
 import { verifyHtmlDeck } from '../verification-packs/html-deck.js'
@@ -32,6 +33,14 @@ import { evaluateRunVerdictGate, formatRunVerdictGateResult } from '../run-verdi
 const execFileAsync = promisify(execFile)
 
 const VERIFY_COMMAND_TIMEOUT_MS = 30_000
+const VERIFICATION_STRENGTH_RANK: Record<TaskVerificationStrength, number> = {
+  none: 0,
+  weak_text_match: 1,
+  compile_only: 2,
+  unit_behavior: 3,
+  integration_behavior: 4,
+  runtime_replay: 5,
+}
 
 export interface TaskVerifyInput {
   taskId: string
@@ -63,17 +72,17 @@ function placeholderReason(p: string): string | null {
 async function runFileExists(check: TaskVerificationCheck, now: string): Promise<TaskVerificationResult> {
   const p = check.path ?? ''
   if (!p) {
-    return { checkId: check.id, passed: false, unsatisfiable: true, detail: 'check.path is required for file_exists', checkedAt: now }
+    return { checkId: check.id, passed: false, strength: 'weak_text_match', unsatisfiable: true, detail: 'check.path is required for file_exists', checkedAt: now }
   }
   const placeholder = placeholderReason(p)
   if (placeholder) {
-    return { checkId: check.id, passed: false, unsatisfiable: true, detail: placeholder, checkedAt: now }
+    return { checkId: check.id, passed: false, strength: 'weak_text_match', unsatisfiable: true, detail: placeholder, checkedAt: now }
   }
   try {
     const stat = fs.statSync(path.resolve(p))
-    return { checkId: check.id, passed: true, detail: `exists (${stat.isDirectory() ? 'directory' : 'file'})`, checkedAt: now }
+    return { checkId: check.id, passed: true, strength: 'weak_text_match', detail: `exists (${stat.isDirectory() ? 'directory' : 'file'})`, checkedAt: now }
   } catch {
-    return { checkId: check.id, passed: false, detail: `not found: ${p}`, checkedAt: now }
+    return { checkId: check.id, passed: false, strength: 'weak_text_match', detail: `not found: ${p}`, checkedAt: now }
   }
 }
 
@@ -81,17 +90,17 @@ async function runFileContains(check: TaskVerificationCheck, now: string): Promi
   const p = check.path ?? ''
   const pattern = check.pattern ?? ''
   if (!p || !pattern) {
-    return { checkId: check.id, passed: false, unsatisfiable: true, detail: 'check.path and check.pattern are required for file_contains', checkedAt: now }
+    return { checkId: check.id, passed: false, strength: 'weak_text_match', unsatisfiable: true, detail: 'check.path and check.pattern are required for file_contains', checkedAt: now }
   }
   const placeholder = placeholderReason(p)
   if (placeholder) {
-    return { checkId: check.id, passed: false, unsatisfiable: true, detail: placeholder, checkedAt: now }
+    return { checkId: check.id, passed: false, strength: 'weak_text_match', unsatisfiable: true, detail: placeholder, checkedAt: now }
   }
   let re: RegExp
   try {
     re = new RegExp(pattern)
   } catch (err) {
-    return { checkId: check.id, passed: false, unsatisfiable: true, detail: `invalid regex pattern: ${String(err)}`, checkedAt: now }
+    return { checkId: check.id, passed: false, strength: 'weak_text_match', unsatisfiable: true, detail: `invalid regex pattern: ${String(err)}`, checkedAt: now }
   }
   try {
     const content = fs.readFileSync(path.resolve(p), 'utf-8')
@@ -99,11 +108,12 @@ async function runFileContains(check: TaskVerificationCheck, now: string): Promi
     return {
       checkId: check.id,
       passed: matched,
+      strength: 'weak_text_match',
       detail: matched ? `pattern /${pattern}/ found` : `pattern /${pattern}/ not found in ${p}`,
       checkedAt: now,
     }
   } catch {
-    return { checkId: check.id, passed: false, detail: `cannot read file: ${p}`, checkedAt: now }
+    return { checkId: check.id, passed: false, strength: 'weak_text_match', detail: `cannot read file: ${p}`, checkedAt: now }
   }
 }
 
@@ -112,7 +122,7 @@ async function runArtifactCount(check: TaskVerificationCheck, now: string): Prom
   const globPattern = check.glob ?? ''
   const min = check.min ?? 1
   if (!root || !globPattern) {
-    return { checkId: check.id, passed: false, unsatisfiable: true, detail: 'check.root and check.glob are required for artifact_count', checkedAt: now }
+    return { checkId: check.id, passed: false, strength: 'weak_text_match', unsatisfiable: true, detail: 'check.root and check.glob are required for artifact_count', checkedAt: now }
   }
 
   // Simple glob matching: support basic patterns like *.html or **/*.ts
@@ -122,13 +132,14 @@ async function runArtifactCount(check: TaskVerificationCheck, now: string): Prom
     const absRoot = path.resolve(root)
     count = countMatchingFiles(absRoot, globPattern)
   } catch {
-    return { checkId: check.id, passed: false, detail: `cannot list directory: ${root}`, checkedAt: now }
+    return { checkId: check.id, passed: false, strength: 'weak_text_match', detail: `cannot list directory: ${root}`, checkedAt: now }
   }
 
   const passed = count >= min
   return {
     checkId: check.id,
     passed,
+    strength: 'weak_text_match',
     detail: passed ? `found ${count} matching files (min=${min})` : `expected >=${min}, got ${count}`,
     checkedAt: now,
   }
@@ -170,11 +181,55 @@ function countMatchingFiles(root: string, globPattern: string): number {
   return count
 }
 
+function commandVerificationStrength(command: string): TaskVerificationStrength {
+  const normalized = command.trim().toLowerCase()
+  if (/\b(?:playwright|cypress)\b.*\btest\b|\be2e\b|\bruntime[-_ ]?replay\b|\breplay\b/.test(normalized)) {
+    return 'runtime_replay'
+  }
+  if (/\b(?:vitest|jest|mocha|ava|pytest|go test|cargo test|swift test|node --test|bun test)\b|\b(?:npm|pnpm|yarn) (?:run )?test\b/.test(normalized)) {
+    return 'unit_behavior'
+  }
+  if (/\b(?:tsc|typecheck|eslint|ruff|mypy|node --check|npm run build|pnpm build|yarn build|vite build|next build)\b/.test(normalized)) {
+    return 'compile_only'
+  }
+  return 'weak_text_match'
+}
+
+function verificationStrengthRank(strength: TaskVerificationStrength | undefined): number {
+  return VERIFICATION_STRENGTH_RANK[strength ?? 'none'] ?? 0
+}
+
+function highestVerificationStrength(results: TaskVerificationResult[]): TaskVerificationStrength {
+  let highest: TaskVerificationStrength = 'none'
+  for (const result of results) {
+    if (verificationStrengthRank(result.strength) > verificationStrengthRank(highest)) {
+      highest = result.strength ?? 'none'
+    }
+  }
+  return highest
+}
+
+function verificationStrengthCounts(results: TaskVerificationResult[]): Record<TaskVerificationStrength, number> {
+  return results.reduce<Record<TaskVerificationStrength, number>>((acc, result) => {
+    const strength = result.strength ?? 'none'
+    acc[strength] += 1
+    return acc
+  }, {
+    none: 0,
+    weak_text_match: 0,
+    compile_only: 0,
+    unit_behavior: 0,
+    integration_behavior: 0,
+    runtime_replay: 0,
+  })
+}
+
 async function runCommand(check: TaskVerificationCheck, now: string): Promise<TaskVerificationResult> {
   const cmd = check.command ?? ''
   if (!cmd) {
-    return { checkId: check.id, passed: false, unsatisfiable: true, detail: 'check.command is required for command check', checkedAt: now }
+    return { checkId: check.id, passed: false, strength: 'none', unsatisfiable: true, detail: 'check.command is required for command check', checkedAt: now }
   }
+  const strength = commandVerificationStrength(cmd)
 
   // Gate: must be safe_readonly. A refused command is unsatisfiable — it will
   // be refused on every re-run; only an edit to the verification spec helps.
@@ -183,6 +238,7 @@ async function runCommand(check: TaskVerificationCheck, now: string): Promise<Ta
     return {
       checkId: check.id,
       passed: false,
+      strength,
       unsatisfiable: true,
       detail: `command refused by risk classifier: ${risk.level} (${risk.reasons[0] ?? 'unknown reason'}). Only safe_readonly commands are allowed for TaskVerify.`,
       checkedAt: now,
@@ -197,20 +253,21 @@ async function runCommand(check: TaskVerificationCheck, now: string): Promise<Ta
       encoding: 'utf-8',
     })
     const detail = stdout.trim().slice(0, 500) || stderr.trim().slice(0, 500) || '(no output)'
-    return { checkId: check.id, passed: true, detail: `exit 0: ${detail}`, checkedAt: now }
+    return { checkId: check.id, passed: true, strength, detail: `exit 0: ${detail}`, checkedAt: now }
   } catch (err: unknown) {
     const anyErr = err as { code?: number; killed?: boolean; stdout?: string; stderr?: string }
     const exitCode = anyErr.code ?? -1
     if (anyErr.killed) {
-      return { checkId: check.id, passed: false, detail: `command timed out after ${VERIFY_COMMAND_TIMEOUT_MS}ms`, checkedAt: now }
+      return { checkId: check.id, passed: false, strength, detail: `command timed out after ${VERIFY_COMMAND_TIMEOUT_MS}ms`, checkedAt: now }
     }
     if (exitCode === expectedCode) {
-      return { checkId: check.id, passed: true, detail: `exit ${exitCode} (expected)`, checkedAt: now }
+      return { checkId: check.id, passed: true, strength, detail: `exit ${exitCode} (expected)`, checkedAt: now }
     }
     const output = (anyErr.stdout ?? '').trim().slice(0, 300) || (anyErr.stderr ?? '').trim().slice(0, 300)
     return {
       checkId: check.id,
       passed: false,
+      strength,
       detail: `exit ${exitCode} (expected ${expectedCode})${output ? ': ' + output : ''}`,
       checkedAt: now,
     }
@@ -220,11 +277,11 @@ async function runCommand(check: TaskVerificationCheck, now: string): Promise<Ta
 async function runRunVerdictGate(check: TaskVerificationCheck, now: string): Promise<TaskVerificationResult> {
   const p = check.path ?? ''
   if (!p) {
-    return { checkId: check.id, passed: false, unsatisfiable: true, detail: 'check.path is required for run_verdict_gate', checkedAt: now }
+    return { checkId: check.id, passed: false, strength: 'runtime_replay', unsatisfiable: true, detail: 'check.path is required for run_verdict_gate', checkedAt: now }
   }
   const placeholder = placeholderReason(p)
   if (placeholder) {
-    return { checkId: check.id, passed: false, unsatisfiable: true, detail: placeholder, checkedAt: now }
+    return { checkId: check.id, passed: false, strength: 'runtime_replay', unsatisfiable: true, detail: placeholder, checkedAt: now }
   }
   try {
     const raw = fs.readFileSync(path.resolve(p), 'utf-8')
@@ -233,6 +290,7 @@ async function runRunVerdictGate(check: TaskVerificationCheck, now: string): Pro
     return {
       checkId: check.id,
       passed: gate.status === 'pass',
+      strength: 'runtime_replay',
       detail: formatRunVerdictGateResult(gate),
       checkedAt: now,
       metadata: { runVerdictGate: gate },
@@ -242,6 +300,7 @@ async function runRunVerdictGate(check: TaskVerificationCheck, now: string): Pro
     return {
       checkId: check.id,
       passed: false,
+      strength: 'runtime_replay',
       detail: `cannot read or parse run verdict artifact ${p}: ${message}`,
       checkedAt: now,
     }
@@ -252,6 +311,7 @@ function runNone(check: TaskVerificationCheck, now: string): TaskVerificationRes
   return {
     checkId: check.id,
     passed: true,
+    strength: 'none',
     detail: `no verification performed: ${check.reason ?? '(no reason given)'}`,
     checkedAt: now,
   }
@@ -266,6 +326,7 @@ async function runVerificationPack(check: TaskVerificationCheck, now: string): P
     return [{
       checkId: check.id,
       passed: false,
+      strength: 'integration_behavior',
       unsatisfiable: true,
       detail: `unknown verification pack: ${check.packId ?? '(missing packId)'}`,
       checkedAt: now,
@@ -276,6 +337,7 @@ async function runVerificationPack(check: TaskVerificationCheck, now: string): P
     return [{
       checkId: check.id,
       passed: false,
+      strength: 'integration_behavior',
       unsatisfiable: true,
       detail: 'check.deckPath is required for verification_pack/html_deck',
       checkedAt: now,
@@ -290,6 +352,7 @@ async function runVerificationPack(check: TaskVerificationCheck, now: string): P
     return [{
       checkId: check.id,
       passed: false,
+      strength: 'integration_behavior',
       unsatisfiable: true,
       detail: 'check.expectedSections must be a non-negative integer for verification_pack/html_deck',
       checkedAt: now,
@@ -311,6 +374,7 @@ async function runVerificationPack(check: TaskVerificationCheck, now: string): P
   return packResult.checks.map(packCheck => ({
     checkId: packCheckId(check, packCheck.checkId),
     passed: packCheck.passed,
+    strength: 'integration_behavior',
     detail: `[${packResult.packId}] ${packCheck.detail}`,
     checkedAt: packResult.checkedAt || now,
     metadata: {
@@ -337,6 +401,7 @@ async function runCheck(check: TaskVerificationCheck, now: string): Promise<Task
       return [{
         checkId: check.id,
         passed: false,
+        strength: 'none',
         unsatisfiable: true,
         detail: `unknown check kind: ${(check as TaskVerificationCheck).kind}`,
         checkedAt: now,
@@ -399,6 +464,8 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
 
       const passedCount = results.filter(r => r.passed).length
       const overallPassed = passedCount === results.length
+      const highestStrength = highestVerificationStrength(results)
+      const strengthCounts = verificationStrengthCounts(results)
 
       // Write results back to step if requested
       if (writeBack) {
@@ -408,6 +475,7 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
       // Build output text
       const lines = [
         `Verification for ${taskId} ${stepId}: ${passedCount}/${results.length} passed`,
+        `Evidence strength: highest=${highestStrength}`,
       ]
       for (const r of results) {
         const icon = r.passed ? '✓' : '✗'
@@ -430,6 +498,8 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
         stepId,
         passed: overallPassed,
         results,
+        highestVerificationStrength: highestStrength,
+        verificationStrengthCounts: strengthCounts,
         writeBack,
       }
       if (runVerdictBlocked.length > 0) {

@@ -35,6 +35,10 @@ import {
   createAgentMailboxResolveTool,
   createAgentMailboxSendTool,
 } from './tools/agent-mailbox.js'
+import { createJobCancelTool, createJobGetTool, createJobListTool } from './tools/job.js'
+import { createBrowserJobTool } from './tools/browser-job.js'
+import { createApiJobTool } from './tools/api-job.js'
+import { createServiceJobTool } from './tools/service-job.js'
 import { createEnterPlanModeTool, type PlanModeState } from './tools/enter-plan-mode.js'
 import { createExitPlanModeTool } from './tools/exit-plan-mode.js'
 import { createConfigTool } from './tools/config.js'
@@ -290,6 +294,12 @@ export class ToolDispatcher {
     this.register(createAgentMailboxListTool())
     this.register(createAgentMailboxGetTool())
     this.register(createAgentMailboxResolveTool())
+    this.register(createJobListTool())
+    this.register(createJobGetTool())
+    this.register(createJobCancelTool())
+    this.register(createBrowserJobTool())
+    this.register(createApiJobTool())
+    this.register(createServiceJobTool())
     this.register(createEnterPlanModeTool(planState))
     this.register(createExitPlanModeTool(planState))
     this.register(createConfigTool())

@@ -44,6 +44,8 @@ const SAFE_TOOLS = new Set<string>([
   'LongTaskList', 'LongTaskGet', 'LongTaskAwait',
   // Runtime recovery ledger inspection is read-only over conversation state.
   'RuntimeRecoveryList', 'RuntimeRecoveryGet',
+  // Platform job supervisor inspection is read-only over runtime-owned job records.
+  'JobList', 'JobGet',
   // Unified runtime truth spine and read-only control-plane inspections.
   'RuntimeLifecycleList', 'RuntimeLifecycleGet',
   'RuntimeSupervisorList', 'RuntimeSupervisorGet',
@@ -72,6 +74,8 @@ const INTERNAL_STATE_TOOLS = new Set<string>([
   'ProjectMap',
   // Mailbox queue mutations are session/runtime state only.
   'AgentMailboxSend', 'AgentMailboxResolve',
+  // Platform job cancellation mutates OwlCoda-supervised lifecycle state.
+  'JobCancel',
 ])
 
 const FILE_TOOLS = new Set<string>(['edit', 'write', 'NotebookEdit'])
@@ -87,6 +91,12 @@ const EXTERNAL_EFFECT_TOOLS = new Set<string>([
   'EnterWorktree', 'ExitWorktree',
   // Model/backend health probes may hit local or remote OpenAI-compatible endpoints.
   'JudgeBackendProbe',
+  // Browser-style capture jobs fetch URLs and write artifacts.
+  'BrowserJob',
+  // API jobs fetch URLs and write response artifacts under runtime supervision.
+  'ApiJob',
+  // Service jobs spawn local dev services, probe health, write logs, and stop processes.
+  'ServiceJob',
 ])
 
 function isInsideCwd(absPath: string, cwd: string = process.cwd()): boolean {
