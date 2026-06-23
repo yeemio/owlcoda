@@ -2,6 +2,46 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.12] — 2026-06-23
+
+Runtime truth + supervised job replay reliability release.
+
+### Added
+
+- Added supervised runtime job tools: `JobList`, `JobGet`, `JobCancel`,
+  `BrowserJob`, `ApiJob`, and `ServiceJob`.
+- Added browser replay evidence capture across fetch/headless/CDP-oriented job
+  providers, with saved HTML/text/screenshot/console/network artifacts where
+  the provider supports them.
+- Added service lifecycle supervision for local dev services, including PID,
+  port, health, log artifact, restart, and graceful stop metadata.
+
+### Changed
+
+- Command-backed `TaskCreate` work now mirrors into the job supervisor, so long
+  tasks have a queryable job snapshot in addition to task and runtime lifecycle
+  state.
+- `TaskVerify` now records verification strength and refuses to complete
+  parser, snapshot, browser, and replay-sensitive steps from weak evidence such
+  as a plain pattern match, typecheck, or build-only signal.
+- Runtime-sensitive final reports now have to mark unresolved browser/business
+  replay as `pending_user_replay` or `runtime_replay_pending` instead of
+  claiming full completion while asking the user to refresh or manually retest.
+
+### Fixed
+
+- Fixed a release packaging regression in the transient `0.15.11` npm package:
+  `0.15.12` is rebuilt from the public `0.15.10` source line and preserves the
+  runtime lifecycle, runtime supervisor, AgentControl, and mailbox control-plane
+  files while adding this release's supervised job tooling.
+
+### Notes
+
+- Published as npm `owlcoda@0.15.12` with GitHub source tag `v0.15.12`.
+- This release improves runtime evidence, replay supervision, and report
+  honesty. It is not a claim that long-running degradation is permanently or
+  completely solved.
+
 ## [0.15.10] — 2026-06-22
 
 Runtime truth + multimodal routing reliability release.
