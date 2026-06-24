@@ -16,6 +16,28 @@
 
 <p>All notable changes to OwlCoda public releases are documented here.</p>
 
+<h2>[0.15.13] — 2026-06-24</h2>
+
+<p>Release gate + control-plane reliability patch.</p>
+
+<h3>Fixed</h3>
+
+<ul>
+<li>Fixed the publish dry-run gate so <code>npm publish --dry-run</code> no longer causes</li>
+<p>  nested <code>npm pack</code> and install-smoke commands to become no-op dry runs.</p>
+<li>Tightened task progress truth: skipped and blocked work stays separate from</li>
+<p>  completed work, and skipped task steps must carry a reason.</p>
+<li>Hardened headless verification policy around exact bash command budgets,</li>
+<p>  local Node test runners, report output headings, model identifiers, and</p>
+<p>  workspace output scopes.</p>
+</ul>
+<h3>Notes</h3>
+
+<ul>
+<li>Published as npm <code>owlcoda@0.15.13</code> with GitHub source tag <code>v0.15.13</code>.</li>
+<li>This is a release reliability and control-plane honesty patch. It is not a</li>
+<p>  claim that long-running degradation is permanently or completely solved.</p>
+</ul>
 <h2>[0.15.12] — 2026-06-23</h2>
 
 <p>Runtime truth + supervised job replay reliability release.</p>
@@ -368,4 +390,4 @@
 <h2>Older Releases</h2>
 
 <p>Historical package versions remain under the license terms that accompanied those versions when they were published.</p>
-</div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>A local-first AI coding workbench</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/docs/install" data-astro-cid-sz7xmlte>Docs</a></li> <li data-astro-cid-sz7xmlte><a href="/architect/" data-astro-cid-sz7xmlte>Architecture Board</a></li> <li data-astro-cid-sz7xmlte><a href="/changelog" data-astro-cid-sz7xmlte>Changelog</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.15.12</li> <li class="pill" data-astro-cid-sz7xmlte>GPL source</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>Local diagnostics</li> </ul> </div> </footer>  </body></html>
+</div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>A local-first AI coding workbench</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/docs/install" data-astro-cid-sz7xmlte>Docs</a></li> <li data-astro-cid-sz7xmlte><a href="/architect/" data-astro-cid-sz7xmlte>Architecture Board</a></li> <li data-astro-cid-sz7xmlte><a href="/changelog" data-astro-cid-sz7xmlte>Changelog</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.15.13</li> <li class="pill" data-astro-cid-sz7xmlte>GPL source</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>Local diagnostics</li> </ul> </div> </footer>  </body></html>
