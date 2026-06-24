@@ -2,6 +2,26 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.13] — 2026-06-24
+
+Release gate + control-plane reliability patch.
+
+### Fixed
+
+- Fixed the publish dry-run gate so `npm publish --dry-run` no longer causes
+  nested `npm pack` and install-smoke commands to become no-op dry runs.
+- Tightened task progress truth: skipped and blocked work stays separate from
+  completed work, and skipped task steps must carry a reason.
+- Hardened headless verification policy around exact bash command budgets,
+  local Node test runners, report output headings, model identifiers, and
+  workspace output scopes.
+
+### Notes
+
+- Published as npm `owlcoda@0.15.13` with GitHub source tag `v0.15.13`.
+- This is a release reliability and control-plane honesty patch. It is not a
+  claim that long-running degradation is permanently or completely solved.
+
 ## [0.15.12] — 2026-06-23
 
 Runtime truth + supervised job replay reliability release.
