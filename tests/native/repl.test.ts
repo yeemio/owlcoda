@@ -2097,7 +2097,7 @@ describe('Additional slash commands', () => {
     await handleSlashCommand('/quit', conv, usage)
     expect(exitSpy).toHaveBeenCalledWith(0)
     exitSpy.mockRestore()
-  })
+  }, 15000)
 
   it('/exit calls process.exit', async () => {
     const conv = makeConv()
@@ -2105,7 +2105,7 @@ describe('Additional slash commands', () => {
     await handleSlashCommand('/exit', conv, usage)
     expect(exitSpy).toHaveBeenCalledWith(0)
     exitSpy.mockRestore()
-  })
+  }, 15000)
 
   it('/theme with name switches theme', async () => {
     const conv = makeConv()

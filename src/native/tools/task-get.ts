@@ -71,7 +71,12 @@ export function createTaskGetTool(): NativeToolDef<TaskGetInput> {
       // Structured task plan (Slice 1)
       if (task.steps && task.steps.length > 0) {
         const completedCount = task.steps.filter(s => s.status === 'completed').length
-        lines.push(`Steps: ${completedCount}/${task.steps.length} completed`)
+        const blockedCount = task.steps.filter(s => s.status === 'blocked').length
+        const skippedCount = task.steps.filter(s => s.status === 'skipped').length
+        const stepSummary = [`Steps: ${completedCount}/${task.steps.length} completed`]
+        if (blockedCount > 0) stepSummary.push(`${blockedCount} blocked`)
+        if (skippedCount > 0) stepSummary.push(`${skippedCount} skipped`)
+        lines.push(stepSummary.join(' · '))
         if (task.deliverables && task.deliverables.length > 0) {
           lines.push('Deliverables:')
           for (const d of task.deliverables) {
@@ -80,7 +85,7 @@ export function createTaskGetTool(): NativeToolDef<TaskGetInput> {
         }
         lines.push('Step details:')
         for (const step of task.steps) {
-          const icon = { pending: '○', in_progress: '▶', completed: '✓', failed: '✗', blocked: '!', cancelled: '-' }[step.status] ?? '?'
+          const icon = { pending: '○', in_progress: '▶', completed: '✓', failed: '✗', blocked: '!', skipped: '↷', cancelled: '-' }[step.status] ?? '?'
           lines.push(`  ${icon} ${step.id}: ${step.title} [${step.status}]`)
           if (step.description) lines.push(`    ${step.description}`)
           if (step.touchedPaths.length > 0) lines.push(`    touchedPaths: ${step.touchedPaths.join(', ')}`)
@@ -127,6 +132,8 @@ export function createTaskGetTool(): NativeToolDef<TaskGetInput> {
         ...(task.steps ? {
           stepCount: task.steps.length,
           completedSteps: task.steps.filter(s => s.status === 'completed').length,
+          blockedSteps: task.steps.filter(s => s.status === 'blocked').length,
+          skippedSteps: task.steps.filter(s => s.status === 'skipped').length,
           hasOpenRequiredSteps: taskHasOpenRequiredSteps(task),
           nextStep: nextStep ? {
             id: nextStep.id,

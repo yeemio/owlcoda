@@ -50,8 +50,13 @@ export function createTaskListTool(): NativeToolDef<TaskListInput> {
         let stepSuffix = ''
         if (t.steps && t.steps.length > 0) {
           const completed = t.steps.filter(s => s.status === 'completed').length
+          const blockedSteps = t.steps.filter(s => s.status === 'blocked').length
+          const skippedSteps = t.steps.filter(s => s.status === 'skipped').length
           const currentStep = t.currentStepId ? ` current=${t.currentStepId}` : ''
-          stepSuffix = ` steps ${completed}/${t.steps.length}${currentStep}`
+          const stepParts = [`steps ${completed}/${t.steps.length}`]
+          if (blockedSteps > 0) stepParts.push(`${blockedSteps} blocked`)
+          if (skippedSteps > 0) stepParts.push(`${skippedSteps} skipped`)
+          stepSuffix = ` ${stepParts.join(' · ')}${currentStep}`
         }
 
         return `${statusIcon} ${t.id}: ${t.subject} [${t.status}]${stepSuffix}${blocked}`
@@ -68,6 +73,8 @@ export function createTaskListTool(): NativeToolDef<TaskListInput> {
             blockedBy: t.blockedBy,
             stepCount: t.steps?.length ?? 0,
             completedSteps: t.steps?.filter(s => s.status === 'completed').length ?? 0,
+            blockedSteps: t.steps?.filter(s => s.status === 'blocked').length ?? 0,
+            skippedSteps: t.steps?.filter(s => s.status === 'skipped').length ?? 0,
             currentStepId: t.currentStepId ?? null,
           })),
         },

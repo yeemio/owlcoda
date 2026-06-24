@@ -34,7 +34,7 @@ const SHELL_ARTIFACT_TOOLS = new Set(['bash', 'PowerShell'])
 const EXECUTION_PROGRESS_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskVerify', 'RunWorkspace', 'ArtifactVerify'])
 const BOOTSTRAP_SCOPE_FILE_EXTS = new Set(['.md', '.mdx', '.txt'])
 const BOOTSTRAP_SCOPE_MAX_BYTES = 256 * 1024
-const ALLOW_WRITE_SECTION_RE = /(允许写入|允许修改|可改动|allowed write|allowed files|allowed paths)/i
+const ALLOW_WRITE_SECTION_RE = /(允许写入|允许修改|可改动|allowed write|allowed files|allowed paths|create or update|create\/update|expected output|expected deliverable|required output|output artifact|write exactly one report file|write (?:a\s+)?(?:triage\s+)?report\s+to|report file|triage report|final report)/i
 const FORBIDDEN_WRITE_SECTION_RE = /(禁止改动|禁止修改|禁止写入|forbidden|do not modify|do not edit|not allowed)/i
 const FORBIDDEN_INLINE_WRITE_SECTION_RE = /^(?:[#>*\-\s]*|【)?(?:禁止|严禁|不得|不允许|禁止改动|禁止修改|禁止写入|forbidden|do not modify|do not edit|not allowed)(?:】)?[:：]?\s*$/i
 const ALLOW_INLINE_WRITE_TARGET_RE = /(?:只许|只允许|只能|允许|可(?:以)?|输出|allowed|only|output)[^。！？\n.!?]{0,80}(?:写|写入|写到|修改|改动|保存|落盘|输出到|write|edit|modify|save|output)|(?:输出到|保存到|落盘到|写到|写入到|生成到|导出到|output\s+to|save\s+to|write\s+to|export\s+to|generate\s+to)|\b(?:write|save|output|export|generate|create)\b[^。！？\n.!?]{0,100}\b(?:to|into|at)\b|(?:生成|创建|导出)[^。！？\n.!?]{0,100}(?:到|至)/i
@@ -1379,7 +1379,7 @@ function collectExplicitWriteTargets(source: SubstantiveUserInput[], cwd: string
           if (cleaned && isAbsolute(cleaned) && !isWithinRoot(resolve(cleaned), cwd)) {
             const canonicalized = canonicalizePath(resolve(cleaned))
             candidates.add(canonicalized)
-            if (isAllowLine) {
+            if (isAllowLine || inAllowWriteSection) {
               userExternalPaths.add(canonicalized)
             }
             continue
@@ -1615,7 +1615,23 @@ function extractPathCandidates(text: string): string[] {
   return allCandidates
 }
 
+// OC-20260623-17: model id / version tokens like `mimo-v2.5-pro`, `gpt-4.1`,
+// `Qwen3.6-35B-A3B`, `v0.15.10` contain dots that extname() misinterprets as
+// file extensions (e.g. '.5-pro').  These must never become write-scope paths.
+function looksLikeModelOrVersionId(candidate: string): boolean {
+  // Tokens with a leading 'v' followed by a digit (e.g. v0.15.10)
+  if (/^v\d/.test(candidate)) return true
+  // Tokens like mimo-v2.5-pro, gpt-4.1 — pure-alpha prefix then -v?digit
+  if (/^[A-Za-z]+-v?\d/.test(candidate)) return true
+  // Tokens like Qwen3.6-35B-A3B — alpha prefix with inline digits, then
+  // dot-or-hyphen followed by digits (version-like, not a file extension).
+  // The digit-after-dot check distinguishes `Qwen3.6` from `file2.ts`.
+  if (/^[A-Za-z]+\d+[.-]\d/.test(candidate) && !candidate.includes('/')) return true
+  return false
+}
+
 function isLikelyPathCandidate(candidate: string): boolean {
+  if (looksLikeModelOrVersionId(candidate)) return false
   return candidate.startsWith('/')
     || candidate.startsWith('./')
     || candidate.startsWith('../')

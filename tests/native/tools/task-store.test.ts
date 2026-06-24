@@ -400,6 +400,24 @@ describe('TaskStore — Steps (Slice 1)', () => {
     expect(r.ok === false && r.reason).toMatch(/failureReason/)
   })
 
+  it('skipped requires failureReason and is not an open required step', () => {
+    const task = makeTaskWithSteps()
+    const rejected = updateTaskStep(task.id, 'step-1', { status: 'skipped' as any })
+    expect(rejected.ok).toBe(false)
+    expect(rejected.ok === false && rejected.reason).toMatch(/failureReason/)
+
+    const skipped = updateTaskStep(task.id, 'step-1', {
+      status: 'skipped' as any,
+      failureReason: 'Wave 4 blocked the dependent canary smoke.',
+    })
+    expect(skipped.ok).toBe(true)
+
+    for (const step of task.steps!.slice(1)) {
+      updateTaskStep(task.id, step.id, { status: 'cancelled' })
+    }
+    expect(taskHasOpenRequiredSteps(task)).toBe(false)
+  })
+
   it('cannot reopen completed step', () => {
     const task = makeTaskWithSteps()
     updateTaskStep(task.id, 'step-1', { status: 'in_progress' })
@@ -497,6 +515,21 @@ describe('TaskStore — findNextStep (Slice 2)', () => {
     ] })
     updateTaskStep(t.id, 'step-1', { status: 'in_progress' })
     updateTaskStep(t.id, 'step-1', { status: 'completed' })
+    const r = findNextStep(t.id)
+    expect(r.hasNext).toBe(false)
+    expect(r.reason).toBe('no_open_steps')
+  })
+
+  it('returns no_open_steps when remaining dependent work is skipped', () => {
+    const t = createTask({ subject: 'Canary', description: 'Run gated smoke', steps: [
+      { title: 'Wave 4', description: 'Runtime canary.' },
+      { title: 'Wave 5', description: 'Dependent OpenAI canary.' },
+    ] })
+    updateTaskStep(t.id, 'step-1', { status: 'completed' })
+    updateTaskStep(t.id, 'step-2', {
+      status: 'skipped' as any,
+      failureReason: 'Skipped because Wave 4 did not produce a serving adapter.',
+    })
     const r = findNextStep(t.id)
     expect(r.hasNext).toBe(false)
     expect(r.reason).toBe('no_open_steps')

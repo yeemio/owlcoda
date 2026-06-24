@@ -10,7 +10,7 @@
  * always run.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -77,6 +77,81 @@ describe.skipIf(!HAS_TS_LS)('NativeLspProvider — live typescript-language-serv
 })
 
 describe('NativeLspProvider — no external server required', () => {
+  it('waits for populated diagnostics after an initial empty publish', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'owlcoda-lsp-delayed-'))
+    const binDir = join(dir, 'bin')
+    const oldPath = process.env.PATH
+    mkdirSync(binDir)
+    const fakeServer = join(binDir, process.platform === 'win32' ? 'typescript-language-server.cmd' : 'typescript-language-server')
+    writeFileSync(fakeServer, `#!/usr/bin/env node
+let buffer = Buffer.alloc(0)
+let openedUri = null
+function send(msg) {
+  const body = JSON.stringify(msg)
+  process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body)
+}
+function handle(msg) {
+  if (msg.method === 'initialize') {
+    send({ jsonrpc: '2.0', id: msg.id, result: { capabilities: { textDocumentSync: 1 } } })
+    return
+  }
+  if (msg.method === 'textDocument/didOpen') {
+    openedUri = msg.params.textDocument.uri
+    send({ jsonrpc: '2.0', method: 'textDocument/publishDiagnostics', params: { uri: openedUri, diagnostics: [] } })
+    setTimeout(() => {
+      send({
+        jsonrpc: '2.0',
+        method: 'textDocument/publishDiagnostics',
+        params: {
+          uri: openedUri,
+          diagnostics: [{
+            range: { start: { line: 0, character: 6 } },
+            severity: 1,
+            source: 'typescript',
+            code: 2322,
+            message: 'Type string is not assignable to type number.',
+          }],
+        },
+      })
+    }, 650)
+    return
+  }
+  if (msg.id !== undefined && msg.method) send({ jsonrpc: '2.0', id: msg.id, result: null })
+}
+process.stdin.on('data', (chunk) => {
+  buffer = Buffer.concat([buffer, chunk])
+  for (;;) {
+    const headerEnd = buffer.indexOf('\\r\\n\\r\\n')
+    if (headerEnd === -1) return
+    const header = buffer.subarray(0, headerEnd).toString('utf8')
+    const match = /Content-Length:\\s*(\\d+)/i.exec(header)
+    if (!match) return
+    const len = Number.parseInt(match[1], 10)
+    const bodyStart = headerEnd + 4
+    if (buffer.length < bodyStart + len) return
+    const body = buffer.subarray(bodyStart, bodyStart + len).toString('utf8')
+    buffer = buffer.subarray(bodyStart + len)
+    handle(JSON.parse(body))
+  }
+})
+setInterval(() => {}, 1000)
+`)
+    chmodSync(fakeServer, 0o755)
+    process.env.PATH = `${binDir}:${oldPath ?? ''}`
+    const provider = new NativeLspProvider()
+    const file = join(dir, 'bad.ts')
+    writeFileSync(file, 'const x: number = "definitely not a number"\nexport { x }\n')
+    try {
+      const result = await provider.execute('diagnostics', { file_path: file })
+      expect(result.isError).toBeFalsy()
+      expect(result.content).toMatch(/not assignable|2322/i)
+    } finally {
+      provider.disposeAll()
+      process.env.PATH = oldPath
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 10000)
+
   it('reports no-server gracefully for unsupported extensions', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'owlcoda-lsp-x-'))
     const f = join(dir, 'data.xyz')

@@ -432,6 +432,34 @@ function isWorkspaceTestCommand(chunk: string): boolean {
     if (isWorkspaceLocalPythonScript(script)) return !tokens.some(isNetworkOrInstallToken)
     if (isDjangoManageTest(tokens)) return !tokens.some(isNetworkOrInstallToken)
   }
+
+  // Node.js test runners via npx — keep this list intentionally narrow.
+  // The bash-risk classifier marks all `npx` as needs_approval (npx can
+  // install arbitrary packages), but in a workspace-local test context these
+  // well-known runners are safe verification commands.
+  const localNodeRunner = normalizeWorkspaceLocalNodeBin(head)
+  if (localNodeRunner) {
+    if (isSafeNodeTestPackage(localNodeRunner)) return !tokens.some(isNetworkOrInstallToken)
+    if (localNodeRunner === 'tsc' && tokens.slice(1).some(t => t === '--noEmit')) {
+      return !tokens.some(isNetworkOrInstallToken)
+    }
+    return false
+  }
+
+  if (head === 'npx' && tokens.length >= 2) {
+    const runner = tokens[1]!.toLowerCase()
+    if (isSafeNodeTestPackage(runner)) return !tokens.some(isNetworkOrInstallToken)
+    // npx tsc --noEmit is type-checking (safe read-only verification)
+    if (runner === 'tsc' && tokens.slice(2).some(t => t === '--noEmit')) {
+      return !tokens.some(isNetworkOrInstallToken)
+    }
+  }
+
+  // tsc --noEmit (direct, not via npx) — type-checking without emitting files
+  if (head === 'tsc' && tokens.slice(1).some(t => t === '--noEmit')) {
+    return !tokens.some(isNetworkOrInstallToken)
+  }
+
   return false
 }
 
@@ -460,6 +488,34 @@ function isWorkspaceLocalPythonScript(script: string): boolean {
 function isDjangoManageTest(tokens: string[]): boolean {
   const script = tokens[1]?.replace(/\\/g, '/').replace(/^\.\//, '')
   return script === 'manage.py' && tokens[2] === 'test'
+}
+
+function normalizeWorkspaceLocalNodeBin(head: string): string | null {
+  const normalized = head.replace(/\\/g, '/').replace(/^\.\//, '')
+  const prefix = 'node_modules/.bin/'
+  if (!normalized.startsWith(prefix)) return null
+  const runner = normalized.slice(prefix.length).toLowerCase()
+  return runner || null
+}
+
+/**
+ * Well-known Node.js test/verification packages that are safe to run via
+ * `npx` in a workspace-local context. This is intentionally conservative —
+ * only recognized test runners, NOT arbitrary CLI tools
+ * like eslint, prettier, or ts-node which can execute arbitrary code or
+ * mutate files.
+ */
+const SAFE_NODE_TEST_PACKAGES: ReadonlySet<string> = new Set([
+  'vitest',
+  'jest',
+  'mocha',
+  'tap',
+  'ava',
+  '@playwright/test',
+])
+
+function isSafeNodeTestPackage(name: string): boolean {
+  return SAFE_NODE_TEST_PACKAGES.has(name)
 }
 
 function isSafeInlinePythonProbe(source: string): boolean {

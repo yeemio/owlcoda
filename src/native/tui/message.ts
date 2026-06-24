@@ -427,11 +427,11 @@ export function formatToolGroup(
  *   ✓   completed   → done
  *   ▶   in_progress → current
  *   ○   pending     → todo
- * and may append `[completed|in_progress|pending|blocked]`. We re-parse
- * those signals into the design's four states so the card carries the
- * full status axis instead of three slightly-different glyphs.
+ * and may append `[completed|in_progress|pending|blocked|skipped]`. We re-parse
+ * those signals into the design's full status axis instead of three
+ * slightly-different glyphs.
  */
-type TodoState = 'done' | 'current' | 'blocked' | 'pending'
+type TodoState = 'done' | 'current' | 'blocked' | 'skipped' | 'pending'
 
 interface TodoEntry {
   state: TodoState
@@ -447,7 +447,7 @@ function parseTodoLine(line: string): TodoEntry | null {
 
   // Detect explicit `[state]` suffix first — it's the most reliable signal
   // and survives glyph swaps in upstream changes.
-  const tagMatch = trimmed.match(/\[(completed|in_progress|pending|blocked)\]\s*$/)
+  const tagMatch = trimmed.match(/\[(completed|in_progress|pending|blocked|skipped)\]\s*$/)
   let state: TodoState | null = null
   let body = trimmed
   if (tagMatch) {
@@ -457,11 +457,12 @@ function parseTodoLine(line: string): TodoEntry | null {
       case 'in_progress': state = 'current'; break
       case 'pending':     state = 'pending'; break
       case 'blocked':     state = 'blocked'; break
+      case 'skipped':     state = 'skipped'; break
     }
   }
 
   // Strip the leading glyph and reuse it as a fallback signal.
-  const glyphMatch = body.match(/^([✓▶▸○⊘□])\s+/)
+  const glyphMatch = body.match(/^([✓▶▸○⊘↷□])\s+/)
   if (glyphMatch) {
     body = body.slice(glyphMatch[0].length)
     if (state === null) {
@@ -470,6 +471,7 @@ function parseTodoLine(line: string): TodoEntry | null {
         case '▶':
         case '▸': state = 'current'; break
         case '⊘': state = 'blocked'; break
+        case '↷': state = 'skipped'; break
         case '○':
         case '□':
         default:  state = 'pending'; break
@@ -495,6 +497,11 @@ function renderTodoEntry(entry: TodoEntry, contentWidth: number): string {
     }
     case 'blocked': {
       const glyph = `${themeColor('warning')}⊘${sgr.reset}`
+      const text = `${themeColor('textDim')}${truncate(entry.text, contentWidth - 2)}${sgr.reset}`
+      return `${glyph} ${text}`
+    }
+    case 'skipped': {
+      const glyph = `${themeColor('textDim')}↷${sgr.reset}`
       const text = `${themeColor('textDim')}${truncate(entry.text, contentWidth - 2)}${sgr.reset}`
       return `${glyph} ${text}`
     }
@@ -526,14 +533,18 @@ function formatTodoWriteResult(output: string, durationMs: number): string {
   const doneCount    = entries.filter((e) => e.state === 'done').length
   const totalCount   = entries.length
   const currentCount = entries.filter((e) => e.state === 'current').length
+  const blockedCount = entries.filter((e) => e.state === 'blocked').length
+  const skippedCount = entries.filter((e) => e.state === 'skipped').length
 
   // Card widths — body matches the rest of the tool-result indent (5).
   const cols = Math.max(40, process.stdout.columns ?? 80)
   const cardWidth   = Math.min(cols - 6, 80)
   const contentWidth = cardWidth - 6  // padding (2) + glyph (1) + space (1) + safety (2)
-  const headerCount = currentCount > 0
-    ? `${doneCount}/${totalCount} done · 1 active`
-    : `${doneCount}/${totalCount} done`
+  const headerParts = [`${doneCount}/${totalCount} done`]
+  if (currentCount > 0) headerParts.push(`${currentCount} active`)
+  if (blockedCount > 0) headerParts.push(`${blockedCount} blocked`)
+  if (skippedCount > 0) headerParts.push(`${skippedCount} skipped`)
+  const headerCount = headerParts.join(' · ')
   const header = `${themeColor('textDim')}TODO${sgr.reset}`
     + `${' '.repeat(Math.max(2, contentWidth - 4 - visibleWidth(headerCount)))}`
     + `${themeColor('textMute')}${headerCount}${sgr.reset}`
@@ -1489,15 +1500,21 @@ function summarizeTodoWriteInput(input: Record<string, unknown>): string {
   let completed = 0
   let active = 0
   let pending = 0
+  let blocked = 0
+  let skipped = 0
   for (const todo of todos) {
     if (!isRecord(todo)) continue
     if (todo['status'] === 'completed') completed++
     else if (todo['status'] === 'in_progress') active++
     else if (todo['status'] === 'pending') pending++
+    else if (todo['status'] === 'blocked') blocked++
+    else if (todo['status'] === 'skipped') skipped++
   }
 
   const parts = [`${total} todo${total === 1 ? '' : 's'}`, `${completed} done`]
   if (active > 0) parts.push(`${active} active`)
+  if (blocked > 0) parts.push(`${blocked} blocked`)
+  if (skipped > 0) parts.push(`${skipped} skipped`)
   if (pending > 0) parts.push(`${pending} pending`)
   return parts.join(' · ')
 }

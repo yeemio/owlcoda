@@ -29,4 +29,18 @@ describe('tool ignore list', () => {
     expect(IGNORE_GLOB_PATTERNS).toContain('**/dist-prod/**')
     expect(IGNORE_GLOB_PATTERNS).toContain('**/.next/**')
   })
+
+  // OC-20260623-15: 'out' must NOT be in the ignore list — it is a
+  // common user-created output directory (research datasets, tsconfig
+  // outDir) and blanket-ignoring it causes false negatives.
+  it('does NOT include out (OC-20260623-15)', () => {
+    expect(IGNORE_DIR_NAMES.has('out')).toBe(false)
+    expect(IGNORE_GLOB_PATTERNS).not.toContain('**/out/**')
+  })
+
+  // Sanity: truly-excluded directories must still be present.
+  it('still excludes node_modules and .git', () => {
+    expect(IGNORE_DIR_NAMES.has('node_modules')).toBe(true)
+    expect(IGNORE_DIR_NAMES.has('.git')).toBe(true)
+  })
 })

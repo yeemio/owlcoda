@@ -169,6 +169,33 @@ describe('NATIVE_TOOL_SCHEMAS', () => {
     expect(service.properties.action.enum).toEqual(['start', 'status', 'stop', 'restart'])
     expect(service.description).toContain('local dev service')
   })
+
+  it('TaskUpdate schema exposes skipped step status with required failure reason', () => {
+    const schema = NATIVE_TOOL_SCHEMAS['TaskUpdate'] as Record<string, any>
+    expect(schema.properties.stepStatus.enum).toContain('skipped')
+    expect(schema.properties.failureReason.description).toContain('skipped')
+  })
+
+  it('TodoWrite schema exposes blocked and skipped statuses with failureReason guidance', () => {
+    const schema = NATIVE_TOOL_SCHEMAS['TodoWrite'] as Record<string, any>
+    const todoItem = schema.properties.todos.items
+
+    expect(todoItem.properties.status.enum).toEqual(['pending', 'in_progress', 'completed', 'blocked', 'skipped'])
+    expect(todoItem.properties.failureReason.type).toBe('string')
+    expect(todoItem.properties.failureReason.description).toContain('blocked')
+    expect(todoItem.properties.failureReason.description).toContain('skipped')
+    expect(todoItem.allOf).toContainEqual({
+      if: {
+        properties: {
+          status: { enum: ['blocked', 'skipped'] },
+        },
+        required: ['status'],
+      },
+      then: {
+        required: ['failureReason'],
+      },
+    })
+  })
 })
 
 describe('buildNativeToolDefs', () => {

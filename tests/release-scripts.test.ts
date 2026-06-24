@@ -11,6 +11,10 @@ function readPackageScripts(): Record<string, string> {
   return pkg.scripts ?? {}
 }
 
+function readProjectFile(path: string): string {
+  return readFileSync(join(process.cwd(), path), 'utf8')
+}
+
 describe('release npm scripts', () => {
   it('runs the full release gate before npm publish', () => {
     const scripts = readPackageScripts()
@@ -28,5 +32,18 @@ describe('release npm scripts', () => {
     expect(scripts['release:prepublish-gate']).toContain('release:smoke')
     expect(scripts['release:prepublish-gate']).toContain('release:package-audit')
     expect(scripts['release:prepublish-gate']).toContain('release:install-smoke')
+  })
+
+  it('forces nested npm pack to write a tarball during npm publish dry-run', () => {
+    const scripts = readPackageScripts()
+    const prepublishGate = scripts['release:prepublish-gate'] ?? ''
+
+    expect(prepublishGate).toMatch(/(?:npm_config_dry_run=false|env -u npm_config_dry_run) npm pack/)
+  })
+
+  it('forces release install smoke to install the tarball during npm publish dry-run', () => {
+    const installSmoke = readProjectFile('scripts/release-install-smoke.ts')
+
+    expect(installSmoke).toContain("npm_config_dry_run: 'false'")
   })
 })

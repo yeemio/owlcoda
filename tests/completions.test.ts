@@ -17,6 +17,10 @@ describe('shell completions', () => {
     expect(output).toContain('--print-url')
     expect(output).toContain('--open-browser')
     expect(output).toContain('--dry-run')
+    expect(output).toContain('--allow-tool')
+    expect(output).toContain('--deny-tool')
+    expect(output).toContain('--allow-bash-command')
+    expect(output).toContain('--max-bash-calls')
   })
 
   it('zsh completion includes descriptions', () => {
@@ -32,6 +36,10 @@ describe('shell completions', () => {
     expect(output).toContain("'--daemon-only[Proxy daemon only]'")
     expect(output).toContain("'--endpoint[Override default endpoint URL]:url:'")
     expect(output).toContain("'--router[Legacy alias for --endpoint]:url:'")
+    expect(output).toContain("'--allow-tool[Restrict non-interactive run to tool names]:tools:'")
+    expect(output).toContain("'--deny-tool[Deny tool names in non-interactive run]:tools:'")
+    expect(output).toContain("'--allow-bash-command[Allow exact bash command in non-interactive policy]:command:'")
+    expect(output).toContain("'--max-bash-calls[Deny bash attempts after N calls]:count:'")
   })
 
   it('fish completion includes all commands', () => {
@@ -52,6 +60,10 @@ describe('shell completions', () => {
     expect(output).toContain("'endpoint'")
     expect(output).toContain("'router'")
     expect(output).toContain("'dry-run'")
+    expect(output).toContain("'allow-tool'")
+    expect(output).toContain("'deny-tool'")
+    expect(output).toContain("'allow-bash-command'")
+    expect(output).toContain("'max-bash-calls'")
   })
 
   it('generateCompletion dispatches correctly', () => {

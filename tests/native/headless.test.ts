@@ -994,6 +994,129 @@ describe('runHeadless', () => {
     expect(conversation.tools.map((tool: { name: string }) => tool.name)).toEqual(['read'])
   })
 
+  it('allows an exact allowlisted bash command without policy violations', async () => {
+    vi.mocked(runConversationLoop).mockImplementationOnce(async (_conversation: any, _dispatcher: any, opts: any) => {
+      const allowed = await opts.callbacks.onToolApproval('bash', { command: 'pwd' })
+      if (allowed) {
+        opts.callbacks.onToolStart?.('bash', { command: 'pwd' })
+        opts.callbacks.onToolEnd?.('bash', 'ok', false, 1)
+      }
+      return {
+        conversation: { turns: [] } as any,
+        finalText: 'done',
+        iterations: 1,
+        stopReason: 'end_turn',
+        usage: { inputTokens: 0, outputTokens: 0, requestCount: 1 },
+        runtimeFailure: null,
+      }
+    })
+
+    const result = await runHeadless({
+      apiBaseUrl: 'http://localhost:8019',
+      apiKey: 'test-key',
+      model: 'test-model',
+      prompt: 'Run one command',
+      json: true,
+      autoApprove: true,
+      allowBashCommands: ['pwd'],
+      maxBashCalls: 1,
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.policyViolations).toEqual([])
+    const payload = JSON.parse(stdoutWrite.mock.calls.at(-1)![0] as string)
+    expect(payload.policy_violations).toEqual([])
+    expect(payload.tool_calls).toHaveLength(1)
+  })
+
+  it('denies a safe bash command that is not in the exact allowlist', async () => {
+    vi.mocked(runConversationLoop).mockImplementationOnce(async (_conversation: any, _dispatcher: any, opts: any) => {
+      const allowed = await opts.callbacks.onToolApproval('bash', { command: 'ls' })
+      if (allowed) {
+        opts.callbacks.onToolStart?.('bash', { command: 'ls' })
+        opts.callbacks.onToolEnd?.('bash', 'should not run', false, 1)
+      }
+      return {
+        conversation: { turns: [] } as any,
+        finalText: 'attempted extra command',
+        iterations: 1,
+        stopReason: 'end_turn',
+        usage: { inputTokens: 0, outputTokens: 0, requestCount: 1 },
+        runtimeFailure: null,
+      }
+    })
+
+    const result = await runHeadless({
+      apiBaseUrl: 'http://localhost:8019',
+      apiKey: 'test-key',
+      model: 'test-model',
+      prompt: 'Run exactly pwd',
+      json: true,
+      autoApprove: true,
+      allowBashCommands: ['pwd'],
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.policyViolations).toEqual([
+      expect.objectContaining({
+        type: 'bash_command_not_allowed',
+        toolName: 'bash',
+        command: 'ls',
+        allowedCommands: ['pwd'],
+      }),
+    ])
+    const payload = JSON.parse(stdoutWrite.mock.calls.at(-1)![0] as string)
+    expect(payload.policy_violations).toHaveLength(1)
+    expect(payload.tool_calls).toHaveLength(0)
+  })
+
+  it('denies bash calls over the max bash call budget', async () => {
+    vi.mocked(runConversationLoop).mockImplementationOnce(async (_conversation: any, _dispatcher: any, opts: any) => {
+      const first = await opts.callbacks.onToolApproval('bash', { command: 'pwd' })
+      const second = await opts.callbacks.onToolApproval('bash', { command: 'ls' })
+      if (first) {
+        opts.callbacks.onToolStart?.('bash', { command: 'pwd' })
+        opts.callbacks.onToolEnd?.('bash', 'ok', false, 1)
+      }
+      if (second) {
+        opts.callbacks.onToolStart?.('bash', { command: 'ls' })
+        opts.callbacks.onToolEnd?.('bash', 'should not run', false, 1)
+      }
+      return {
+        conversation: { turns: [] } as any,
+        finalText: 'attempted two commands',
+        iterations: 1,
+        stopReason: 'end_turn',
+        usage: { inputTokens: 0, outputTokens: 0, requestCount: 1 },
+        runtimeFailure: null,
+      }
+    })
+
+    const result = await runHeadless({
+      apiBaseUrl: 'http://localhost:8019',
+      apiKey: 'test-key',
+      model: 'test-model',
+      prompt: 'Run at most one command',
+      json: true,
+      autoApprove: true,
+      maxBashCalls: 1,
+    })
+
+    expect(result.exitCode).toBe(1)
+    expect(result.policyViolations).toEqual([
+      expect.objectContaining({
+        type: 'max_bash_calls_exceeded',
+        toolName: 'bash',
+        command: 'ls',
+        max: 1,
+        attempted: 2,
+      }),
+    ])
+    const payload = JSON.parse(stdoutWrite.mock.calls.at(-1)![0] as string)
+    expect(payload.policy_violations).toHaveLength(1)
+    expect(payload.tool_calls).toHaveLength(1)
+  })
+
   it('respects maxTokens option', async () => {
     await runHeadless({
       apiBaseUrl: 'http://localhost:8019',

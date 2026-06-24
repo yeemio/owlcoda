@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createTaskGetTool } from '../../../src/native/tools/task-get.js'
-import { resetTaskStore, createTask } from '../../../src/native/tools/task-store.js'
+import { resetTaskStore, createTask, updateTaskStep } from '../../../src/native/tools/task-store.js'
 
 describe('TaskGet tool', () => {
   const tool = createTaskGetTool()
@@ -65,6 +65,31 @@ describe('TaskGet tool', () => {
     expect(meta.hasOpenRequiredSteps).toBe(true)
     expect(meta.nextStep).toBeDefined()
     expect(meta.nextStep.id).toBe('step-1')
+  })
+
+  it('shows skipped and blocked step accounting in structured plan details', async () => {
+    createTask({
+      subject: 'Canary', description: 'desc',
+      steps: [
+        { title: 'Wave 1', description: 'done' },
+        { title: 'Wave 4', description: 'blocked runtime canary' },
+        { title: 'Wave 5', description: 'dependent smoke' },
+      ],
+    })
+    updateTaskStep('task-1', 'step-1', { status: 'completed' })
+    updateTaskStep('task-1', 'step-2', { status: 'blocked', failureReason: 'runtime gap' })
+    updateTaskStep('task-1', 'step-3', { status: 'skipped' as any, failureReason: 'Wave 4 blocked' })
+
+    const r = await tool.execute({ taskId: 'task-1' })
+
+    expect(r.output).toContain('Steps: 1/3 completed')
+    expect(r.output).toContain('1 blocked')
+    expect(r.output).toContain('1 skipped')
+    expect(r.output).toContain('↷ step-3: Wave 5 [skipped]')
+    const meta = (r.metadata as any).task
+    expect(meta.completedSteps).toBe(1)
+    expect(meta.blockedSteps).toBe(1)
+    expect(meta.skippedSteps).toBe(1)
   })
 
   it('no-steps get unchanged', async () => {

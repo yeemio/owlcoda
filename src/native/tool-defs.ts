@@ -111,10 +111,24 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
           type: 'object',
           properties: {
             content: { type: 'string', description: 'Task description (imperative form)' },
-            status: { type: 'string', enum: ['pending', 'in_progress', 'completed'], description: 'Task status' },
+            status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'blocked', 'skipped'], description: 'Task status' },
             activeForm: { type: 'string', description: 'Task description (present continuous form)' },
+            failureReason: { type: 'string', description: 'Required when status is blocked or skipped; explain the blocker or why the todo was not attempted.' },
           },
           required: ['content', 'status', 'activeForm'],
+          allOf: [
+            {
+              if: {
+                properties: {
+                  status: { enum: ['blocked', 'skipped'] },
+                },
+                required: ['status'],
+              },
+              then: {
+                required: ['failureReason'],
+              },
+            },
+          ],
         },
       },
     },
@@ -627,7 +641,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
       addBlocks: { type: 'array', items: { type: 'string' }, description: 'Task IDs this task should block' },
       removeBlocks: { type: 'array', items: { type: 'string' }, description: 'Task IDs to unblock' },
       stepId: { type: 'string', description: 'Step ID to update (triggers step-level update when present)' },
-      stepStatus: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'failed', 'blocked', 'cancelled'], description: 'New status for the step' },
+      stepStatus: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'failed', 'blocked', 'skipped', 'cancelled'], description: 'New status for the step' },
       touchedPaths: { type: 'array', items: { type: 'string' }, description: 'Paths touched during this step (appended to existing)' },
       verification: {
         type: 'array',
@@ -688,7 +702,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
           required: ['checkId', 'passed', 'checkedAt'],
         },
       },
-      failureReason: { type: 'string', description: 'Failure reason for failed/blocked steps (required when stepStatus is failed or blocked)' },
+      failureReason: { type: 'string', description: 'Failure reason for failed/blocked/skipped steps (required when stepStatus is failed, blocked, or skipped)' },
     },
     required: ['taskId'],
   },

@@ -40,12 +40,12 @@ export interface TaskUpdateInput {
   verification?: TaskVerificationCheck[]
   /** Verification results to record for this step (Slice 1). Replaces existing results. */
   verificationResults?: TaskVerificationResult[]
-  /** Failure reason for failed/blocked steps (Slice 1). Required when stepStatus is 'failed' or 'blocked'. */
+  /** Failure reason for failed/blocked/skipped steps (Slice 1). Required when stepStatus is 'failed', 'blocked', or 'skipped'. */
   failureReason?: string
 }
 
 const VALID_STATUSES = new Set(['pending', 'in_progress', 'completed', 'cancelled', 'blocked', 'deleted'])
-const VALID_STEP_STATUSES = new Set(['pending', 'in_progress', 'completed', 'failed', 'blocked', 'cancelled'])
+const VALID_STEP_STATUSES = new Set(['pending', 'in_progress', 'completed', 'failed', 'blocked', 'skipped', 'cancelled'])
 
 export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
   return {
@@ -96,7 +96,7 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
       if (stepId !== undefined) {
         if (stepStatus !== undefined && !VALID_STEP_STATUSES.has(stepStatus)) {
           return {
-            output: `Invalid stepStatus "${stepStatus}". Valid: pending, in_progress, completed, failed, blocked, cancelled.`,
+            output: `Invalid stepStatus "${stepStatus}". Valid: pending, in_progress, completed, failed, blocked, skipped, cancelled.`,
             isError: true,
           }
         }

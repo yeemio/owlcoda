@@ -46,6 +46,7 @@ function main(): void {
   try {
     execFileSync('npm', ['install', args.tarball, '--prefix', installRoot, '--no-audit', '--fund=false'], {
       encoding: 'utf8',
+      env: { ...process.env, npm_config_dry_run: 'false' },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     const binPath = join(installRoot, 'node_modules', '.bin', 'owlcoda')

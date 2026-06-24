@@ -76,6 +76,7 @@ export type TaskStepStatus =
   | 'completed'
   | 'failed'
   | 'blocked'
+  | 'skipped'
   | 'cancelled'
 
 export type TaskStepAction =
@@ -297,7 +298,7 @@ export function getTaskStep(taskId: string, stepId: string): TaskStep | undefine
  * Enforces transition rules:
  *   - Only one step may be `in_progress` per task (unless another is already in_progress)
  *   - `completed` requires all verification results to be passed (or none exist)
- *   - `failed` and `blocked` require `failureReason`
+ *   - `failed`, `blocked`, and `skipped` require `failureReason`
  *   - `completed` cannot be reopened (returns error)
  */
 export function updateTaskStep(
@@ -368,8 +369,8 @@ export function updateTaskStep(
       }
     }
 
-    // failed and blocked require failureReason
-    if ((newStatus === 'failed' || newStatus === 'blocked') && !updates.failureReason && !step.failureReason) {
+    // failed, blocked, and skipped require failureReason
+    if ((newStatus === 'failed' || newStatus === 'blocked' || newStatus === 'skipped') && !updates.failureReason && !step.failureReason) {
       return {
         ok: false,
         reason: `Cannot mark step "${stepId}" as ${newStatus} without a failureReason.`,
@@ -532,6 +533,7 @@ export function getCurrentOrNextStep(taskId: string): TaskStep | undefined {
 /**
  * Returns true if the task has any required steps that are not yet done.
  * A step is "open" if its status is pending, in_progress, failed, or blocked.
+ * Skipped steps are terminal non-success outcomes and are not open work.
  * Tasks without steps always return false (pure TODO task).
  */
 export function taskHasOpenRequiredSteps(task: Task): boolean {

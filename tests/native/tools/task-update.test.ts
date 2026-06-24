@@ -342,6 +342,26 @@ describe('TaskUpdate — step updates (Slice 1)', () => {
     expect(r.output).toMatch(/failureReason/)
   })
 
+  it('marks skipped with failureReason for dependent work that cannot run', async () => {
+    makeTask()
+    const r = await tool.execute({
+      taskId: 'task-1',
+      stepId: 'step-2',
+      stepStatus: 'skipped' as any,
+      failureReason: 'Skipped because prerequisite Wave 4 is blocked.',
+    })
+    expect(r.isError).toBe(false)
+    expect(r.output).toContain('skipped')
+    expect(getTask('task-1')?.steps?.[1]?.status).toBe('skipped')
+  })
+
+  it('refuses skipped without failureReason', async () => {
+    makeTask()
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-2', stepStatus: 'skipped' as any })
+    expect(r.isError).toBe(true)
+    expect(r.output).toMatch(/failureReason/)
+  })
+
   it('task-level update still works alongside steps', async () => {
     makeTask()
     const r = await tool.execute({ taskId: 'task-1', subject: 'New Subject' })

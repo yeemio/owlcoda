@@ -10,6 +10,8 @@ import {
   type TranscriptItem,
 } from '../../src/native/repl-shared.js'
 
+const WARM_CACHE_SANITY_BUDGET_MS = 100
+
 // 0.13.73 transcript-perf — LRU cache for getDisplayLines.
 //
 // The composer's spinner re-renders at ~11 Hz during an active
@@ -194,9 +196,11 @@ describe('TranscriptOffsetsCache (D-1)', () => {
     buildTranscriptOffsetsCache(makeItems(200, 3), 80)
     const coldTime = performance.now() - coldStart
 
-    // 100 single-appends should be much cheaper than 1 full cold rebuild
-    // (generous 5x threshold for CI)
-    expect(appendTime).toBeLessThan(Math.max(10, coldTime * 5))
+    // 100 single-appends should be much cheaper than repeated cold rebuilds.
+    // Keep a relative check plus a loose absolute floor so a loaded
+    // self-hosted runner does not turn this complexity guard into a CPU-speed
+    // benchmark.
+    expect(appendTime).toBeLessThan(Math.max(25, coldTime * 8))
   })
 
   it('selectVisibleTranscriptWindow with warm cache returns identical result to cold call', () => {
@@ -232,8 +236,9 @@ describe('TranscriptOffsetsCache (D-1)', () => {
 
     // Keep this as an absolute sanity bound instead of a warm/cold ratio:
     // under parallel full-suite load, the cold side can also become very fast
-    // once the display-line LRU is hot, making ratio assertions noisy.
-    expect(warmTime).toBeLessThan(50)
+    // once the display-line LRU is hot, making ratio assertions noisy. The
+    // threshold guards pathological regressions without pinning runner speed.
+    expect(warmTime).toBeLessThan(WARM_CACHE_SANITY_BUDGET_MS)
   })
 })
 
@@ -250,7 +255,7 @@ describe('selectVisibleTranscriptWindow O(1) spinner-tick regression (D-5)', () 
     }))
   }
 
-  it('100 stable-item calls with warm cache take < 20ms total (pins O(1) cost)', () => {
+  it('100 stable-item calls with warm cache stay within a loose O(1) budget', () => {
     // Simulate 100 spinner ticks where items/budget/cols are unchanged.
     // With warm offsets cache + warm display-lines LRU, these calls are cheap.
     const items = makeItems(200, 3)
@@ -265,8 +270,9 @@ describe('selectVisibleTranscriptWindow O(1) spinner-tick regression (D-5)', () 
     }
     const elapsed = performance.now() - t0
 
-    // Generous: 20ms for 100 calls on any CI machine
-    expect(elapsed).toBeLessThan(20)
+    // This pins the O(1) path without turning the test into a strict
+    // machine-speed benchmark under parallel full-suite load.
+    expect(elapsed).toBeLessThan(WARM_CACHE_SANITY_BUDGET_MS)
   })
 
   it('cold calls (no display-lines LRU, no offsets cache) are slower than warm cached calls', () => {

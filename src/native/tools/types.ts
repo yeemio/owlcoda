@@ -182,7 +182,7 @@ export interface TodoWriteInput {
   /** The updated todo list */
   todos: Array<{
     content: string
-    status: 'pending' | 'in_progress' | 'completed'
+    status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'skipped'
     activeForm: string
   }>
 }

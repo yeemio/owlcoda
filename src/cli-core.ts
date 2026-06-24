@@ -173,6 +173,8 @@ export function parseArgs(argv: string[]): {
   autoApprove?: boolean
   allowTools?: string[]
   denyTools?: string[]
+  allowBashCommands?: string[]
+  maxBashCalls?: number
   resumeSession?: string
   force?: boolean
   dryRun?: boolean
@@ -198,6 +200,8 @@ export function parseArgs(argv: string[]): {
   let autoApprove = false
   const allowTools: string[] = []
   const denyTools: string[] = []
+  const allowBashCommands: string[] = []
+  let maxBashCalls: number | undefined
   let resumeSession: string | undefined
   let force = false
   let dryRun = false
@@ -280,6 +284,12 @@ export function parseArgs(argv: string[]): {
         break
       case '--deny-tool':
         appendCommaSeparatedValues(denyTools, args[++i])
+        break
+      case '--allow-bash-command':
+        appendRawValue(allowBashCommands, args[++i])
+        break
+      case '--max-bash-calls':
+        maxBashCalls = parseNonNegativeInteger(args[++i])
         break
       case '--resume':
         resumeSession = args[++i] ?? 'last'
@@ -420,6 +430,8 @@ export function parseArgs(argv: string[]): {
     autoApprove,
     allowTools,
     denyTools,
+    allowBashCommands,
+    maxBashCalls,
     resumeSession,
     force,
     dryRun,
@@ -438,6 +450,18 @@ function appendCommaSeparatedValues(out: string[], raw: string | undefined): voi
     const value = part.trim()
     if (value) out.push(value)
   }
+}
+
+function appendRawValue(out: string[], raw: string | undefined): void {
+  if (raw === undefined || raw === '') return
+  out.push(raw)
+}
+
+function parseNonNegativeInteger(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw === '') return undefined
+  const parsed = Number.parseInt(raw, 10)
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined
+  return parsed
 }
 
 
@@ -519,6 +543,9 @@ Options:
   --auto-approve          Auto-approve safe tools and task-contract file writes (non-interactive; mutating bash remains policy-gated)
   --allow-tool <list>     Restrict non-interactive run to comma-separated tool names
   --deny-tool <list>      Deny comma-separated tool names even when otherwise safe
+  --allow-bash-command <cmd>
+                          Allow only this exact bash command in non-interactive policy; repeatable
+  --max-bash-calls <N>    Deny bash attempts after N calls in non-interactive policy
   --resume [id|last]      Resume a previous session
   --dry-run               Validate environment without launching
   --print-url             Print the browser admin URL without opening a browser
@@ -1267,6 +1294,8 @@ export async function main(): Promise<void> {
     autoApprove,
     allowTools,
     denyTools,
+    allowBashCommands,
+    maxBashCalls,
     resumeSession,
     force,
     dryRun,
@@ -2390,6 +2419,8 @@ export async function main(): Promise<void> {
               autoApprove,
               allowTools,
               denyTools,
+              allowBashCommands,
+              maxBashCalls,
               resumeSession: effectiveResumeSession,
             })
             process.exit(result.exitCode)
@@ -2419,6 +2450,8 @@ export async function main(): Promise<void> {
         autoApprove,
         allowTools,
         denyTools,
+        allowBashCommands,
+        maxBashCalls,
         resumeSession: effectiveResumeSession,
         saveSessionOnComplete: true,
       })

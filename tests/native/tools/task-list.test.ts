@@ -63,6 +63,29 @@ describe('TaskList tool', () => {
     expect(meta.completedSteps).toBe(1)
   })
 
+  it('distinguishes skipped and blocked steps from completed progress', async () => {
+    createTask({
+      subject: 'Canary', description: 'Run gated canary',
+      steps: [
+        { title: 'Wave 1', description: 'done' },
+        { title: 'Wave 4', description: 'blocked runtime canary' },
+        { title: 'Wave 5', description: 'dependent smoke' },
+      ],
+    })
+    const { updateTaskStep } = await import('../../../src/native/tools/task-store.js')
+    updateTaskStep('task-1', 'step-1', { status: 'completed' })
+    updateTaskStep('task-1', 'step-2', { status: 'blocked', failureReason: 'runtime gap' })
+    updateTaskStep('task-1', 'step-3', { status: 'skipped' as any, failureReason: 'Wave 4 blocked' })
+    const r = await tool.execute({})
+    expect(r.output).toContain('steps 1/3')
+    expect(r.output).toContain('1 blocked')
+    expect(r.output).toContain('1 skipped')
+    const meta = (r.metadata as any).tasks[0]
+    expect(meta.completedSteps).toBe(1)
+    expect(meta.blockedSteps).toBe(1)
+    expect(meta.skippedSteps).toBe(1)
+  })
+
   it('no-steps list unchanged — no step progress shown', async () => {
     createTask({ subject: 'A', description: 'a' })
     const r = await tool.execute({})

@@ -276,7 +276,7 @@ class LspSession {
     return uri
   }
 
-  async diagnostics(filePath: string, languageId: string, settleMs = 2500): Promise<Diagnostic[]> {
+  async diagnostics(filePath: string, languageId: string, settleMs = 8000): Promise<Diagnostic[]> {
     await this.initializePromise
     const uri = this.ensureOpen(filePath, languageId)
     return new Promise<Diagnostic[]>((resolve) => {
@@ -293,13 +293,20 @@ class LspSession {
       }
       const listener = (changed: string): void => {
         if (changed !== uri) return
-        // Debounce: publishDiagnostics may arrive empty-then-populated, so
-        // wait 400ms after the LAST update to return the settled set.
+        const currentDiagnostics = this.diagnosticsByUri.get(uri) ?? []
+        // TypeScript can publish an initial empty set before the project graph
+        // finishes. Only non-empty diagnostics are safe to debounce quickly;
+        // empty sets wait for the hard cap so late type errors are not hidden.
+        if (currentDiagnostics.length === 0) return
+        // Debounce populated diagnostics in case related diagnostics follow.
         if (settleTimer) clearTimeout(settleTimer)
         settleTimer = setTimeout(finish, 400)
       }
       this.diagnosticsListeners.add(listener)
-      // Hard cap so we never hang if the server never publishes for this uri.
+      const currentDiagnostics = this.diagnosticsByUri.get(uri) ?? []
+      if (currentDiagnostics.length > 0) settleTimer = setTimeout(finish, 400)
+      // Hard cap so we never hang if the server only publishes an empty set or
+      // never publishes for this uri.
       hardCap = setTimeout(finish, settleMs)
     })
   }

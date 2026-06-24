@@ -297,6 +297,34 @@ describe('headless approval policy', () => {
     })
   })
 
+  it('auto-approves declared Create or update report paths outside the cwd', () => {
+    const cwd = join(tmpdir(), 'owlcoda-headless-create-update-output')
+    const reportPath = '/Users/yeemio/AI/gitrep/owlmodel/out/control/round62_owlcoda_push_open_pr_gate_20260623.md'
+    const conversation = createConversation({ system: 'test', model: 'm' })
+    addUserMessage(
+      conversation,
+      [
+        'Expected output:',
+        '',
+        'Create or update:',
+        '',
+        '```text',
+        reportPath,
+        '```',
+      ].join('\n'),
+    )
+    const taskState = ensureTaskExecutionState(conversation, cwd)
+
+    expect(taskState.contract.allowedWritePaths.some(
+      (scope) => scope.origin === 'user-external' && scope.path === reportPath,
+    )).toBe(true)
+    expect(decideHeadlessApproval('write', true, { path: reportPath, content: 'ok\n' }, taskState)).toEqual({
+      allowed: true,
+      reason: 'task-contract-auto-approve',
+      toolName: 'write',
+    })
+  })
+
   it('auto-approves edit and NotebookEdit only for declared task-contract paths', async () => {
     const { taskState, target } = await makeExplicitTaskState('notes.ipynb')
     expect(decideHeadlessApproval('edit', true, { path: target, oldStr: 'a', newStr: 'b' }, taskState)).toEqual({
@@ -545,6 +573,109 @@ describe('headless approval policy', () => {
     ]) {
       const decision = decideHeadlessApproval('bash', true, { command }, taskState)
       expect(decision.allowed).toBe(false)
+    }
+  })
+
+  // ─── OC-20260623-14: Node.js workspace-local verification commands ────
+
+  it('auto-approves workspace-local npx vitest run for high-confidence code-change tasks', async () => {
+    const { cwd, taskState } = await makeWorkspaceCodeChangeTaskState()
+    for (const command of [
+      `cd ${cwd} && npx vitest run tests/native/tools/ignore.test.ts tests/native/tools/glob.test.ts`,
+      `cd ${cwd} && npx vitest run`,
+      `cd ${cwd} && npx jest tests/foo.test.ts --verbose`,
+      `cd ${cwd} && npx mocha tests/unit/**/*.test.ts`,
+    ]) {
+      const decision = decideHeadlessApproval('bash', true, { command }, taskState)
+      expect(decision.allowed).toBe(true)
+      if (decision.allowed) {
+        expect(decision.reason).toBe('workspace-test-bash')
+      }
+    }
+  })
+
+  it('auto-approves workspace-local node_modules/.bin vitest runner paths', async () => {
+    const { cwd, taskState } = await makeWorkspaceCodeChangeTaskState()
+    for (const command of [
+      `cd ${cwd} && ./node_modules/.bin/vitest run tests/native/task-state.test.ts --testNamePattern "Write exactly one report file"`,
+      `cd ${cwd} && node_modules/.bin/vitest run tests/native/task-state.test.ts`,
+      `cd ${cwd} && ./node_modules/.bin/jest tests/foo.test.ts --verbose`,
+      `cd ${cwd} && ./node_modules/.bin/mocha tests/unit/**/*.test.ts`,
+      `cd ${cwd} && ./node_modules/.bin/tsc --noEmit`,
+    ]) {
+      const decision = decideHeadlessApproval('bash', true, { command }, taskState)
+      expect(decision.allowed).toBe(true)
+      if (decision.allowed) {
+        expect(decision.reason).toBe('workspace-test-bash')
+      }
+    }
+  })
+
+  it('auto-approves workspace-local tsc --noEmit for type-checking', async () => {
+    const { cwd, taskState } = await makeWorkspaceCodeChangeTaskState()
+    for (const command of [
+      `cd ${cwd} && tsc --noEmit`,
+      `cd ${cwd} && npx tsc --noEmit`,
+    ]) {
+      const decision = decideHeadlessApproval('bash', true, { command }, taskState)
+      expect(decision.allowed).toBe(true)
+      if (decision.allowed) {
+        expect(decision.reason).toBe('workspace-test-bash')
+      }
+    }
+  })
+
+  it('auto-approves TaskCreate with npx vitest workspace test command', async () => {
+    const { cwd, taskState } = await makeWorkspaceCodeChangeTaskState()
+    const decision = decideHeadlessApproval('TaskCreate', true, {
+      command: `cd ${cwd} && npx vitest run tests/foo.test.ts`,
+    }, taskState)
+    expect(decision.allowed).toBe(true)
+    if (decision.allowed) {
+      expect(decision.reason).toBe('workspace-test-bash')
+    }
+  })
+
+  it('does not auto-approve npx with unrecognized packages', async () => {
+    const { cwd, taskState } = await makeWorkspaceCodeChangeTaskState()
+    for (const command of [
+      `cd ${cwd} && npx eslint src/`,
+      `cd ${cwd} && npx ts-node scripts/migrate.ts`,
+      `cd ${cwd} && npx prettier --write src/`,
+      `cd ${cwd} && npx c8 sh -c "echo bad"`,
+      `cd ${cwd} && npx nyc node scripts/migrate.js`,
+      `cd ${cwd} && ./node_modules/.bin/prettier --write src/`,
+      `cd ${cwd} && ./node_modules/.bin/ts-node scripts/migrate.ts`,
+      `cd ${cwd} && ./node_modules/.bin/tsc --watch`,
+    ]) {
+      const decision = decideHeadlessApproval('bash', true, { command }, taskState)
+      expect(decision.allowed).toBe(false)
+    }
+  })
+
+  it('does not auto-approve npx test runners that cd outside workspace', async () => {
+    const { cwd, taskState } = await makeWorkspaceCodeChangeTaskState()
+    const decision = decideHeadlessApproval('bash', true, {
+      command: `cd ${join(cwd, '..')} && npx vitest run tests/foo.test.ts`,
+    }, taskState)
+    expect(decision.allowed).toBe(false)
+  })
+
+  it('safe_readonly standalone inspection commands are allowed without autoApprove', () => {
+    // These classify as safe_readonly in bash-risk and pass the first check
+    // in decideHeadlessApproval without needing autoApprove or taskState.
+    for (const command of [
+      'head -20 package.json',
+      'echo READY',
+      'cat README.md',
+      'ls -la',
+      'git status',
+    ]) {
+      const decision = decideHeadlessApproval('bash', false, { command })
+      expect(decision.allowed).toBe(true)
+      if (decision.allowed) {
+        expect(decision.reason).toBe('safe-bash')
+      }
     }
   })
 

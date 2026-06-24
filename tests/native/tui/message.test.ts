@@ -83,6 +83,22 @@ describe('formatToolUseHeader', () => {
     expect(plain).not.toContain('activeForm')
   })
 
+  it('summarizes TodoWrite blocked and skipped counts separately from done', () => {
+    const result = formatToolUseHeader('TodoWrite', {
+      todos: [
+        { content: 'Wave 1', activeForm: 'Wave 1', status: 'completed' },
+        { content: 'Wave 4', activeForm: 'Wave 4 blocked', status: 'blocked' },
+        { content: 'Wave 5', activeForm: 'Wave 5 skipped', status: 'skipped' },
+      ],
+    })
+    const plain = stripAnsi(result)
+    expect(plain).toContain('3 todos')
+    expect(plain).toContain('1 done')
+    expect(plain).toContain('1 blocked')
+    expect(plain).toContain('1 skipped')
+    expect(plain).not.toContain('3 done')
+  })
+
   it('summarizes Brief input as user-facing text plus attachment count', () => {
     const result = formatToolUseHeader('Brief', {
       message: '已将反馈写入 /tmp/review.md，署名 mimo',
@@ -206,6 +222,26 @@ describe('formatToolResult', () => {
     expect(plain).toContain('Read design spec')
     expect(plain).toContain('Implementing panel renderer')
     expect(plain).toContain('Run smoke tests')
+  })
+
+  it('formats TodoWrite skipped and blocked output without inflating done count', () => {
+    const output = [
+      'Todo List:',
+      '',
+      '  ✓ Wave 1 shipped [completed]',
+      '  ⊘ Wave 4 blocked by runtime gap [blocked]',
+      '  ↷ Wave 5 skipped because Wave 4 was blocked [skipped]',
+      '',
+      'Progress: 1/3 completed · 1 blocked · 1 skipped',
+    ].join('\n')
+    const result = formatToolResult('TodoWrite', output, false, 400)
+    const plain = stripAnsi(result)
+    expect(plain).toContain('1/3 done')
+    expect(plain).toContain('1 blocked')
+    expect(plain).toContain('1 skipped')
+    expect(plain).toContain('Wave 4 blocked by runtime gap')
+    expect(plain).toContain('Wave 5 skipped because Wave 4 was blocked')
+    expect(plain).not.toContain('3/3 done')
   })
 
   it('shows output lines for errors', () => {

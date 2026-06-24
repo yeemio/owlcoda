@@ -115,6 +115,20 @@ describe('parseArgs', () => {
     expect(parse(['--auto-approve']).autoApprove).toBe(true)
   })
 
+  it('parses exact bash command policy flags', () => {
+    const result = parse([
+      'run',
+      '--allow-bash-command', './node_modules/.bin/vitest run tests/native/headless-approval.test.ts --testNamePattern node_modules/.bin',
+      '--allow-bash-command', 'pwd',
+      '--max-bash-calls', '1',
+    ])
+    expect(result.allowBashCommands).toEqual([
+      './node_modules/.bin/vitest run tests/native/headless-approval.test.ts --testNamePattern node_modules/.bin',
+      'pwd',
+    ])
+    expect(result.maxBashCalls).toBe(1)
+  })
+
   it('parses --resume with value', () => {
     expect(parse(['--resume', 'abc-123']).resumeSession).toBe('abc-123')
   })

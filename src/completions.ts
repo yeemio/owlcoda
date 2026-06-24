@@ -4,7 +4,7 @@
  */
 
 const COMMANDS = ['start', 'stop', 'status', 'clients', 'server', 'serve', 'run', 'doctor', 'ui', 'admin', 'init', 'config', 'models', 'logs', 'completions', 'benchmark', 'export', 'inspect', 'validate', 'health', 'audit', 'cache', 'skills']
-const FLAGS = ['--port', '--config', '--endpoint', '--router', '--model', '--mode', '--daemon-only', '--prompt', '--json', '--auto-approve', '--resume', '--dry-run', '--print-url', '--open-browser', '--route', '--select', '--view', '--force', '--help', '--version']
+const FLAGS = ['--port', '--config', '--endpoint', '--router', '--model', '--mode', '--daemon-only', '--prompt', '--json', '--auto-approve', '--allow-tool', '--deny-tool', '--allow-bash-command', '--max-bash-calls', '--resume', '--dry-run', '--print-url', '--open-browser', '--route', '--select', '--view', '--force', '--help', '--version']
 
 export function generateBashCompletion(): string {
   return `# owlcoda bash completion
@@ -70,6 +70,10 @@ ${cmdDescs.map(d => `    '${d}'`).join('\n')}
     '--prompt[Prompt text]:text:'
     '--json[JSON output mode]'
     '--auto-approve[Auto-approve tool executions]'
+    '--allow-tool[Restrict non-interactive run to tool names]:tools:'
+    '--deny-tool[Deny tool names in non-interactive run]:tools:'
+    '--allow-bash-command[Allow exact bash command in non-interactive policy]:command:'
+    '--max-bash-calls[Deny bash attempts after N calls]:count:'
     '--resume[Resume session]:id:'
     '--dry-run[Validate without launching]'
     '--print-url[Print the admin URL without opening a browser]'
@@ -144,6 +148,10 @@ export function generateFishCompletion(): string {
     ['prompt', 'Prompt text', true],
     ['json', 'JSON output mode', false],
     ['auto-approve', 'Auto-approve tool executions', false],
+    ['allow-tool', 'Restrict non-interactive run to tool names', true],
+    ['deny-tool', 'Deny tool names in non-interactive run', true],
+    ['allow-bash-command', 'Allow exact bash command in non-interactive policy', true],
+    ['max-bash-calls', 'Deny bash attempts after N calls', true],
     ['resume', 'Resume session', true],
     ['dry-run', 'Validate without launching', false],
     ['print-url', 'Print the admin URL without opening a browser', false],

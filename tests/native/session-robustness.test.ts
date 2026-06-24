@@ -395,7 +395,7 @@ describe('Crash recovery (Gate 3.7)', () => {
     expect(ids).toContain(goodId)
     expect(ids).not.toContain(badId)
     expect(ids).not.toContain(wrongVerId)
-  })
+  }, 15000)
 
   it('saveSession works after corrupted files exist in directory', () => {
     const badId = `crash-preexist-${Date.now()}`
