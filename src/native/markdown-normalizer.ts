@@ -83,6 +83,51 @@ function isStrictSeparator(line: string): boolean {
 // text(list-item); the text classifier downstream renders the list correctly.
 const HEADING_OL_GLUE_RE = /^(.*?[一-鿿])(\d+\.\s+\S.*)$/
 
+const BOX_ROW_START_CHARS = new Set(['┌', '└', '├', '┏', '┗', '┣', '╔', '╚', '╠', '╭', '╰', '╞', '╟', '│', '┃'])
+const BOX_ROW_END_CHARS = new Set(['┐', '┘', '┤', '┓', '┛', '┫', '╗', '╝', '╣', '╮', '╯', '╡', '╢', '│', '┃'])
+
+function splitBoxDrawingGlue(line: string): string[] {
+  if (!/[┌┐└┘├┤┏┓┗┛┣┫╔╗╚╝╠╣╭╮╰╯╞╡╟╢│┃]/.test(line)) return [line]
+
+  const indent = line.match(/^\s*/)?.[0] ?? ''
+  const breaks: number[] = []
+  for (let i = indent.length + 1; i < line.length; i++) {
+    const ch = line[i]!
+    const prev = line[i - 1]!
+    if (ch === '│' || ch === '┃') {
+      if (BOX_ROW_END_CHARS.has(prev)) breaks.push(i)
+      continue
+    }
+    if (BOX_ROW_START_CHARS.has(ch) && BOX_ROW_END_CHARS.has(prev)) {
+      breaks.push(i)
+    }
+  }
+
+  if (breaks.length === 0) return [line]
+  const parts: string[] = []
+  let start = 0
+  for (const at of breaks) {
+    const part = line.slice(start, at)
+    if (part.trim() !== '') parts.push(part)
+    start = at
+  }
+  const last = line.slice(start)
+  if (last.trim() !== '') parts.push(last)
+  if (parts.length <= 1) return [line]
+
+  return parts.map((part, index) => {
+    if (index === 0 || indent === '' || /^\s/.test(part)) return part
+    return indent + part
+  })
+}
+
+function splitGluedFenceClose(line: string): { content: string; closed: boolean } {
+  const idx = line.lastIndexOf('```')
+  if (idx <= 0) return { content: line, closed: false }
+  if (line.slice(idx + 3).trim() !== '') return { content: line, closed: false }
+  return { content: line.slice(0, idx), closed: true }
+}
+
 function classifyHeadingOrText(line: string): NormalizedLine[] {
   const m = line.match(HEADING_RE)
   if (m) {
@@ -164,7 +209,15 @@ export class MarkdownBlockNormalizer {
     }
 
     if (this.inCodeFence) {
-      out.push({ kind: 'code-line', text: line })
+      const splitFence = splitGluedFenceClose(line)
+      for (const part of splitBoxDrawingGlue(splitFence.content)) {
+        out.push({ kind: 'code-line', text: part })
+      }
+      if (splitFence.closed) {
+        this.inCodeFence = false
+        this.codeFenceLang = ''
+        out.push({ kind: 'code-fence-close' })
+      }
       return out
     }
 
@@ -184,6 +237,14 @@ export class MarkdownBlockNormalizer {
     // Table state ends if we get to here with inTable still set.
     if (this.inTable) {
       this.inTable = false
+    }
+
+    const boxParts = splitBoxDrawingGlue(line)
+    if (boxParts.length > 1) {
+      for (const part of boxParts) {
+        out.push(...classifyHeadingOrText(part))
+      }
+      return out
     }
 
     // Potential table-header / lookahead candidate: line has ≥ 2 pipes

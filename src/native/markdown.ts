@@ -644,7 +644,7 @@ function renderTable(table: ParsedTable): string {
 // 0.13.98: also detect `---+` (3+ consecutive ASCII dashes) anywhere — covers
 // HR lines, HR-glued-to-prose (`...导入---`), and `---` frontmatter
 // terminators. Em dash `—` (U+2014) is a single char and won't match.
-const MD_SYNTAX_RE = /[#*`|>~_[\]]|^\s*[-+]\s|^\s*\d+\.\s|^\s{4,}\S|\n\n|\n\s*[-+#*`|>]|\n\s*\d+\.\s|-{3,}/m
+const MD_SYNTAX_RE = /[#*`|>~_[\]]|^\s*[-+]\s|^\s*\d+\.\s|^\s{4,}\S|\n\n|\n\s*[-+#*`|>]|\n\s*\d+\.\s|-{3,}|[┌┐└┘├┤┏┓┗┛┣┫╔╗╚╝╠╣╭╮╰╯╞╡╟╢│┃]/m
 function hasMarkdownSyntax(s: string): boolean {
   return MD_SYNTAX_RE.test(s.length > 500 ? s.slice(0, 500) : s)
 }

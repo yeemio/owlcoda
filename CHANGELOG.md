@@ -2,6 +2,19 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.14] — 2026-06-26
+
+Terminal markdown rendering reliability patch.
+
+### Fixed
+
+- Fixed Unicode box-drawing output that some models emit without enough
+  newlines, so terminal diagrams such as `┌────┐│...│└────┘` are recovered as
+  readable multi-line blocks.
+- Fixed fenced code blocks where the closing ````` marker is glued to the last
+  box-drawing row, preventing following headings or paragraphs from being
+  swallowed into the code block.
+
 ## [0.15.13] — 2026-06-24
 
 Release gate + control-plane reliability patch.

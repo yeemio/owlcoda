@@ -320,6 +320,25 @@ describe('renderMarkdown', () => {
     expect(result).toContain('hello')
   })
 
+  it('recovers box drawing rows when a model glues them onto one physical line', () => {
+    const result = renderMarkdown('┌────┐│你││下达任务│└────┘')
+    expect(stripAnsi(result).split('\n')).toEqual([
+      '┌────┐',
+      '│你│',
+      '│下达任务│',
+      '└────┘',
+    ])
+  })
+
+  it('closes a fenced box drawing block when the closing fence is glued to the last row', () => {
+    const result = renderMarkdown('```\n┌────┐│你│└────┘```\n###后续')
+    const plain = stripAnsi(result)
+    expect(plain).not.toContain('```')
+    expect(plain).toContain('  ┌────┐\n  │你│\n  └────┘')
+    expect(plain).toContain('后续')
+    expect(plain).not.toContain('###后续')
+  })
+
   it('renders blockquotes', () => {
     const result = renderMarkdown('> important note')
     expect(result).toContain('│')
@@ -465,6 +484,24 @@ describe('StreamingMarkdownRenderer', () => {
     // Streaming code block uses DIM separators + syntax highlighting
     expect(result).toContain(DIM)
     expect(stripAnsi(result)).toContain('x = 1')
+  })
+
+  it('recovers glued box rows and a glued fence close while streaming', () => {
+    const renderer = new StreamingMarkdownRenderer()
+    const chunks: string[] = []
+
+    for (const chunk of ['```\n', '┌────┐│你│', '└────┘```\n', '###后续\n']) {
+      const out = renderer.push(chunk)
+      if (out) chunks.push(out)
+    }
+    const flushed = renderer.flush()
+    if (flushed) chunks.push(flushed)
+
+    const plain = stripAnsi(chunks.join(''))
+    expect(plain).not.toContain('```')
+    expect(plain).toContain('  ┌────┐\n  │你│\n  └────┘')
+    expect(plain).toContain('后续')
+    expect(plain).not.toContain('###后续')
   })
 
   it('flushes partial line on flush()', () => {
