@@ -2,6 +2,35 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.15] — 2026-06-26
+
+Model Output Harness v1 release for structured artifacts.
+
+### Added
+
+- Added provider-agnostic `POST /v1/structured-output` for schema/preset-driven
+  model output, starting with `evidence-digest.v1`, `analyst-audit.v1`, and
+  `canonical-judge.v1`.
+- Added parse, extract, repair, salvage, and structured fallback handling so
+  callers receive either a schema-valid artifact or a `failed_fallback.v1`
+  object instead of empty or ambiguous model text.
+- Added per-call `attempts`, `rawText`, token, stop reason, and duration
+  accounting for downstream run manifests and replay.
+- Added a standalone release smoke gate for real `/v1/structured-output`
+  success and policy-fallback checks.
+
+### Changed
+
+- Structured-output presets are named by artifact contract, not by provider, so
+  OwlFootball and other consumers can route Kimi, DeepSeek, GPT, or local models
+  through the same harness boundary.
+
+### Fixed
+
+- Forbidden phrase policy failures now return a structured
+  `failed_fallback.v1` artifact with `retryHint: "rerun_role_artifact"`, so
+  business callers do not accidentally consume invalid model output.
+
 ## [0.15.14] — 2026-06-26
 
 Terminal markdown rendering reliability patch.

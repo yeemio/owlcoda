@@ -55,6 +55,33 @@ export function getOpenApiSpec(): object {
           },
         },
       },
+      '/v1/structured-output': {
+        post: {
+          summary: 'Structured model output harness',
+          description: 'Call a model with a provider-agnostic preset and schema, then parse, repair, salvage, or fallback to a structured JSON artifact.',
+          operationId: 'createStructuredOutput',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/StructuredOutputRequest' },
+              },
+            },
+          },
+          responses: {
+            '200': {
+              description: 'Structured output result. Failed model output still returns a structured failed_fallback artifact.',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/StructuredOutputResponse' },
+                },
+              },
+            },
+            '400': { description: 'Invalid request', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+            '502': { description: 'Upstream model error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+          },
+        },
+      },
       '/v1/chat/completions': {
         post: {
           summary: 'OpenAI Chat Completions',
@@ -752,6 +779,77 @@ export function getOpenApiSpec(): object {
                 output_tokens: { type: 'integer' },
               },
             },
+          },
+        },
+        StructuredOutputRequest: {
+          type: 'object',
+          required: ['model', 'user'],
+          properties: {
+            model: { type: 'string', description: 'Model ID or alias resolved by OwlCoda model routing' },
+            preset: {
+              type: 'string',
+              description: 'Provider-agnostic output preset, e.g. evidence-digest.v1, analyst-audit.v1, canonical-judge.v1',
+            },
+            schema: { type: 'object', description: 'JSON Schema subset for the expected artifact' },
+            system: { type: 'string', description: 'Additional caller instructions appended to the preset contract' },
+            user: { type: 'string', description: 'User/task payload sent to the selected model' },
+            maxTokens: { type: 'integer', minimum: 1, description: 'Maximum output tokens' },
+            repairPolicy: {
+              type: 'object',
+              properties: {
+                enabled: { type: 'boolean' },
+                maxAttempts: { type: 'integer', minimum: 0 },
+              },
+            },
+            salvagePolicy: {
+              type: 'object',
+              properties: {
+                enabled: { type: 'boolean' },
+                fields: { type: 'array', items: { type: 'string' } },
+              },
+            },
+            policy: {
+              type: 'object',
+              properties: {
+                forbiddenPhrases: { type: 'array', items: { type: 'string' } },
+                maxArrayItems: { type: 'integer' },
+                maxStringLength: { type: 'integer' },
+              },
+            },
+          },
+        },
+        StructuredOutputAttempt: {
+          type: 'object',
+          properties: {
+            label: { type: 'string', enum: ['primary', 'parse', 'repair', 'salvage', 'fallback'] },
+            model: { type: 'string' },
+            durationMs: { type: 'integer' },
+            inputTokens: { type: 'integer' },
+            outputTokens: { type: 'integer' },
+            stopReason: { type: 'string', nullable: true },
+            parsed: { type: 'boolean' },
+            schemaValid: { type: 'boolean' },
+            error: { type: 'string' },
+          },
+        },
+        StructuredOutputResponse: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean' },
+            artifact: { type: 'object' },
+            rawText: { type: 'string' },
+            rawThinkingText: { type: 'string' },
+            parsed: { type: 'boolean' },
+            schemaValid: { type: 'boolean' },
+            validationErrors: { type: 'array', items: { type: 'string' } },
+            attempts: { type: 'array', items: { $ref: '#/components/schemas/StructuredOutputAttempt' } },
+            repairCount: { type: 'integer' },
+            salvageUsed: { type: 'boolean' },
+            fallbackUsed: { type: 'boolean' },
+            stopReason: { type: 'string', nullable: true },
+            inputTokens: { type: 'integer' },
+            outputTokens: { type: 'integer' },
+            durationMs: { type: 'integer' },
           },
         },
         ErrorResponse: {
