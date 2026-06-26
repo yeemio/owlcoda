@@ -16,6 +16,38 @@
 
 <p>All notable changes to OwlCoda public releases are documented here.</p>
 
+<h2>[0.15.15] — 2026-06-26</h2>
+
+<p>Model Output Harness v1 release for structured artifacts.</p>
+
+<h3>Added</h3>
+
+<ul>
+<li>Added provider-agnostic <code>POST /v1/structured-output</code> for schema/preset-driven</li>
+<p>  model output, starting with <code>evidence-digest.v1</code>, <code>analyst-audit.v1</code>, and</p>
+<p>  <code>canonical-judge.v1</code>.</p>
+<li>Added parse, extract, repair, salvage, and structured fallback handling so</li>
+<p>  callers receive either a schema-valid artifact or a <code>failed_fallback.v1</code></p>
+<p>  object instead of empty or ambiguous model text.</p>
+<li>Added per-call <code>attempts</code>, <code>rawText</code>, token, stop reason, and duration</li>
+<p>  accounting for downstream run manifests and replay.</p>
+<li>Added a standalone release smoke gate for real <code>/v1/structured-output</code></li>
+<p>  success and policy-fallback checks.</p>
+</ul>
+<h3>Changed</h3>
+
+<ul>
+<li>Structured-output presets are named by artifact contract, not by provider, so</li>
+<p>  OwlFootball and other consumers can route Kimi, DeepSeek, GPT, or local models</p>
+<p>  through the same harness boundary.</p>
+</ul>
+<h3>Fixed</h3>
+
+<ul>
+<li>Forbidden phrase policy failures now return a structured</li>
+<p>  <code>failed_fallback.v1</code> artifact with <code>retryHint: "rerun_role_artifact"</code>, so</p>
+<p>  business callers do not accidentally consume invalid model output.</p>
+</ul>
 <h2>[0.15.14] — 2026-06-26</h2>
 
 <p>Terminal markdown rendering reliability patch.</p>
@@ -404,4 +436,4 @@
 <h2>Older Releases</h2>
 
 <p>Historical package versions remain under the license terms that accompanied those versions when they were published.</p>
-</div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>本地优先 AI 编码工作台</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/zh/docs/install" data-astro-cid-sz7xmlte>文档</a></li> <li data-astro-cid-sz7xmlte><a href="/architect/" data-astro-cid-sz7xmlte>架构看板</a></li> <li data-astro-cid-sz7xmlte><a href="/zh/changelog" data-astro-cid-sz7xmlte>更新日志</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.15.14</li> <li class="pill" data-astro-cid-sz7xmlte>GPL 源码</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>本地诊断</li> </ul> </div> </footer>  </body></html>
+</div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>本地优先 AI 编码工作台</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/zh/docs/install" data-astro-cid-sz7xmlte>文档</a></li> <li data-astro-cid-sz7xmlte><a href="/architect/" data-astro-cid-sz7xmlte>架构看板</a></li> <li data-astro-cid-sz7xmlte><a href="/zh/changelog" data-astro-cid-sz7xmlte>更新日志</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.15.15</li> <li class="pill" data-astro-cid-sz7xmlte>GPL 源码</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>本地诊断</li> </ul> </div> </footer>  </body></html>
