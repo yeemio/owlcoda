@@ -16,197 +16,37 @@
 
 <p>All notable changes to OwlCoda public releases are documented here.</p>
 
-<h2>[0.15.15] — 2026-06-26</h2>
+<h2>[0.15.16] — 2026-06-27</h2>
 
-<p>Model Output Harness v1 release for structured artifacts.</p>
-
-<h3>Added</h3>
-
-<ul>
-<li>Added provider-agnostic <code>POST /v1/structured-output</code> for schema/preset-driven</li>
-<p>  model output, starting with <code>evidence-digest.v1</code>, <code>analyst-audit.v1</code>, and</p>
-<p>  <code>canonical-judge.v1</code>.</p>
-<li>Added parse, extract, repair, salvage, and structured fallback handling so</li>
-<p>  callers receive either a schema-valid artifact or a <code>failed_fallback.v1</code></p>
-<p>  object instead of empty or ambiguous model text.</p>
-<li>Added per-call <code>attempts</code>, <code>rawText</code>, token, stop reason, and duration</li>
-<p>  accounting for downstream run manifests and replay.</p>
-<li>Added a standalone release smoke gate for real <code>/v1/structured-output</code></li>
-<p>  success and policy-fallback checks.</p>
-</ul>
-<h3>Changed</h3>
-
-<ul>
-<li>Structured-output presets are named by artifact contract, not by provider, so</li>
-<p>  OwlFootball and other consumers can route Kimi, DeepSeek, GPT, or local models</p>
-<p>  through the same harness boundary.</p>
-</ul>
-<h3>Fixed</h3>
-
-<ul>
-<li>Forbidden phrase policy failures now return a structured</li>
-<p>  <code>failed_fallback.v1</code> artifact with <code>retryHint: "rerun_role_artifact"</code>, so</p>
-<p>  business callers do not accidentally consume invalid model output.</p>
-</ul>
-<h2>[0.15.14] — 2026-06-26</h2>
-
-<p>Terminal markdown rendering reliability patch.</p>
-
-<h3>Fixed</h3>
-
-<ul>
-<li>Fixed Unicode box-drawing output that some models emit without enough</li>
-<p>  newlines, so terminal diagrams such as <code>┌────┐│...│└────┘</code> are recovered as</p>
-<p>  readable multi-line blocks.</p>
-<li>Fixed fenced code blocks where the closing ````` marker is glued to the last</li>
-<p>  box-drawing row, preventing following headings or paragraphs from being</p>
-<p>  swallowed into the code block.</p>
-</ul>
-<h2>[0.15.13] — 2026-06-24</h2>
-
-<p>Release gate + control-plane reliability patch.</p>
-
-<h3>Fixed</h3>
-
-<ul>
-<li>Fixed the publish dry-run gate so <code>npm publish --dry-run</code> no longer causes</li>
-<p>  nested <code>npm pack</code> and install-smoke commands to become no-op dry runs.</p>
-<li>Tightened task progress truth: skipped and blocked work stays separate from</li>
-<p>  completed work, and skipped task steps must carry a reason.</p>
-<li>Hardened headless verification policy around exact bash command budgets,</li>
-<p>  local Node test runners, report output headings, model identifiers, and</p>
-<p>  workspace output scopes.</p>
-</ul>
-<h3>Notes</h3>
-
-<ul>
-<li>Published as npm <code>owlcoda@0.15.13</code> with GitHub source tag <code>v0.15.13</code>.</li>
-<li>This is a release reliability and control-plane honesty patch. It is not a</li>
-<p>  claim that long-running degradation is permanently or completely solved.</p>
-</ul>
-<h2>[0.15.12] — 2026-06-23</h2>
-
-<p>Runtime truth + supervised job replay reliability release.</p>
+<p>Runtime harness consolidation release for the Phase D entry point.</p>
 
 <h3>Added</h3>
 
 <ul>
-<li>Added supervised runtime job tools: <code>JobList</code>, <code>JobGet</code>, <code>JobCancel</code>,</li>
-<p>  <code>BrowserJob</code>, <code>ApiJob</code>, and <code>ServiceJob</code>.</p>
-<li>Added browser replay evidence capture across fetch/headless/CDP-oriented job</li>
-<p>  providers, with saved HTML/text/screenshot/console/network artifacts where</p>
-<p>  the provider supports them.</p>
-<li>Added service lifecycle supervision for local dev services, including PID,</li>
-<p>  port, health, log artifact, restart, and graceful stop metadata.</p>
+<li>Added the <code>owlcoda/desktop</code> package export for desktop-shell consumers.</li>
+<li>Added desktop product-shell view models, live event adapters, smoke probes,</li>
+<p>  runtime facts drilldown, and capability gating for App Server driven shells.</p>
+<li>Added provider evaluation and scorecard surfaces for RL-ready run accounting:</li>
+<p>  default provider selection, headless audit/runner, report generation,</p>
+<p>  persistent eval records, and scorecard adapters.</p>
+<li>Extended the structured-output harness with artifact persistence, app-server</li>
+<p>  access, role-level rerun support, provider matrix checks, and desktop-facing</p>
+<p>  artifact APIs.</p>
 </ul>
 <h3>Changed</h3>
 
 <ul>
-<li>Command-backed <code>TaskCreate</code> work now mirrors into the job supervisor, so long</li>
-<p>  tasks have a queryable job snapshot in addition to task and runtime lifecycle</p>
-<p>  state.</p>
-<li><code>TaskVerify</code> now records verification strength and refuses to complete</li>
-<p>  parser, snapshot, browser, and replay-sensitive steps from weak evidence such</p>
-<p>  as a plain pattern match, typecheck, or build-only signal.</p>
-<li>Runtime-sensitive final reports now have to mark unresolved browser/business</li>
-<p>  replay as <code>pending_user_replay</code> or <code>runtime_replay_pending</code> instead of</p>
-<p>  claiming full completion while asking the user to refresh or manually retest.</p>
+<li>Release validation now treats the runtime harness as the product boundary:</li>
+<p>  execution, artifacts, provider capability, scorecard, and desktop surfaces are</p>
+<p>  verified together before public packaging.</p>
 </ul>
 <h3>Fixed</h3>
 
 <ul>
-<li>Fixed a release packaging regression in the transient <code>0.15.11</code> npm package:</li>
-<p>  <code>0.15.12</code> is rebuilt from the public <code>0.15.10</code> source line and preserves the</p>
-<p>  runtime lifecycle, runtime supervisor, AgentControl, and mailbox control-plane</p>
-<p>  files while adding this release's supervised job tooling.</p>
-</ul>
-<h3>Notes</h3>
-
-<ul>
-<li>Published as npm <code>owlcoda@0.15.12</code> with GitHub source tag <code>v0.15.12</code>.</li>
-<li>This release improves runtime evidence, replay supervision, and report</li>
-<p>  honesty. It is not a claim that long-running degradation is permanently or</p>
-<p>  completely solved.</p>
-</ul>
-<h2>[0.15.10] — 2026-06-22</h2>
-
-<p>Runtime truth + multimodal routing reliability release.</p>
-
-<h3>Added</h3>
-
-<ul>
-<li>Added image input handling for local paths, <code>@image.png</code>, Markdown image</li>
-<p>  references, and <code>file://</code> image links, converting them into multimodal</p>
-<p>  content blocks when the selected model is image-capable.</p>
-<li>Added provider capability routing and probe support so Kimi K2.7 / Moonshot</li>
-<p>  and other OpenAI-compatible providers can enable image recognition through</p>
-<p>  model capabilities instead of a hard-coded provider branch.</p>
-<li>Added runtime lifecycle tools for task commands, Agent runs, supervisor</li>
-<p>  processes, and mailbox messages: <code>RuntimeLifecycleList/Get</code>,</p>
-<p>  <code>RuntimeSupervisorList/Get</code>, <code>AgentControlList/Get</code>, and</p>
-<p>  <code>AgentMailboxSend/List/Get/Resolve</code>.</p>
-</ul>
-<h3>Changed</h3>
-
-<ul>
-<li>Command-style long tasks now record supervisor-process snapshots with process</li>
-<p>  identity, parent run linkage, and inspect/recovery policy.</p>
-<li>Agent run history now exposes parent/child run views and inspect-before-retry</li>
-<p>  recovery state outside of the transcript.</p>
-<li>Parent/child agent messages now flow through a mailbox queue and runtime</li>
-<p>  lifecycle snapshots instead of living only in conversation text.</p>
-<li><code>TaskVerify</code> safe-readonly classification now allows read-only process and</li>
-<p>  hashing checks such as <code>ps</code>, <code>pgrep</code>, <code>shasum</code>, and <code>sha256sum</code>.</p>
-</ul>
-<h3>Fixed</h3>
-
-<ul>
-<li>Fixed runtime recovery / task-state divergence after a</li>
-<p>  verification-repair checkpoint resolves: the post-recovery-overrun guard now</p>
-<p>  checks the real task-store step state before skipping <code>TaskUpdate(completed)</code>,</p>
-<p>  so a step that is still <code>in_progress</code> can converge to <code>completed</code>.</p>
-<li>Kept the verification-repair hard-stop guard strict; the release does not</li>
-<p>  weaken checkpoint or overrun protections.</p>
-<li>Fixed the runtime event contract so legal <code>long_task_wait_policy</code></li>
-<p>  interventions do not require <code>violation_kind</code> when the event is a wait-policy</p>
-<p>  record rather than a violation.</p>
-</ul>
-<h3>Notes</h3>
-
-<ul>
-<li>Published as npm <code>owlcoda@0.15.10</code> with GitHub source tag <code>v0.15.10</code>.</li>
-<li>This release improves runtime evidence, recovery convergence, and multimodal</li>
-<p>  routing. It is not a claim that long-running degradation is permanently or</p>
-<p>  completely solved.</p>
-</ul>
-<h2>[0.15.8] — 2026-06-18</h2>
-
-<p>Long-run reliability release.</p>
-
-<h3>Added</h3>
-
-<ul>
-<li>Added runtime recovery ledger surfaces and inspection tools so long-running</li>
-<p>  sessions can expose unresolved checkpoints instead of losing them behind</p>
-<p>  generic completion or retry output.</p>
-<li>Added long-task lifecycle tracking and tools for inspecting, waiting on, and</li>
-<p>  replacing managed long tasks.</p>
-<li>Added runtime event persistence into saved sessions so recovery context can</li>
-<p>  survive resume paths.</p>
-</ul>
-<h3>Changed</h3>
-
-<ul>
-<li>Hardened TaskVerify, TaskUpdate, completion, finalization, and headless/TUI</li>
-<p>  gates around long-run degradation and recovery states.</p>
-<li>Updated root and Admin dependencies to keep release-candidate audits clean.</li>
-</ul>
-<h3>Notes</h3>
-
-<ul>
-<li>The npm package remains the public install surface; the <code>demo/</code> World Cup</li>
-<p>  predictor and private execution prompts are excluded from the npm tarball.</p>
-<li>This release is intended to be paired with public source tag <code>v0.15.8</code>.</li>
+<li>Hardened long-task recovery, runtime event accounting, model capability</li>
+<p>  routing, multimodal image message handling, job supervision, markdown</p>
+<p>  normalization, and review-center partial apply paths covered by the expanded</p>
+<p>  release gate.</p>
 </ul>
 <h2>[0.15.7] — 2026-06-14</h2>
 
@@ -436,4 +276,4 @@
 <h2>Older Releases</h2>
 
 <p>Historical package versions remain under the license terms that accompanied those versions when they were published.</p>
-</div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>本地优先 AI 编码工作台</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/zh/docs/install" data-astro-cid-sz7xmlte>文档</a></li> <li data-astro-cid-sz7xmlte><a href="/architect/" data-astro-cid-sz7xmlte>架构看板</a></li> <li data-astro-cid-sz7xmlte><a href="/zh/changelog" data-astro-cid-sz7xmlte>更新日志</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.15.15</li> <li class="pill" data-astro-cid-sz7xmlte>GPL 源码</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>本地诊断</li> </ul> </div> </footer>  </body></html>
+</div> </article>   </main> <footer class="site-footer" data-astro-cid-sz7xmlte> <div class="container footer-row" data-astro-cid-sz7xmlte> <div class="col-brand" data-astro-cid-sz7xmlte> <span class="brand-row" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--dark" src="/brand/owlcoda-mark-dark.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> <img class="footer__mark footer__mark--light" src="/brand/owlcoda-mark-light.svg" alt="OwlCoda" height="24" data-astro-cid-sz7xmlte> </span> <span class="tagline" data-astro-cid-sz7xmlte>本地优先 AI 编码工作台</span> </div> <ul class="links" aria-label="footer links" data-astro-cid-sz7xmlte> <li data-astro-cid-sz7xmlte><a href="/zh/docs/install" data-astro-cid-sz7xmlte>文档</a></li> <li data-astro-cid-sz7xmlte><a href="/architect/" data-astro-cid-sz7xmlte>架构看板</a></li> <li data-astro-cid-sz7xmlte><a href="/zh/changelog" data-astro-cid-sz7xmlte>更新日志</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>GitHub</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/issues" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>Issues</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/LICENSE" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>LICENSE</a></li> <li data-astro-cid-sz7xmlte><a href="https://github.com/yeemio/owlcoda/blob/main/NOTICE.md" target="_blank" rel="noopener" data-astro-cid-sz7xmlte>NOTICE</a></li> </ul> <ul class="pills" aria-label="status pills" data-astro-cid-sz7xmlte> <li class="pill pill--ver" data-astro-cid-sz7xmlte>v0.15.16</li> <li class="pill" data-astro-cid-sz7xmlte>GPL 源码</li> <li class="pill pill--mute" data-astro-cid-sz7xmlte>本地诊断</li> </ul> </div> </footer>  </body></html>
