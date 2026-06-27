@@ -185,6 +185,28 @@ describe('createWebFetchTool', () => {
     expect(result.output).toBe('Error: HTTP 404 Not Found fetching https://docs.example.com/guides/install')
     expect(fetchMock).toHaveBeenCalledTimes(3)
   })
+
+  it('marks HTTP 403 as a recoverable fetch block with response evidence and alternate capture hints', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('Cloudflare says no', {
+      status: 403,
+      statusText: 'Forbidden',
+      headers: { 'content-type': 'text/html' },
+    }))
+
+    const result = await tool.execute({ url: 'https://docs.example.com/protected' })
+
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('HTTP 403 Forbidden')
+    expect(result.output).toContain('recoverable fetch block')
+    expect(result.output).toContain('BrowserJob')
+    expect(result.output).toContain('Cloudflare says no')
+    expect(result.metadata).toMatchObject({
+      failureCategory: 'web-fetch:http-403',
+      httpStatus: 403,
+      recoverable: true,
+      responseBodySnippet: 'Cloudflare says no',
+    })
+  })
 })
 
 describe('extractLlmsTxtCandidateUrls', () => {

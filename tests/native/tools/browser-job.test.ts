@@ -62,6 +62,8 @@ describe('BrowserJob platform tool', () => {
     expect(result.isError).toBe(false)
     expect(result.output).toContain('Browser job completed')
     expect(result.output).toContain('selector=#scoreboard')
+    expect(result.output).toContain('artifacts:')
+    expect(result.output).toContain('browser_text=')
     const job = (result.metadata as any).job
     expect(job).toMatchObject({
       type: 'browser',
@@ -162,6 +164,49 @@ console.log('<!doctype html><main id="scoreboard">Chrome rendered odds board</ma
     })
   })
 
+  it('preserves partial chrome_headless evidence when capture times out after producing DOM', async () => {
+    const fakeChrome = join(artifactDir, 'slow-fake-chrome.mjs')
+    await writeFile(fakeChrome, `#!/usr/bin/env node
+import { writeFileSync } from 'node:fs'
+const screenshotArg = process.argv.find((arg) => arg.startsWith('--screenshot='))
+if (screenshotArg) writeFileSync(screenshotArg.slice('--screenshot='.length), 'partial-png')
+console.error('partial stderr before hang')
+console.log('<!doctype html><main id="scoreboard">Partial rendered odds board</main>')
+await new Promise((resolve) => setTimeout(resolve, 1000))
+`, 'utf-8')
+    await chmod(fakeChrome, 0o755)
+    const tool = createBrowserJobTool()
+
+    const result = await tool.execute({
+      url: `${baseUrl}/page`,
+      provider: 'chrome_headless',
+      chromeExecutablePath: fakeChrome,
+      artifactDir,
+      deadlineMs: 300,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('timed out')
+    expect(result.output).toContain('artifacts:')
+    const job = (result.metadata as any).job
+    expect(job).toMatchObject({
+      type: 'browser',
+      status: 'timeout',
+      stage: 'timeout',
+      provider: 'chrome_headless',
+      terminationReason: 'deadline_exceeded',
+    })
+    expect(job.artifacts.map((artifact: any) => artifact.artifactType)).toEqual([
+      'browser_screenshot',
+      'browser_dom',
+      'browser_text',
+    ])
+    const screenshotPath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_screenshot').path
+    const textPath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_text').path
+    expect(existsSync(screenshotPath)).toBe(true)
+    expect(await readFile(textPath, 'utf-8')).toContain('Partial rendered odds board')
+  })
+
   it('records browser evidence in the run artifact registry with runtime metadata', async () => {
     const outputRoot = join(artifactDir, 'run-output')
     const { manifest } = await createRunWorkspace({
@@ -215,6 +260,10 @@ console.log('<!doctype html><main id="scoreboard">Chrome rendered odds board</ma
 
     expect(result.isError).toBe(true)
     expect(result.output).toContain('selector not found')
+    expect(result.output).toContain('fetch_html captures static HTML')
+    expect(result.output).toContain('provider=chrome_headless')
+    expect(result.output).toContain('artifacts:')
+    expect(result.output).toContain('browser_text=')
     expect((result.metadata as any).job).toMatchObject({
       type: 'browser',
       status: 'failed',
@@ -222,6 +271,28 @@ console.log('<!doctype html><main id="scoreboard">Chrome rendered odds board</ma
       error: expect.stringContaining('#missing'),
       terminationReason: 'selector_missing',
     })
+    const job = (result.metadata as any).job
+    expect(job.artifacts.map((artifact: any) => artifact.artifactType)).toEqual(['browser_html', 'browser_text'])
+    const textPath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_text').path
+    expect(await readFile(textPath, 'utf-8')).toContain('Live odds board')
+  })
+
+  it('classifies fetch_html connection failures with local recovery hints', async () => {
+    const tool = createBrowserJobTool()
+
+    const result = await tool.execute({
+      url: 'http://127.0.0.1:1/',
+      waitForSelector: 'header',
+      artifactDir,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('Browser job failed')
+    expect(result.output).toContain('local app')
+    expect(result.output).toContain('exact host/port')
+    expect(result.output).toContain('provider=chrome_headless')
+    expect((result.metadata as any).failureCategory).toBe('browser-job:fetch-failed')
+    expect((result.metadata as any).recoverable).toBe(true)
   })
 
   it('marks timed out browser jobs as timeout with cleanup evidence', async () => {

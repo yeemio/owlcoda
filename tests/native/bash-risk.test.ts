@@ -11,6 +11,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   classifyBashCommand,
+  primaryBashRiskReason,
   type BashRiskLevel,
 } from '../../src/native/bash-risk.js'
 
@@ -217,6 +218,13 @@ describe('classifyBashCommand — taxonomy', () => {
 
   it('preserves the input verbatim in command field (after trim)', () => {
     expect(classifyBashCommand('  pwd  ').command).toBe('pwd')
+  })
+
+  it('reports the load-bearing non-safe reason before harmless cd chunks', () => {
+    const v = classifyBashCommand('cd /Users/publicuser/AI/gitrep/owlfootball && npx tsc --noEmit')
+    expect(v.level).toBe('needs_approval')
+    expect(v.reasons[0]).toContain('cd')
+    expect(primaryBashRiskReason(v)).toContain('npx')
   })
 })
 

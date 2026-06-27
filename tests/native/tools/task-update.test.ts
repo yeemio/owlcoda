@@ -129,6 +129,25 @@ describe('TaskUpdate — step updates (Slice 1)', () => {
     expect(r.output).toContain('verification 1/1 passed')
   })
 
+  it('rejects verification command checks that TaskVerify would refuse', async () => {
+    makeTask()
+    await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
+    const r = await tool.execute({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      verification: [{
+        id: 'curl-html',
+        kind: 'command',
+        command: 'curl -s http://127.0.0.1:5182/ | head -c 3000',
+      }],
+    })
+
+    expect(r.isError).toBe(true)
+    expect(r.output).toContain('Unsafe TaskVerify command check')
+    expect(r.output).toContain('curl-html')
+    expect(getTaskStep('task-1', 'step-1')?.verification).toEqual([])
+  })
+
   it('completes step after passed verification', async () => {
     makeTask()
     await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })

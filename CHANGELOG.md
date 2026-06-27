@@ -2,6 +2,38 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.18] — 2026-06-27
+
+Release-blocking reliability fixes.
+
+### Fixed
+
+- `TaskVerify` now separates retryable check failures from unsatisfiable or
+  verdict-blocked failures, and returns structured repair checkpoints with
+  next-action guidance instead of pushing models into blind workarounds.
+- `TaskCreate` and `TaskUpdate` now reject verification policies that would
+  require unsafe verification commands before the task is accepted.
+- `TodoWrite` and `TaskUpdate` preserve `blocked` and `skipped` task states,
+  require a reason for skipped work, and no longer count skipped or blocked
+  steps as completed.
+- `WebFetch` 403 responses are recoverable evidence failures instead of
+  terminal research dead ends.
+- `BrowserJob` preserves partial artifacts for selector misses and capture
+  failures, so follow-up recovery can inspect the evidence that did land.
+- Bash and long-task timeout reporting now surfaces incomplete snapshots rather
+  than letting watchdog timeouts be summarized as completed work.
+- `ReadMcpResource` routes `file://` and absolute filesystem paths through the
+  file reader, reducing MCP-tool misuse dead ends.
+- Structured-output capability handling no longer treats fallback
+  `maxOutputTokens` as a hard cap over an explicit caller `maxTokens`; only
+  declared or manual model limits cap the request.
+
+### Notes
+
+- This release closes the currently exposed release-blocking reliability defects
+  around verification, recovery evidence, and structured-output provider
+  controls. It does not claim all deeper platform issues are permanently solved.
+
 ## [0.15.17] — 2026-06-27
 
 Resumable workflow runner release.

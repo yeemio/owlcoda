@@ -80,4 +80,17 @@ describe('model structured output capability', () => {
       source: 'declared',
     })
   })
+
+  it('does not bake project-specific Kimi output budgets into global capabilities', () => {
+    const capabilities = resolveModelCapabilities({
+      id: 'kimi-code',
+      backendModel: 'kimi-for-coding',
+      provider: 'kimi',
+    })
+
+    expect(capabilities.structuredOutput.maxOutputTokens).toMatchObject({
+      tokens: 4096,
+      source: 'fallback',
+    })
+  })
 })

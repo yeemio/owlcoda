@@ -217,6 +217,7 @@ function evaluateFsPolicy(
       `Path resolves outside the allowed workspace. ` +
       `Resolved: ${resolvedReal}. ` +
       `Allowed roots: ${summary}${more}. ` +
+      `For recoverable task artifacts, write inside the current workspace or a RunWorkspace output root. ` +
       `To extend the allowed set, set OWLCODA_ALLOW_FS_ROOTS=<root>[:<root>...].`,
     attemptedPath: resolvedReal,
   }

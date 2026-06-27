@@ -110,6 +110,22 @@ describe('Native Bash tool', () => {
     expect(result.metadata?.killed).toBe(true)
   }, 10_000)
 
+  it('does not label a zero-exit background-shaped timeout as process killed', async () => {
+    const result = await bash.execute({
+      command: "trap 'echo ready; exit 0' TERM; sleep 1 >/tmp/owlcoda-bash-background-timeout.log 2>&1 & echo started; wait",
+      timeoutMs: 50,
+    })
+
+    expect(result.isError).toBe(false)
+    expect(result.output).toContain('started')
+    expect(result.output).not.toContain('[killed]')
+    expect(result.output).toContain('[timeout exceeded]')
+    expect(result.metadata?.exitCode).toBe(0)
+    expect(result.metadata?.killed).toBe(false)
+    expect(result.metadata?.timeoutExceeded).toBe(true)
+    expect(result.metadata?.backgroundLikely).toBe(true)
+  }, 10_000)
+
   // ── Output truncation ──
 
   it('truncates very large output', async () => {

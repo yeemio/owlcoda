@@ -6298,6 +6298,13 @@ function findVerificationRepairCheckpoint(results: ToolExecutionResult[]): Verif
       .filter((item) => item.checkId !== '(unknown-check)')
 
     if (failedChecks.length === 0) continue
+    const failureCategory = stringValue(metadata['failureCategory'])
+    const requiresHardRepairCheckpoint =
+      failedChecks.some((check) => check.unsatisfiable)
+      || failureCategory === 'verify:unsatisfiable-spec'
+      || failureCategory === 'verify:run-verdict-blocked'
+    if (!requiresHardRepairCheckpoint) continue
+
     return {
       taskId,
       stepId,

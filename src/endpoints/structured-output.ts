@@ -83,7 +83,7 @@ export function createStructuredOutputModelExecutor(config: OwlCodaConfig): Stru
       max_tokens: request.maxTokens,
       messages: [{ role: 'user', content: request.user }],
       stream: false,
-      temperature: 0,
+      ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     }
     const upstreamBody = route.translate
       ? translateRequest(anthropicBody, route.backendModel)

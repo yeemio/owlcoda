@@ -129,6 +129,34 @@ describe('/v1/structured-output', () => {
     expect(backendBodies[0].model).toBe('upstream-model')
     expect(backendBodies[0].messages[0].role).toBe('system')
     expect(backendBodies[0].messages[0].content).toContain('Return exactly one short JSON object')
+    expect(backendBodies[0].messages[0].content).toContain('Required top-level keys: artifact, summary, confidence')
+    expect(backendBodies[0].messages[0].content).toContain('Constant fields: artifact="evidence-digest.v1"')
+  })
+
+  it('passes caller-provided temperature through to the upstream provider', async () => {
+    const beforeCalls = backendBodies.length
+    const res = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'test-model',
+        preset: 'evidence-digest.v1',
+        user: 'Digest this with provider-compatible controls.',
+        maxTokens: 256,
+        temperature: 1,
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.ok).toBe(true)
+    expect(body.attempts[0]).toMatchObject({
+      requestedTemperature: 1,
+      appliedTemperature: 1,
+      temperatureSource: 'request',
+    })
+    expect(backendBodies).toHaveLength(beforeCalls + 1)
+    expect(backendBodies.at(-1).temperature).toBe(1)
   })
 
   it('persists artifact and attempts into the RunWorkspace ledger when requested', async () => {

@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { constants } from 'node:fs'
+import { constants, existsSync } from 'node:fs'
 import { access, mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import {
@@ -12,6 +12,7 @@ import {
   recordJobCleanup,
   startJob,
   unregisterJobAbortAdapter,
+  type JobArtifactRef,
   type JobRecord,
 } from '../job-supervisor.js'
 import { getRunWorkspacePathsFromRef, recordArtifact } from '../run-workspace.js'
@@ -114,18 +115,6 @@ export function createBrowserJobTool(): NativeToolDef<BrowserJobInput> {
         const html = await res.text()
         appendJobOutput(jobId, `Fetched ${parsed.href} status=${res.status} bytes=${html.length}\n`)
 
-        if (input.waitForSelector && !selectorExists(html, input.waitForSelector)) {
-          const message = `selector not found: ${input.waitForSelector}`
-          appendJobOutput(jobId, `${message}\n`)
-          finishJob(jobId, 'failed', {
-            stage: 'selector_missing',
-            error: message,
-            terminationReason: 'selector_missing',
-          })
-          recordFetchCleanup(jobId)
-          return browserResult(jobId, true, `Browser job failed: ${message}`)
-        }
-
         const artifacts = await writeBrowserArtifacts({
           jobId,
           artifactDir: resolveBrowserArtifactDir(input, cwd),
@@ -141,6 +130,21 @@ export function createBrowserJobTool(): NativeToolDef<BrowserJobInput> {
         })
         addJobArtifacts(jobId, recordedArtifacts)
         appendJobOutput(jobId, `Saved ${artifacts.length} artifact(s)\n`)
+
+        if (input.waitForSelector && !selectorExists(html, input.waitForSelector)) {
+          const message = `selector not found: ${input.waitForSelector}`
+          const hint =
+            'fetch_html captures static HTML only; for client-rendered selectors use provider=chrome_headless or inspect saved browser_html/browser_text artifacts.'
+          appendJobOutput(jobId, `${message}\n${hint}\n`)
+          finishJob(jobId, 'failed', {
+            stage: 'selector_missing',
+            error: message,
+            terminationReason: 'selector_missing',
+          })
+          recordFetchCleanup(jobId)
+          return browserResult(jobId, true, `Browser job failed: ${message}\n${hint}`)
+        }
+
         finishJob(jobId, 'done', { stage: 'completed' })
         recordFetchCleanup(jobId)
         const selectorNote = input.waitForSelector ? ` selector=${input.waitForSelector}` : ''
@@ -159,12 +163,19 @@ export function createBrowserJobTool(): NativeToolDef<BrowserJobInput> {
           terminationReason: timedOut ? 'deadline_exceeded' : 'execution_error',
         })
         recordFetchCleanup(jobId)
+        const failureHint = !timedOut ? browserFetchFailureHint(parsed) : ''
         return browserResult(
           jobId,
           true,
           timedOut
             ? `Browser job timed out after ${deadlineMs}ms: ${jobId}`
-            : `Browser job failed: ${message}`,
+            : `Browser job failed: ${message}${failureHint ? `\n${failureHint}` : ''}`,
+          !timedOut
+            ? {
+                failureCategory: 'browser-job:fetch-failed',
+                recoverable: true,
+              }
+            : undefined,
         )
       } finally {
         unregisterJobAbortAdapter(jobId)
@@ -264,18 +275,6 @@ async function runChromeHeadlessJob(args: {
     const html = stdout.trim()
     appendJobOutput(args.jobId, `Chrome captured ${args.parsed.href} dom_bytes=${html.length}\n`)
 
-    if (args.input.waitForSelector && !selectorExists(html, args.input.waitForSelector)) {
-      const message = `selector not found: ${args.input.waitForSelector}`
-      appendJobOutput(args.jobId, `${message}\n`)
-      finishJob(args.jobId, 'failed', {
-        stage: 'selector_missing',
-        error: message,
-        terminationReason: 'selector_missing',
-      })
-      await cleanupChromeProfile(args.jobId, profileDir)
-      return browserResult(args.jobId, true, `Browser job failed: ${message}`)
-    }
-
     await writeFile(domPath, html, 'utf-8')
     await writeFile(textPath, htmlToText(html), 'utf-8')
     const artifacts = [
@@ -291,6 +290,19 @@ async function runChromeHeadlessJob(args: {
     })
     addJobArtifacts(args.jobId, recordedArtifacts)
     appendJobOutput(args.jobId, `Saved ${artifacts.length} chrome_headless artifact(s)\n`)
+
+    if (args.input.waitForSelector && !selectorExists(html, args.input.waitForSelector)) {
+      const message = `selector not found: ${args.input.waitForSelector}`
+      appendJobOutput(args.jobId, `${message}\n`)
+      finishJob(args.jobId, 'failed', {
+        stage: 'selector_missing',
+        error: message,
+        terminationReason: 'selector_missing',
+      })
+      await cleanupChromeProfile(args.jobId, profileDir)
+      return browserResult(args.jobId, true, `Browser job failed: ${message}`)
+    }
+
     finishJob(args.jobId, 'done', { stage: 'completed' })
     await cleanupChromeProfile(args.jobId, profileDir)
     const selectorNote = args.input.waitForSelector ? ` selector=${args.input.waitForSelector}` : ''
@@ -298,10 +310,23 @@ async function runChromeHeadlessJob(args: {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     const timedOut = isAbortLikeError(err) || isExecTimeoutError(err)
+    const partialOutput = extractExecFilePartialOutput(err)
     appendJobOutput(args.jobId, `${message}\n`)
+    if (partialOutput.stderr.trim()) appendJobOutput(args.jobId, partialOutput.stderr.slice(-2000))
     if (getJob(args.jobId)?.status === 'cancelled') {
       await cleanupChromeProfile(args.jobId, profileDir)
       return browserResult(args.jobId, true, `Browser job cancelled: ${args.jobId}`)
+    }
+    if (timedOut) {
+      await recordPartialChromeArtifacts({
+        jobId: args.jobId,
+        input: args.input,
+        cwd: args.cwd,
+        screenshotPath,
+        domPath,
+        textPath,
+        html: partialOutput.stdout.trim(),
+      })
     }
     finishJob(args.jobId, timedOut ? 'timeout' : 'failed', {
       stage: timedOut ? 'timeout' : 'failed',
@@ -331,10 +356,56 @@ function execFileText(
       maxBuffer: 10 * 1024 * 1024,
       signal: options.signal,
     }, (error, stdout, stderr) => {
-      if (error) reject(error)
+      if (error) {
+        reject(Object.assign(error, {
+          stdout: String(stdout ?? ''),
+          stderr: String(stderr ?? ''),
+        }))
+      }
       else resolvePromise({ stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
     })
   })
+}
+
+function extractExecFilePartialOutput(err: unknown): { stdout: string; stderr: string } {
+  if (!err || typeof err !== 'object') return { stdout: '', stderr: '' }
+  const record = err as Record<string, unknown>
+  return {
+    stdout: typeof record['stdout'] === 'string' ? record['stdout'] : '',
+    stderr: typeof record['stderr'] === 'string' ? record['stderr'] : '',
+  }
+}
+
+async function recordPartialChromeArtifacts(args: {
+  jobId: string
+  input: BrowserJobInput
+  cwd: string
+  screenshotPath: string
+  domPath: string
+  textPath: string
+  html: string
+}): Promise<void> {
+  const artifacts: Array<{ path: string; artifactType: string }> = []
+  if (existsSync(args.screenshotPath)) {
+    artifacts.push({ path: args.screenshotPath, artifactType: 'browser_screenshot' })
+  }
+  if (args.html) {
+    await writeFile(args.domPath, args.html, 'utf-8')
+    await writeFile(args.textPath, htmlToText(args.html), 'utf-8')
+    artifacts.push(
+      { path: args.domPath, artifactType: 'browser_dom' },
+      { path: args.textPath, artifactType: 'browser_text' },
+    )
+  }
+  if (artifacts.length === 0) return
+  const recordedArtifacts = await recordBrowserArtifacts({
+    artifacts,
+    input: args.input,
+    jobId: args.jobId,
+    cwd: args.cwd,
+  })
+  addJobArtifacts(args.jobId, recordedArtifacts)
+  appendJobOutput(args.jobId, `Saved ${artifacts.length} partial chrome_headless artifact(s)\n`)
 }
 
 async function resolveChromeExecutable(explicitPath?: string): Promise<string | undefined> {
@@ -526,15 +597,42 @@ function recordFetchCleanup(jobId: string): void {
   })
 }
 
-function browserResult(jobId: string, isError: boolean, output: string): ToolResult {
+function browserFetchFailureHint(parsed: URL): string {
+  if (isLocalBrowserHost(parsed.hostname)) {
+    return 'Recovery: local app fetch failed; verify the server is listening on the exact host/port, try swapping localhost and 127.0.0.1, or use provider=chrome_headless for browser-rendered UI.'
+  }
+  return 'Recovery: fetch_html could not fetch this page; verify network access or try provider=chrome_headless for browser-rendered UI.'
+}
+
+function isLocalBrowserHost(hostname: string): boolean {
+  const normalized = hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  return normalized === 'localhost' || normalized === '127.0.0.1' || normalized === '::1'
+}
+
+function browserResult(
+  jobId: string,
+  isError: boolean,
+  output: string,
+  extraMetadata?: Record<string, unknown>,
+): ToolResult {
   const job = getFinishedJob(jobId)
+  const artifactSummary = job?.artifacts.length ? formatArtifactSummary(job.artifacts) : ''
   return {
-    output,
+    output: artifactSummary ? `${output}\nartifacts: ${artifactSummary}` : output,
     isError,
-    metadata: job ? { job } : { jobId },
+    metadata: {
+      ...(extraMetadata ?? {}),
+      ...(job ? { job } : { jobId }),
+    },
   }
 }
 
 function getFinishedJob(jobId: string): JobRecord | undefined {
   return getJob(jobId)
+}
+
+function formatArtifactSummary(artifacts: JobArtifactRef[]): string {
+  return artifacts
+    .map((artifact) => `${artifact.artifactType ?? 'artifact'}=${artifact.path}`)
+    .join(' ')
 }

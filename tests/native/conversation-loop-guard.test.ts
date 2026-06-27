@@ -6005,8 +6005,7 @@ describe('task execution nudge wiring (Slice 4)', () => {
     expect(checkpointText).toContain('"kind": "blocked_task_report"')
     expect(checkpointText).toContain('"blocked_task":')
     expect(checkpointText).not.toContain('Your next reply MUST be plain text')
-    expect(checkpointText).toContain('Do not call TaskVerify, bash, Sleep, Agent, or other tools')
-    expect(checkpointText).toContain('only allowed tool escape is TaskUpdate')
+    expect(checkpointText).toContain('Do not call TaskVerify, TaskUpdate, bash, Sleep, Agent, or other tools')
     expect(checkpointText).toContain('[Runtime blocked-task checkpoint payload]')
     expect(checkpointText).toContain('"kind": "blocked_task_checkpoint"')
     expect(checkpointText).toContain('"task_id": "task-1"')
@@ -6060,12 +6059,10 @@ describe('task execution nudge wiring (Slice 4)', () => {
 
     expect(result.stopReason).toBe('end_turn')
     const ledger = (conv.options as any)?.runtimeRecoveryLedger
-    expect(ledger?.checkpoints).toHaveLength(2)
-    expect(ledger.checkpoints[0].kind).toBe('verification_repair_checkpoint')
-    expect(ledger.checkpoints[0].disposition).toBe('resolved')
-    expect(ledger.checkpoints[1].kind).toBe('blocked_task_checkpoint')
-    expect(ledger.checkpoints[1].inspectCommands).toEqual(['TaskGet taskId=task-1'])
-    expect(ledger.checkpoints[1].payload.blocked_task).toMatchObject({
+    expect(ledger?.checkpoints).toHaveLength(1)
+    expect(ledger.checkpoints[0].kind).toBe('blocked_task_checkpoint')
+    expect(ledger.checkpoints[0].inspectCommands).toEqual(['TaskGet taskId=task-1'])
+    expect(ledger.checkpoints[0].payload.blocked_task).toMatchObject({
       task_id: 'task-1',
       step_id: 'prove-guard',
       inspect_command: 'TaskGet taskId=task-1',
@@ -6137,7 +6134,7 @@ describe('task execution nudge wiring (Slice 4)', () => {
     expect(JSON.stringify(conv.turns)).not.toContain('tool-after-blocked')
   })
 
-  it('injects a verification-repair checkpoint after TaskVerify fails', async () => {
+  it('injects a verification-repair checkpoint after unsatisfiable TaskVerify fails', async () => {
     resetTaskStore()
     const conv = createConversation({ system: 'test', model: 'test-model' })
     addUserMessage(conv, 'Run verification and stop on the repair contract if it fails.')
@@ -6146,15 +6143,15 @@ describe('task execution nudge wiring (Slice 4)', () => {
     const responses = [
       toolUseResponse('TaskCreate', 'tool-create', {
         subject: 'Verification repair',
-        description: 'Prove failed verification becomes a runtime repair checkpoint.',
+        description: 'Prove unsatisfiable verification becomes a runtime repair checkpoint.',
         steps: [{
           id: 'prove-verify',
           title: 'Prove verify',
-          description: 'Run a check that is expected to fail.',
+          description: 'Run a check that can never pass as authored.',
           verification: [{
             id: 'v1',
-            kind: 'file_exists',
-            path: '/tmp/owlcoda-verification-repair-missing.md',
+            kind: 'artifact_count',
+            min: 1,
           }],
         }],
       }),
@@ -6167,7 +6164,7 @@ describe('task execution nudge wiring (Slice 4)', () => {
         taskId: 'task-1',
         stepId: 'prove-verify',
       }),
-      textResponse('Verification repair report: task-1/prove-verify failed check v1 because /tmp/owlcoda-verification-repair-missing.md is missing. Next action is create the artifact or replace the spec with a concrete reachable check, then run TaskVerify taskId=task-1 stepId=prove-verify once.'),
+      textResponse('Verification repair report: task-1/prove-verify failed check v1 because artifact_count is missing root/glob. Next action is replace the spec with a concrete reachable check, then run TaskVerify taskId=task-1 stepId=prove-verify once.'),
     ]
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
       requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
@@ -6219,7 +6216,7 @@ describe('task execution nudge wiring (Slice 4)', () => {
     expect(checkpointText).toContain('"task_id": "task-1"')
     expect(checkpointText).toContain('"step_id": "prove-verify"')
     expect(checkpointText).toContain('"check_id": "v1"')
-    expect(checkpointText).toContain('/tmp/owlcoda-verification-repair-missing.md')
+    expect(checkpointText).toContain('check.root and check.glob are required')
 
     const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.find((item: any) => item.kind === 'verification_repair_checkpoint')
     expect(checkpoint?.disposition).toBe('acknowledged')
@@ -6227,6 +6224,66 @@ describe('task execution nudge wiring (Slice 4)', () => {
       check_id: 'v1',
       passed: false,
     })
+  })
+
+  it('does not hard-stop ordinary retryable verification failures before repair tools', async () => {
+    resetTaskStore()
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Run verification, inspect the artifact after a normal failed check, then repair.')
+
+    const requestBodies: Array<Record<string, unknown>> = []
+    const responses = [
+      toolUseResponse('TaskCreate', 'tool-create', {
+        subject: 'Retryable verification failure',
+        description: 'A normal missing artifact should allow repair tools.',
+        steps: [{
+          id: 'prove-verify',
+          title: 'Prove verify',
+          description: 'Run a check that can pass after normal work.',
+          verification: [{
+            id: 'v1',
+            kind: 'file_exists',
+            path: '/tmp/owlcoda-verification-repair-normal-missing.md',
+          }],
+        }],
+      }),
+      toolUseResponse('TaskUpdate', 'tool-start', {
+        taskId: 'task-1',
+        stepId: 'prove-verify',
+        stepStatus: 'in_progress',
+      }),
+      toolUseResponse('TaskVerify', 'tool-verify', {
+        taskId: 'task-1',
+        stepId: 'prove-verify',
+      }),
+      toolUseResponse('read', 'tool-read-after-failed-verify', {
+        path: join(process.cwd(), 'package.json'),
+      }),
+      textResponse('I inspected package.json and will repair the missing artifact before re-verifying.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+      requestBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return responses.shift()!
+    })
+
+    const errors: string[] = []
+    const notices: string[] = []
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 8,
+      callbacks: {
+        onError(message) { errors.push(message) },
+        onNotice(message) { notices.push(message) },
+      },
+    })
+
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('repair the missing artifact')
+    expect(errors.some((message) => message.includes('ignored the verification-repair checkpoint'))).toBe(false)
+    expect(notices.some((message) => /^Verification-repair checkpoint:/.test(message))).toBe(false)
+    expect(JSON.stringify(requestBodies[3]?.['messages']).replace(/\\"/g, '"')).not.toContain('[Runtime verification-repair checkpoint]')
+    expect(JSON.stringify(conv.turns)).toContain('tool-read-after-failed-verify')
   })
 
   it('records structured verification-repair reports as runtime recovery events when acknowledged', async () => {
@@ -6328,11 +6385,11 @@ describe('task execution nudge wiring (Slice 4)', () => {
         steps: [{
           id: 'prove-verify',
           title: 'Prove verify',
-          description: 'Run a check that is expected to fail.',
+          description: 'Run a check that can never pass as authored.',
           verification: [{
             id: 'v1',
-            kind: 'file_exists',
-            path: '/tmp/owlcoda-verification-repair-hard-stop-missing.md',
+            kind: 'artifact_count',
+            min: 1,
           }],
         }],
       }),

@@ -42,7 +42,8 @@ import {
   type TaskVerificationCheck,
   type TaskVerificationKind,
 } from './task-store.js'
-import { classifyBashCommand } from '../bash-risk.js'
+import { findUnsafeVerificationCommand } from './task-verification-policy.js'
+import { classifyBashCommand, primaryBashRiskReason } from '../bash-risk.js'
 
 /** Input shape for a single step when creating a structured task plan. */
 export interface TaskCreateStepInput {
@@ -160,6 +161,15 @@ export function createTaskCreateTool(): NativeToolDef<TaskCreateInput> {
           return {
             output: projectMapVerification.reason,
             isError: true,
+          }
+        }
+        for (const step of projectMapVerification.steps) {
+          const unsafeVerification = findUnsafeVerificationCommand(step.verification)
+          if (unsafeVerification) {
+            return {
+              output: unsafeVerification.reason,
+              isError: true,
+            }
           }
         }
         const task = createTask({
@@ -372,6 +382,7 @@ const TASK_VERIFICATION_KINDS = new Set<TaskVerificationKind>([
   'artifact_count',
   'verification_pack',
   'run_verdict_gate',
+  'http_get',
   'command',
   'none',
 ])
@@ -385,7 +396,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function refuseCommandByRisk(bashRisk: ReturnType<typeof classifyBashCommand>): ToolResult {
-  const reason = bashRisk.reasons[0] ?? bashRisk.level
+  const reason = primaryBashRiskReason(bashRisk)
   return {
     output:
       `TaskCreate refused by risk classifier: ${bashRisk.level} ` +

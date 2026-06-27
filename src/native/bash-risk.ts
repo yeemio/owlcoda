@@ -124,6 +124,18 @@ export function classifyBashCommand(command: unknown): BashRiskClassification {
   }
 }
 
+export function primaryBashRiskReason(classification: BashRiskClassification): string {
+  if (classification.reasons.length === 0) return classification.level
+  if (classification.level === 'safe_readonly') return classification.reasons[0]!
+  return classification.reasons.find(reason => !isSafeReadonlyReason(reason))
+    ?? classification.reasons[0]!
+}
+
+function isSafeReadonlyReason(reason: string): boolean {
+  return /\((?:read-only|process inspection|checksum read|read-only traversal)\)/i.test(reason)
+    || /\b--version\b/i.test(reason)
+}
+
 function emptyClassification(
   command: string,
   level: BashRiskLevel,

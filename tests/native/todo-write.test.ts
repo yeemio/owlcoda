@@ -64,8 +64,18 @@ describe('TodoWrite Tool', () => {
     const result = await tool.execute({
       todos: [
         { content: 'Wave 1 shipped', status: 'completed', activeForm: 'Wave 1 shipped' },
-        { content: 'Wave 4 blocked by runtime adapter_path gap', status: 'blocked' as any, activeForm: 'Recording runtime blocker' },
-        { content: 'Wave 5 skipped because Wave 4 did not serve', status: 'skipped' as any, activeForm: 'Skipping dependent smoke' },
+        {
+          content: 'Wave 4 blocked by runtime adapter_path gap',
+          status: 'blocked' as any,
+          activeForm: 'Recording runtime blocker',
+          failureReason: 'runtime adapter_path gap',
+        },
+        {
+          content: 'Wave 5 skipped because Wave 4 did not serve',
+          status: 'skipped' as any,
+          activeForm: 'Skipping dependent smoke',
+          failureReason: 'Wave 4 did not serve',
+        },
         { content: 'Wave 6 report blocked outcome', status: 'pending', activeForm: 'Writing blocked outcome' },
       ],
     })
@@ -83,6 +93,21 @@ describe('TodoWrite Tool', () => {
       successful: 1,
       terminalNonSuccess: 2,
     })
+  })
+
+  it('rejects blocked and skipped todos without a failureReason', async () => {
+    const tool = createTodoWriteTool()
+    const blocked = await tool.execute({
+      todos: [{ content: 'Blocked', status: 'blocked' as any, activeForm: 'Recording blocker' }],
+    })
+    expect(blocked.isError).toBe(true)
+    expect(blocked.output).toContain('failureReason')
+
+    const skipped = await tool.execute({
+      todos: [{ content: 'Skipped', status: 'skipped' as any, activeForm: 'Skipping dependent work', failureReason: '   ' }],
+    })
+    expect(skipped.isError).toBe(true)
+    expect(skipped.output).toContain('failureReason')
   })
 
   it('handles empty todo list', async () => {

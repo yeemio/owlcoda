@@ -8,7 +8,7 @@ import {
   type LongTaskLifecycleVerdict,
   type LongTaskSnapshot,
 } from '../long-task-lifecycle.js'
-import { classifyBashCommand } from '../bash-risk.js'
+import { classifyBashCommand, primaryBashRiskReason } from '../bash-risk.js'
 import { createTask, getTask, spawnTaskCommand } from './task-store.js'
 import type { NativeToolDef, ToolExecutionContext, ToolResult } from './types.js'
 
@@ -216,7 +216,7 @@ export function createLongTaskReplaceTool(): NativeToolDef<LongTaskReplaceInput>
         return {
           output:
             `LongTaskReplace refused by risk classifier: ${bashRisk.level} ` +
-            `(${bashRisk.reasons[0] ?? bashRisk.level}). Use an explicit bash call with operator approval for this command.`,
+            `(${primaryBashRiskReason(bashRisk)}). Use an explicit bash call with operator approval for this command.`,
           isError: true,
           metadata: {
             replacement_status: 'refused',

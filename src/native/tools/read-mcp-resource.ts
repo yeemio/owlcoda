@@ -8,7 +8,10 @@
  * - Our version: delegates to MCP client provider
  */
 
-import type { NativeToolDef, ToolResult } from './types.js'
+import type { NativeToolDef, ToolExecutionContext, ToolResult } from './types.js'
+import { fileURLToPath } from 'node:url'
+import { isAbsolute } from 'node:path'
+import { createReadTool } from './read.js'
 
 export interface ReadMcpResourceInput {
   server_name: string
@@ -30,9 +33,10 @@ export function createReadMcpResourceTool(
 ): NativeToolDef<ReadMcpResourceInput> {
   return {
     name: 'ReadMcpResource',
-    description: 'Read a resource from a connected MCP server by URI.',
+    description:
+      'Read a resource from a connected MCP server by URI. Local file:// URIs and absolute local paths are routed through the native read tool.',
 
-    async execute(input: ReadMcpResourceInput): Promise<ToolResult> {
+    async execute(input: ReadMcpResourceInput, context?: ToolExecutionContext): Promise<ToolResult> {
       // Be charitable about near-miss param names. Weak models routinely
       // emit `server:` / `serverName:` instead of `server_name:` and then
       // retry the identical wrong shape after a bare "server_name is
@@ -56,17 +60,11 @@ export function createReadMcpResourceTool(
       }
       if (!uri) return { output: 'Error: uri is required.', isError: true, metadata: { failureCategory: 'mcp:bad-params' } }
 
-      // file:// is a local-filesystem path, not an MCP resource. Models reach
-      // for ReadMcpResource here when they want a file; redirect to Read so
-      // they stop retrying against a server that will never serve it.
       if (/^file:\/\//i.test(uri)) {
-        return {
-          output:
-            `Error: "${uri}" is a local file path, not an MCP resource. ` +
-            `Use the Read tool to read local files (Read accepts an absolute path).`,
-          isError: true,
-          metadata: { failureCategory: 'mcp:file-uri' },
-        }
+        return await readLocalFileUri(uri, context)
+      }
+      if (isLocalAbsolutePath(uri)) {
+        return await readLocalPath(uri, uri, context)
       }
 
       if (!provider.isConnected(server_name)) {
@@ -90,4 +88,56 @@ export function createReadMcpResourceTool(
       }
     },
   }
+}
+
+async function readLocalFileUri(uri: string, context?: ToolExecutionContext): Promise<ToolResult> {
+  let normalizedPath: string
+  try {
+    normalizedPath = fileURLToPath(uri)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return {
+      output: `Error: "${uri}" is not a valid local file URI: ${message}`,
+      isError: true,
+      metadata: {
+        failureCategory: 'mcp:file-uri-invalid',
+        routedFrom: 'ReadMcpResource',
+        routedTo: 'read',
+        uri,
+      },
+    }
+  }
+
+  return await readLocalPath(normalizedPath, uri, context, result => ({
+    ...(result.isError && !result.metadata?.['failureCategory'] ? { failureCategory: 'read:file-uri' } : {}),
+  }))
+}
+
+async function readLocalPath(
+  path: string,
+  originalUri: string,
+  context?: ToolExecutionContext,
+  extraMetadata?: (result: ToolResult) => Record<string, unknown>,
+): Promise<ToolResult> {
+  const result = await createReadTool().execute({ path }, context)
+  const readPath = typeof result.metadata?.['path'] === 'string'
+    ? result.metadata['path']
+    : path
+  const routedMetadata = extraMetadata ? extraMetadata(result) : {}
+  return {
+    ...result,
+    metadata: {
+      ...(result.metadata ?? {}),
+      ...routedMetadata,
+      ...(result.isError && !result.metadata?.['failureCategory'] && !routedMetadata['failureCategory'] ? { failureCategory: 'read:local-path' } : {}),
+      routedFrom: 'ReadMcpResource',
+      routedTo: 'read',
+      uri: originalUri,
+      normalizedPath: readPath,
+    },
+  }
+}
+
+function isLocalAbsolutePath(value: string): boolean {
+  return isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value)
 }

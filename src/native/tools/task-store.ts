@@ -82,6 +82,7 @@ export type TaskVerificationKind =
   | 'artifact_count'
   | 'verification_pack'
   | 'run_verdict_gate'
+  | 'http_get'
   | 'command'
   | 'none'
 
@@ -108,6 +109,9 @@ export interface TaskVerificationCheck {
   forbiddenTerms?: string[]
   command?: string
   expectedExitCode?: number
+  url?: string
+  expectedStatus?: number
+  bodyPattern?: string
   reason?: string
 }
 

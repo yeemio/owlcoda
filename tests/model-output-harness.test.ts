@@ -185,6 +185,47 @@ describe('model output harness', () => {
     })
   })
 
+  it('does not cap explicit maxTokens with fallback model output capability', async () => {
+    let executorRequest: Parameters<StructuredOutputExecutor>[0] | undefined
+    const result = await runModelOutputHarness({
+      model: 'kimi',
+      preset: 'evidence-digest.v1',
+      user: 'Digest this evidence.',
+      maxTokens: 20_480,
+      modelCapabilities: {
+        jsonMode: { status: 'supported', source: 'manual' },
+        maxContextTokens: { tokens: 128_000, source: 'manual' },
+        maxOutputTokens: { tokens: 4096, source: 'fallback' },
+        streaming: { status: 'unknown', source: 'fallback' },
+        thinking: { behavior: 'unknown', source: 'fallback' },
+      },
+    }, async request => {
+      executorRequest = request
+      return {
+        text: JSON.stringify({
+          artifact: 'evidence-digest.v1',
+          summary: 'Uncapped digest.',
+          confidence: 0.83,
+        }),
+        stopReason: 'end_turn',
+      }
+    })
+
+    expect(result.ok).toBe(true)
+    expect(executorRequest?.maxTokens).toBe(20_480)
+    expect(result.capabilityGate).toMatchObject({
+      ok: true,
+      requestedMaxTokens: 20_480,
+      appliedMaxTokens: 20_480,
+      modelCapabilities: {
+        maxOutputTokens: { tokens: 4096, source: 'fallback' },
+      },
+    })
+    expect(result.capabilityGate?.warnings).not.toEqual(expect.arrayContaining([
+      'requested maxTokens 20480 capped to model maxOutputTokens 4096',
+    ]))
+  })
+
   it('extracts the first JSON object when the model wraps it in prose', async () => {
     const result = await runModelOutputHarness(baseRequest, executorReturning({
       text: [
@@ -333,6 +374,33 @@ describe('model output harness', () => {
       artifact: 'evidence-digest.v1',
       summary: 'Salvaged digest',
       confidence: 0.44,
+    })
+    expect(result.attempts.map(a => a.label)).toEqual(['primary', 'salvage'])
+  })
+
+  it('salvages a schema-valid artifact from provider thinking text when final text is empty', async () => {
+    const result = await runModelOutputHarness(baseRequest, executorReturning({
+      text: '',
+      thinkingText: [
+        'The provider placed the final object in a thinking block:',
+        '```json',
+        '{"artifact":"evidence-digest.v1","summary":"Thinking digest.","confidence":0.64}',
+        '```',
+      ].join('\n'),
+      stopReason: 'max_tokens',
+      inputTokens: 80,
+      outputTokens: 256,
+    }))
+
+    expect(result.ok).toBe(true)
+    expect(result.rawText).toBe('')
+    expect(result.rawThinkingText).toContain('Thinking digest.')
+    expect(result.salvageUsed).toBe(true)
+    expect(result.fallbackUsed).toBe(false)
+    expect(result.artifact).toMatchObject({
+      artifact: 'evidence-digest.v1',
+      summary: 'Thinking digest.',
+      confidence: 0.64,
     })
     expect(result.attempts.map(a => a.label)).toEqual(['primary', 'salvage'])
   })

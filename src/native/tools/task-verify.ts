@@ -3,7 +3,7 @@
  *
  * Deterministic verification for task step completion checks.
  * Supports: file_exists, file_contains, artifact_count, verification_pack,
- * run_verdict_gate, command (safe_readonly only), none.
+ * run_verdict_gate, http_get (localhost only), command (safe_readonly only), none.
  *
  * By default (writeBack=true), verification results are written back to the step's
  * verificationResults via TaskUpdate semantics. Does NOT auto-transition step status —
@@ -25,13 +25,14 @@ import {
   type TaskVerificationCheck,
   type TaskVerificationResult,
 } from './task-store.js'
-import { classifyBashCommand } from '../bash-risk.js'
+import { classifyBashCommand, primaryBashRiskReason } from '../bash-risk.js'
 import { verifyHtmlDeck } from '../verification-packs/html-deck.js'
 import { evaluateRunVerdictGate, formatRunVerdictGateResult } from '../run-verdict-gate.js'
 
 const execFileAsync = promisify(execFile)
 
 const VERIFY_COMMAND_TIMEOUT_MS = 30_000
+const VERIFY_HTTP_TIMEOUT_MS = 10_000
 
 export interface TaskVerifyInput {
   taskId: string
@@ -184,7 +185,7 @@ async function runCommand(check: TaskVerificationCheck, now: string): Promise<Ta
       checkId: check.id,
       passed: false,
       unsatisfiable: true,
-      detail: `command refused by risk classifier: ${risk.level} (${risk.reasons[0] ?? 'unknown reason'}). Only safe_readonly commands are allowed for TaskVerify.`,
+      detail: `command refused by risk classifier: ${risk.level} (${primaryBashRiskReason(risk)}). Only safe_readonly commands are allowed for TaskVerify.`,
       checkedAt: now,
     }
   }
@@ -246,6 +247,101 @@ async function runRunVerdictGate(check: TaskVerificationCheck, now: string): Pro
       checkedAt: now,
     }
   }
+}
+
+async function runHttpGet(check: TaskVerificationCheck, now: string): Promise<TaskVerificationResult> {
+  const rawUrl = check.url ?? ''
+  if (!rawUrl) {
+    return { checkId: check.id, passed: false, unsatisfiable: true, detail: 'check.url is required for http_get', checkedAt: now }
+  }
+
+  let url: URL
+  try {
+    url = new URL(rawUrl)
+  } catch (err) {
+    return {
+      checkId: check.id,
+      passed: false,
+      unsatisfiable: true,
+      detail: `invalid http_get url "${rawUrl}": ${err instanceof Error ? err.message : String(err)}`,
+      checkedAt: now,
+    }
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) {
+    return {
+      checkId: check.id,
+      passed: false,
+      unsatisfiable: true,
+      detail: `http_get supports only http/https URLs (got ${url.protocol})`,
+      checkedAt: now,
+    }
+  }
+  if (!isLocalHttpHost(url.hostname)) {
+    return {
+      checkId: check.id,
+      passed: false,
+      unsatisfiable: true,
+      detail: `http_get verification allows only localhost/127.0.0.1/::1 URLs, got ${url.hostname}`,
+      checkedAt: now,
+    }
+  }
+
+  let bodyRe: RegExp | undefined
+  if (check.bodyPattern?.trim()) {
+    try {
+      bodyRe = new RegExp(check.bodyPattern)
+    } catch (err) {
+      return {
+        checkId: check.id,
+        passed: false,
+        unsatisfiable: true,
+        detail: `invalid bodyPattern regex: ${err instanceof Error ? err.message : String(err)}`,
+        checkedAt: now,
+      }
+    }
+  }
+
+  const expectedStatus = check.expectedStatus ?? 200
+  try {
+    const res = await fetch(url.href, {
+      method: 'GET',
+      signal: AbortSignal.timeout(VERIFY_HTTP_TIMEOUT_MS),
+      headers: { Accept: 'application/json, text/plain, text/html, */*' },
+    })
+    const text = await res.text()
+    const statusPassed = res.status === expectedStatus
+    const bodyPassed = bodyRe ? bodyRe.test(text) : true
+    return {
+      checkId: check.id,
+      passed: statusPassed && bodyPassed,
+      detail: statusPassed && bodyPassed
+        ? `http ${res.status}: ${text.trim().slice(0, 300) || '(empty body)'}`
+        : `http ${res.status} (expected ${expectedStatus})${bodyRe && !bodyPassed ? `; bodyPattern /${check.bodyPattern}/ not found` : ''}`,
+      checkedAt: now,
+      metadata: {
+        http: {
+          url: url.href,
+          status: res.status,
+          expectedStatus,
+          bodyBytes: text.length,
+        },
+      },
+    }
+  } catch (err) {
+    return {
+      checkId: check.id,
+      passed: false,
+      detail: `http_get failed for ${url.href}: ${err instanceof Error ? err.message : String(err)}`,
+      checkedAt: now,
+    }
+  }
+}
+
+function isLocalHttpHost(hostname: string): boolean {
+  const normalized = hostname.replace(/^\[|\]$/g, '').toLowerCase()
+  return normalized === 'localhost'
+    || normalized === '127.0.0.1'
+    || normalized === '::1'
 }
 
 function runNone(check: TaskVerificationCheck, now: string): TaskVerificationResult {
@@ -331,6 +427,7 @@ async function runCheck(check: TaskVerificationCheck, now: string): Promise<Task
     case 'artifact_count': return [await runArtifactCount(check, now)]
     case 'verification_pack': return runVerificationPack(check, now)
     case 'run_verdict_gate': return [await runRunVerdictGate(check, now)]
+    case 'http_get': return [await runHttpGet(check, now)]
     case 'command': return [await runCommand(check, now)]
     case 'none': return [runNone(check, now)]
     default:
@@ -344,6 +441,53 @@ async function runCheck(check: TaskVerificationCheck, now: string): Promise<Task
   }
 }
 
+interface TaskVerifyRepairCheckpoint {
+  taskId: string
+  stepId: string
+  status: 'verification_failed'
+  failedCheckIds: string[]
+  retryableCheckIds: string[]
+  unsatisfiableCheckIds: string[]
+  nextAction:
+    | 'fix_artifact_or_service_then_reverify'
+    | 'update_verification_spec_then_reverify'
+    | 'fix_blocking_artifact_or_runtime_then_reverify'
+  reverifyCommand: string
+  taskUpdateCommand?: string
+}
+
+function buildRepairCheckpoint(
+  taskId: string,
+  stepId: string,
+  results: TaskVerificationResult[],
+  runVerdictBlocked: TaskVerificationResult[],
+): TaskVerifyRepairCheckpoint | undefined {
+  const failed = results.filter(r => !r.passed)
+  if (failed.length === 0) return undefined
+
+  const unsatisfiable = failed.filter(r => r.unsatisfiable)
+  const retryable = failed.filter(r => !r.unsatisfiable)
+  const nextAction = unsatisfiable.length > 0
+    ? 'update_verification_spec_then_reverify'
+    : runVerdictBlocked.length > 0
+      ? 'fix_blocking_artifact_or_runtime_then_reverify'
+      : 'fix_artifact_or_service_then_reverify'
+
+  return {
+    taskId,
+    stepId,
+    status: 'verification_failed',
+    failedCheckIds: failed.map(r => r.checkId),
+    retryableCheckIds: retryable.map(r => r.checkId),
+    unsatisfiableCheckIds: unsatisfiable.map(r => r.checkId),
+    nextAction,
+    reverifyCommand: `TaskVerify({ taskId: "${taskId}", stepId: "${stepId}", writeBack: true })`,
+    ...(unsatisfiable.length > 0
+      ? { taskUpdateCommand: `TaskUpdate({ taskId: "${taskId}", stepId: "${stepId}", verification: [...] })` }
+      : {}),
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tool factory
 // ---------------------------------------------------------------------------
@@ -353,7 +497,7 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
     name: 'TaskVerify',
     description:
       'Run deterministic verification checks defined on a task step. ' +
-      'Supports: file_exists, file_contains, artifact_count, verification_pack/html_deck, run_verdict_gate, command (safe_readonly only), none. ' +
+      'Supports: file_exists, file_contains, artifact_count, verification_pack/html_deck, run_verdict_gate, http_get (localhost only), command (safe_readonly only), none. ' +
       'By default (writeBack=true), results are written back to step.verificationResults so subsequent ' +
       'TaskUpdate can check them before allowing stepStatus=completed. ' +
       'Does NOT auto-transition step status — use TaskUpdate(stepStatus="completed") after all checks pass. ' +
@@ -425,12 +569,14 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
         (r.metadata as Record<string, unknown> | undefined)?.['runVerdictGate']
         && ((r.metadata as Record<string, unknown>)['runVerdictGate'] as Record<string, unknown>)['status'] === 'blocked',
       )
+      const repairCheckpoint = buildRepairCheckpoint(taskId, stepId, results, runVerdictBlocked)
       const metadata: Record<string, unknown> = {
         taskId,
         stepId,
         passed: overallPassed,
         results,
         writeBack,
+        ...(repairCheckpoint ? { repairCheckpoint } : {}),
       }
       if (runVerdictBlocked.length > 0) {
         metadata['failureCategory'] = 'verify:run-verdict-blocked'
@@ -443,6 +589,20 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
           ...unsatisfiable.map(r => `  · ${r.checkId}: ${r.detail ?? 'unsatisfiable'}`),
         )
         metadata['failureCategory'] = metadata['failureCategory'] ?? 'verify:unsatisfiable-spec'
+      }
+      if (repairCheckpoint) {
+        lines.push(
+          '',
+          'Repair checkpoint:',
+          `  failedCheckIds=${repairCheckpoint.failedCheckIds.join(', ') || '(none)'}`,
+          `  retryableCheckIds=${repairCheckpoint.retryableCheckIds.join(', ') || '(none)'}`,
+          `  unsatisfiableCheckIds=${repairCheckpoint.unsatisfiableCheckIds.join(', ') || '(none)'}`,
+          `  nextAction=${repairCheckpoint.nextAction}`,
+          `  reverify=${repairCheckpoint.reverifyCommand}`,
+        )
+        if (repairCheckpoint.taskUpdateCommand) {
+          lines.push(`  updateSpec=${repairCheckpoint.taskUpdateCommand}`)
+        }
       }
 
       return {

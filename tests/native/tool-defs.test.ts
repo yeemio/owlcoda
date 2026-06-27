@@ -59,10 +59,23 @@ describe('NATIVE_TOOL_SCHEMAS', () => {
     expect(schema.properties.verification.items.properties.kind.enum).toContain('run_verdict_gate')
   })
 
+  it('TaskUpdate schema exposes skipped step status and failureReason contract', () => {
+    const schema = NATIVE_TOOL_SCHEMAS['TaskUpdate'] as Record<string, any>
+    expect(schema.properties.stepStatus.enum).toContain('skipped')
+    expect(schema.properties.failureReason.description).toContain('skipped')
+  })
+
   it('TaskCreate schema exposes run verdict verification gates', () => {
     const schema = NATIVE_TOOL_SCHEMAS['TaskCreate'] as Record<string, any>
     const kindEnum = schema.properties.steps.items.properties.verification.items.properties.kind.enum
     expect(kindEnum).toContain('run_verdict_gate')
+  })
+
+  it('TodoWrite schema exposes blocked/skipped statuses with failureReason', () => {
+    const schema = NATIVE_TOOL_SCHEMAS['TodoWrite'] as Record<string, any>
+    const itemSchema = schema.properties.todos.items
+    expect(itemSchema.properties.status.enum).toEqual(['pending', 'in_progress', 'completed', 'blocked', 'skipped'])
+    expect(itemSchema.properties.failureReason.description).toContain('required for blocked/skipped')
   })
 
   it('TaskCreate schema exposes optional command-backed execution fields', () => {

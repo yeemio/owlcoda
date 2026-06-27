@@ -1,4 +1,8 @@
 import { describe, it, expect } from 'vitest'
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { createReadMcpResourceTool } from '../../../src/native/tools/read-mcp-resource.js'
 
 describe('ReadMcpResource tool', () => {
@@ -38,11 +42,47 @@ describe('ReadMcpResource tool', () => {
     expect(result.output).toMatch(/srv|received/i)
   })
 
-  it('redirects file:// URIs to the Read tool', async () => {
+  it('auto-reads local file:// URIs through the Read tool instead of returning a retryable MCP error', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'owlcoda-read-mcp-file-uri-'))
+    const filePath = join(dir, 'web.log')
+    await writeFile(filePath, 'vite ready\napi ok\n', 'utf-8')
     const tool = createReadMcpResourceTool()
-    const result = await tool.execute({ server_name: 'tools', uri: 'file:///etc/hosts' })
-    expect(result.isError).toBe(true)
-    expect(result.output).toMatch(/Read tool/i)
+    try {
+      const realFilePath = await realpath(filePath)
+      const result = await tool.execute({ server_name: 'tools', uri: pathToFileURL(filePath).href })
+      expect(result.isError).toBe(false)
+      expect(result.output).toContain(`[file: ${realFilePath}]`)
+      expect(result.output).toContain('vite ready')
+      expect(result.metadata).toMatchObject({
+        routedFrom: 'ReadMcpResource',
+        routedTo: 'read',
+        normalizedPath: realFilePath,
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('auto-reads absolute local paths passed as uri through the Read tool', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'owlcoda-read-mcp-absolute-path-'))
+    const filePath = join(dir, 'review.tsx')
+    await writeFile(filePath, 'export const ok = true\n', 'utf-8')
+    const tool = createReadMcpResourceTool()
+    try {
+      const realFilePath = await realpath(filePath)
+      const result = await tool.execute({ server_name: 'user', uri: filePath })
+      expect(result.isError).toBe(false)
+      expect(result.output).toContain(`[file: ${realFilePath}]`)
+      expect(result.output).toContain('export const ok')
+      expect(result.metadata).toMatchObject({
+        routedFrom: 'ReadMcpResource',
+        routedTo: 'read',
+        uri: filePath,
+        normalizedPath: realFilePath,
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
   })
 
   // Error returns carry a failureCategory so the loop guard can aggregate
@@ -52,9 +92,6 @@ describe('ReadMcpResource tool', () => {
     const tool = createReadMcpResourceTool()
     const notConnected = await tool.execute({ server_name: 'nope', uri: 'mcp://x' })
     expect(notConnected.metadata?.['failureCategory']).toBe('mcp:not-connected')
-
-    const fileUri = await tool.execute({ server_name: 'tools', uri: 'file:///etc/hosts' })
-    expect(fileUri.metadata?.['failureCategory']).toBe('mcp:file-uri')
 
     const badParams = await tool.execute({ srv: 'x', uri: 'y' } as never)
     expect(badParams.metadata?.['failureCategory']).toBe('mcp:bad-params')

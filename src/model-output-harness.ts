@@ -93,6 +93,7 @@ export interface StructuredOutputRequest {
   system?: string
   user: string
   maxTokens?: number
+  temperature?: number
   repairPolicy?: StructuredOutputRepairPolicy
   salvagePolicy?: StructuredOutputSalvagePolicy
   policy?: StructuredOutputPolicy
@@ -141,6 +142,9 @@ export interface StructuredOutputAttempt {
   parsed: boolean
   schemaValid: boolean
   error?: string
+  requestedTemperature?: number
+  appliedTemperature?: number
+  temperatureSource?: 'request'
 }
 
 export interface StructuredOutputResponse {
@@ -347,12 +351,14 @@ function evaluateStructuredOutputCapabilityGate(
     warnings.push(`model capability jsonMode=unknown source=${capabilities.jsonMode.source}`)
   }
 
-  if (Number.isFinite(capabilities.maxOutputTokens.tokens) && capabilities.maxOutputTokens.tokens > 0) {
-    appliedMaxTokens = Math.min(appliedMaxTokens, Math.floor(capabilities.maxOutputTokens.tokens))
+  const maxOutputCapability = capabilities.maxOutputTokens
+  const hasHardMaxOutputCap = maxOutputCapability.source === 'declared' || maxOutputCapability.source === 'manual'
+  if (hasHardMaxOutputCap && Number.isFinite(maxOutputCapability.tokens) && maxOutputCapability.tokens > 0) {
+    appliedMaxTokens = Math.min(appliedMaxTokens, Math.floor(maxOutputCapability.tokens))
     if (appliedMaxTokens < requestedMaxTokens) {
       warnings.push(`requested maxTokens ${requestedMaxTokens} capped to model maxOutputTokens ${appliedMaxTokens}`)
     }
-  } else {
+  } else if (hasHardMaxOutputCap) {
     errors.push(`model capability maxOutputTokens invalid source=${capabilities.maxOutputTokens.source}`)
   }
 
@@ -745,6 +751,9 @@ function attempt(args: {
   parsed: boolean
   schemaValid: boolean
   error?: string
+  requestedTemperature?: number
+  appliedTemperature?: number
+  temperatureSource?: 'request'
 }): StructuredOutputAttempt {
   return {
     label: args.label,
@@ -756,7 +765,20 @@ function attempt(args: {
     parsed: args.parsed,
     schemaValid: args.schemaValid,
     ...(args.error ? { error: args.error } : {}),
+    ...(args.requestedTemperature !== undefined ? { requestedTemperature: args.requestedTemperature } : {}),
+    ...(args.appliedTemperature !== undefined ? { appliedTemperature: args.appliedTemperature } : {}),
+    ...(args.temperatureSource ? { temperatureSource: args.temperatureSource } : {}),
   }
+}
+
+function providerControlAttemptFields(request: StructuredOutputRequest): Pick<StructuredOutputAttempt, 'requestedTemperature' | 'appliedTemperature' | 'temperatureSource'> {
+  return request.temperature !== undefined
+    ? {
+        requestedTemperature: request.temperature,
+        appliedTemperature: request.temperature,
+        temperatureSource: 'request',
+      }
+    : {}
 }
 
 function failedFallbackArtifact(args: {
@@ -784,9 +806,26 @@ function failedFallbackArtifact(args: {
   }
 }
 
-function joinSystemPrompt(system: string | undefined, preset: StructuredOutputPreset): string {
+function schemaContractPrompt(schema: JsonSchema | undefined): string | null {
+  if (!schema || schema.type !== 'object') return null
+  const lines = ['Structured output contract:']
+  if (schema.required?.length) {
+    lines.push(`Required top-level keys: ${schema.required.join(', ')}`)
+  }
+  const constFields = Object.entries(schema.properties ?? {})
+    .flatMap(([key, value]) => value.const !== undefined ? [`${key}=${JSON.stringify(value.const)}`] : [])
+  if (constFields.length > 0) {
+    lines.push(`Constant fields: ${constFields.join(', ')}`)
+  }
+  if (schema.additionalProperties === false) {
+    lines.push('Do not add top-level keys outside this schema.')
+  }
+  return lines.length > 1 ? lines.join('\n') : null
+}
+
+function joinSystemPrompt(system: string | undefined, preset: StructuredOutputPreset, schema: JsonSchema | undefined): string {
   const presetSystem = STRUCTURED_OUTPUT_PRESETS[preset as keyof typeof STRUCTURED_OUTPUT_PRESETS]?.system
-  return [presetSystem, system].filter(Boolean).join('\n\n')
+  return [presetSystem, schemaContractPrompt(schema), system].filter(Boolean).join('\n\n')
 }
 
 export async function runModelOutputHarness(
@@ -801,6 +840,7 @@ export async function runModelOutputHarness(
   const capabilityGate = evaluateStructuredOutputCapabilityGate(effectiveRequest, requestedMaxTokens)
   const capabilityGatePayload = effectiveRequest.modelCapabilities ? { capabilityGate } : {}
   const maxTokens = capabilityGate.appliedMaxTokens
+  const providerControls = providerControlAttemptFields(effectiveRequest)
 
   if (!capabilityGate.ok) {
     const durationMs = Date.now() - start
@@ -825,6 +865,7 @@ export async function runModelOutputHarness(
       schemaValid: false,
       durationMs,
       error: failureReason,
+      ...providerControls,
     }))
     return {
       ok: false,
@@ -850,7 +891,7 @@ export async function runModelOutputHarness(
     modelResponse = await executor({
       ...effectiveRequest,
       preset,
-      system: joinSystemPrompt(effectiveRequest.system, preset),
+      system: joinSystemPrompt(effectiveRequest.system, preset, effectiveRequest.schema),
       maxTokens,
     })
   } catch (err) {
@@ -874,6 +915,7 @@ export async function runModelOutputHarness(
       schemaValid: false,
       durationMs,
       error: err instanceof Error ? err.message : String(err),
+      ...providerControls,
     }))
     attempts.push(attempt({
       label: 'fallback',
@@ -882,6 +924,7 @@ export async function runModelOutputHarness(
       parsed: false,
       schemaValid: false,
       error: failureReason,
+      ...providerControls,
     }))
     return {
       ok: false,
@@ -919,6 +962,7 @@ export async function runModelOutputHarness(
     parsed: false,
     schemaValid: false,
     ...(rawText.trim() ? {} : { error: rawThinkingText ? 'empty_text_with_thinking' : 'empty_text' }),
+    ...providerControls,
   }))
 
   let repairCount = 0
@@ -942,6 +986,7 @@ export async function runModelOutputHarness(
       parsed: false,
       schemaValid: false,
       error: failureReason,
+      ...providerControls,
     }))
     return {
       ok: false,
@@ -964,6 +1009,42 @@ export async function runModelOutputHarness(
   }
 
   if (!rawText.trim()) {
+    if (rawThinkingText?.trim()) {
+      const parsedThinking = parseOrExtractJsonObject(rawThinkingText)
+      if (parsedThinking) {
+        const validation = validateArtifact(parsedThinking, effectiveRequest.schema, rawThinkingText, effectiveRequest.policy)
+        attempts.push(attempt({
+          label: 'salvage',
+          model: effectiveRequest.model,
+          stopReason,
+          parsed: false,
+          schemaValid: validation.schemaValid,
+          ...(validation.schemaValid ? {} : { error: validation.validationErrors.join('; ') }),
+          ...providerControls,
+        }))
+        if (validation.schemaValid) {
+          salvageUsed = true
+          return {
+            ok: true,
+            artifact: validation.artifact,
+            rawText,
+            rawThinkingText,
+            parsed: false,
+            schemaValid: true,
+            validationErrors: [],
+            attempts,
+            repairCount,
+            salvageUsed,
+            fallbackUsed: false,
+            stopReason,
+            inputTokens,
+            outputTokens,
+            durationMs: totalDurationMs,
+            ...capabilityGatePayload,
+          }
+        }
+      }
+    }
     return fallback(rawThinkingText ? 'empty_text_with_thinking' : 'empty_text')
   }
 

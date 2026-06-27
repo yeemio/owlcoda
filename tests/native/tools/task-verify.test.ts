@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { createServer, type Server } from 'node:http'
 import { createTaskCreateTool } from '../../../src/native/tools/task-create.js'
 import { createTaskVerifyTool } from '../../../src/native/tools/task-verify.js'
 import {
@@ -49,7 +50,7 @@ afterEach(() => {
 
 function makeTaskWithVerification(checks: Array<{
   id: string
-  kind: 'file_exists' | 'file_contains' | 'artifact_count' | 'verification_pack' | 'command' | 'none' | 'run_verdict_gate'
+  kind: 'file_exists' | 'file_contains' | 'artifact_count' | 'verification_pack' | 'command' | 'none' | 'run_verdict_gate' | 'http_get'
   packId?: string
   path?: string
   pattern?: string
@@ -65,6 +66,9 @@ function makeTaskWithVerification(checks: Array<{
   forbiddenTerms?: string[]
   command?: string
   expectedExitCode?: number
+  url?: string
+  expectedStatus?: number
+  bodyPattern?: string
   reason?: string
 }>) {
   return createTask({
@@ -176,6 +180,16 @@ describe('TaskVerify tool', () => {
       ])
       const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
       expect(r.metadata?.['failureCategory']).toBeUndefined()
+      expect(r.output).toContain('Repair checkpoint')
+      expect(r.metadata?.['repairCheckpoint']).toMatchObject({
+        taskId: 'task-1',
+        stepId: 'step-1',
+        status: 'verification_failed',
+        failedCheckIds: ['v1'],
+        retryableCheckIds: ['v1'],
+        unsatisfiableCheckIds: [],
+        nextAction: 'fix_artifact_or_service_then_reverify',
+      })
       const results = r.metadata?.['results'] as Array<Record<string, unknown>>
       expect(results[0]?.['passed']).toBe(false)
       expect(results[0]?.['unsatisfiable']).toBeUndefined()
@@ -245,6 +259,55 @@ describe('TaskVerify tool', () => {
     expect(r.output).not.toContain('command refused by risk classifier')
     const results = r.metadata?.['results'] as Array<Record<string, unknown>>
     expect(results[0]?.['passed']).toBe(true)
+  })
+
+  it('runs localhost http_get checks without shelling out to curl', async () => {
+    const server = await listenJsonServer({ ok: true, n_matches: 52 })
+    try {
+      makeTaskWithVerification([
+        {
+          id: 'reviews-aggregate-http',
+          kind: 'http_get',
+          url: `${server.url}/api/reviews/aggregate`,
+          expectedStatus: 200,
+          bodyPattern: '"n_matches":52',
+        },
+      ])
+
+      const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+      expect(r.isError).toBe(false)
+      expect(r.output).toContain('1/1 passed')
+      expect(r.output).toContain('http 200')
+      expect(r.output).not.toContain('command refused by risk classifier')
+      const results = r.metadata?.['results'] as Array<Record<string, any>>
+      expect(results[0]?.passed).toBe(true)
+      expect(results[0]?.metadata?.http).toMatchObject({
+        status: 200,
+        url: `${server.url}/api/reviews/aggregate`,
+      })
+    } finally {
+      await server.close()
+    }
+  })
+
+  it('refuses non-local http_get verification checks as unsatisfiable', async () => {
+    makeTaskWithVerification([
+      {
+        id: 'external-http',
+        kind: 'http_get',
+        url: 'https://example.com/health',
+        expectedStatus: 200,
+      },
+    ])
+
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+    expect(r.metadata?.['failureCategory']).toBe('verify:unsatisfiable-spec')
+    const results = r.metadata?.['results'] as Array<Record<string, unknown>>
+    expect(results[0]?.['passed']).toBe(false)
+    expect(results[0]?.['unsatisfiable']).toBe(true)
+    expect(results[0]?.['detail']).toContain('only localhost')
   })
 
   it('runs structured checks expanded from Project Map verification profiles', async () => {
@@ -503,6 +566,11 @@ describe('TaskVerify tool', () => {
     const meta = r.metadata as any
     expect(meta.passed).toBe(false)
     expect(meta.results).toHaveLength(2)
+    expect(meta.repairCheckpoint).toMatchObject({
+      failedCheckIds: ['v2'],
+      retryableCheckIds: ['v2'],
+      nextAction: 'fix_artifact_or_service_then_reverify',
+    })
   })
 
   it('failed verification prevents step completion via TaskUpdate', async () => {
@@ -660,5 +728,23 @@ function projectMapSnapshotWithProfiles(
       checkedAt: '2026-05-30T00:00:00.000Z',
       sourceHashes: {},
     },
+  }
+}
+
+async function listenJsonServer(payload: unknown): Promise<{ url: string; close: () => Promise<void> }> {
+  const server: Server = createServer((_, res) => {
+    const body = JSON.stringify(payload)
+    res.writeHead(200, {
+      'content-type': 'application/json',
+      'content-length': Buffer.byteLength(body),
+    })
+    res.end(body)
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('test server did not bind')
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
   }
 }

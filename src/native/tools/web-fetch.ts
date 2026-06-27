@@ -288,6 +288,31 @@ export function createWebFetchTool(): NativeToolDef<WebFetchInput> {
             if (fallback) return fallback
           }
 
+          if (res.status === 403) {
+            const contentType = res.headers.get('content-type') ?? ''
+            const raw = method === 'HEAD' ? '' : await safeReadResponseText(res)
+            const responseBodySnippet = responseSnippet(raw, contentType)
+            const snippetLine = responseBodySnippet
+              ? `\nResponse snippet: ${responseBodySnippet}`
+              : ''
+            return {
+              output:
+                `Error: HTTP ${res.status} ${res.statusText} fetching ${url}\n` +
+                'Recovery: recoverable fetch block; try BrowserJob with provider=chrome_headless, use a documented API endpoint, or record this URL as blocked evidence instead of repeatedly retrying WebFetch.' +
+                snippetLine,
+              isError: true,
+              metadata: {
+                failureCategory: 'web-fetch:http-403',
+                httpStatus: res.status,
+                statusText: res.statusText,
+                url,
+                contentType,
+                recoverable: true,
+                ...(responseBodySnippet ? { responseBodySnippet } : {}),
+              },
+            }
+          }
+
           return {
             output: `Error: HTTP ${res.status} ${res.statusText} fetching ${url}`,
             isError: true,
@@ -306,6 +331,19 @@ export function createWebFetchTool(): NativeToolDef<WebFetchInput> {
       }
     },
   }
+}
+
+async function safeReadResponseText(res: Response): Promise<string> {
+  try {
+    return await res.text()
+  } catch {
+    return ''
+  }
+}
+
+function responseSnippet(raw: string, contentType: string): string {
+  const text = contentType.includes('text/html') ? htmlToText(raw) : raw.trim()
+  return text.replace(/\s+/g, ' ').slice(0, 500)
 }
 
 function normalizeMethod(value: unknown): 'GET' | 'HEAD' | null {

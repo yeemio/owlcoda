@@ -112,6 +112,20 @@ describe('TaskCreate tool', () => {
     expect(listTasks()).toHaveLength(0)
   })
 
+  it('reports the load-bearing risk reason instead of harmless cd chunks', async () => {
+    const r = await tool.execute({
+      subject: 'typecheck',
+      description: 'run project typecheck',
+      command: 'cd /Users/publicuser/AI/gitrep/owlfootball && npx tsc --noEmit',
+    })
+
+    expect(r.isError).toBe(true)
+    expect(r.output).toContain('needs_approval')
+    expect(r.output).toContain('npx')
+    expect(r.output).not.toContain('(cd (read-only))')
+    expect(listTasks()).toHaveLength(0)
+  })
+
   it('refuses ADR-008 destructive deny-list commands without spawning', async () => {
     for (const command of ADR008_DESTRUCTIVE_COMMANDS_SAFE_IF_MISRUN) {
       const r = await tool.execute({
@@ -461,6 +475,49 @@ describe('TaskCreate tool', () => {
       }),
     ])
     expect(task.steps?.[0]?.verificationResults).toEqual([])
+  })
+
+  it('rejects direct verification command checks that TaskVerify would refuse', async () => {
+    const r = await tool.execute({
+      subject: 'Unsafe verification',
+      description: 'should fail before storing an impossible TaskVerify spec',
+      steps: [{
+        title: 'Verify with curl',
+        description: 'curl is networked and not safe_readonly',
+        verification: [{
+          id: 'curl-html',
+          kind: 'command',
+          command: 'curl -s http://127.0.0.1:5182/ | head -c 3000',
+        }],
+      }],
+    })
+
+    expect(r.isError).toBe(true)
+    expect(r.output).toContain('Unsafe TaskVerify command check')
+    expect(r.output).toContain('curl-html')
+    expect(r.output).toContain('safe_readonly')
+    expect(getTask('task-1')).toBeUndefined()
+  })
+
+  it('rejects Project Map command checks that TaskVerify would refuse', async () => {
+    const snapshot = projectMapSnapshotWithProfiles([
+      { id: 'tsc-profile', commands: ['npx tsc --noEmit'] },
+    ])
+    const r = await tool.execute({
+      subject: 'Unsafe Project Map verification',
+      description: 'profile command should not create a doomed verification spec',
+      steps: [{
+        title: 'Implement change',
+        description: 'make the change',
+        projectMapVerificationProfileIds: ['tsc-profile'],
+      }],
+    }, { projectMapSnapshot: snapshot } as any)
+
+    expect(r.isError).toBe(true)
+    expect(r.output).toContain('Unsafe TaskVerify command check')
+    expect(r.output).toContain('project-map-tsc-profile-1')
+    expect(r.output).toContain('npx (executes arbitrary package)')
+    expect(getTask('task-1')).toBeUndefined()
   })
 
   it('expands Project Map taskVerifyChecks with profile command checks', async () => {

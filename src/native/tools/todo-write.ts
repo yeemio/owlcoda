@@ -14,6 +14,7 @@ export interface TodoItem {
   content: string
   status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'skipped'
   activeForm: string
+  failureReason?: string
 }
 
 export interface TodoWriteInput {
@@ -43,7 +44,10 @@ function formatTodos(todos: TodoItem[]): string {
       t.status === 'blocked' ? '⊘' :
       t.status === 'skipped' ? '↷' : '○'
     const status = t.status === 'in_progress' ? t.activeForm : t.content
-    lines.push(`  ${icon} ${status} [${t.status}]`)
+    const reason = (t.status === 'blocked' || t.status === 'skipped') && t.failureReason?.trim()
+      ? ` reason=${t.failureReason.trim()}`
+      : ''
+    lines.push(`  ${icon} ${status} [${t.status}]${reason}`)
   }
 
   const completed = todos.filter(t => t.status === 'completed').length
@@ -90,6 +94,9 @@ export function createTodoWriteTool(): NativeToolDef<TodoWriteInput> {
         }
         if (!item.activeForm || typeof item.activeForm !== 'string') {
           return { output: 'Error: each todo must have an activeForm string', isError: true }
+        }
+        if ((item.status === 'blocked' || item.status === 'skipped') && (!item.failureReason || typeof item.failureReason !== 'string' || !item.failureReason.trim())) {
+          return { output: `Error: ${item.status} todo "${item.content}" must include a non-empty failureReason`, isError: true }
         }
       }
 

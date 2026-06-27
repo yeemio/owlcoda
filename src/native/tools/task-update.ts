@@ -21,6 +21,7 @@ import {
   type TaskVerificationCheck,
   type TaskVerificationResult,
 } from './task-store.js'
+import { findUnsafeVerificationCommand } from './task-verification-policy.js'
 
 export interface TaskUpdateInput {
   taskId: string
@@ -97,6 +98,13 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
         if (stepStatus !== undefined && !VALID_STEP_STATUSES.has(stepStatus)) {
           return {
             output: `Invalid stepStatus "${stepStatus}". Valid: pending, in_progress, completed, failed, blocked, skipped, cancelled.`,
+            isError: true,
+          }
+        }
+        const unsafeVerification = findUnsafeVerificationCommand(verification)
+        if (unsafeVerification) {
+          return {
+            output: unsafeVerification.reason,
             isError: true,
           }
         }

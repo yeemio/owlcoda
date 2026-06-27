@@ -90,6 +90,16 @@ describe('fs-policy.checkWritePathAllowed', () => {
       expect(r.allowed).toBe(false)
     })
 
+    it('guides rejected temp artifact writes back to workspace-owned outputs', () => {
+      const r = checkWritePathAllowed(join(tmpdir(), 'owlcoda-report.md'), { workspaceRoot })
+      expect(r.allowed).toBe(false)
+      if (!r.allowed) {
+        expect(r.reason).toContain('current workspace')
+        expect(r.reason).toContain('RunWorkspace')
+        expect(r.reason).toContain('OWLCODA_ALLOW_FS_ROOTS')
+      }
+    })
+
     it('rejection happens before mutation (helper never touches FS)', () => {
       const targetDir = join(outsideRoot, 'should-not-be-created')
       checkWritePathAllowed(join(targetDir, 'file.txt'), { workspaceRoot })

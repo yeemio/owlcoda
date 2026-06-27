@@ -177,6 +177,7 @@ function runCommand(
     let settled = false
     let aborted = false
     let forcedRelease = false
+    let timeoutExceeded = false
 
     // Progress tracking
     const startTime = Date.now()
@@ -297,6 +298,7 @@ function runCommand(
 
     const timer = setTimeout(() => {
       if (settled) return
+      timeoutExceeded = true
       killed = true
       killGroup('SIGTERM')
       timeoutEscalation = setTimeout(() => {
@@ -358,6 +360,12 @@ function runCommand(
       const stdout = sanitizeBashOutput(truncateBuffer(stdoutChunks, stdoutTotal))
       const stderr = sanitizeBashOutput(truncateBuffer(stderrChunks, stderrTotal))
       const exitCode = code ?? (signal ? 128 : 1)
+      const backgroundLikely = timeoutExceeded
+        && !aborted
+        && exitCode === 0
+        && signal === null
+        && isBackgroundShapedCommand(command)
+      const killedForResult = killed && !backgroundLikely
 
       // 0.13.60: smart bash output formatter. Always emits an
       // `[exit code: N]` trailer line; preserves the full stderr
@@ -372,14 +380,24 @@ function runCommand(
             stdout,
             stderr,
             exitCode,
-            killed,
+            killed: killedForResult,
             timeoutMs,
+            timeoutExceeded,
+            backgroundLikely,
           })
 
       resolve({
         output: formatted,
         isError: aborted ? true : exitCode !== 0,
-        metadata: { exitCode, killed, signal, aborted, forcedRelease },
+        metadata: {
+          exitCode,
+          killed: killedForResult,
+          signal,
+          aborted,
+          forcedRelease,
+          ...(timeoutExceeded ? { timeoutExceeded: true } : {}),
+          ...(backgroundLikely ? { backgroundLikely: true } : {}),
+        },
       })
     })
   })
@@ -413,6 +431,8 @@ interface BashFormatInput {
   exitCode: number
   killed: boolean
   timeoutMs: number
+  timeoutExceeded?: boolean
+  backgroundLikely?: boolean
 }
 
 /**
@@ -444,9 +464,13 @@ function formatBashOutput(input: BashFormatInput): string {
   const killedLine = input.killed
     ? `[killed] Process timed out after ${input.timeoutMs}ms`
     : ''
+  const timeoutExceededLine = input.timeoutExceeded && input.backgroundLikely && !input.killed
+    ? `[timeout exceeded] Command exited 0 after timeout signal; background work may still be running.`
+    : ''
 
   const trailerParts: string[] = []
   if (killedLine) trailerParts.push(killedLine)
+  if (timeoutExceededLine) trailerParts.push(timeoutExceededLine)
   trailerParts.push(exitLine)
   const trailer = trailerParts.join('\n')
 
@@ -484,6 +508,11 @@ function formatBashOutput(input: BashFormatInput): string {
     return `(no output)\n\n${trailer}`
   }
   return result
+}
+
+function isBackgroundShapedCommand(command: string): boolean {
+  return /(^|[^&])&(?!&)/.test(command)
+    || /\b(?:nohup|setsid|disown)\b/.test(command)
 }
 
 /** Keep head 60% + tail 20%, with a clear marker between them. */
