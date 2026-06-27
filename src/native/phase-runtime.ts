@@ -365,28 +365,12 @@ function evaluateRuntimeSensitiveFinalReportContract(text: string): RuntimeSensi
   if (!/\bremaining risks?\b|\bresidual risks?\b|\bknown (?:gap|defect|issue)\b|\brisk\b|\bnot[_ -]?fixed\b/i.test(text)) {
     missing.push('remaining risk')
   }
-  if (mentionsManualRuntimeReplayPending(text) && !hasExplicitBusinessReplayPendingStatus(text)) {
-    missing.push('business replay pending status')
-  }
 
   return { applies: true, missing }
 }
 
 function isRuntimeSensitiveCompletion(text: string): boolean {
   return /\b(?:runtime[- ]?(?:supervisor|truth|recovery|lifecycle|gate|bug|fix|state|contract|tool)|long[- ]?tasks?|watchdogs?|supervisors?|jobs?|browser|playwright|chrome|process(?:es)?|pids?|daemon|agents?|subagents?|external tools?|TaskVerify|TaskUpdate|recovery|checkpoint|resume|timeout|deadline)\b/i.test(text)
-}
-
-function mentionsManualRuntimeReplayPending(text: string): boolean {
-  return /\b(?:user|manual|operator|product|business)\b[^.!?\n]{0,100}\b(?:refresh|click|replay|re-run|rerun|recapture|capture|verify|validate|sign[ -]?off)\b/i.test(text)
-    || /\b(?:refresh|click|replay|re-run|rerun|recapture|capture)\b[^.!?\n]{0,100}\b(?:manually|by the user|user must|user needs|business loop|acceptance|sign[ -]?off)\b/i.test(text)
-    || /(?:需要|仍需|需|请|等待|待)[^。！？\n]{0,60}(?:用户|人工|手动)[^。！？\n]{0,100}(?:刷新|点击|复测|重跑|重新抓取|再次抓取|回放|验收|确认|验证)/i.test(text)
-    || /(?:业务闭环|业务验收|真实业务|线上页面)[^。！？\n]{0,100}(?:待|需要|仍需|未完成|pending|复测|验收|确认|验证)/i.test(text)
-}
-
-function hasExplicitBusinessReplayPendingStatus(text: string): boolean {
-  return /\b(?:business_acceptance_pending|pending_user_replay|needs_runtime_replay|runtime_replay_pending|manual_replay_pending|business_replay_pending)\b/i.test(text)
-    || /\b(?:runtime|business|user|manual)[-_ ]?(?:replay|acceptance|signoff|sign[ -]?off)[-_ ]?pending\b/i.test(text)
-    || /(?:业务验收|业务闭环|用户复测|人工复测|手动复测|刷新点击复测|真实业务回放)[^。！？\n]{0,100}(?:pending|待|未完成|仍需|需要|未验证)/i.test(text)
 }
 
 function findLastPhaseEvent(

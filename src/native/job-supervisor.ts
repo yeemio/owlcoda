@@ -2,9 +2,149 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import type { RuntimeFactRefs } from './protocol/types.js'
+import { mergeRuntimeFactRefs } from './runtime-facts.js'
 
 export type JobType = 'command' | 'agent' | 'browser' | 'api' | (string & {})
-export type JobStatus = 'queued' | 'running' | 'waiting' | 'done' | 'failed' | 'cancelled' | 'timeout'
+export type JobStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting'
+  | 'done'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timeout'
+  | 'detached'
+  | 'recovering'
+  | 'unrecoverable'
+  | 'orphaned'
+
+export type JobTerminalStatus =
+  | 'done'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timeout'
+  | 'unrecoverable'
+  | 'orphaned'
+
+export type JobRecoveryClass =
+  | 'not_started'
+  | 'active'
+  | 'terminal'
+  | 'detached_process'
+  | 'external_reconnect_required'
+  | 'unrecoverable'
+  | 'orphaned'
+
+export interface JobStateDescriptor {
+  status: JobStatus
+  terminal: boolean
+  canCancel: boolean
+  canResume: boolean
+  requiresProof: boolean
+  userMessage: string
+}
+
+export const JOB_STATE_MACHINE: Record<JobStatus, JobStateDescriptor> = {
+  queued: {
+    status: 'queued',
+    terminal: false,
+    canCancel: true,
+    canResume: false,
+    requiresProof: false,
+    userMessage: 'Job is queued and has not started.',
+  },
+  running: {
+    status: 'running',
+    terminal: false,
+    canCancel: true,
+    canResume: false,
+    requiresProof: false,
+    userMessage: 'Job is running under the current runtime.',
+  },
+  waiting: {
+    status: 'waiting',
+    terminal: false,
+    canCancel: true,
+    canResume: true,
+    requiresProof: false,
+    userMessage: 'Job is waiting for external input or runtime continuation.',
+  },
+  done: {
+    status: 'done',
+    terminal: true,
+    canCancel: false,
+    canResume: false,
+    requiresProof: true,
+    userMessage: 'Job completed successfully. Legacy status; prefer completed for new records.',
+  },
+  completed: {
+    status: 'completed',
+    terminal: true,
+    canCancel: false,
+    canResume: false,
+    requiresProof: true,
+    userMessage: 'Job completed successfully.',
+  },
+  failed: {
+    status: 'failed',
+    terminal: true,
+    canCancel: false,
+    canResume: true,
+    requiresProof: true,
+    userMessage: 'Job failed with an explicit error or non-zero outcome.',
+  },
+  cancelled: {
+    status: 'cancelled',
+    terminal: true,
+    canCancel: false,
+    canResume: false,
+    requiresProof: true,
+    userMessage: 'Job was cancelled and must carry cleanup evidence.',
+  },
+  timeout: {
+    status: 'timeout',
+    terminal: true,
+    canCancel: false,
+    canResume: true,
+    requiresProof: true,
+    userMessage: 'Job timed out; inspect output and decide whether to retry.',
+  },
+  detached: {
+    status: 'detached',
+    terminal: false,
+    canCancel: true,
+    canResume: true,
+    requiresProof: true,
+    userMessage: 'Job process appears to exist, but the current runtime no longer owns its live handle.',
+  },
+  recovering: {
+    status: 'recovering',
+    terminal: false,
+    canCancel: true,
+    canResume: true,
+    requiresProof: false,
+    userMessage: 'Job has a recovery handle or source record and needs runtime reconciliation.',
+  },
+  unrecoverable: {
+    status: 'unrecoverable',
+    terminal: true,
+    canCancel: false,
+    canResume: false,
+    requiresProof: true,
+    userMessage: 'Job cannot be safely recovered; inspect recorded output or restart explicitly.',
+  },
+  orphaned: {
+    status: 'orphaned',
+    terminal: true,
+    canCancel: false,
+    canResume: false,
+    requiresProof: true,
+    userMessage: 'Job was active but has no process, external handle, or source record to recover from.',
+  },
+}
 
 export interface JobArtifactRef {
   id?: string
@@ -22,6 +162,11 @@ export interface JobRecord {
   startedAt?: string
   updatedAt: string
   endedAt?: string
+  threadId?: string
+  turnId?: string
+  runId?: string
+  taskId?: string
+  factRefs?: RuntimeFactRefs
   cwd?: string
   command?: string
   tool?: string
@@ -33,6 +178,11 @@ export interface JobRecord {
   lastOutput?: string
   error?: string
   recoveryHint?: string
+  recoveryClass?: JobRecoveryClass
+  recoveryReason?: string
+  recoveryUpdatedAt?: string
+  resumeCommand?: string
+  proofRequired?: boolean
   deadlineAt?: string
   stageDeadlineAt?: string
   terminationReason?: string
@@ -63,6 +213,25 @@ export interface CreateJobInput {
   stageDeadlineMs?: number
   artifacts?: JobArtifactRef[]
   source?: JobRecord['source']
+  threadId?: string
+  turnId?: string
+  runId?: string
+  taskId?: string
+  factRefs?: RuntimeFactRefs
+}
+
+export interface RuntimeRestartReconcileOptions {
+  now?: string
+  isProcessAlive?: (pid: number) => boolean
+}
+
+export interface JobReconciliationResult {
+  jobId: string
+  previousStatus: JobStatus
+  status: JobStatus
+  recoveryClass?: JobRecoveryClass
+  action: 'unchanged' | 'detached' | 'recovering' | 'unrecoverable' | 'orphaned'
+  reason: string
 }
 
 export interface ResetJobSupervisorOptions {
@@ -77,20 +246,36 @@ let jobStoreWarned = false
 export function createJob(input: CreateJobInput): JobRecord {
   ensureJobStoreLoaded()
   const now = new Date()
+  const jobId = input.jobId ?? `job-${randomUUID()}`
+  const sourceTaskId = input.source?.kind === 'task' ? input.source.id : undefined
+  const factRefs = mergeRuntimeFactRefs(input.factRefs, {
+    threadId: input.threadId,
+    turnId: input.turnId,
+    runId: input.runId,
+    taskId: input.taskId ?? sourceTaskId,
+    jobId,
+  })
   const job: JobRecord = {
     schemaVersion: 1,
-    jobId: input.jobId ?? `job-${randomUUID()}`,
+    jobId,
     type: input.type,
     status: 'queued',
     stage: input.stage ?? 'queued',
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
     artifacts: input.artifacts ?? [],
+    ...(factRefs?.threadId ? { threadId: factRefs.threadId } : {}),
+    ...(factRefs?.turnId ? { turnId: factRefs.turnId } : {}),
+    ...(factRefs?.runId ? { runId: factRefs.runId } : {}),
+    ...(factRefs?.taskId ? { taskId: factRefs.taskId } : {}),
+    ...(factRefs ? { factRefs } : {}),
     ...(input.cwd ? { cwd: input.cwd } : {}),
     ...(input.command ? { command: input.command } : {}),
     ...(input.tool ? { tool: input.tool } : {}),
     ...(input.provider ? { provider: input.provider } : {}),
     ...(input.recoveryHint ? { recoveryHint: input.recoveryHint } : {}),
+    recoveryClass: 'not_started',
+    proofRequired: false,
     ...(input.deadlineMs && input.deadlineMs > 0 ? { deadlineAt: new Date(now.getTime() + input.deadlineMs).toISOString() } : {}),
     ...(input.stageDeadlineMs && input.stageDeadlineMs > 0 ? { stageDeadlineAt: new Date(now.getTime() + input.stageDeadlineMs).toISOString() } : {}),
     ...(input.source ? { source: input.source } : {}),
@@ -112,6 +297,10 @@ export function startJob(
   job.stage = details.stage ?? 'running'
   job.startedAt = job.startedAt ?? now
   job.updatedAt = now
+  job.recoveryClass = 'active'
+  delete job.recoveryReason
+  job.recoveryUpdatedAt = now
+  job.proofRequired = false
   if (details.pid !== undefined) job.pid = details.pid
   if (details.processGroup !== undefined) job.processGroup = details.processGroup
   if (details.externalHandle !== undefined) job.externalHandle = details.externalHandle
@@ -142,7 +331,7 @@ export function addJobArtifacts(jobId: string, artifacts: JobArtifactRef[]): Job
 
 export function finishJob(
   jobId: string,
-  status: Exclude<JobStatus, 'queued' | 'running' | 'waiting'>,
+  status: JobTerminalStatus,
   details: {
     stage?: string
     error?: string
@@ -162,10 +351,164 @@ export function finishJob(
   job.stage = details.stage ?? status
   job.updatedAt = now
   job.endedAt = now
+  job.recoveryClass = status === 'unrecoverable' ? 'unrecoverable' : status === 'orphaned' ? 'orphaned' : 'terminal'
+  job.recoveryUpdatedAt = now
+  job.proofRequired = getJobStateDescriptor(status).requiresProof
   if (details.error !== undefined) job.error = details.error
-  if (details.terminationReason !== undefined) job.terminationReason = details.terminationReason
+  if (details.terminationReason !== undefined) {
+    job.terminationReason = details.terminationReason
+    job.recoveryReason = details.terminationReason
+  }
   persistJobRegistry()
   return cloneJob(job)
+}
+
+export function markJobDetached(
+  jobId: string,
+  details: {
+    reason: string
+    updatedAt?: string
+    recoveryHint?: string
+    resumeCommand?: string
+  },
+): JobRecord | undefined {
+  return updateJobRecoveryState(jobId, {
+    status: 'detached',
+    recoveryClass: 'detached_process',
+    stage: 'detached',
+    reason: details.reason,
+    updatedAt: details.updatedAt,
+    recoveryHint: details.recoveryHint,
+    resumeCommand: details.resumeCommand,
+  })
+}
+
+export function markJobRecovering(
+  jobId: string,
+  details: {
+    reason: string
+    updatedAt?: string
+    recoveryHint?: string
+    resumeCommand?: string
+  },
+): JobRecord | undefined {
+  return updateJobRecoveryState(jobId, {
+    status: 'recovering',
+    recoveryClass: 'external_reconnect_required',
+    stage: 'recovering',
+    reason: details.reason,
+    updatedAt: details.updatedAt,
+    recoveryHint: details.recoveryHint,
+    resumeCommand: details.resumeCommand,
+  })
+}
+
+export function markJobUnrecoverable(
+  jobId: string,
+  details: {
+    reason: string
+    updatedAt?: string
+    error?: string
+  },
+): JobRecord | undefined {
+  return updateJobRecoveryState(jobId, {
+    status: 'unrecoverable',
+    recoveryClass: 'unrecoverable',
+    stage: 'unrecoverable',
+    reason: details.reason,
+    updatedAt: details.updatedAt,
+    error: details.error,
+  })
+}
+
+export function markJobOrphaned(
+  jobId: string,
+  details: {
+    reason: string
+    updatedAt?: string
+  },
+): JobRecord | undefined {
+  return updateJobRecoveryState(jobId, {
+    status: 'orphaned',
+    recoveryClass: 'orphaned',
+    stage: 'orphaned',
+    reason: details.reason,
+    updatedAt: details.updatedAt,
+  })
+}
+
+export function reconcileJobsAfterRuntimeRestart(
+  options: RuntimeRestartReconcileOptions = {},
+): JobReconciliationResult[] {
+  ensureJobStoreLoaded()
+  const isProcessAlive = options.isProcessAlive ?? defaultIsProcessAlive
+  const results: JobReconciliationResult[] = []
+  for (const job of jobs.values()) {
+    if (!isRestartReconciliationCandidate(job.status)) {
+      results.push({
+        jobId: job.jobId,
+        previousStatus: job.status,
+        status: job.status,
+        recoveryClass: job.recoveryClass,
+        action: 'unchanged',
+        reason: 'job status is not active across restart',
+      })
+      continue
+    }
+
+    const previousStatus = job.status
+    let updated: JobRecord | undefined
+    let action: JobReconciliationResult['action'] = 'unchanged'
+    let reason = ''
+
+    if (job.pid !== undefined) {
+      if (isProcessAlive(job.pid)) {
+        action = 'detached'
+        reason = `Runtime restarted while pid ${job.pid} still appears alive; live abort/output adapters are not bound.`
+        updated = markJobDetached(job.jobId, {
+          reason,
+          updatedAt: options.now,
+          recoveryHint: job.recoveryHint,
+          resumeCommand: job.recoveryHint,
+        })
+      } else {
+        action = 'unrecoverable'
+        reason = `Runtime restarted and pid ${job.pid} is no longer alive.`
+        updated = markJobUnrecoverable(job.jobId, {
+          reason,
+          updatedAt: options.now,
+        })
+      }
+    } else if (job.externalHandle || job.source) {
+      action = 'recovering'
+      reason = job.externalHandle
+        ? `Runtime restarted with external handle ${job.externalHandle}; provider-specific reconciliation is required.`
+        : `Runtime restarted with source ${job.source?.kind}:${job.source?.id}; inspect the source to reconcile status.`
+      updated = markJobRecovering(job.jobId, {
+        reason,
+        updatedAt: options.now,
+        recoveryHint: job.recoveryHint,
+        resumeCommand: job.recoveryHint,
+      })
+    } else {
+      action = 'orphaned'
+      reason = 'Runtime restarted while job was active, but no pid, external handle, or source record is available.'
+      updated = markJobOrphaned(job.jobId, {
+        reason,
+        updatedAt: options.now,
+      })
+    }
+
+    results.push({
+      jobId: job.jobId,
+      previousStatus,
+      status: updated?.status ?? job.status,
+      recoveryClass: updated?.recoveryClass ?? job.recoveryClass,
+      action,
+      reason,
+    })
+  }
+  return results
 }
 
 export function recordJobCleanup(
@@ -244,6 +587,69 @@ export function abortJob(jobId: string, reason = 'user_cancel'): boolean {
   if (!abort) return false
   abort(reason)
   return true
+}
+
+export function getJobStateDescriptor(status: JobStatus): JobStateDescriptor {
+  return JOB_STATE_MACHINE[status]
+}
+
+export function isTerminalJobStatus(status: JobStatus): boolean {
+  return getJobStateDescriptor(status).terminal
+}
+
+function updateJobRecoveryState(
+  jobId: string,
+  details: {
+    status: JobStatus
+    recoveryClass: JobRecoveryClass
+    stage: string
+    reason: string
+    updatedAt?: string
+    recoveryHint?: string
+    resumeCommand?: string
+    error?: string
+  },
+): JobRecord | undefined {
+  ensureJobStoreLoaded()
+  const job = jobs.get(jobId)
+  if (!job) return undefined
+  const now = details.updatedAt ?? new Date().toISOString()
+  job.status = details.status
+  job.stage = details.stage
+  job.updatedAt = now
+  job.recoveryClass = details.recoveryClass
+  job.recoveryReason = details.reason
+  job.recoveryUpdatedAt = now
+  job.proofRequired = getJobStateDescriptor(details.status).requiresProof
+  if (details.recoveryHint !== undefined) job.recoveryHint = details.recoveryHint
+  if (details.resumeCommand !== undefined) job.resumeCommand = details.resumeCommand
+  if (details.error !== undefined) job.error = details.error
+  if (getJobStateDescriptor(details.status).terminal) {
+    job.endedAt = job.endedAt ?? now
+    job.terminationReason = job.terminationReason ?? details.reason
+  }
+  persistJobRegistry()
+  return cloneJob(job)
+}
+
+function isRestartReconciliationCandidate(status: JobStatus): boolean {
+  return status === 'queued'
+    || status === 'running'
+    || status === 'waiting'
+    || status === 'detached'
+    || status === 'recovering'
+}
+
+function defaultIsProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    const code = typeof err === 'object' && err !== null && 'code' in err
+      ? (err as { code?: unknown }).code
+      : undefined
+    return code === 'EPERM'
+  }
 }
 
 function cloneJob(job: JobRecord): JobRecord {

@@ -1,6 +1,6 @@
 /**
  * End-to-end verification script.
- * Prerequisites: owlcoda running at :8019, Router at :8009.
+ * Prerequisites: owlcoda running at :8019, owlmlx at :8066.
  * Run: npx tsx tests/sdk-verify.ts
  */
 

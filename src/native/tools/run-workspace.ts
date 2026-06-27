@@ -43,7 +43,13 @@ export interface RunWorkspaceInput {
   checkpoint?: RunCheckpoint
   path?: string
   origin?: RunArtifactOrigin | string
+  environment?: string
+  project?: string
+  runId?: string
+  jobId?: string
+  artifactType?: string
   stepId?: string
+  status?: string
   participatesInFinal?: boolean
   sourcePath?: string
   event?: RunWorkspaceEvent
@@ -174,6 +180,11 @@ async function executeRecordArtifact(input: RunWorkspaceInput, context?: ToolExe
   const result = await recordArtifact(runRef, {
     path: artifactPath,
     origin,
+    ...(typeof input.environment === 'string' && input.environment.trim() ? { environment: input.environment } : {}),
+    ...(typeof input.project === 'string' && input.project.trim() ? { project: input.project } : {}),
+    ...(typeof input.runId === 'string' && input.runId.trim() ? { runId: input.runId } : {}),
+    ...(typeof input.jobId === 'string' && input.jobId.trim() ? { jobId: input.jobId } : {}),
+    ...(typeof input.artifactType === 'string' && input.artifactType.trim() ? { artifactType: input.artifactType } : {}),
     ...(typeof input.stepId === 'string' && input.stepId.trim() ? { stepId: input.stepId } : {}),
     ...(typeof input.participatesInFinal === 'boolean' ? { participatesInFinal: input.participatesInFinal } : {}),
     ...(typeof input.sourcePath === 'string' && input.sourcePath.trim() ? { sourcePath: input.sourcePath } : {}),
@@ -187,7 +198,15 @@ async function executeReadLedger(input: RunWorkspaceInput, context?: ToolExecuti
   if (typeof runRef !== 'string') return runRef
   const fsVerdict = allowMetadataRead(getRunWorkspacePathsFromRef(runRef, input.cwd).artifactsPath, input, context)
   if (fsVerdict) return fsVerdict
-  const result = await readArtifactLedger(runRef, {}, input.cwd)
+  const filters = artifactLedgerReadFilters(input)
+  const result = await readArtifactLedger(runRef, filters, input.cwd)
+  if (Object.keys(filters).length > 0) {
+    return jsonResult({
+      ledger: result,
+      artifactCount: result.artifacts.length,
+      filters,
+    }, { action: 'readLedger', artifactCount: result.artifacts.length, filters })
+  }
   return jsonResult(result, { action: 'readLedger', artifactCount: result.artifacts.length })
 }
 
@@ -258,6 +277,20 @@ function resolveEventInput(input: RunWorkspaceInput): RunWorkspaceEvent | Error 
     ...(typeof input.stepId === 'string' && input.stepId.trim() ? { stepId: input.stepId } : {}),
     ...(typeof input.message === 'string' && input.message.trim() ? { message: input.message } : {}),
     ...(isRecord(input.data) ? { data: input.data } : {}),
+  }
+}
+
+function artifactLedgerReadFilters(input: RunWorkspaceInput) {
+  return {
+    ...(typeof input.environment === 'string' && input.environment.trim() ? { environment: input.environment.trim() } : {}),
+    ...(typeof input.project === 'string' && input.project.trim() ? { project: input.project.trim() } : {}),
+    ...(typeof input.runId === 'string' && input.runId.trim() ? { runId: input.runId.trim() } : {}),
+    ...(typeof input.jobId === 'string' && input.jobId.trim() ? { jobId: input.jobId.trim() } : {}),
+    ...(typeof input.artifactType === 'string' && input.artifactType.trim() ? { artifactType: input.artifactType.trim() } : {}),
+    ...(typeof input.origin === 'string' && input.origin.trim() ? { origin: input.origin.trim() } : {}),
+    ...(typeof input.status === 'string' && input.status.trim() ? { status: input.status.trim() } : {}),
+    ...(typeof input.stepId === 'string' && input.stepId.trim() ? { stepId: input.stepId.trim() } : {}),
+    ...(typeof input.participatesInFinal === 'boolean' ? { participatesInFinal: input.participatesInFinal } : {}),
   }
 }
 

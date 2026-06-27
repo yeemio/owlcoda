@@ -43,7 +43,7 @@ export const CAPABILITIES: Capability[] = [
   // ── Partial / Best-effort / Manual-only ──
   { name: '/cost display', status: 'partial', detail: 'Token counts real; durations real; USD uses Anthropic cloud pricing — not meaningful for local models. Warning displayed.' },
   { name: 'Wheel / trackpad transcript scroll', status: 'partial', detail: 'Terminal.app direct terminal-owned scrollback path verified. Real tmux wheel passthrough is not guaranteed in selection-first mode; use PgUp/PgDn, Ctrl+↓, or tmux scrollback. iTerm2 verification pending.' },
-  { name: 'Image input', status: 'best_effort', detail: 'Protocol supports it; requires multimodal backend model' },
+  { name: 'Image input', status: 'best_effort', detail: 'Capability-aware routing: attaches local image references only for models with declared/known vision support; unsupported or unknown models get an explicit downgrade warning.' },
   { name: 'Model availability', status: 'supported', detail: 'Live runtime probe at startup; owlmlx direct path uses /v1/openai/models for visibility, /v1/runtime/model-visibility for diagnostics, and treats /v1/models as loaded inventory only' },
   { name: 'LSP tool', status: 'supported', detail: 'Native LSP client (lsp-provider.ts) auto-spawns a language server per workspace root over stdio JSON-RPC. Actions: diagnostics / hover / definition / references / symbols / completion. TS/JS via typescript-language-server (install `npm i -g typescript-language-server typescript`); other extensions report no-server gracefully. Sessions are lazily created and reused per root.' },
 

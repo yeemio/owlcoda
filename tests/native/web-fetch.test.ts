@@ -79,6 +79,27 @@ describe('createWebFetchTool', () => {
     expect(result.output).toContain('HTTP/HTTPS')
   })
 
+  it('rejects unsupported HTTP methods', async () => {
+    const result = await tool.execute({ url: 'http://127.0.0.1:3000/health', method: 'POST' })
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('GET and HEAD')
+  })
+
+  it('passes HEAD through to fetch without reading a response body', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, {
+      status: 200,
+      headers: { 'content-type': 'text/plain' },
+    }))
+
+    const result = await tool.execute({ url: 'http://127.0.0.1:3000/health', method: 'HEAD' })
+
+    expect(result.isError).toBe(false)
+    expect(result.output).toContain('Length: 0 chars')
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:3000/health', expect.objectContaining({
+      method: 'HEAD',
+    }))
+  })
+
   it('falls back to llms.txt markdown candidates when a docs URL returns 404', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
       const requested = String(input)

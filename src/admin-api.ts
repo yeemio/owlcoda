@@ -359,6 +359,7 @@ export async function handleAdminApiRequest(
         return true
       }
       case 'test-model': {
+        const body = await readJsonBody(req)
         const model = deps.getConfig().models.find(candidate => candidate.id === route.modelId!)
         if (!model) throw new AdminApiError(404, 'not_found', `Model "${route.modelId}" not found`)
         const result = await deps.providerProbe.test(model)
@@ -366,9 +367,20 @@ export async function handleAdminApiRequest(
           const cache = deps.endpointHealthCache ?? defaultEndpointHealthCache
           cache.record(sampleFromProbeResult(model.endpoint, result))
         }
+        let visionResult: Awaited<ReturnType<ProviderProbe['testVision']>> | undefined
+        let appliedPatch: { supportsImages: true } | undefined
+        if (shouldProbeVision(body)) {
+          visionResult = await deps.providerProbe.testVision(model)
+          if (visionResult.supported && shouldEnableVisionOnSuccess(body)) {
+            await deps.mutator.updateModelFields(model.id, { supportsImages: true })
+            appliedPatch = { supportsImages: true }
+          }
+        }
         sendAdminJson(res, 200, {
           schemaVersion: ADMIN_API_SCHEMA_VERSION,
           result,
+          ...(visionResult ? { visionResult } : {}),
+          ...(appliedPatch ? { appliedPatch } : {}),
         })
         return true
       }
@@ -380,9 +392,19 @@ export async function handleAdminApiRequest(
           const cache = deps.endpointHealthCache ?? defaultEndpointHealthCache
           cache.record(sampleFromProbeResult(payload.endpoint, result))
         }
+        let visionResult: Awaited<ReturnType<ProviderProbe['testVision']>> | undefined
+        let suggestedPatch: { supportsImages: true } | undefined
+        if (shouldProbeVision(body)) {
+          visionResult = await deps.providerProbe.testVision(payload)
+          if (visionResult.supported) {
+            suggestedPatch = { supportsImages: true }
+          }
+        }
         sendAdminJson(res, 200, {
           schemaVersion: ADMIN_API_SCHEMA_VERSION,
           result,
+          ...(visionResult ? { visionResult } : {}),
+          ...(suggestedPatch ? { suggestedPatch } : {}),
         })
         return true
       }
@@ -582,6 +604,26 @@ function unwrapProbePayload(body: Record<string, unknown>): DryRunProviderPayloa
     return candidate as DryRunProviderPayload
   }
   return body as DryRunProviderPayload
+}
+
+function shouldProbeVision(body: Record<string, unknown>): boolean {
+  return readProbeBooleanFlag(body, 'probeVision')
+    || readProbeBooleanFlag(body, 'visionProbe')
+    || readProbeBooleanFlag(body, 'includeVision')
+}
+
+function shouldEnableVisionOnSuccess(body: Record<string, unknown>): boolean {
+  return readProbeBooleanFlag(body, 'enableVisionOnSuccess')
+    || readProbeBooleanFlag(body, 'enableImagesOnSuccess')
+}
+
+function readProbeBooleanFlag(body: Record<string, unknown>, key: string): boolean {
+  if (body[key] === true) return true
+  const candidate = body.model
+  if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+    return (candidate as Record<string, unknown>)[key] === true
+  }
+  return false
 }
 
 function sendMutationResult(

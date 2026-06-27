@@ -46,11 +46,6 @@ const SAFE_TOOLS = new Set<string>([
   'RuntimeRecoveryList', 'RuntimeRecoveryGet',
   // Platform job supervisor inspection is read-only over runtime-owned job records.
   'JobList', 'JobGet',
-  // Unified runtime truth spine and read-only control-plane inspections.
-  'RuntimeLifecycleList', 'RuntimeLifecycleGet',
-  'RuntimeSupervisorList', 'RuntimeSupervisorGet',
-  'AgentControlList', 'AgentControlGet',
-  'AgentMailboxList', 'AgentMailboxGet',
 ])
 
 const INTERNAL_STATE_TOOLS = new Set<string>([
@@ -72,8 +67,6 @@ const INTERNAL_STATE_TOOLS = new Set<string>([
   'RunWorkspace',
   // Runtime harness snapshot — bounded repo scan plus OwlCoda run metadata
   'ProjectMap',
-  // Mailbox queue mutations are session/runtime state only.
-  'AgentMailboxSend', 'AgentMailboxResolve',
   // Platform job cancellation mutates OwlCoda-supervised lifecycle state.
   'JobCancel',
 ])
@@ -93,11 +86,11 @@ const EXTERNAL_EFFECT_TOOLS = new Set<string>([
   'JudgeBackendProbe',
   // Browser-style capture jobs fetch URLs and write artifacts.
   'BrowserJob',
-  // API jobs fetch URLs and write response artifacts under runtime supervision.
-  'ApiJob',
-  // Service jobs spawn local dev services, probe health, write logs, and stop processes.
-  'ServiceJob',
 ])
+
+const LOCAL_READONLY_HEALTH_SEGMENTS = new Set(['health', 'healthz', 'ready', 'readyz', 'live', 'livez'])
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
+const SENSITIVE_HTTP_HEADER_NAMES = new Set(['authorization', 'cookie', 'x-api-key', 'x-auth-token'])
 
 function isInsideCwd(absPath: string, cwd: string = process.cwd()): boolean {
   const resolved = isAbsolute(absPath) ? absPath : resolvePath(cwd, absPath)
@@ -120,6 +113,34 @@ function riskFromBashCommand(command: unknown): RiskClass {
   //   dangerous      → 'destructive'
   //   unknown        → 'mutating' (fail-safe)
   return classification.level === 'dangerous' ? 'destructive' : 'mutating'
+}
+
+function isSafeReadonlyLocalHttpDiagnostic(args: Record<string, unknown>): boolean {
+  if (typeof args['url'] !== 'string' || !args['url'].trim()) return false
+  const method = typeof args['method'] === 'string' && args['method'].trim()
+    ? args['method'].trim().toUpperCase()
+    : 'GET'
+  if (method !== 'GET' && method !== 'HEAD') return false
+  if (args['body'] !== undefined || args['data'] !== undefined || args['json'] !== undefined) return false
+
+  let url: URL
+  try {
+    url = new URL(args['url'])
+  } catch {
+    return false
+  }
+
+  if (!['http:', 'https:'].includes(url.protocol)) return false
+  if (!LOCAL_HOSTS.has(url.hostname.toLowerCase())) return false
+  if (!url.port) return false
+  if (hasSensitiveHeaders(args['headers'])) return false
+  const pathSegments = url.pathname.toLowerCase().split('/').filter(Boolean)
+  return pathSegments.some((segment) => LOCAL_READONLY_HEALTH_SEGMENTS.has(segment))
+}
+
+function hasSensitiveHeaders(headers: unknown): boolean {
+  if (!headers || typeof headers !== 'object' || Array.isArray(headers)) return false
+  return Object.keys(headers).some((name) => SENSITIVE_HTTP_HEADER_NAMES.has(name.toLowerCase()))
 }
 
 export function classifyToolRisk(
@@ -154,6 +175,7 @@ export function classifyToolRisk(
     return 'mutating'
   }
 
+  if (toolName === 'WebFetch' && isSafeReadonlyLocalHttpDiagnostic(args)) return 'safe_readonly_local'
   if (EXTERNAL_EFFECT_TOOLS.has(toolName)) return 'external_effect'
 
   return 'mutating' // fail-safe

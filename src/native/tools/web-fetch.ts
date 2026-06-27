@@ -11,6 +11,8 @@ import type { NativeToolDef, ToolResult } from './types.js'
 export interface WebFetchInput {
   /** The URL to fetch */
   url: string
+  /** HTTP method. Only GET and HEAD are supported. Defaults to GET. */
+  method?: 'GET' | 'HEAD' | string
   /** Optional prompt — included as context but not processed by a secondary model */
   prompt?: string
 }
@@ -251,9 +253,13 @@ export function createWebFetchTool(): NativeToolDef<WebFetchInput> {
 
     async execute(input: WebFetchInput): Promise<ToolResult> {
       const { url, prompt } = input
+      const method = normalizeMethod(input.method)
 
       if (!url || typeof url !== 'string') {
         return { output: 'Error: url is required', isError: true }
+      }
+      if (method === null) {
+        return { output: 'Error: WebFetch only supports GET and HEAD methods', isError: true }
       }
 
       // Basic URL validation
@@ -270,13 +276,14 @@ export function createWebFetchTool(): NativeToolDef<WebFetchInput> {
 
       try {
         const res = await fetch(url, {
+          method,
           signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
           headers: fetchHeaders(),
           redirect: 'follow',
         })
 
         if (!res.ok) {
-          if (res.status === 404) {
+          if (res.status === 404 && method === 'GET') {
             const fallback = await tryLlmsTxtFallback(url, parsed, prompt)
             if (fallback) return fallback
           }
@@ -288,7 +295,7 @@ export function createWebFetchTool(): NativeToolDef<WebFetchInput> {
         }
 
         const contentType = res.headers.get('content-type') ?? ''
-        const raw = await res.text()
+        const raw = method === 'HEAD' ? '' : await res.text()
         return renderFetchedContent({ responseUrl: url, contentType, raw, prompt })
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
@@ -299,4 +306,12 @@ export function createWebFetchTool(): NativeToolDef<WebFetchInput> {
       }
     },
   }
+}
+
+function normalizeMethod(value: unknown): 'GET' | 'HEAD' | null {
+  if (value === undefined) return 'GET'
+  if (typeof value !== 'string') return null
+  const method = value.trim().toUpperCase()
+  if (method === 'GET' || method === 'HEAD') return method
+  return null
 }

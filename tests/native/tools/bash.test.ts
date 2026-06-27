@@ -1,5 +1,14 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect } from 'vitest'
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createBashTool } from '../../../src/native/tools/bash.js'
+
+const temporaryRoots: string[] = []
+
+afterEach(() => {
+  for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true })
+})
 
 describe('Native Bash tool', () => {
   const bash = createBashTool()
@@ -151,6 +160,29 @@ describe('Native Bash tool', () => {
     // the [exit code: 0] trailer.
     expect(result.output).toContain('(no output)')
     expect(result.output).toContain('[exit code: 0]')
+  })
+
+  it('captures before and after source for parsed bash write targets', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-capture-'))
+    temporaryRoots.push(root)
+    const targetPath = join(root, 'target.txt')
+    writeFileSync(targetPath, 'before\n', 'utf8')
+
+    const result = await bash.execute({
+      command: 'printf "after\\n" > target.txt',
+      cwd: root,
+    })
+
+    expect(result.isError).toBe(false)
+    expect(readFileSync(targetPath, 'utf8')).toBe('after\n')
+    expect(result.metadata?.writeCaptures).toEqual([
+      expect.objectContaining({
+        path: realpathSync(targetPath),
+        kind: 'redirect_stdout',
+        oldContent: 'before\n',
+        newContent: 'after\n',
+      }),
+    ])
   })
 
   // ── Progress callback ──

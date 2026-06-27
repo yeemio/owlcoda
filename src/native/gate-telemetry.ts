@@ -212,7 +212,7 @@ export interface GateEvent {
   agentParentStepId?: string | null
   // Permission modes gate (Slice D).
   operatingMode?: 'plan' | 'normal' | 'auto' | 'yolo'
-  modeRiskClass?: 'safe' | 'internal_state' | 'mutating' | 'destructive' | 'external_effect'
+  modeRiskClass?: 'safe' | 'safe_readonly_local' | 'internal_state' | 'mutating' | 'destructive' | 'external_effect'
   modeWouldBlockLegacy?: boolean
   // Evidence-ledger fidelity shadow fields. These describe runtime facts
   // available to later audits and never grant authority or block execution.

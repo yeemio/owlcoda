@@ -14,7 +14,6 @@ export interface TodoItem {
   content: string
   status: 'pending' | 'in_progress' | 'completed' | 'blocked' | 'skipped'
   activeForm: string
-  failureReason?: string
 }
 
 export interface TodoWriteInput {
@@ -71,7 +70,7 @@ export function createTodoWriteTool(): NativeToolDef<TodoWriteInput> {
   return {
     name: 'TodoWrite',
     description:
-      'Update the todo list for the current session. Track progress on multi-step tasks with pending/in_progress/completed/blocked/skipped states. blocked/skipped todos require failureReason.',
+      'Update the todo list for the current session. Track progress on multi-step tasks with pending/in_progress/completed states.',
     maturity: 'beta' as const,
 
     async execute(input: TodoWriteInput): Promise<ToolResult> {
@@ -91,9 +90,6 @@ export function createTodoWriteTool(): NativeToolDef<TodoWriteInput> {
         }
         if (!item.activeForm || typeof item.activeForm !== 'string') {
           return { output: 'Error: each todo must have an activeForm string', isError: true }
-        }
-        if ((item.status === 'blocked' || item.status === 'skipped') && (typeof item.failureReason !== 'string' || item.failureReason.trim().length === 0)) {
-          return { output: `Error: ${item.status} todos require a non-empty failureReason`, isError: true }
         }
       }
 

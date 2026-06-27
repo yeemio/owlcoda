@@ -295,7 +295,7 @@ const REPORT = {
   packageVersion: '0.15.0',
   daemonHealth: 'HEALTHY' as const,
   daemon: '127.0.0.1:9999',
-  runtime: '127.0.0.1:8009',
+  runtime: '127.0.0.1:8066',
   npmBuild: 'PASSED' as const,
   runs: [
     {
@@ -377,7 +377,7 @@ const REPORT = {
     capture: [
       { prompt: '~/owlcoda $', text: 'owlcoda --model cloud-primary' },
       { ts: '14:02:11', tone: 'ok', text: 'daemon healthy 127.0.0.1:9999' },
-      { ts: '14:02:11', tone: 'ok', text: 'runtime 127.0.0.1:8009 · cloud demo backend' },
+      { ts: '14:02:11', tone: 'ok', text: 'runtime 127.0.0.1:8066 · owlmlx demo backend' },
       { ts: '14:02:14', tone: 'caret', text: 'Task demo · plan loaded' },
       { ts: '14:02:18', tone: 'caret', text: 'bash npm test --reporter=basic' },
       { ts: '14:02:55', tone: 'check', text: '42 files · 640 tests pass' },

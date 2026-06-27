@@ -16,7 +16,7 @@ import { ensureTaskExecutionState } from '../../src/native/task-state.js'
 import { recordLongTaskSnapshot, resetLongTaskLifecycleForTesting } from '../../src/native/long-task-lifecycle.js'
 import { buildRuntimeEventContractDiagnostics } from '../../src/native/runtime-events.js'
 import { recordReadAndBuildNudge } from '../../src/native/tools/read.js'
-import { createTask, resetTaskStore, updateTaskStep } from '../../src/native/tools/task-store.js'
+import { createTask, getTaskStep, resetTaskStore, updateTaskStep } from '../../src/native/tools/task-store.js'
 import { createTaskUpdateTool } from '../../src/native/tools/task-update.js'
 
 // 2026-06-13 kimi-code dogfood: ReadMcpResource failed ~8× with a different
@@ -158,28 +158,6 @@ function textResponse(text: string): Response {
   })
 }
 
-function streamingTextResponse(chunks: string[]): Response {
-  const encoder = new TextEncoder()
-  const sse = [
-    'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3}}}\n\n',
-    'event: content_block_start\ndata: {"type":"content_block_start","content_block":{"type":"text","text":""}}\n\n',
-    ...chunks.map((text) =>
-      `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text } })}\n\n`),
-    'event: content_block_stop\ndata: {"type":"content_block_stop"}\n\n',
-    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}\n\n',
-    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
-  ].join('')
-  return new Response(new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(encoder.encode(sse))
-      controller.close()
-    },
-  }), {
-    status: 200,
-    headers: { 'content-type': 'text/event-stream' },
-  })
-}
-
 function gateV2EnabledForTest(): boolean {
   const value = process.env['OWLCODA_GATE_V2']
   return value === '1' || value === 'true' || value === 'yes' || value === 'on'
@@ -255,113 +233,23 @@ describe('runtime event envelope', () => {
     expect(result.stopReason).toBe('end_turn')
     expect(events.map((event) => event.kind)).toEqual([
       'turn_started',
-      'assistant_stream_recorded',
-      'assistant_response_recorded',
-      'assistant_response_disposition_recorded',
       'item_started',
       'item_completed',
-      'assistant_stream_recorded',
-      'assistant_response_recorded',
-      'assistant_response_disposition_recorded',
       'turn_completed',
     ])
+    expect(events[1]?.turnId).toBe(events[0]?.turnId)
+    expect(events[2]?.turnId).toBe(events[0]?.turnId)
     expect(events[1]).toMatchObject({
-      kind: 'assistant_stream_recorded',
-      payload: {
-        response_index: 1,
-        source: 'json_stream_fallback',
-        text_delta_count: 0,
-        text_chars: 0,
-        usage_update_count: 1,
-        input_tokens: 1,
-        output_tokens: 1,
-      },
-    })
-    expect(events[2]).toMatchObject({
-      kind: 'assistant_response_recorded',
-      payload: {
-        response_index: 1,
-        phase: 'main',
-        stop_reason: 'tool_use',
-        text_chars: 0,
-        tool_use_count: 1,
-        has_tool_use: true,
-        thinking_block_count: 0,
-        input_tokens: 1,
-        output_tokens: 1,
-        is_empty_response: false,
-      },
-    })
-    expect(String(events[2]?.payload?.['text_digest'] ?? '')).toMatch(/^sha256:[a-f0-9]{64}$/)
-    expect(events[3]).toMatchObject({
-      kind: 'assistant_response_disposition_recorded',
-      payload: {
-        response_index: 1,
-        phase: 'main',
-        action: 'execute_tools',
-        stop_reason: 'tool_use',
-        text_chars: 0,
-        original_tool_use_count: 1,
-        executed_tool_count: 1,
-        deferred_tool_count: 0,
-        runtime_tool_count: 0,
-      },
-    })
-    expect(events[4]?.turnId).toBe(events[0]?.turnId)
-    expect(events[5]?.turnId).toBe(events[0]?.turnId)
-    expect(events[4]).toMatchObject({
       kind: 'item_started',
       itemId: 'probe-tool-1',
       payload: { tool_name: 'ProbeTool' },
     })
-    expect(events[5]).toMatchObject({
+    expect(events[2]).toMatchObject({
       kind: 'item_completed',
       itemId: 'probe-tool-1',
       payload: { tool_name: 'ProbeTool', is_error: false },
     })
-    expect(events[6]).toMatchObject({
-      kind: 'assistant_stream_recorded',
-      payload: {
-        response_index: 2,
-        source: 'json_stream_fallback',
-        text_delta_count: 1,
-        text_chars: 'Probe complete.'.length,
-        usage_update_count: 1,
-        input_tokens: 1,
-        output_tokens: 1,
-      },
-    })
-    expect(events[7]).toMatchObject({
-      kind: 'assistant_response_recorded',
-      payload: {
-        response_index: 2,
-        phase: 'main',
-        stop_reason: 'end_turn',
-        text_chars: 'Probe complete.'.length,
-        tool_use_count: 0,
-        has_tool_use: false,
-        thinking_block_count: 0,
-        input_tokens: 1,
-        output_tokens: 1,
-        is_empty_response: false,
-      },
-    })
-    expect(String(events[7]?.payload?.['text_digest'] ?? '')).toMatch(/^sha256:[a-f0-9]{64}$/)
-    expect(events[8]).toMatchObject({
-      kind: 'assistant_response_disposition_recorded',
-      payload: {
-        response_index: 2,
-        phase: 'main',
-        action: 'accept_final_text',
-        stop_reason: 'end_turn',
-        text_chars: 'Probe complete.'.length,
-        original_tool_use_count: 0,
-        executed_tool_count: 0,
-        deferred_tool_count: 0,
-        runtime_tool_count: 0,
-      },
-    })
-    expect(events[9]).toMatchObject({
+    expect(events[3]).toMatchObject({
       kind: 'turn_completed',
       payload: {
         stop_reason: 'end_turn',
@@ -378,85 +266,7 @@ describe('runtime event envelope', () => {
       },
     })
     expect(buildRuntimeEventContractDiagnostics(events, { limit: null })).toMatchObject({
-      valid_event_count: 10,
-      legacy_event_count: 0,
-      malformed_event_count: 0,
-    })
-  })
-
-  it('records compact stream callback summaries in the runtime log', async () => {
-    const conv = createConversation({ system: 'test', model: 'test-model' })
-    addUserMessage(conv, 'Stream a short answer.')
-
-    const dispatcher = new ToolDispatcher()
-    const streamedText: string[] = []
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(streamingTextResponse(['Hello', ' stream']))
-
-    const result = await runConversationLoop(conv, dispatcher, {
-      apiBaseUrl: 'http://localhost:0',
-      apiKey: 'test',
-      maxIterations: 1,
-      callbacks: {
-        onText(text) {
-          streamedText.push(text)
-        },
-      },
-    })
-
-    const events = result.conversation.options?.runtimeEventLog?.events ?? []
-    expect(result.finalText).toBe('Hello stream')
-    expect(streamedText.join('')).toBe('Hello stream')
-    expect(events.map((event) => event.kind)).toEqual([
-      'turn_started',
-      'assistant_stream_recorded',
-      'assistant_response_recorded',
-      'assistant_response_disposition_recorded',
-      'turn_completed',
-    ])
-    expect(events[1]).toMatchObject({
-      kind: 'assistant_stream_recorded',
-      turnId: events[0]?.turnId,
-      payload: {
-        response_index: 1,
-        source: 'sse',
-        text_delta_count: 2,
-        text_chars: 'Hello stream'.length,
-        thinking_start_count: 0,
-        thinking_delta_count: 0,
-        thinking_chars: 0,
-        thinking_end_count: 0,
-        usage_update_count: 2,
-        input_tokens: 3,
-        output_tokens: 5,
-      },
-    })
-    expect(events[2]).toMatchObject({
-      kind: 'assistant_response_recorded',
-      payload: {
-        response_index: 1,
-        phase: 'main',
-        stop_reason: 'end_turn',
-        text_chars: 'Hello stream'.length,
-        input_tokens: 3,
-        output_tokens: 5,
-      },
-    })
-    expect(events[3]).toMatchObject({
-      kind: 'assistant_response_disposition_recorded',
-      payload: {
-        response_index: 1,
-        phase: 'main',
-        action: 'accept_final_text',
-        stop_reason: 'end_turn',
-        text_chars: 'Hello stream'.length,
-        original_tool_use_count: 0,
-        executed_tool_count: 0,
-        deferred_tool_count: 0,
-        runtime_tool_count: 0,
-      },
-    })
-    expect(buildRuntimeEventContractDiagnostics(events, { limit: null })).toMatchObject({
-      valid_event_count: 5,
+      valid_event_count: 4,
       legacy_event_count: 0,
       malformed_event_count: 0,
     })
@@ -2770,18 +2580,6 @@ describe('native conversation tool loop guard default (cost-burn protection)', (
     expect(result.stopReason).toBe('tool_loop')
     expect(errors.some((message) => message.includes('ignored the child-run synthesis checkpoint'))).toBe(true)
     expect(JSON.stringify(conv.turns)).not.toContain('agent-5')
-    const guardEvent = result.conversation.options?.runtimeEventLog?.events
-      ?.find((event) => event.kind === 'runtime_intervention'
-        && event.payload?.['intervention_kind'] === 'recovery_guard_hard_stop')
-    expect(guardEvent).toMatchObject({
-      checkpointKind: 'child_run_synthesis_checkpoint',
-      payload: {
-        action: 'hard_stop',
-        guard_kind: 'child_run_synthesis_checkpoint',
-        ignored_tool_count: 1,
-        stop_reason: 'tool_loop',
-      },
-    })
   })
 
   it('2026-05-28: parent re-issuing the SAME Agent prompt 3x still trips loop guard (intentKey-based)', async () => {
@@ -5479,18 +5277,6 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
     expect(result.stopReason).toBe('tool_loop')
     expect(errors.at(-1)).toMatch(/ignored the long-task checkpoint/i)
     expect(bashExecutions).toBe(2)
-    const guardEvent = result.conversation.options?.runtimeEventLog?.events
-      ?.find((event) => event.kind === 'runtime_intervention'
-        && event.payload?.['intervention_kind'] === 'recovery_guard_hard_stop')
-    expect(guardEvent).toMatchObject({
-      checkpointKind: 'long_task_checkpoint',
-      payload: {
-        action: 'hard_stop',
-        guard_kind: 'long_task_checkpoint',
-        ignored_tool_count: 1,
-        stop_reason: 'tool_loop',
-      },
-    })
   })
 
   it('escalates to hard terminate on the SECOND loop trigger for the same intentKey', async () => {
@@ -5722,7 +5508,10 @@ describe('production gate v1 (0.13.70)', () => {
       ].join('\n'),
     )
     if (!conv.options) conv.options = {}
-    const taskState = ensureTaskExecutionState(conv)
+    let taskState = ensureTaskExecutionState(conv)
+    conv.options.taskState = taskState
+    addUserMessage(conv, '确认跨仓库边界，可以继续；但写入仍需正常审批。')
+    taskState = ensureTaskExecutionState(conv)
     conv.options.taskState = taskState
 
     recordReadAndBuildNudge(taskState, '/abs/file-1.md', 'full', 1000, 100)
@@ -6584,18 +6373,6 @@ describe('task execution nudge wiring (Slice 4)', () => {
     const checkpointMessages = requestBodies[3]?.['messages'] as Array<Record<string, unknown>>
     expect(JSON.stringify(checkpointMessages)).toContain('[Runtime verification-repair checkpoint]')
     expect(JSON.stringify(conv.turns)).not.toContain('tool-verify-again')
-    const guardEvent = result.conversation.options?.runtimeEventLog?.events
-      ?.find((event) => event.kind === 'runtime_intervention'
-        && event.payload?.['intervention_kind'] === 'recovery_guard_hard_stop')
-    expect(guardEvent).toMatchObject({
-      checkpointKind: 'verification_repair_checkpoint',
-      payload: {
-        action: 'hard_stop',
-        guard_kind: 'verification_repair_checkpoint',
-        ignored_tool_count: 1,
-        stop_reason: 'tool_loop',
-      },
-    })
   })
 
   it('allows a user-requested reverify after a verification-repair checkpoint is acknowledged', async () => {
@@ -6773,6 +6550,95 @@ describe('task execution nudge wiring (Slice 4)', () => {
     expect(followupText).toContain('resolved 1 verification-repair checkpoint')
     const checkpoint = (conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]
     expect(checkpoint?.disposition).toBe('resolved')
+  })
+
+  it('does not suppress step completion required after verification-repair recovery', async () => {
+    resetTaskStore()
+    const task = createTask({
+      subject: 'Recovered verification repair',
+      description: 'Reverify a repaired step, complete it, then start the next step.',
+      steps: [
+        {
+          id: 'step-1',
+          title: 'Reverify repaired artifact',
+          description: 'Run the repaired verification check.',
+          verification: [{
+            id: 'v1',
+            kind: 'none',
+            reason: 'deterministic recovery regression fixture',
+          }],
+        },
+        {
+          id: 'step-2',
+          title: 'Continue after repair',
+          description: 'This step must be allowed to start after step-1 completes.',
+        },
+      ],
+    })
+    updateTaskStep(task.id, 'step-1', { status: 'in_progress' })
+
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    ;(conv as any).options = {
+      runtimeRecoveryLedger: {
+        schemaVersion: 1,
+        updatedAt: '2026-06-22T07:30:00.000Z',
+        checkpoints: [{
+          id: 'verification_repair_checkpoint-1',
+          kind: 'verification_repair_checkpoint',
+          generatedAt: '2026-06-22T07:25:00.000Z',
+          conversationId: conv.id,
+          disposition: 'acknowledged',
+          dispositionUpdatedAt: '2026-06-22T07:30:00.000Z',
+          dispositionReason: 'Model produced the required text-only verification repair report.',
+          inspectCommands: [
+            `TaskGet taskId=${task.id}`,
+            `TaskVerify taskId=${task.id} stepId=step-1`,
+          ],
+          payload: {
+            schema_version: 1,
+            kind: 'verification_repair_checkpoint',
+            generated_at: '2026-06-22T07:25:00.000Z',
+            verification_repair: {
+              task_id: task.id,
+              step_id: 'step-1',
+              status: 'failed_verification',
+              failed_checks: [{ check_id: 'v1', passed: false }],
+              inspect_command: `TaskGet taskId=${task.id}`,
+              verify_command: `TaskVerify taskId=${task.id} stepId=step-1`,
+            },
+          },
+        }],
+      },
+    }
+    addUserMessage(conv, 'The verification spec has been repaired. Reverify, complete step-1, then start step-2.')
+
+    const responses = [
+      toolUseResponse('TaskVerify', 'tool-reverify', {
+        taskId: task.id,
+        stepId: 'step-1',
+      }),
+      contentResponse([
+        { type: 'text', text: 'TaskVerify passed; I will close step-1 and continue.' },
+        { type: 'tool_use', id: 'tool-complete-step-1', name: 'TaskUpdate', input: { taskId: task.id, stepId: 'step-1', stepStatus: 'completed' } },
+        { type: 'tool_use', id: 'tool-start-step-2', name: 'TaskUpdate', input: { taskId: task.id, stepId: 'step-2', stepStatus: 'in_progress' } },
+      ], 'tool_use'),
+      textResponse('Step 2 is now in progress after the recovered verification step closed.'),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 4,
+    })
+
+    const toolResultsText = JSON.stringify(conv.turns).replace(/\\"/g, '"')
+    expect(result.stopReason).toBe('end_turn')
+    expect((conv.options as any)?.runtimeRecoveryLedger?.checkpoints?.[0]?.disposition).toBe('resolved')
+    expect(toolResultsText).not.toContain('[post-recovery-overrun] skipped redundant TaskUpdate')
+    expect(toolResultsText).not.toContain('already in_progress')
+    expect(getTaskStep(task.id, 'step-1')?.status).toBe('completed')
+    expect(getTaskStep(task.id, 'step-2')?.status).toBe('in_progress')
   })
 
   it('suppresses redundant TaskUpdate overrun after same-run recovery is already clean', async () => {
@@ -8523,6 +8389,10 @@ describe('Slice 0 deliverable contract: file artifact legacy hard-stop', () => {
         '   建议文件名：`build-notes-v1.4-content-rebuild-46p.md`',
       ].join('\n'),
     )
+    if (!conv.options) conv.options = {}
+    conv.options.taskState = ensureTaskExecutionState(conv)
+    addUserMessage(conv, '确认跨仓库边界，可以继续；但写入仍需正常审批。')
+    conv.options.taskState = ensureTaskExecutionState(conv)
 
     const dispatcher = new ToolDispatcher()
     dispatcher.register({

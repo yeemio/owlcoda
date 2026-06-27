@@ -65,11 +65,47 @@ export type RuntimeRecoveryCheckpointDisposition =
   | 'resolved'
   | 'superseded'
 
+export interface RunIdentity {
+  threadId: string
+  turnId?: string
+  runId: string
+}
+
+export interface RuntimeFactRefs {
+  threadId?: string
+  turnId?: string
+  runId?: string
+  taskId?: string
+  stepId?: string
+  jobId?: string
+  artifactId?: string
+  artifactPath?: string
+  checkpointId?: string
+  proofId?: string
+  itemId?: string
+  coveredIds?: string[]
+}
+
+export interface ConversationModelIdentity {
+  id?: string
+  label?: string
+  backendModel?: string
+  aliases?: string[]
+  provider?: string
+  endpoint?: string
+  contextWindow?: number
+  supportsImages?: boolean
+}
+
 export interface RuntimeRecoveryCheckpointRecord {
   id: string
   kind: RuntimeRecoveryCheckpointKind
   generatedAt: string
   conversationId: string
+  threadId?: string
+  turnId?: string
+  runId?: string
+  factRefs?: RuntimeFactRefs
   disposition?: RuntimeRecoveryCheckpointDisposition
   dispositionUpdatedAt?: string
   dispositionReason?: string
@@ -86,9 +122,6 @@ export interface RuntimeRecoveryLedger {
 
 export type RuntimeEventKind =
   | 'turn_started'
-  | 'assistant_stream_recorded'
-  | 'assistant_response_recorded'
-  | 'assistant_response_disposition_recorded'
   | 'item_started'
   | 'item_completed'
   | 'checkpoint_installed'
@@ -105,10 +138,13 @@ export interface RuntimeEventRecord {
   kind: RuntimeEventKind
   at: string
   conversationId: string
+  threadId?: string
   turnId?: string
+  runId?: string
   itemId?: string
   checkpointId?: string
   checkpointKind?: RuntimeEventCheckpointKind
+  factRefs?: RuntimeFactRefs
   contract?: RuntimeEventContract
   payload?: Record<string, unknown>
 }
@@ -227,6 +263,7 @@ export interface TaskRunState {
     attemptedPaths: string[]
     requestedAt: number
   } | null
+  crossRepoBoundaryCheckpoint?: CrossRepoBoundaryCheckpoint | null
   runWorkspace?: {
     runId: string
     outputRoot: string
@@ -243,6 +280,29 @@ export interface TaskRunState {
     lastCheckpointAt?: string
   } | null
   lastUpdatedAt: number
+}
+
+export type CrossRepoBoundaryCheckpointStatus = 'pending' | 'confirmed'
+
+export interface CrossRepoBoundaryDirtySummary {
+  count: number
+  sample: string[]
+  truncated: boolean
+}
+
+export interface CrossRepoBoundaryCheckpoint {
+  status: CrossRepoBoundaryCheckpointStatus
+  currentRepo: string
+  promptSource: string
+  promptSourceRepo: string | null
+  targetRepo: string
+  branch: string | null
+  dirtyWorktreeSummary: CrossRepoBoundaryDirtySummary | null
+  plannedWriteRoots: string[]
+  risk: string
+  requiredUserConfirmation: string
+  installedAt: number
+  confirmedAt?: number
 }
 
 export interface TaskExecutionState {
@@ -293,6 +353,8 @@ export interface ConversationOptions {
   fast?: boolean
   /** Effort level: low, medium, high. */
   effort?: string
+  /** Model identity and declared capabilities captured when the session starts. */
+  modelIdentity?: ConversationModelIdentity
   /** Vim keybinding mode. */
   vimMode?: boolean
   /** Additional working directories. */
@@ -473,21 +535,6 @@ export interface AssistantResponse {
   hasToolUse: boolean
   /** Combined text content */
   text: string
-  /** Compact summary of streaming callbacks observed while receiving this response. */
-  streamSummary?: AssistantStreamSummary
-}
-
-export interface AssistantStreamSummary {
-  source: 'sse' | 'json_stream_fallback'
-  textDeltaCount: number
-  textChars: number
-  thinkingStartCount: number
-  thinkingDeltaCount: number
-  thinkingChars: number
-  thinkingEndCount: number
-  usageUpdateCount: number
-  inputTokens: number
-  outputTokens: number
 }
 
 /** SSE event from the streaming API */

@@ -136,6 +136,69 @@ describe('ProviderProbe', () => {
     expect(result.status).toBe(200)
   })
 
+  it('probes Kimi K2.7 Code through the Moonshot OpenAI-compatible route', async () => {
+    fetchMock.mockResolvedValue(new Response('{}', { status: 200 }))
+    const probe = createProbe()
+
+    const result = await probe.test({
+      provider: 'moonshot',
+      id: 'kimi-k2.7-code',
+      backendModel: 'kimi-k2.7-code',
+      endpoint: 'https://api.moonshot.ai/v1',
+      apiKey: 'sk-moonshot',
+      testPath: '/chat/completions',
+      testMode: 'chat',
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.moonshot.ai/v1/chat/completions',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    const headers = fetchMock.mock.calls[0]![1].headers as Headers
+    expect(headers.get('authorization')).toBe('Bearer sk-moonshot')
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body))).toMatchObject({
+      model: 'kimi-k2.7-code',
+      max_tokens: 1,
+      messages: [{ role: 'user', content: 'ping' }],
+    })
+    expect(result.ok).toBe(true)
+    expect(result.status).toBe(200)
+  })
+
+  it('vision-probes OpenAI-compatible providers with image_url content', async () => {
+    fetchMock.mockResolvedValue(new Response('{}', { status: 200 }))
+    const probe = createProbe()
+
+    const result = await probe.testVision({
+      provider: 'openai-compat',
+      id: 'vision-model',
+      backendModel: 'vision-model',
+      endpoint: 'https://api.example.com/v1',
+      apiKey: 'sk-test',
+      testPath: '/chat/completions',
+      testMode: 'chat',
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.example.com/v1/chat/completions',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    const body = JSON.parse(String(fetchMock.mock.calls[0]![1].body))
+    expect(body).toMatchObject({
+      model: 'vision-model',
+      max_tokens: 1,
+    })
+    expect(body.messages[0].content).toEqual([
+      { type: 'text', text: 'Reply with one short word describing the image.' },
+      {
+        type: 'image_url',
+        image_url: { url: expect.stringMatching(/^data:image\/png;base64,/) },
+      },
+    ])
+    expect(result.supported).toBe(true)
+    expect(result.status).toBe(200)
+  })
+
   it('probes Kimi Code saved models via official chat completions route', async () => {
     fetchMock.mockResolvedValue(new Response('{}', { status: 200 }))
     const probe = createProbe()
@@ -444,6 +507,7 @@ describe('getProviderTemplates', () => {
     const ids = templates.map(provider => provider.id)
     expect(ids).toEqual([
       'kimi',
+      'kimi-k2.7-code',
       'deepseek',
       'glm',
       'minimax',
@@ -466,6 +530,15 @@ describe('getProviderTemplates', () => {
       defaultBackendModel: 'kimi-for-coding',
       defaultAliases: ['kimi'],
       headers: { 'User-Agent': 'KimiCLI/1.33.0' },
+      testPath: '/chat/completions',
+      testMode: 'chat',
+    })
+    expect(templates.find(provider => provider.id === 'kimi-k2.7-code')).toMatchObject({
+      provider: 'moonshot',
+      endpoint: 'https://api.moonshot.ai/v1',
+      defaultModelId: 'kimi-k2.7-code',
+      defaultBackendModel: 'kimi-k2.7-code',
+      defaultAliases: ['kimi27', 'kimi-2.7', 'kimi-vision'],
       testPath: '/chat/completions',
       testMode: 'chat',
     })
@@ -498,6 +571,7 @@ describe('getProviderTemplates', () => {
       provider: 'openai-compat',
       tier: 'local',
       endpoint: 'http://localhost:8066/v1',
+      testPath: '/openai/models',
       testMode: 'models',
     })
     expect(templates.find(provider => provider.id === 'kimi')?.tier).toBe('cloud')

@@ -2,180 +2,34 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
-## [0.15.15] — 2026-06-26
+## [0.15.16] — 2026-06-27
 
-Model Output Harness v1 release for structured artifacts.
-
-### Added
-
-- Added provider-agnostic `POST /v1/structured-output` for schema/preset-driven
-  model output, starting with `evidence-digest.v1`, `analyst-audit.v1`, and
-  `canonical-judge.v1`.
-- Added parse, extract, repair, salvage, and structured fallback handling so
-  callers receive either a schema-valid artifact or a `failed_fallback.v1`
-  object instead of empty or ambiguous model text.
-- Added per-call `attempts`, `rawText`, token, stop reason, and duration
-  accounting for downstream run manifests and replay.
-- Added a standalone release smoke gate for real `/v1/structured-output`
-  success and policy-fallback checks.
-
-### Changed
-
-- Structured-output presets are named by artifact contract, not by provider, so
-  OwlFootball and other consumers can route Kimi, DeepSeek, GPT, or local models
-  through the same harness boundary.
-
-### Fixed
-
-- Forbidden phrase policy failures now return a structured
-  `failed_fallback.v1` artifact with `retryHint: "rerun_role_artifact"`, so
-  business callers do not accidentally consume invalid model output.
-
-## [0.15.14] — 2026-06-26
-
-Terminal markdown rendering reliability patch.
-
-### Fixed
-
-- Fixed Unicode box-drawing output that some models emit without enough
-  newlines, so terminal diagrams such as `┌────┐│...│└────┘` are recovered as
-  readable multi-line blocks.
-- Fixed fenced code blocks where the closing ````` marker is glued to the last
-  box-drawing row, preventing following headings or paragraphs from being
-  swallowed into the code block.
-
-## [0.15.13] — 2026-06-24
-
-Release gate + control-plane reliability patch.
-
-### Fixed
-
-- Fixed the publish dry-run gate so `npm publish --dry-run` no longer causes
-  nested `npm pack` and install-smoke commands to become no-op dry runs.
-- Tightened task progress truth: skipped and blocked work stays separate from
-  completed work, and skipped task steps must carry a reason.
-- Hardened headless verification policy around exact bash command budgets,
-  local Node test runners, report output headings, model identifiers, and
-  workspace output scopes.
-
-### Notes
-
-- Published as npm `owlcoda@0.15.13` with GitHub source tag `v0.15.13`.
-- This is a release reliability and control-plane honesty patch. It is not a
-  claim that long-running degradation is permanently or completely solved.
-
-## [0.15.12] — 2026-06-23
-
-Runtime truth + supervised job replay reliability release.
+Runtime harness consolidation release for the Phase D entry point.
 
 ### Added
 
-- Added supervised runtime job tools: `JobList`, `JobGet`, `JobCancel`,
-  `BrowserJob`, `ApiJob`, and `ServiceJob`.
-- Added browser replay evidence capture across fetch/headless/CDP-oriented job
-  providers, with saved HTML/text/screenshot/console/network artifacts where
-  the provider supports them.
-- Added service lifecycle supervision for local dev services, including PID,
-  port, health, log artifact, restart, and graceful stop metadata.
+- Added the `owlcoda/desktop` package export for desktop-shell consumers.
+- Added desktop product-shell view models, live event adapters, smoke probes,
+  runtime facts drilldown, and capability gating for App Server driven shells.
+- Added provider evaluation and scorecard surfaces for RL-ready run accounting:
+  default provider selection, headless audit/runner, report generation,
+  persistent eval records, and scorecard adapters.
+- Extended the structured-output harness with artifact persistence, app-server
+  access, role-level rerun support, provider matrix checks, and desktop-facing
+  artifact APIs.
 
 ### Changed
 
-- Command-backed `TaskCreate` work now mirrors into the job supervisor, so long
-  tasks have a queryable job snapshot in addition to task and runtime lifecycle
-  state.
-- `TaskVerify` now records verification strength and refuses to complete
-  parser, snapshot, browser, and replay-sensitive steps from weak evidence such
-  as a plain pattern match, typecheck, or build-only signal.
-- Runtime-sensitive final reports now have to mark unresolved browser/business
-  replay as `pending_user_replay` or `runtime_replay_pending` instead of
-  claiming full completion while asking the user to refresh or manually retest.
+- Release validation now treats the runtime harness as the product boundary:
+  execution, artifacts, provider capability, scorecard, and desktop surfaces are
+  verified together before public packaging.
 
 ### Fixed
 
-- Fixed a release packaging regression in the transient `0.15.11` npm package:
-  `0.15.12` is rebuilt from the public `0.15.10` source line and preserves the
-  runtime lifecycle, runtime supervisor, AgentControl, and mailbox control-plane
-  files while adding this release's supervised job tooling.
-
-### Notes
-
-- Published as npm `owlcoda@0.15.12` with GitHub source tag `v0.15.12`.
-- This release improves runtime evidence, replay supervision, and report
-  honesty. It is not a claim that long-running degradation is permanently or
-  completely solved.
-
-## [0.15.10] — 2026-06-22
-
-Runtime truth + multimodal routing reliability release.
-
-### Added
-
-- Added image input handling for local paths, `@image.png`, Markdown image
-  references, and `file://` image links, converting them into multimodal
-  content blocks when the selected model is image-capable.
-- Added provider capability routing and probe support so Kimi K2.7 / Moonshot
-  and other OpenAI-compatible providers can enable image recognition through
-  model capabilities instead of a hard-coded provider branch.
-- Added runtime lifecycle tools for task commands, Agent runs, supervisor
-  processes, and mailbox messages: `RuntimeLifecycleList/Get`,
-  `RuntimeSupervisorList/Get`, `AgentControlList/Get`, and
-  `AgentMailboxSend/List/Get/Resolve`.
-
-### Changed
-
-- Command-style long tasks now record supervisor-process snapshots with process
-  identity, parent run linkage, and inspect/recovery policy.
-- Agent run history now exposes parent/child run views and inspect-before-retry
-  recovery state outside of the transcript.
-- Parent/child agent messages now flow through a mailbox queue and runtime
-  lifecycle snapshots instead of living only in conversation text.
-- `TaskVerify` safe-readonly classification now allows read-only process and
-  hashing checks such as `ps`, `pgrep`, `shasum`, and `sha256sum`.
-
-### Fixed
-
-- Fixed runtime recovery / task-state divergence after a
-  verification-repair checkpoint resolves: the post-recovery-overrun guard now
-  checks the real task-store step state before skipping `TaskUpdate(completed)`,
-  so a step that is still `in_progress` can converge to `completed`.
-- Kept the verification-repair hard-stop guard strict; the release does not
-  weaken checkpoint or overrun protections.
-- Fixed the runtime event contract so legal `long_task_wait_policy`
-  interventions do not require `violation_kind` when the event is a wait-policy
-  record rather than a violation.
-
-### Notes
-
-- Published as npm `owlcoda@0.15.10` with GitHub source tag `v0.15.10`.
-- This release improves runtime evidence, recovery convergence, and multimodal
-  routing. It is not a claim that long-running degradation is permanently or
-  completely solved.
-
-## [0.15.8] — 2026-06-18
-
-Long-run reliability release.
-
-### Added
-
-- Added runtime recovery ledger surfaces and inspection tools so long-running
-  sessions can expose unresolved checkpoints instead of losing them behind
-  generic completion or retry output.
-- Added long-task lifecycle tracking and tools for inspecting, waiting on, and
-  replacing managed long tasks.
-- Added runtime event persistence into saved sessions so recovery context can
-  survive resume paths.
-
-### Changed
-
-- Hardened TaskVerify, TaskUpdate, completion, finalization, and headless/TUI
-  gates around long-run degradation and recovery states.
-- Updated root and Admin dependencies to keep release-candidate audits clean.
-
-### Notes
-
-- The npm package remains the public install surface; the `demo/` World Cup
-  predictor and private execution prompts are excluded from the npm tarball.
-- This release is intended to be paired with public source tag `v0.15.8`.
+- Hardened long-task recovery, runtime event accounting, model capability
+  routing, multimodal image message handling, job supervision, markdown
+  normalization, and review-center partial apply paths covered by the expanded
+  release gate.
 
 ## [0.15.7] — 2026-06-14
 

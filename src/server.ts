@@ -3,7 +3,7 @@ import type { OwlCodaConfig } from './config.js'
 import { configureCircuitBreaker, resetCircuitBreaker, getAllCircuitStates } from './middleware/circuit-breaker.js'
 import { createLogger } from './utils/logger.js'
 import { handleMessages } from './endpoints/messages.js'
-import { handleStructuredOutput } from './endpoints/structured-output.js'
+import { handleStructuredOutput, handleStructuredOutputRerun } from './endpoints/structured-output.js'
 import { handleModels } from './endpoints/models.js'
 import { handleCountTokens } from './endpoints/count-tokens.js'
 import { handleBackends } from './endpoints/backends.js'
@@ -302,6 +302,7 @@ function handleRequest(
       endpoints: [
         { method: 'POST', path: '/v1/messages', description: 'Messages API (streaming + non-streaming)' },
         { method: 'POST', path: '/v1/structured-output', description: 'Provider-agnostic schema/preset model output harness' },
+        { method: 'POST', path: '/v1/structured-output/rerun', description: 'Role/artifact-level structured output rerun with RunWorkspace lineage' },
         { method: 'POST', path: '/v1/chat/completions', description: 'OpenAI Chat Completions API (passthrough to router)' },
         { method: 'GET', path: '/v1/models', description: 'List available models' },
         { method: 'GET', path: '/v1/backends', description: 'Discover local LLM backends (Ollama, LM Studio, vLLM)' },
@@ -444,6 +445,17 @@ function handleRequest(
     handleStructuredOutput(req, res, config).catch(err => {
       logError('http', 'Unhandled error in handleStructuredOutput', { error: String(err) })
       recordError('/v1/structured-output', 'api_error', String(err))
+      if (!res.headersSent) {
+        sendError(res, 500, 'api_error', 'Internal server error')
+      }
+    })
+    return
+  }
+
+  if (method === 'POST' && url === '/v1/structured-output/rerun') {
+    handleStructuredOutputRerun(req, res, config).catch(err => {
+      logError('http', 'Unhandled error in handleStructuredOutputRerun', { error: String(err) })
+      recordError('/v1/structured-output/rerun', 'api_error', String(err))
       if (!res.headersSent) {
         sendError(res, 500, 'api_error', 'Internal server error')
       }

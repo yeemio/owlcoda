@@ -43,6 +43,16 @@ describe('recordProposal', () => {
     expect(tc.permissionState).toBe<PermissionState>('not_needed')
   })
 
+  it('creates a ProposedToolCall with permissionState=not_needed for safe_readonly_local risk', () => {
+    const list: ProposedToolCall[] = []
+    const tc = recordProposal(list, {
+      tool: 'WebFetch',
+      riskClass: 'safe_readonly_local',
+      iteration: 1,
+    })
+    expect(tc.permissionState).toBe<PermissionState>('not_needed')
+  })
+
   it('internal_state still requires permission (needed)', () => {
     const list: ProposedToolCall[] = []
     const tc = recordProposal(list, {

@@ -53,6 +53,7 @@ export interface JudgeBackendProbeResult {
 export interface JudgeBackendProbeDeps {
   fetch: typeof fetch
   now: () => number
+  signal: AbortSignal
 }
 
 const DEFAULT_TIMEOUT_MS = 45_000
@@ -80,6 +81,7 @@ export async function runJudgeBackendProbe(
   for (const model of models) {
     const calls: JudgeProbeCallResult[] = []
     for (let i = 0; i < prompts.length; i += 1) {
+      throwIfAborted(deps.signal)
       calls.push(await probeOne(fetchImpl, now, {
         endpoint,
         model,
@@ -89,7 +91,9 @@ export async function runJudgeBackendProbe(
         apiKey: input.apiKey,
         headers: input.headers,
         maxTokens: resolveMaxTokens(input.maxTokens),
+        signal: deps.signal,
       }))
+      throwIfAborted(deps.signal)
     }
     summaries[model] = summarizeModel(model, calls, minJsonSuccessRate)
   }
@@ -130,6 +134,7 @@ async function probeOne(
     apiKey?: string
     headers?: Record<string, string>
     maxTokens: number
+    signal?: AbortSignal
   },
 ): Promise<JudgeProbeCallResult> {
   const started = now()
@@ -153,7 +158,7 @@ async function probeOne(
           { role: 'user', content: input.prompt },
         ],
       }),
-      signal: timeoutSignal(input.timeoutMs),
+      signal: composeAbortSignal(input.timeoutMs, input.signal),
     })
     const latencyMs = Math.max(0, now() - started)
     const body = await response.text()
@@ -174,6 +179,14 @@ async function probeOne(
     const status: JudgeProbeCallStatus = isTimeoutError(err) ? 'timeout' : 'fetch_error'
     return callResult(input, status, latencyMs, message)
   }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return
+  if (signal.reason instanceof Error) throw signal.reason
+  const err = new Error(typeof signal.reason === 'string' ? signal.reason : 'probe aborted')
+  err.name = 'AbortError'
+  throw err
 }
 
 function summarizeModel(
@@ -282,6 +295,16 @@ function timeoutSignal(timeoutMs: number): AbortSignal | undefined {
   return typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
     ? AbortSignal.timeout(timeoutMs)
     : undefined
+}
+
+function composeAbortSignal(timeoutMs: number, signal: AbortSignal | undefined): AbortSignal | undefined {
+  const timeout = timeoutSignal(timeoutMs)
+  const signals = [timeout, signal].filter((item): item is AbortSignal => Boolean(item))
+  if (signals.length === 0) return undefined
+  if (signals.length === 1) return signals[0]
+  return typeof AbortSignal !== 'undefined' && typeof AbortSignal.any === 'function'
+    ? AbortSignal.any(signals)
+    : signals[0]
 }
 
 function isTimeoutError(err: unknown): boolean {

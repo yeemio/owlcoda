@@ -1,7 +1,10 @@
-export type StructuredOutputPreset =
+export type BuiltinStructuredOutputPreset =
   | 'evidence-digest.v1'
   | 'analyst-audit.v1'
   | 'canonical-judge.v1'
+
+export type StructuredOutputPreset =
+  | BuiltinStructuredOutputPreset
   | (string & {})
 
 export type StructuredOutputAttemptLabel = 'primary' | 'parse' | 'repair' | 'salvage' | 'fallback'
@@ -30,8 +33,57 @@ export interface StructuredOutputSalvagePolicy {
 
 export interface StructuredOutputPolicy {
   forbiddenPhrases?: string[]
+  forbiddenPhraseAction?: 'reject' | 'sanitize_to_risks'
   maxArrayItems?: number
   maxStringLength?: number
+}
+
+export type StructuredOutputCapabilityStatus = 'supported' | 'unsupported' | 'unknown'
+export type StructuredOutputCapabilitySource = 'declared' | 'probed' | 'manual' | 'fallback'
+export type StructuredOutputThinkingBehavior = 'text_and_thinking' | 'thinking_only_risk' | 'unknown'
+
+export interface StructuredOutputSupportCapability {
+  status: StructuredOutputCapabilityStatus
+  source: StructuredOutputCapabilitySource
+  reason?: string
+}
+
+export interface StructuredOutputTokenCapability {
+  tokens: number
+  source: StructuredOutputCapabilitySource
+}
+
+export interface StructuredOutputThinkingCapability {
+  behavior: StructuredOutputThinkingBehavior
+  source: StructuredOutputCapabilitySource
+  reason?: string
+}
+
+export interface StructuredOutputModelCapabilities {
+  jsonMode: StructuredOutputSupportCapability
+  maxContextTokens: StructuredOutputTokenCapability
+  maxOutputTokens: StructuredOutputTokenCapability
+  streaming: StructuredOutputSupportCapability
+  thinking: StructuredOutputThinkingCapability
+}
+
+export interface StructuredOutputCapabilityGateResult {
+  ok: boolean
+  source: StructuredOutputCapabilitySource
+  requestedMaxTokens: number
+  appliedMaxTokens: number
+  errors: string[]
+  warnings: string[]
+  modelCapabilities?: StructuredOutputModelCapabilities
+}
+
+export interface StructuredOutputPresetContract {
+  artifact: BuiltinStructuredOutputPreset
+  system: string
+  schema: JsonSchema
+  policy: StructuredOutputPolicy
+  salvagePolicy: StructuredOutputSalvagePolicy
+  maxTokens?: number
 }
 
 export interface StructuredOutputRequest {
@@ -44,6 +96,20 @@ export interface StructuredOutputRequest {
   repairPolicy?: StructuredOutputRepairPolicy
   salvagePolicy?: StructuredOutputSalvagePolicy
   policy?: StructuredOutputPolicy
+  persist?: boolean
+  runRef?: string
+  role?: string
+  threadId?: string
+  turnId?: string
+  runId?: string
+  taskId?: string
+  stepId?: string
+  jobId?: string
+  proofId?: string
+  previousArtifactId?: string
+  inputRef?: string
+  artifactRef?: string
+  modelCapabilities?: StructuredOutputModelCapabilities
 }
 
 export interface StructuredOutputExecutorRequest extends StructuredOutputRequest {
@@ -93,25 +159,213 @@ export interface StructuredOutputResponse {
   inputTokens: number
   outputTokens: number
   durationMs: number
+  persisted?: boolean
+  artifactId?: string
+  attemptLedgerId?: string
+  runRef?: string
+  rerun?: boolean
+  parentArtifactId?: string
+  rerunOf?: string
+  inputRef?: string
+  artifactRef?: string
+  capabilityGate?: StructuredOutputCapabilityGateResult
 }
 
-export const STRUCTURED_OUTPUT_PRESETS = {
+export const STRUCTURED_OUTPUT_PRESETS: Record<BuiltinStructuredOutputPreset, StructuredOutputPresetContract> = {
   'evidence-digest.v1': {
     artifact: 'evidence-digest.v1',
     system:
       'Return exactly one short JSON object. Do not include chain-of-thought, markdown, or prose outside JSON.',
+    schema: {
+      type: 'object',
+      required: ['artifact', 'summary', 'confidence'],
+      properties: {
+        role: { type: 'string' },
+        artifact: { const: 'evidence-digest.v1' },
+        summary: { type: 'string' },
+        confidence: { type: 'number' },
+        source_refs: { type: 'array', items: { type: 'string' } },
+        evidence_items: { type: 'array', items: { type: 'object' } },
+        source_quality: { type: 'string' },
+        risks: { type: 'array', items: { type: 'string' } },
+        data_quality: { type: 'string' },
+        market_coverage: { type: 'string' },
+        data_gaps: { type: 'array', items: { type: 'string' } },
+      },
+    },
+    policy: {
+      forbiddenPhrases: ['chain-of-thought', '思考过程', '推理过程'],
+      maxArrayItems: 12,
+      maxStringLength: 1200,
+    },
+    salvagePolicy: {
+      enabled: true,
+      fields: ['artifact', 'summary', 'confidence', 'source_refs', 'risks', 'data_gaps'],
+    },
+    maxTokens: 1200,
   },
   'analyst-audit.v1': {
     artifact: 'analyst-audit.v1',
     system:
       'Consume the provided artifact only. Return exactly one JSON object with conflicts, gaps, assumptions, and candidate findings. Do not make a final judgment.',
+    schema: {
+      type: 'object',
+      required: ['artifact', 'candidate_findings', 'conflicts', 'gaps', 'assumptions', 'confidence'],
+      properties: {
+        artifact: { const: 'analyst-audit.v1' },
+        candidate_findings: { type: 'array', items: { type: 'string' } },
+        conflicts: { type: 'array', items: { type: 'string' } },
+        gaps: { type: 'array', items: { type: 'string' } },
+        assumptions: { type: 'array', items: { type: 'string' } },
+        confidence: { type: 'number' },
+      },
+    },
+    policy: {
+      forbiddenPhrases: ['chain-of-thought', '思考过程', '推理过程', 'final judgment'],
+      maxArrayItems: 12,
+      maxStringLength: 1200,
+    },
+    salvagePolicy: {
+      enabled: true,
+      fields: ['artifact', 'candidate_findings', 'conflicts', 'gaps', 'assumptions', 'confidence'],
+    },
+    maxTokens: 1200,
   },
   'canonical-judge.v1': {
     artifact: 'canonical-judge.v1',
     system:
       'Consume the provided compressed artifacts only. Return exactly one canonical JSON object. Do not fetch or reread long evidence.',
+    schema: {
+      type: 'object',
+      required: ['artifact', 'decision', 'confidence', 'evidence_refs', 'conflicts'],
+      properties: {
+        artifact: { const: 'canonical-judge.v1' },
+        decision: { type: 'string' },
+        confidence: { type: 'number' },
+        rationale_summary: { type: 'string' },
+        evidence_refs: { type: 'array', items: { type: 'string' } },
+        conflicts: { type: 'array', items: { type: 'string' } },
+      },
+    },
+    policy: {
+      forbiddenPhrases: ['chain-of-thought', '思考过程', '推理过程'],
+      maxArrayItems: 12,
+      maxStringLength: 1200,
+    },
+    salvagePolicy: {
+      enabled: true,
+      fields: ['artifact', 'decision', 'confidence', 'rationale_summary', 'evidence_refs', 'conflicts'],
+    },
+    maxTokens: 1200,
   },
-} as const
+}
+
+export function getStructuredOutputPresetContract(
+  preset: StructuredOutputPreset | undefined,
+): StructuredOutputPresetContract | undefined {
+  const resolvedPreset = preset ?? 'evidence-digest.v1'
+  return STRUCTURED_OUTPUT_PRESETS[resolvedPreset as BuiltinStructuredOutputPreset]
+}
+
+export function structuredOutputRequestContractErrors(request: StructuredOutputRequest): string[] {
+  const preset = request.preset ?? 'evidence-digest.v1'
+  const contract = getStructuredOutputPresetContract(preset)
+  if (!contract && !request.schema) {
+    return ['custom preset requires an explicit schema']
+  }
+  return []
+}
+
+export function applyStructuredOutputPresetDefaults(request: StructuredOutputRequest): StructuredOutputRequest {
+  const errors = structuredOutputRequestContractErrors(request)
+  if (errors.length > 0) {
+    throw new Error(errors.join('; '))
+  }
+  const preset = request.preset ?? 'evidence-digest.v1'
+  const contract = getStructuredOutputPresetContract(preset)
+  const schema = request.schema ?? contract?.schema
+  const policy = mergePolicy(contract?.policy, request.policy)
+  const salvagePolicy = request.salvagePolicy ?? contract?.salvagePolicy
+  const maxTokens = request.maxTokens ?? contract?.maxTokens
+
+  return {
+    ...request,
+    preset,
+    ...(schema ? { schema } : {}),
+    ...(policy ? { policy } : {}),
+    ...(salvagePolicy ? { salvagePolicy } : {}),
+    ...(maxTokens ? { maxTokens } : {}),
+  }
+}
+
+function mergePolicy(
+  base: StructuredOutputPolicy | undefined,
+  overlay: StructuredOutputPolicy | undefined,
+): StructuredOutputPolicy | undefined {
+  if (!base && !overlay) return undefined
+  const forbiddenPhrases = uniqueStrings([
+    ...(base?.forbiddenPhrases ?? []),
+    ...(overlay?.forbiddenPhrases ?? []),
+  ])
+  return {
+    ...(forbiddenPhrases.length > 0 ? { forbiddenPhrases } : {}),
+    ...(overlay?.forbiddenPhraseAction ?? base?.forbiddenPhraseAction
+      ? { forbiddenPhraseAction: overlay?.forbiddenPhraseAction ?? base?.forbiddenPhraseAction }
+      : {}),
+    ...(typeof (overlay?.maxArrayItems ?? base?.maxArrayItems) === 'number'
+      ? { maxArrayItems: overlay?.maxArrayItems ?? base?.maxArrayItems }
+      : {}),
+    ...(typeof (overlay?.maxStringLength ?? base?.maxStringLength) === 'number'
+      ? { maxStringLength: overlay?.maxStringLength ?? base?.maxStringLength }
+      : {}),
+  }
+}
+
+function evaluateStructuredOutputCapabilityGate(
+  request: StructuredOutputRequest,
+  requestedMaxTokens: number,
+): StructuredOutputCapabilityGateResult {
+  const capabilities = request.modelCapabilities
+  if (!capabilities) {
+    return {
+      ok: true,
+      source: 'fallback',
+      requestedMaxTokens,
+      appliedMaxTokens: requestedMaxTokens,
+      errors: [],
+      warnings: ['structured output model capabilities not supplied; using prompt+parse fallback path'],
+    }
+  }
+
+  const errors: string[] = []
+  const warnings: string[] = []
+  let appliedMaxTokens = requestedMaxTokens
+
+  if (capabilities.jsonMode.status === 'unsupported') {
+    errors.push(`model capability jsonMode=unsupported source=${capabilities.jsonMode.source}`)
+  } else if (capabilities.jsonMode.status === 'unknown') {
+    warnings.push(`model capability jsonMode=unknown source=${capabilities.jsonMode.source}`)
+  }
+
+  if (Number.isFinite(capabilities.maxOutputTokens.tokens) && capabilities.maxOutputTokens.tokens > 0) {
+    appliedMaxTokens = Math.min(appliedMaxTokens, Math.floor(capabilities.maxOutputTokens.tokens))
+    if (appliedMaxTokens < requestedMaxTokens) {
+      warnings.push(`requested maxTokens ${requestedMaxTokens} capped to model maxOutputTokens ${appliedMaxTokens}`)
+    }
+  } else {
+    errors.push(`model capability maxOutputTokens invalid source=${capabilities.maxOutputTokens.source}`)
+  }
+
+  return {
+    ok: errors.length === 0,
+    source: capabilities.jsonMode.source,
+    requestedMaxTokens,
+    appliedMaxTokens,
+    errors,
+    warnings,
+    modelCapabilities: capabilities,
+  }
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -119,6 +373,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function stableJson(value: unknown): string {
   return JSON.stringify(value)
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map(value => value.trim()).filter(Boolean))]
 }
 
 function typeName(value: unknown): JsonSchemaType {
@@ -254,6 +512,10 @@ function parseOrExtractJsonObject(text: string): Record<string, unknown> | null 
   return balanced ? parseJsonObject(balanced) : null
 }
 
+function sanitizeJsonCandidate(candidate: string): string {
+  return candidate.replace(/,\s*([}\]])/gu, '$1')
+}
+
 function closePartialJsonObject(text: string): string | null {
   const start = text.indexOf('{')
   if (start < 0) return null
@@ -296,8 +558,15 @@ function closePartialJsonObject(text: string): string | null {
 }
 
 function repairJsonObject(text: string): Record<string, unknown> | null {
+  const balanced = findBalancedJsonObject(text)
+  if (balanced) {
+    const sanitized = sanitizeJsonCandidate(balanced)
+    const parsed = parseJsonObject(sanitized)
+    if (parsed) return parsed
+  }
+
   const repaired = closePartialJsonObject(text)
-  return repaired ? parseJsonObject(repaired) : null
+  return repaired ? parseJsonObject(sanitizeJsonCandidate(repaired)) : null
 }
 
 function fieldsFromSchema(schema: JsonSchema | undefined): string[] {
@@ -309,12 +578,33 @@ function fieldsFromSchema(schema: JsonSchema | undefined): string[] {
 }
 
 function coerceScalar(raw: string): unknown {
-  const trimmed = raw.trim().replace(/^["']|["']$/gu, '')
+  const trimmed = raw.trim().replace(/^["'“”‘’]|["'“”‘’]$/gu, '')
   if (/^-?\d+(?:\.\d+)?$/u.test(trimmed)) return Number(trimmed)
   if (trimmed === 'true') return true
   if (trimmed === 'false') return false
   if (trimmed === 'null') return null
   return trimmed
+}
+
+function salvageBulletList(text: string, escapedField: string): string[] | null {
+  const match = text.match(new RegExp(`(?:^|\\n)\\s*${escapedField}\\s*:\\s*\\n((?:\\s*[-*]\\s+[^\\n]+\\n?)+)`, 'u'))
+  if (!match?.[1]) return null
+  const items = match[1]
+    .split('\n')
+    .map(line => line.replace(/^\s*[-*]\s+/u, '').trim())
+    .filter(Boolean)
+  return items.length > 0 ? items : null
+}
+
+function salvageInlineArray(text: string, escapedField: string): unknown[] | null {
+  const match = text.match(new RegExp(`(?:^|\\n)\\s*${escapedField}\\s*:\\s*\\[([^\\n\\]]*)`, 'u'))
+  if (!match?.[1]) return null
+  const items = match[1]
+    .split(',')
+    .map(item => item.trim().replace(/^[\s"'“”‘’]+|[\s"'“”‘’]+$/gu, ''))
+    .filter(Boolean)
+    .map(coerceScalar)
+  return items.length > 0 ? items : null
 }
 
 function salvageFields(text: string, fields: string[]): Record<string, unknown> | null {
@@ -328,6 +618,18 @@ function salvageFields(text: string, fields: string[]): Record<string, unknown> 
       continue
     }
 
+    const inlineArray = salvageInlineArray(text, escaped)
+    if (inlineArray) {
+      artifact[field] = inlineArray
+      continue
+    }
+
+    const bulletList = salvageBulletList(text, escaped)
+    if (bulletList) {
+      artifact[field] = bulletList
+      continue
+    }
+
     const line = new RegExp(`(?:^|\\n)\\s*${escaped}\\s*:\\s*([^\\n,}]+)`, 'u')
     const lineMatch = text.match(line)
     if (lineMatch?.[1]) {
@@ -337,14 +639,59 @@ function salvageFields(text: string, fields: string[]): Record<string, unknown> 
   return Object.keys(artifact).length > 0 ? artifact : null
 }
 
+function sanitizeForbiddenPhrases(
+  artifact: Record<string, unknown>,
+  policy: StructuredOutputPolicy | undefined,
+): Record<string, unknown> {
+  const forbiddenPhrases = policy?.forbiddenPhrases?.filter(Boolean) ?? []
+  if (policy?.forbiddenPhraseAction !== 'sanitize_to_risks' || forbiddenPhrases.length === 0) {
+    return artifact
+  }
+
+  const sanitizedPhrases = new Set<string>()
+  const sanitizeNode = (node: unknown): unknown => {
+    if (typeof node === 'string') {
+      const matched = forbiddenPhrases.filter(phrase => node.includes(phrase))
+      if (matched.length === 0) return node
+      matched.forEach(phrase => sanitizedPhrases.add(phrase))
+      return '[sanitized forbidden phrase]'
+    }
+    if (Array.isArray(node)) return node.map(sanitizeNode)
+    if (isPlainObject(node)) {
+      const out: Record<string, unknown> = {}
+      for (const [key, child] of Object.entries(node)) {
+        out[key] = sanitizeNode(child)
+      }
+      return out
+    }
+    return node
+  }
+
+  const sanitized = sanitizeNode(artifact)
+  if (!isPlainObject(sanitized) || sanitizedPhrases.size === 0) {
+    return artifact
+  }
+
+  const existingRisks = Array.isArray(sanitized.risks)
+    ? sanitized.risks.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : []
+  sanitized.risks = uniqueStrings([
+    ...existingRisks,
+    ...Array.from(sanitizedPhrases).map(phrase => `sanitized forbidden phrase: ${phrase}`),
+  ])
+  return sanitized
+}
+
 function collectPolicyErrors(value: unknown, rawText: string, policy: StructuredOutputPolicy | undefined): string[] {
   const errors: string[] = []
   if (!policy) return errors
 
-  const rendered = `${rawText}\n${JSON.stringify(value)}`
-  for (const phrase of policy.forbiddenPhrases ?? []) {
-    if (phrase && rendered.includes(phrase)) {
-      errors.push(`forbidden_phrase:${phrase}`)
+  if (policy.forbiddenPhraseAction !== 'sanitize_to_risks') {
+    const rendered = `${rawText}\n${JSON.stringify(value)}`
+    for (const phrase of policy.forbiddenPhrases ?? []) {
+      if (phrase && rendered.includes(phrase)) {
+        errors.push(`forbidden_phrase:${phrase}`)
+      }
     }
   }
 
@@ -374,9 +721,10 @@ function validateArtifact(
   schema: JsonSchema | undefined,
   rawText: string,
   policy: StructuredOutputPolicy | undefined,
-): { schemaValid: boolean; validationErrors: string[]; failureReason?: string } {
-  const schemaErrors = schema ? validateJsonSchema(artifact, schema) : []
-  const policyErrors = collectPolicyErrors(artifact, rawText, policy)
+): { artifact: Record<string, unknown>; schemaValid: boolean; validationErrors: string[]; failureReason?: string } {
+  const preparedArtifact = sanitizeForbiddenPhrases(artifact, policy)
+  const schemaErrors = schema ? validateJsonSchema(preparedArtifact, schema) : []
+  const policyErrors = collectPolicyErrors(preparedArtifact, rawText, policy)
   const validationErrors = [...schemaErrors, ...policyErrors]
   const schemaValid = validationErrors.length === 0
   const failureReason = policyErrors.length > 0
@@ -384,7 +732,7 @@ function validateArtifact(
     : schemaErrors.length > 0
       ? 'schema_validation_failed'
       : undefined
-  return { schemaValid, validationErrors, failureReason }
+  return { artifact: preparedArtifact, schemaValid, validationErrors, failureReason }
 }
 
 function attempt(args: {
@@ -446,23 +794,70 @@ export async function runModelOutputHarness(
   executor: StructuredOutputExecutor,
 ): Promise<StructuredOutputResponse> {
   const start = Date.now()
-  const preset = request.preset ?? 'evidence-digest.v1'
+  const effectiveRequest = applyStructuredOutputPresetDefaults(request)
+  const preset = effectiveRequest.preset ?? 'evidence-digest.v1'
   const attempts: StructuredOutputAttempt[] = []
-  const maxTokens = request.maxTokens ?? 1024
+  const requestedMaxTokens = effectiveRequest.maxTokens ?? 1024
+  const capabilityGate = evaluateStructuredOutputCapabilityGate(effectiveRequest, requestedMaxTokens)
+  const capabilityGatePayload = effectiveRequest.modelCapabilities ? { capabilityGate } : {}
+  const maxTokens = capabilityGate.appliedMaxTokens
+
+  if (!capabilityGate.ok) {
+    const durationMs = Date.now() - start
+    const failureReason = capabilityGate.errors.some(error => error.includes('jsonMode=unsupported'))
+      ? 'capability_json_unsupported'
+      : 'capability_gate_failed'
+    const fallbackArtifact = failedFallbackArtifact({
+      request: effectiveRequest,
+      preset,
+      failureReason,
+      stopReason: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      repairCount: 0,
+      salvageUsed: false,
+    })
+    attempts.push(attempt({
+      label: 'fallback',
+      model: effectiveRequest.model,
+      stopReason: null,
+      parsed: false,
+      schemaValid: false,
+      durationMs,
+      error: failureReason,
+    }))
+    return {
+      ok: false,
+      artifact: fallbackArtifact,
+      rawText: '',
+      parsed: false,
+      schemaValid: false,
+      validationErrors: capabilityGate.errors,
+      attempts,
+      repairCount: 0,
+      salvageUsed: false,
+      fallbackUsed: true,
+      stopReason: null,
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs,
+      ...capabilityGatePayload,
+    }
+  }
 
   let modelResponse: StructuredOutputModelResponse
   try {
     modelResponse = await executor({
-      ...request,
+      ...effectiveRequest,
       preset,
-      system: joinSystemPrompt(request.system, preset),
+      system: joinSystemPrompt(effectiveRequest.system, preset),
       maxTokens,
     })
   } catch (err) {
     const durationMs = Date.now() - start
     const failureReason = 'model_call_failed'
     const fallbackArtifact = failedFallbackArtifact({
-      request,
+      request: effectiveRequest,
       preset,
       failureReason,
       stopReason: null,
@@ -473,7 +868,7 @@ export async function runModelOutputHarness(
     })
     attempts.push(attempt({
       label: 'primary',
-      model: request.model,
+      model: effectiveRequest.model,
       stopReason: null,
       parsed: false,
       schemaValid: false,
@@ -482,7 +877,7 @@ export async function runModelOutputHarness(
     }))
     attempts.push(attempt({
       label: 'fallback',
-      model: request.model,
+      model: effectiveRequest.model,
       stopReason: null,
       parsed: false,
       schemaValid: false,
@@ -503,6 +898,7 @@ export async function runModelOutputHarness(
       inputTokens: 0,
       outputTokens: 0,
       durationMs,
+      ...capabilityGatePayload,
     }
   }
 
@@ -515,7 +911,7 @@ export async function runModelOutputHarness(
   const totalDurationMs = primaryDurationMs
   attempts.push(attempt({
     label: 'primary',
-    model: request.model,
+    model: effectiveRequest.model,
     stopReason,
     inputTokens,
     outputTokens,
@@ -530,7 +926,7 @@ export async function runModelOutputHarness(
 
   const fallback = (failureReason: string, validationErrors: string[] = [failureReason]): StructuredOutputResponse => {
     const artifact = failedFallbackArtifact({
-      request,
+      request: effectiveRequest,
       preset,
       failureReason,
       stopReason,
@@ -541,7 +937,7 @@ export async function runModelOutputHarness(
     })
     attempts.push(attempt({
       label: 'fallback',
-      model: request.model,
+      model: effectiveRequest.model,
       stopReason,
       parsed: false,
       schemaValid: false,
@@ -563,6 +959,7 @@ export async function runModelOutputHarness(
       inputTokens,
       outputTokens,
       durationMs: totalDurationMs,
+      ...capabilityGatePayload,
     }
   }
 
@@ -572,10 +969,10 @@ export async function runModelOutputHarness(
 
   const parsed = parseOrExtractJsonObject(rawText)
   if (parsed) {
-    const validation = validateArtifact(parsed, request.schema, rawText, request.policy)
+    const validation = validateArtifact(parsed, effectiveRequest.schema, rawText, effectiveRequest.policy)
     attempts.push(attempt({
       label: 'parse',
-      model: request.model,
+      model: effectiveRequest.model,
       stopReason,
       parsed: true,
       schemaValid: validation.schemaValid,
@@ -584,7 +981,7 @@ export async function runModelOutputHarness(
     if (validation.schemaValid) {
       return {
         ok: true,
-        artifact: parsed,
+        artifact: validation.artifact,
         rawText,
         ...(rawThinkingText ? { rawThinkingText } : {}),
         parsed: true,
@@ -598,21 +995,22 @@ export async function runModelOutputHarness(
         inputTokens,
         outputTokens,
         durationMs: totalDurationMs,
+        ...capabilityGatePayload,
       }
     }
     return fallback(validation.failureReason ?? 'schema_validation_failed', validation.validationErrors)
   }
 
-  const repairEnabled = request.repairPolicy?.enabled !== false
-  const repairAttempts = request.repairPolicy?.maxAttempts ?? 1
+  const repairEnabled = effectiveRequest.repairPolicy?.enabled !== false
+  const repairAttempts = effectiveRequest.repairPolicy?.maxAttempts ?? 1
   if (repairEnabled && repairAttempts > 0) {
     const repaired = repairJsonObject(rawText)
     if (repaired) {
       repairCount = 1
-      const validation = validateArtifact(repaired, request.schema, rawText, request.policy)
+      const validation = validateArtifact(repaired, effectiveRequest.schema, rawText, effectiveRequest.policy)
       attempts.push(attempt({
         label: 'repair',
-        model: request.model,
+        model: effectiveRequest.model,
         stopReason,
         parsed: true,
         schemaValid: validation.schemaValid,
@@ -621,7 +1019,7 @@ export async function runModelOutputHarness(
       if (validation.schemaValid) {
         return {
           ok: true,
-          artifact: repaired,
+          artifact: validation.artifact,
           rawText,
           ...(rawThinkingText ? { rawThinkingText } : {}),
           parsed: true,
@@ -635,24 +1033,25 @@ export async function runModelOutputHarness(
           inputTokens,
           outputTokens,
           durationMs: totalDurationMs,
+          ...capabilityGatePayload,
         }
       }
       return fallback(validation.failureReason ?? 'schema_validation_failed', validation.validationErrors)
     }
   }
 
-  const salvageEnabled = request.salvagePolicy?.enabled !== false
+  const salvageEnabled = effectiveRequest.salvagePolicy?.enabled !== false
   if (salvageEnabled) {
-    const fields = request.salvagePolicy?.fields?.length
-      ? request.salvagePolicy.fields
-      : fieldsFromSchema(request.schema)
+    const fields = effectiveRequest.salvagePolicy?.fields?.length
+      ? effectiveRequest.salvagePolicy.fields
+      : fieldsFromSchema(effectiveRequest.schema)
     const salvaged = salvageFields(rawText, fields)
     if (salvaged) {
       salvageUsed = true
-      const validation = validateArtifact(salvaged, request.schema, rawText, request.policy)
+      const validation = validateArtifact(salvaged, effectiveRequest.schema, rawText, effectiveRequest.policy)
       attempts.push(attempt({
         label: 'salvage',
-        model: request.model,
+        model: effectiveRequest.model,
         stopReason,
         parsed: false,
         schemaValid: validation.schemaValid,
@@ -661,7 +1060,7 @@ export async function runModelOutputHarness(
       if (validation.schemaValid) {
         return {
           ok: true,
-          artifact: salvaged,
+          artifact: validation.artifact,
           rawText,
           ...(rawThinkingText ? { rawThinkingText } : {}),
           parsed: false,
@@ -675,6 +1074,7 @@ export async function runModelOutputHarness(
           inputTokens,
           outputTokens,
           durationMs: totalDurationMs,
+          ...capabilityGatePayload,
         }
       }
       return fallback(validation.failureReason ?? 'schema_validation_failed', validation.validationErrors)

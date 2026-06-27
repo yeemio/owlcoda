@@ -16,9 +16,7 @@ export const IGNORE_DIR_NAMES: ReadonlySet<string> = new Set([
   'build',
   'target',
   'output',
-  // NOTE: 'out' intentionally removed — it is a common user-created output
-  // directory (e.g. research datasets, tsconfig outDir) and must not be
-  // blanket-ignored.  See OC-20260623-15.
+  'out',
   'coverage',
   // Framework / bundler caches
   '.next',

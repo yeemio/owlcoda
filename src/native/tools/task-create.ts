@@ -35,6 +35,7 @@ import type { ProjectMapSnapshot, ProjectMapVerificationProfile } from '../proto
 import {
   createTask,
   getTask,
+  getTaskJob,
   spawnTaskCommand,
   getCurrentOrNextStep,
   type TaskStepAction,
@@ -72,6 +73,8 @@ export interface TaskCreateInput {
   command?: string
   /** Optional working directory for `command` (defaults to process.cwd()). */
   cwd?: string
+  /** Optional total deadline for command-backed task execution in milliseconds. */
+  deadlineMs?: number
   /**
    * Optional structured deliverables for this task plan.
    * Paths that should be produced by completing this task.
@@ -105,7 +108,7 @@ export function createTaskCreateTool(): NativeToolDef<TaskCreateInput> {
     maturity: 'beta' as const,
 
     async execute(input: TaskCreateInput, context?: ToolExecutionContext): Promise<ToolResult> {
-      const { subject, description, activeForm, metadata, command, cwd, deliverables, steps } = input
+      const { subject, description, activeForm, metadata, command, cwd, deadlineMs, deliverables, steps } = input
 
       if (!subject || !description) {
         return {
@@ -219,6 +222,7 @@ export function createTaskCreateTool(): NativeToolDef<TaskCreateInput> {
         metadata,
         command: commandToRun,
         cwd,
+        deadlineMs,
         conversationId: context?.conversationId,
         bashRisk: safeBashRisk,
         deliverables,
@@ -233,6 +237,7 @@ export function createTaskCreateTool(): NativeToolDef<TaskCreateInput> {
         metadata: {
           task: { id: task.id, subject: task.subject, stepCount: 0, currentStepId: null },
           ...(runningTask.longTaskSnapshot ? { longTaskSnapshot: runningTask.longTaskSnapshot } : {}),
+          ...(getTaskJob(runningTask.id) ? { job: getTaskJob(runningTask.id) } : {}),
           command: commandToRun,
           bashRisk: {
             level: safeBashRisk.level,

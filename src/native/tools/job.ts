@@ -2,6 +2,8 @@ import {
   abortJob,
   finishJob,
   getJob,
+  getJobStateDescriptor,
+  isTerminalJobStatus,
   listJobs,
   recordJobCleanup,
   type JobRecord,
@@ -186,10 +188,6 @@ function cancelSupervisorOnlyJob(
   return getJob(jobId)
 }
 
-function isTerminalJobStatus(status: JobStatus): boolean {
-  return status === 'done' || status === 'failed' || status === 'cancelled' || status === 'timeout'
-}
-
 function jobFilters(input: JobListInput): { status?: string; type?: string } {
   return {
     ...(normalizeOptionalString(input.status) ? { status: normalizeOptionalString(input.status)! } : {}),
@@ -232,11 +230,17 @@ function formatJobDetail(job: JobRecord, actions: JobSuggestedAction[] = []): st
   if (job.deadlineAt) lines.push(`Deadline: ${job.deadlineAt}`)
   if (job.stageDeadlineAt) lines.push(`StageDeadline: ${job.stageDeadlineAt}`)
   if (job.terminationReason) lines.push(`TerminationReason: ${job.terminationReason}`)
+  if (job.recoveryClass) lines.push(`RecoveryClass: ${job.recoveryClass}`)
+  if (job.recoveryReason) lines.push(`RecoveryReason: ${job.recoveryReason}`)
+  if (job.recoveryUpdatedAt) lines.push(`RecoveryUpdated: ${job.recoveryUpdatedAt}`)
+  if (job.resumeCommand) lines.push(`ResumeCommand: ${job.resumeCommand}`)
+  if (job.proofRequired !== undefined) lines.push(`ProofRequired: ${job.proofRequired}`)
   if (job.cleanupAttempted !== undefined) lines.push(`CleanupAttempted: ${job.cleanupAttempted}`)
   if (job.cleanupSucceeded !== undefined) lines.push(`CleanupSucceeded: ${job.cleanupSucceeded}`)
   if (job.remainingPids !== undefined) lines.push(`RemainingPids: ${job.remainingPids.join(',')}`)
   if (job.source) lines.push(`Source: ${job.source.kind}:${job.source.id}`)
   if (job.recoveryHint) lines.push(`Recovery: ${job.recoveryHint}`)
+  lines.push(`State: ${getJobStateDescriptor(job.status).userMessage}`)
   if (job.error) lines.push(`Error: ${job.error}`)
   if (job.lastOutput) {
     lines.push('Last output:')
@@ -272,7 +276,9 @@ function suggestedJobActions(job: JobRecord): JobSuggestedAction[] {
     })
   }
 
-  if (job.status === 'queued' || job.status === 'running' || job.status === 'waiting') {
+  const state = getJobStateDescriptor(job.status)
+
+  if (state.canCancel) {
     addCommandAction(actions, seenCommands, {
       kind: 'cancel',
       label: 'Cancel job',
@@ -280,6 +286,15 @@ function suggestedJobActions(job: JobRecord): JobSuggestedAction[] {
       reason: job.type === 'command'
         ? 'routes through TaskStop cleanup when possible'
         : 'marks supervisor state unless a live adapter exists',
+    })
+  }
+
+  if (state.canResume && job.resumeCommand) {
+    addCommandAction(actions, seenCommands, {
+      kind: 'recover',
+      label: 'Resume or inspect recovery path',
+      command: job.resumeCommand,
+      reason: job.recoveryReason,
     })
   }
 

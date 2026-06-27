@@ -215,6 +215,9 @@ export function createNotebookEditTool(): NativeToolDef<NotebookEditInput> {
           cell_type: cell_type ?? 'code',
           language,
           edit_mode,
+          oldContent: raw,
+          newContent: updatedContent,
+          changeKind: `notebook_${edit_mode}`,
         },
       }
     },

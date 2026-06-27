@@ -32,6 +32,11 @@ describe('RunWorkspace native tool', () => {
     expect(properties['outputRoot']).toBeDefined()
     expect(properties['runRef']).toBeDefined()
     expect(properties['origin']).toBeDefined()
+    expect(properties['environment']).toBeDefined()
+    expect(properties['project']).toBeDefined()
+    expect(properties['jobId']).toBeDefined()
+    expect(properties['artifactType']).toBeDefined()
+    expect(properties['status']).toBeDefined()
     expect(properties['checkpoint']).toBeDefined()
   })
 
@@ -68,6 +73,10 @@ describe('RunWorkspace native tool', () => {
       runRef: outputRoot,
       path: 'deck.html',
       origin: 'write',
+      environment: 'dogfood',
+      project: 'owlcoda-platform',
+      jobId: 'job-browser-1',
+      artifactType: 'html_deck',
       stepId: 'write-deck',
       participatesInFinal: true,
     })
@@ -76,6 +85,11 @@ describe('RunWorkspace native tool', () => {
     expect(JSON.parse(artifact.output)).toMatchObject({
       path: deckPath,
       origin: 'write',
+      environment: 'dogfood',
+      project: 'owlcoda-platform',
+      runId: createPayload.manifest.runId,
+      jobId: 'job-browser-1',
+      artifactType: 'html_deck',
       status: 'present',
       stepId: 'write-deck',
       participatesInFinal: true,
@@ -88,7 +102,14 @@ describe('RunWorkspace native tool', () => {
     await unlink(deckPath)
     const refreshed = await tool.execute({ action: 'refreshLedger', runRef: outputRoot })
     expect(refreshed.isError).toBe(false)
-    expect(JSON.parse(refreshed.output).artifacts[0]).toMatchObject({ status: 'missing' })
+    expect(JSON.parse(refreshed.output).artifacts[0]).toMatchObject({
+      status: 'missing',
+      environment: 'dogfood',
+      project: 'owlcoda-platform',
+      runId: createPayload.manifest.runId,
+      jobId: 'job-browser-1',
+      artifactType: 'html_deck',
+    })
 
     const event = await tool.execute({
       action: 'recordEvent',
@@ -105,6 +126,60 @@ describe('RunWorkspace native tool', () => {
     })
     const eventLines = (await readFile(join(outputRoot, '.owlcoda-run', 'events.jsonl'), 'utf8')).trim().split('\n')
     expect(eventLines).toHaveLength(1)
+  })
+
+  it('filters artifact ledger reads by runtime metadata', async () => {
+    const tool = createRunWorkspaceTool()
+    const outputRoot = join(tempDir, 'filtered-output')
+    await tool.execute({ action: 'create', outputRoot, cwd: tempDir })
+
+    await writeFile(join(outputRoot, 'browser-a.html'), '<html>A</html>\n', 'utf8')
+    await writeFile(join(outputRoot, 'browser-b.html'), '<html>B</html>\n', 'utf8')
+    await tool.execute({
+      action: 'recordArtifact',
+      runRef: outputRoot,
+      path: 'browser-a.html',
+      origin: 'manual',
+      environment: 'dogfood',
+      project: 'owlcoda-platform',
+      jobId: 'job:browser:a',
+      artifactType: 'browser_html',
+      status: 'present',
+    })
+    await tool.execute({
+      action: 'recordArtifact',
+      runRef: outputRoot,
+      path: 'browser-b.html',
+      origin: 'manual',
+      environment: 'ci',
+      project: 'owlcoda-platform',
+      jobId: 'job:browser:b',
+      artifactType: 'browser_html',
+      status: 'present',
+    })
+
+    const byJob = await tool.execute({ action: 'readLedger', runRef: outputRoot, jobId: 'job:browser:a' })
+    expect(byJob.isError).toBe(false)
+    expect(JSON.parse(byJob.output)).toMatchObject({
+      artifactCount: 1,
+      filters: { jobId: 'job:browser:a' },
+      ledger: {
+        artifacts: [expect.objectContaining({
+          jobId: 'job:browser:a',
+          environment: 'dogfood',
+          artifactType: 'browser_html',
+        })],
+      },
+    })
+
+    const byEnvironment = await tool.execute({ action: 'readLedger', runRef: outputRoot, environment: 'ci' })
+    expect(byEnvironment.isError).toBe(false)
+    const payload = JSON.parse(byEnvironment.output)
+    expect(payload.artifactCount).toBe(1)
+    expect(payload.ledger.artifacts[0]).toMatchObject({
+      jobId: 'job:browser:b',
+      environment: 'ci',
+    })
   })
 
   it('writes and reads checkpoint metadata', async () => {

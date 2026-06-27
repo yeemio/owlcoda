@@ -22,11 +22,15 @@
  */
 
 import { spawn } from 'node:child_process'
+import { readFile, stat } from 'node:fs/promises'
 import type { BashInput, NativeToolDef, ToolExecutionContext, ToolResult } from './types.js'
+import { extractWriteTargets } from '../write-provenance.js'
+import type { ExtractedWriteTarget } from '../protocol/write-provenance-types.js'
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_OUTPUT_BYTES = 1024 * 1024 // 1 MiB cap per stream
 const PROGRESS_TAIL_LINES = 5 // Number of recent lines to include in progress events
+const MAX_SOURCE_CAPTURE_BYTES = 1024 * 1024
 
 /**
  * Grace windows on the cancellation path (user Ctrl+C).
@@ -85,8 +89,73 @@ export function createBashTool(): NativeToolDef<BashInput> {
         }
       }
 
-      return runCommand(command, effectiveCwd, timeoutMs, context)
+      const captureSeeds = await prepareBashWriteCaptures(command, effectiveCwd)
+      const result = await runCommand(command, effectiveCwd, timeoutMs, context)
+      const writeCaptures = await completeBashWriteCaptures(captureSeeds)
+      if (writeCaptures.length > 0) {
+        result.metadata = {
+          ...(result.metadata ?? {}),
+          writeCaptures,
+        }
+      }
+      return result
     },
+  }
+}
+
+interface BashWriteCaptureSeed {
+  target: ExtractedWriteTarget
+  before: TextFileReadResult
+}
+
+interface BashWriteCapture {
+  path: string
+  kind: ExtractedWriteTarget['kind']
+  oldContent: string | null
+  newContent: string
+}
+
+type TextFileReadResult =
+  | { ok: true; content: string }
+  | { ok: false; missing: true; reason: 'missing' }
+  | { ok: false; missing: false; reason: 'not_file' | 'too_large' | 'unreadable' }
+
+async function prepareBashWriteCaptures(command: string, cwd: string): Promise<BashWriteCaptureSeed[]> {
+  const targets = extractWriteTargets('bash', { command }, cwd)
+  const seeds: BashWriteCaptureSeed[] = []
+  for (const target of targets) {
+    const before = await readUtf8FileForCapture(target.path)
+    if (before.ok || before.missing) {
+      seeds.push({ target, before })
+    }
+  }
+  return seeds
+}
+
+async function completeBashWriteCaptures(seeds: BashWriteCaptureSeed[]): Promise<BashWriteCapture[]> {
+  const captures: BashWriteCapture[] = []
+  for (const seed of seeds) {
+    const after = await readUtf8FileForCapture(seed.target.path)
+    if (!after.ok) continue
+    captures.push({
+      path: seed.target.path,
+      kind: seed.target.kind,
+      oldContent: seed.before.ok ? seed.before.content : null,
+      newContent: after.content,
+    })
+  }
+  return captures
+}
+
+async function readUtf8FileForCapture(path: string): Promise<TextFileReadResult> {
+  try {
+    const info = await stat(path)
+    if (!info.isFile()) return { ok: false, missing: false, reason: 'not_file' }
+    if (info.size > MAX_SOURCE_CAPTURE_BYTES) return { ok: false, missing: false, reason: 'too_large' }
+    return { ok: true, content: await readFile(path, 'utf8') }
+  } catch (error) {
+    if (isNodeErrorCode(error, 'ENOENT')) return { ok: false, missing: true, reason: 'missing' }
+    return { ok: false, missing: false, reason: 'unreadable' }
   }
 }
 
@@ -435,4 +504,11 @@ function truncateBuffer(chunks: Buffer[], totalLen: number): string {
   }
   const truncated = buf.subarray(0, MAX_OUTPUT_BYTES).toString('utf-8')
   return `${truncated}\n[truncated — output exceeded ${MAX_OUTPUT_BYTES} bytes]`
+}
+
+function isNodeErrorCode(error: unknown, code: string): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as { code?: unknown }).code === code
 }

@@ -139,8 +139,14 @@ function addHistoryCacheBreakpoint(messages: AnthropicMessage[]): void {
 function conversationToMessages(conversation: Conversation): AnthropicMessage[] {
   return prepareTurnsForRequest(conversation.turns).map((turn) => ({
     role: turn.role,
-    content: turn.content as AnthropicContentBlock[],
+    content: turn.content.map(stripInternalBlockFields),
   }))
+}
+
+function stripInternalBlockFields(block: AnthropicContentBlock): AnthropicContentBlock {
+  if (block.type !== 'tool_result') return block
+  const { metadata: _metadata, ...providerBlock } = block
+  return providerBlock
 }
 
 function cloneBlock(block: AnthropicContentBlock): AnthropicContentBlock {

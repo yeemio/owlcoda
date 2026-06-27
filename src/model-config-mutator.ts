@@ -26,6 +26,7 @@ export interface BindDiscoveredModelPatch {
   backendModel?: string
   endpoint?: string
   contextWindow?: number
+  supportsImages?: boolean
   timeoutMs?: number
   headers?: Record<string, string>
 }
@@ -41,6 +42,7 @@ export interface CreateEndpointModelPatch {
   apiKeyEnv?: string
   headers?: Record<string, string>
   contextWindow?: number
+  supportsImages?: boolean
   role?: string
   timeoutMs?: number
 }
@@ -53,6 +55,7 @@ export interface UpdateModelFieldsPatch {
   endpoint?: string
   headers?: Record<string, string>
   contextWindow?: number
+  supportsImages?: boolean
   role?: string
   timeoutMs?: number
   default?: never
@@ -74,6 +77,7 @@ const ALLOWED_PATCH_FIELDS = new Set([
   'endpoint',
   'headers',
   'contextWindow',
+  'supportsImages',
   'role',
   'timeoutMs',
 ])
@@ -155,6 +159,7 @@ export class ModelConfigMutator {
         target.backendModel = discoveredPatch.backendModel ?? discoveredId
         if (discoveredPatch.endpoint !== undefined) target.endpoint = discoveredPatch.endpoint
         if (discoveredPatch.contextWindow !== undefined) target.contextWindow = discoveredPatch.contextWindow
+        if (discoveredPatch.supportsImages !== undefined) target.supportsImages = discoveredPatch.supportsImages
         if (discoveredPatch.timeoutMs !== undefined) target.timeoutMs = discoveredPatch.timeoutMs
         if (discoveredPatch.headers !== undefined) target.headers = discoveredPatch.headers
         return
@@ -176,6 +181,7 @@ export class ModelConfigMutator {
         role: discoveredPatch.role,
         endpoint: discoveredPatch.endpoint,
         contextWindow: discoveredPatch.contextWindow,
+        supportsImages: discoveredPatch.supportsImages,
         timeoutMs: discoveredPatch.timeoutMs,
         headers: discoveredPatch.headers,
       })
@@ -203,6 +209,7 @@ export class ModelConfigMutator {
         apiKeyEnv: patch.apiKeyEnv,
         headers: patch.headers,
         contextWindow: patch.contextWindow,
+        supportsImages: patch.supportsImages,
         role: patch.role,
         timeoutMs: patch.timeoutMs,
       })
@@ -234,6 +241,7 @@ export class ModelConfigMutator {
       if (patch.endpoint !== undefined) model.endpoint = patch.endpoint
       if (patch.headers !== undefined) model.headers = patch.headers
       if (patch.contextWindow !== undefined) model.contextWindow = patch.contextWindow
+      if (patch.supportsImages !== undefined) model.supportsImages = patch.supportsImages
       if (patch.role !== undefined) model.role = patch.role
       if (patch.timeoutMs !== undefined) model.timeoutMs = patch.timeoutMs
     })
@@ -354,6 +362,7 @@ function validatePatchFields(patch: UpdateModelFieldsPatch): void {
   }
   validateOptionalPositiveNumber('contextWindow', patch.contextWindow)
   validateOptionalPositiveNumber('timeoutMs', patch.timeoutMs)
+  validateOptionalBoolean('supportsImages', patch.supportsImages)
 }
 
 function validateRuntimePatch(patch: UpdateRuntimeSettingsPatch): void {
@@ -377,12 +386,20 @@ function validateCreatePatch(patch: CreateEndpointModelPatch): void {
   }
   validateOptionalPositiveNumber('contextWindow', patch.contextWindow)
   validateOptionalPositiveNumber('timeoutMs', patch.timeoutMs)
+  validateOptionalBoolean('supportsImages', patch.supportsImages)
 }
 
 function validateOptionalPositiveNumber(field: string, value: number | undefined): void {
   if (value === undefined) return
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(`${field} must be a positive number`)
+  }
+}
+
+function validateOptionalBoolean(field: string, value: boolean | undefined): void {
+  if (value === undefined) return
+  if (typeof value !== 'boolean') {
+    throw new Error(`${field} must be a boolean`)
   }
 }
 

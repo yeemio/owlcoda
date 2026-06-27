@@ -6,7 +6,7 @@ vi.mock('../../src/native/dispatch.js', () => {
     McpAuth: '[stub] tokens are NOT validated',
   }
   class MockDispatcher {
-    getToolNames() { return ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'AgentRunList', 'AgentRunGet', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'RuntimeLifecycleList', 'RuntimeLifecycleGet', 'RuntimeSupervisorList', 'RuntimeSupervisorGet', 'AgentControlList', 'AgentControlGet', 'AgentMailboxSend', 'AgentMailboxList', 'AgentMailboxGet', 'AgentMailboxResolve', 'JobList', 'JobGet', 'JobCancel', 'BrowserJob', 'ApiJob', 'ServiceJob', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TaskVerify', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'DeliveryAudit', 'SkillRoutePreview', 'RunWorkspace', 'ProjectMap', 'ArtifactVerify', 'ProbePlan', 'JudgeBackendProbe'] }
+    getToolNames() { return ['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'JobCancel', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'JudgeBackendProbe'] }
     getToolDescription(name: string): string | undefined { return STUB_DESCRIPTIONS[name] }
   }
   return { ToolDispatcher: MockDispatcher }
@@ -97,27 +97,6 @@ describe('NATIVE_TOOL_SCHEMAS', () => {
     expect(get.description).toContain('does not resume')
   })
 
-  it('Runtime truth spine schemas expose lifecycle, supervisor, AgentControl, and mailbox tools', () => {
-    const lifecycleList = NATIVE_TOOL_SCHEMAS['RuntimeLifecycleList'] as Record<string, any>
-    const lifecycleGet = NATIVE_TOOL_SCHEMAS['RuntimeLifecycleGet'] as Record<string, any>
-    expect(lifecycleList.description).toContain('unified runtime truth spine')
-    expect(lifecycleGet.required).toEqual(['runId'])
-
-    const supervisorGet = NATIVE_TOOL_SCHEMAS['RuntimeSupervisorGet'] as Record<string, any>
-    expect(supervisorGet.required).toEqual(['processId'])
-    expect(supervisorGet.description).toContain('Read-only')
-
-    const agentControlGet = NATIVE_TOOL_SCHEMAS['AgentControlGet'] as Record<string, any>
-    expect(agentControlGet.required).toEqual(['agentId'])
-    expect(agentControlGet.description).toContain('does not spawn')
-
-    const mailboxSend = NATIVE_TOOL_SCHEMAS['AgentMailboxSend'] as Record<string, any>
-    const mailboxResolve = NATIVE_TOOL_SCHEMAS['AgentMailboxResolve'] as Record<string, any>
-    expect(mailboxSend.required).toEqual(['author', 'recipient', 'body'])
-    expect(mailboxSend.description).toContain('Internal-state only')
-    expect(mailboxResolve.required).toEqual(['messageId'])
-  })
-
   it('LongTask lifecycle inspection schemas are read-only and queryable', () => {
     const list = NATIVE_TOOL_SCHEMAS['LongTaskList'] as Record<string, any>
     const get = NATIVE_TOOL_SCHEMAS['LongTaskGet'] as Record<string, any>
@@ -146,56 +125,6 @@ describe('NATIVE_TOOL_SCHEMAS', () => {
     expect(schema.properties.models.items.type).toBe('string')
     expect(schema.properties.prompts.description).toContain('fixed judge prompts')
   })
-
-  it('runtime job schemas expose cancellation, API, browser replay, and service control surfaces', () => {
-    const list = NATIVE_TOOL_SCHEMAS['JobList'] as Record<string, any>
-    const get = NATIVE_TOOL_SCHEMAS['JobGet'] as Record<string, any>
-    const cancel = NATIVE_TOOL_SCHEMAS['JobCancel'] as Record<string, any>
-    const browser = NATIVE_TOOL_SCHEMAS['BrowserJob'] as Record<string, any>
-    const api = NATIVE_TOOL_SCHEMAS['ApiJob'] as Record<string, any>
-    const service = NATIVE_TOOL_SCHEMAS['ServiceJob'] as Record<string, any>
-
-    expect(list.description).toContain('Read-only')
-    expect(get.required).toEqual(['jobId'])
-    expect(cancel.required).toEqual(['jobId'])
-    expect(cancel.description).toContain('Cancel one platform job')
-    expect(browser.required).toEqual(['url'])
-    expect(browser.properties.provider.enum).toEqual(['fetch_html', 'chrome_headless', 'chrome_cdp'])
-    expect(browser.properties.runRef.description).toContain('RunWorkspace')
-    expect(api.required).toEqual(['url'])
-    expect(api.properties.method.enum).toEqual(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'])
-    expect(api.properties.runRef.description).toContain('RunWorkspace')
-    expect(service.required).toEqual(['action', 'serviceName'])
-    expect(service.properties.action.enum).toEqual(['start', 'status', 'stop', 'restart'])
-    expect(service.description).toContain('local dev service')
-  })
-
-  it('TaskUpdate schema exposes skipped step status with required failure reason', () => {
-    const schema = NATIVE_TOOL_SCHEMAS['TaskUpdate'] as Record<string, any>
-    expect(schema.properties.stepStatus.enum).toContain('skipped')
-    expect(schema.properties.failureReason.description).toContain('skipped')
-  })
-
-  it('TodoWrite schema exposes blocked and skipped statuses with failureReason guidance', () => {
-    const schema = NATIVE_TOOL_SCHEMAS['TodoWrite'] as Record<string, any>
-    const todoItem = schema.properties.todos.items
-
-    expect(todoItem.properties.status.enum).toEqual(['pending', 'in_progress', 'completed', 'blocked', 'skipped'])
-    expect(todoItem.properties.failureReason.type).toBe('string')
-    expect(todoItem.properties.failureReason.description).toContain('blocked')
-    expect(todoItem.properties.failureReason.description).toContain('skipped')
-    expect(todoItem.allOf).toContainEqual({
-      if: {
-        properties: {
-          status: { enum: ['blocked', 'skipped'] },
-        },
-        required: ['status'],
-      },
-      then: {
-        required: ['failureReason'],
-      },
-    })
-  })
 })
 
 describe('buildNativeToolDefs', () => {
@@ -203,9 +132,9 @@ describe('buildNativeToolDefs', () => {
     const dispatcher = new ToolDispatcher()
     const defs = buildNativeToolDefs(dispatcher)
 
-    expect(defs).toHaveLength(68)
+    expect(defs).toHaveLength(44)
     const names = defs.map((d: { name: string }) => d.name)
-    expect(names).toEqual(['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'AgentRunList', 'AgentRunGet', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'RuntimeLifecycleList', 'RuntimeLifecycleGet', 'RuntimeSupervisorList', 'RuntimeSupervisorGet', 'AgentControlList', 'AgentControlGet', 'AgentMailboxSend', 'AgentMailboxList', 'AgentMailboxGet', 'AgentMailboxResolve', 'JobList', 'JobGet', 'JobCancel', 'BrowserJob', 'ApiJob', 'ServiceJob', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TaskVerify', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'DeliveryAudit', 'SkillRoutePreview', 'RunWorkspace', 'ProjectMap', 'ArtifactVerify', 'ProbePlan', 'JudgeBackendProbe'])
+    expect(names).toEqual(['bash', 'read', 'write', 'edit', 'glob', 'grep', 'WebFetch', 'WebSearch', 'TodoWrite', 'AskUserQuestion', 'Sleep', 'LongTaskList', 'LongTaskGet', 'LongTaskAwait', 'LongTaskReplace', 'RuntimeRecoveryList', 'RuntimeRecoveryGet', 'JobCancel', 'EnterPlanMode', 'ExitPlanMode', 'Config', 'NotebookEdit', 'EnterWorktree', 'ExitWorktree', 'TaskCreate', 'TaskList', 'TaskGet', 'TaskUpdate', 'TaskStop', 'TaskOutput', 'TeamCreate', 'TeamDelete', 'ToolSearch', 'StructuredOutput', 'RemoteTrigger', 'MCPTool', 'ListMcpResources', 'ReadMcpResource', 'McpAuth', 'Skill', 'LSP', 'PowerShell', 'Brief', 'JudgeBackendProbe'])
   })
 
   it('each def has name, description, and input_schema', () => {

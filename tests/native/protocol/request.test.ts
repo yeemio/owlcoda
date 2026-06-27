@@ -303,6 +303,39 @@ describe('Native Protocol — conversation prefix caching', () => {
     expect(last.role).toBe('user')
     expect(blocks[blocks.length - 1]!['cache_control']).toEqual({ type: 'ephemeral' })
   })
+
+  it('strips internal tool_result metadata from provider requests', () => {
+    const req = buildRequest({
+      ...base,
+      id: 'metadata-strip',
+      turns: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'write-1', name: 'write', input: { path: 'a.txt', content: 'after' } }],
+          timestamp: 1,
+        },
+        {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'write-1',
+            content: 'Wrote file',
+            is_error: false,
+            metadata: {
+              oldContent: 'before',
+              newContent: 'after',
+            },
+          }],
+          timestamp: 2,
+        },
+      ] as ConversationTurn[],
+    })
+
+    const block = (req.messages[1]!.content as Array<Record<string, unknown>>)[0]!
+    expect(block['type']).toBe('tool_result')
+    expect(block['metadata']).toBeUndefined()
+    expect(block['cache_control']).toEqual({ type: 'ephemeral' })
+  })
 })
 
 describe('sanitizeConversationTurns — allMatched fix', () => {

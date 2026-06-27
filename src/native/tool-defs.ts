@@ -89,6 +89,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
     type: 'object',
     properties: {
       url: { type: 'string', description: 'The URL to fetch content from' },
+      method: { type: 'string', enum: ['GET', 'HEAD'], description: 'HTTP method. Only GET and HEAD are supported; defaults to GET.' },
       prompt: { type: 'string', description: 'Optional prompt describing what to look for in the content' },
     },
     required: ['url'],
@@ -111,24 +112,10 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
           type: 'object',
           properties: {
             content: { type: 'string', description: 'Task description (imperative form)' },
-            status: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'blocked', 'skipped'], description: 'Task status' },
+            status: { type: 'string', enum: ['pending', 'in_progress', 'completed'], description: 'Task status' },
             activeForm: { type: 'string', description: 'Task description (present continuous form)' },
-            failureReason: { type: 'string', description: 'Required when status is blocked or skipped; explain the blocker or why the todo was not attempted.' },
           },
           required: ['content', 'status', 'activeForm'],
-          allOf: [
-            {
-              if: {
-                properties: {
-                  status: { enum: ['blocked', 'skipped'] },
-                },
-                required: ['status'],
-              },
-              then: {
-                required: ['failureReason'],
-              },
-            },
-          ],
         },
       },
     },
@@ -277,90 +264,6 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
     required: ['jobId'],
     description: 'Read one platform job supervisor record by ID. Read-only; this does not wait, cancel, resume, or mutate the job.',
   },
-  RuntimeLifecycleList: {
-    type: 'object',
-    properties: {
-      limit: { type: 'number', description: 'Maximum recent runtime lifecycle records to return. Defaults to 20.' },
-      kind: { type: 'string', description: 'Optional run kind filter: task_command, agent_run, supervisor_process, mailbox_message, or runtime_checkpoint.' },
-    },
-    description: 'Read-only inspection of the unified runtime truth spine: task commands, agent runs, supervisor processes, mailbox messages, and checkpoints. This does not wait, resume, retry, or mutate work.',
-  },
-  RuntimeLifecycleGet: {
-    type: 'object',
-    properties: {
-      runId: { type: 'string', description: 'Unified runtime lifecycle run ID returned by RuntimeLifecycleList, such as task:task-1, agent:agent-D1, process:task-1, or mailbox:mailbox-1.' },
-    },
-    required: ['runId'],
-    description: 'Read one unified runtime lifecycle record by runId. Read-only; this does not wait, resume, retry, or mutate work.',
-  },
-  RuntimeSupervisorList: {
-    type: 'object',
-    properties: {
-      limit: { type: 'number', description: 'Maximum recent runtime-supervised process snapshots to return. Defaults to 20.' },
-    },
-    description: 'Read-only inspection of runtime-supervised process snapshots for command-backed long tasks. This does not wait, kill, resume, retry, or mutate work.',
-  },
-  RuntimeSupervisorGet: {
-    type: 'object',
-    properties: {
-      processId: { type: 'string', description: 'Runtime supervisor process ID returned by RuntimeSupervisorList, such as process:task-1.' },
-    },
-    required: ['processId'],
-    description: 'Read one runtime-supervised process snapshot by processId. Read-only; this does not wait, kill, resume, retry, or mutate work.',
-  },
-  AgentControlList: {
-    type: 'object',
-    properties: {
-      limit: { type: 'number', description: 'Maximum recent AgentControl records to return. Defaults to 20.' },
-    },
-    description: 'Read-only inspection of AgentControl records with parent run links, status, inspect commands, and recovery policy. This does not spawn, resume, retry, or mutate agents.',
-  },
-  AgentControlGet: {
-    type: 'object',
-    properties: {
-      agentId: { type: 'string', description: 'Agent ID returned by AgentControlList or AgentRunList.' },
-    },
-    required: ['agentId'],
-    description: 'Read one AgentControl record by agentId. Read-only; this does not spawn, resume, retry, or mutate agents.',
-  },
-  AgentMailboxSend: {
-    type: 'object',
-    properties: {
-      author: { type: 'string', description: 'Mailbox author, for example root or agent:agent-D1.' },
-      recipient: { type: 'string', description: 'Mailbox recipient, for example root or agent:agent-D1.' },
-      body: { type: 'string', description: 'Structured message body to preserve outside the free-form transcript.' },
-      parentRunId: { type: 'string', description: 'Optional parent runtime run ID that this message belongs to.' },
-      triggerTurn: { type: 'boolean', description: 'Whether this message should be treated as turn-triggering intent by future AgentControl implementations. This v1 tool queues the intent but does not directly resume a sub-agent.' },
-    },
-    required: ['author', 'recipient', 'body'],
-    description: 'Queue a structured parent/agent mailbox message in runtime state. Internal-state only; this does not directly resume a sub-agent turn.',
-  },
-  AgentMailboxList: {
-    type: 'object',
-    properties: {
-      recipient: { type: 'string', description: 'Optional recipient filter.' },
-      status: { type: 'string', enum: ['queued', 'delivered', 'acknowledged', 'resolved'], description: 'Optional mailbox status filter.' },
-      limit: { type: 'number', description: 'Maximum recent mailbox messages to return. Defaults to 20.' },
-    },
-    description: 'Read-only inspection of structured parent/agent mailbox messages. This does not deliver, resume, retry, or mutate agents.',
-  },
-  AgentMailboxGet: {
-    type: 'object',
-    properties: {
-      messageId: { type: 'string', description: 'Mailbox message ID returned by AgentMailboxSend or AgentMailboxList.' },
-    },
-    required: ['messageId'],
-    description: 'Read one structured parent/agent mailbox message by messageId. Read-only; this does not deliver, resume, retry, or mutate agents.',
-  },
-  AgentMailboxResolve: {
-    type: 'object',
-    properties: {
-      messageId: { type: 'string', description: 'Mailbox message ID to mark resolved.' },
-      reason: { type: 'string', description: 'Optional resolution reason recorded into runtime lifecycle evidence.' },
-    },
-    required: ['messageId'],
-    description: 'Mark a structured parent/agent mailbox message as resolved in runtime state. Internal-state only; this does not deliver, resume, retry, or mutate agents.',
-  },
   JobCancel: {
     type: 'object',
     properties: {
@@ -374,12 +277,9 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
     type: 'object',
     properties: {
       url: { type: 'string', description: 'HTTP(S) URL to capture through the platform-supervised browser job lifecycle.' },
-      provider: { type: 'string', enum: ['fetch_html', 'chrome_headless', 'chrome_cdp'], description: 'Browser provider. fetch_html uses HTTP fetch; chrome_headless shells out for screenshot/DOM; chrome_cdp uses Chrome DevTools Protocol for click replay.' },
-      chromeExecutablePath: { type: 'string', description: 'Optional Chrome/Chromium executable path for provider=chrome_headless or provider=chrome_cdp. When omitted, OwlCoda probes common local install paths.' },
+      provider: { type: 'string', enum: ['fetch_html', 'chrome_headless'], description: 'Browser provider. fetch_html uses HTTP fetch; chrome_headless shells out to a local Chrome/Chromium executable when configured.' },
+      chromeExecutablePath: { type: 'string', description: 'Optional Chrome/Chromium executable path for provider=chrome_headless. When omitted, OwlCoda probes common local install paths.' },
       waitForSelector: { type: 'string', description: 'Optional simple selector to require before the job is considered complete. Supports #id, .class, tag, and simple [attr=value] checks in the fetch_html provider.' },
-      clickSelector: { type: 'string', description: 'Optional selector to click during provider=chrome_cdp replay before final waits/artifact capture.' },
-      waitForResponseUrlIncludes: { type: 'string', description: 'Optional substring of a network response URL to wait for during provider=chrome_cdp replay.' },
-      waitAfterClickMs: { type: 'number', description: 'Optional delay after click for provider=chrome_cdp, before final selector/response checks and artifacts.' },
       artifactDir: { type: 'string', description: 'Optional directory for captured browser artifacts. Defaults to .owlcoda-browser-jobs under cwd.' },
       cwd: { type: 'string', description: 'Working directory used to resolve artifactDir. Defaults to the current process cwd.' },
       deadlineMs: { type: 'number', description: 'Total deadline in milliseconds. Defaults to 30000 and is capped by the runtime.' },
@@ -391,45 +291,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
       participatesInFinal: { type: 'boolean', description: 'Whether browser artifacts participate in final delivery. Defaults to RunWorkspace behavior.' },
     },
     required: ['url'],
-    description: 'Run a platform-supervised browser-style capture job. Providers: fetch_html, chrome_headless, and chrome_cdp. Records artifacts plus job lifecycle status.',
-  },
-  ApiJob: {
-    type: 'object',
-    properties: {
-      url: { type: 'string', description: 'HTTP(S) API URL to request through the platform-supervised API job lifecycle.' },
-      method: { type: 'string', enum: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'], description: 'HTTP method. Defaults to GET. GET/HEAD requests cannot include body.' },
-      headers: { type: 'object', description: 'Optional HTTP request headers. Values must be strings.' },
-      body: { type: 'string', description: 'Optional request body for POST, PUT, PATCH, or DELETE requests.' },
-      artifactDir: { type: 'string', description: 'Optional directory for response artifacts. Defaults to .owlcoda-api-jobs under cwd.' },
-      cwd: { type: 'string', description: 'Working directory used to resolve artifactDir. Defaults to the current process cwd.' },
-      deadlineMs: { type: 'number', description: 'Total deadline in milliseconds. Defaults to 30000 and is capped by the runtime.' },
-      runRef: { type: 'string', description: 'Optional RunWorkspace output root, .owlcoda-run directory, or manifest path. When provided, response artifacts are recorded in the run artifact registry.' },
-      environment: { type: 'string', description: 'Optional environment label recorded on RunWorkspace API artifacts.' },
-      project: { type: 'string', description: 'Optional project name recorded on RunWorkspace API artifacts.' },
-      origin: { type: 'string', description: 'Optional artifact origin. Defaults to api_job when runRef is provided.' },
-      stepId: { type: 'string', description: 'Optional step id recorded on RunWorkspace API artifacts.' },
-      participatesInFinal: { type: 'boolean', description: 'Whether API artifacts participate in final delivery. Defaults to RunWorkspace behavior.' },
-    },
-    required: ['url'],
-    description: 'Run a platform-supervised HTTP(S) API request. Records response artifacts plus job lifecycle status, timeout, and live cancellation.',
-  },
-  ServiceJob: {
-    type: 'object',
-    properties: {
-      action: { type: 'string', enum: ['start', 'status', 'stop', 'restart'], description: 'Service lifecycle action.' },
-      serviceName: { type: 'string', description: 'Stable local service name, such as demo-backend or vite-web.' },
-      command: { type: 'string', description: 'Executable to start. Required for start, and for restart unless the service is already running.' },
-      args: { type: 'array', description: 'Executable arguments. OwlCoda spawns without shell interpolation.', items: { type: 'string' } },
-      env: { type: 'object', description: 'Optional string environment overrides for the service process.' },
-      cwd: { type: 'string', description: 'Working directory used to start the service and resolve artifactDir.' },
-      port: { type: 'number', description: 'Optional local port recorded as the service external handle.' },
-      healthUrl: { type: 'string', description: 'Optional HTTP(S) health URL to wait for on start and probe on status.' },
-      artifactDir: { type: 'string', description: 'Optional directory for service logs. Defaults to .owlcoda-service-jobs under cwd.' },
-      deadlineMs: { type: 'number', description: 'Startup health deadline in milliseconds. Defaults to 30000 and is capped by the runtime.' },
-      gracefulStopMs: { type: 'number', description: 'Grace period for SIGTERM before OwlCoda escalates to SIGKILL. Defaults to 3000.' },
-    },
-    required: ['action', 'serviceName'],
-    description: 'Manage a local dev service through the platform job supervisor service lifecycle. Records PID, port, health, logs, cleanup, and recovery hints.',
+    description: 'Run a platform-supervised browser-style capture job. Providers: fetch_html and chrome_headless. Records artifacts plus job lifecycle status.',
   },
   JudgeBackendProbe: {
     type: 'object',
@@ -641,7 +503,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
       addBlocks: { type: 'array', items: { type: 'string' }, description: 'Task IDs this task should block' },
       removeBlocks: { type: 'array', items: { type: 'string' }, description: 'Task IDs to unblock' },
       stepId: { type: 'string', description: 'Step ID to update (triggers step-level update when present)' },
-      stepStatus: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'failed', 'blocked', 'skipped', 'cancelled'], description: 'New status for the step' },
+      stepStatus: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'failed', 'blocked', 'cancelled'], description: 'New status for the step' },
       touchedPaths: { type: 'array', items: { type: 'string' }, description: 'Paths touched during this step (appended to existing)' },
       verification: {
         type: 'array',
@@ -702,7 +564,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
           required: ['checkId', 'passed', 'checkedAt'],
         },
       },
-      failureReason: { type: 'string', description: 'Failure reason for failed/blocked/skipped steps (required when stepStatus is failed, blocked, or skipped)' },
+      failureReason: { type: 'string', description: 'Failure reason for failed/blocked steps (required when stepStatus is failed or blocked)' },
     },
     required: ['taskId'],
   },
@@ -919,6 +781,12 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
         type: 'string',
         description: 'Artifact origin for recordArtifact, e.g. write, edit, bash_detected, skill_asset_copy, manual.',
       },
+      environment: { type: 'string', description: 'Optional environment label for recordArtifact, e.g. dogfood, local, ci, smoke.' },
+      project: { type: 'string', description: 'Optional project or package name that produced the artifact.' },
+      runId: { type: 'string', description: 'Optional run id override for recordArtifact. Defaults to manifest.runId.' },
+      jobId: { type: 'string', description: 'Optional platform job id that produced the artifact.' },
+      artifactType: { type: 'string', description: 'Optional artifact type, e.g. browser_html, browser_text, html_deck, screenshot.' },
+      status: { type: 'string', enum: ['present', 'missing'], description: 'Optional artifact status filter for readLedger.' },
       stepId: { type: 'string', description: 'Optional step id for recordArtifact or recordEvent.' },
       participatesInFinal: { type: 'boolean', description: 'Whether the recorded artifact participates in final delivery.' },
       sourcePath: { type: 'string', description: 'Source path for copied skill assets.' },

@@ -15,7 +15,7 @@ import {
 } from '../src/admin-api.js'
 import { VERSION } from '../src/version.js'
 import type { PlatformCatalog } from '../src/models/catalog.js'
-import type { DryRunProviderPayload, ProviderProbeResult } from '../src/provider-probe.js'
+import type { DryRunProviderPayload, ProviderProbeResult, ProviderVisionProbeResult } from '../src/provider-probe.js'
 import { EndpointHealthCache } from '../src/endpoint-health-cache.js'
 
 type ProbeInput = DryRunProviderPayload | ConfiguredModel
@@ -87,6 +87,7 @@ function makeCatalog(): PlatformCatalog {
 
 function createProbeStub() {
   const calls: ProbeInput[] = []
+  const visionCalls: ProbeInput[] = []
   return {
     probe: {
       async test(input: ProbeInput): Promise<ProviderProbeResult> {
@@ -104,8 +105,24 @@ function createProbeStub() {
           backendModel: (input as { backendModel?: string }).backendModel ?? id,
         }
       },
+      async testVision(input: ProbeInput): Promise<ProviderVisionProbeResult> {
+        visionCalls.push(input)
+        const id = typeof (input as { id?: string }).id === 'string'
+          ? (input as { id: string }).id
+          : (input as DryRunProviderPayload).endpoint ?? 'none'
+        return {
+          supported: true,
+          status: 200,
+          latencyMs: 18,
+          detail: `vision-tested:${id}`,
+          provider: (input as { provider?: string }).provider ?? 'stub',
+          endpoint: (input as { endpoint?: string }).endpoint ?? '',
+          backendModel: (input as { backendModel?: string }).backendModel ?? id,
+        }
+      },
     },
     calls,
+    visionCalls,
   }
 }
 
@@ -176,6 +193,7 @@ function createHarness(options: {
     homeDir,
     getConfig: () => config,
     probeCalls: probeStub.calls,
+    visionProbeCalls: probeStub.visionCalls,
     auth,
     deps: {
       getConfig: () => config,
@@ -491,6 +509,66 @@ describe('admin api routes', () => {
       const dryRunBody = JSON.parse(dryRunRes.body)
       expect(dryRunBody.schemaVersion).toBe(ADMIN_API_SCHEMA_VERSION)
       expect(dryRunBody.result.ok).toBe(true)
+    } finally {
+      rmSync(harness.homeDir, { recursive: true, force: true })
+    }
+  })
+
+  it('optionally probes image input support on dry-run test-connection', async () => {
+    const harness = createHarness()
+
+    try {
+      const res = await invokeAdminRoute(harness.deps, '/admin/api/test-connection', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer test-admin-secret',
+          'content-type': 'application/json',
+        },
+        body: {
+          provider: 'openai-compat',
+          endpoint: 'https://api.example.com/v1',
+          backendModel: 'vision-model',
+          apiKey: 'dry-run-key',
+          probeVision: true,
+        },
+      })
+
+      expect(res.statusCode).toBe(200)
+      expect(harness.probeCalls).toHaveLength(1)
+      expect(harness.visionProbeCalls).toHaveLength(1)
+      const body = JSON.parse(res.body)
+      expect(body.result.ok).toBe(true)
+      expect(body.visionResult.supported).toBe(true)
+      expect(body.suggestedPatch).toEqual({ supportsImages: true })
+    } finally {
+      rmSync(harness.homeDir, { recursive: true, force: true })
+    }
+  })
+
+  it('can enable supportsImages on a saved model after a successful vision probe', async () => {
+    const harness = createHarness()
+
+    try {
+      const res = await invokeAdminRoute(harness.deps, '/admin/api/models/saved-cloud/test', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer test-admin-secret',
+          'content-type': 'application/json',
+        },
+        body: {
+          probeVision: true,
+          enableVisionOnSuccess: true,
+        },
+      })
+
+      expect(res.statusCode).toBe(200)
+      expect(harness.probeCalls).toHaveLength(1)
+      expect(harness.visionProbeCalls).toHaveLength(1)
+      const body = JSON.parse(res.body)
+      expect(body.result.ok).toBe(true)
+      expect(body.visionResult.supported).toBe(true)
+      expect(body.appliedPatch).toEqual({ supportsImages: true })
+      expect(harness.getConfig().models.find(model => model.id === 'saved-cloud')?.supportsImages).toBe(true)
     } finally {
       rmSync(harness.homeDir, { recursive: true, force: true })
     }

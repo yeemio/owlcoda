@@ -10,6 +10,7 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import type {
   Conversation,
+  ConversationModelIdentity,
   ConversationTurn,
   PendingRetryState,
   RuntimeEventLog,
@@ -27,6 +28,11 @@ import {
   snapshotAgentRunHistory,
   type AgentRunHistorySnapshot,
 } from './tools/agent.js'
+import {
+  restoreJobRegistry,
+  snapshotJobRegistry,
+  type JobRegistrySnapshot,
+} from './job-supervisor.js'
 import { applyRuntimeTruthResumeSnapshot } from './runtime-events.js'
 
 function getDefaultSessionsDir(): string {
@@ -43,6 +49,7 @@ export interface SessionFile {
   system: string
   maxTokens: number
   temperature?: number
+  tools?: Array<{ name: string; description?: string; input_schema: Record<string, unknown> }>
   turns: ConversationTurn[]
   createdAt: number
   updatedAt: number
@@ -53,10 +60,12 @@ export interface SessionFile {
   branchName?: string
   pendingRetry?: PendingRetryState
   taskState?: TaskExecutionState
+  modelIdentity?: ConversationModelIdentity
   runtimeRecoveryLedger?: RuntimeRecoveryLedger
   runtimeEventLog?: RuntimeEventLog
   taskStore?: TaskStoreSnapshot
   agentRunStore?: AgentRunHistorySnapshot
+  jobRegistry?: JobRegistrySnapshot
 }
 
 /** Ensure sessions directory exists. Returns true on success. */
@@ -92,7 +101,7 @@ function sessionPath(id: string): string {
  *  A one-time warning is printed on the first failure; subsequent saves
  *  fail silently so the REPL isn't spammed every turn. The in-memory
  *  conversation is never affected by persistence failure. */
-export function saveSession(conversation: Conversation, title?: string): string {
+export function saveSession(conversation: Conversation, title?: string, options: { cwd?: string } = {}): string {
   if (!ensureDir()) {
     warnPersistenceFailure('could not create sessions directory')
     return ''
@@ -110,16 +119,19 @@ export function saveSession(conversation: Conversation, title?: string): string 
     system: conversation.system,
     maxTokens: conversation.maxTokens,
     temperature: conversation.temperature,
+    tools: conversation.tools,
     turns: sanitizedTurns,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     title: title ?? existing?.title ?? deriveTitle(conversation),
-    cwd: process.cwd(),
+    cwd: options.cwd ?? process.cwd(),
     pendingRetry: conversation.options?.pendingRetry,
     taskState: conversation.options?.taskState,
+    modelIdentity: conversation.options?.modelIdentity,
     runtimeRecoveryLedger: conversation.options?.runtimeRecoveryLedger,
     runtimeEventLog: conversation.options?.runtimeEventLog,
     taskStore: snapshotTaskStore(conversation.id),
+    jobRegistry: snapshotJobRegistry(),
   }
   const agentRunStore = snapshotAgentRunHistory(conversation.id)
   if (agentRunStore.records.length > 0) {
@@ -190,6 +202,12 @@ export function restoreConversation(
       taskState: session.taskState,
     }
   }
+  if (session.modelIdentity) {
+    conversation.options = {
+      ...conversation.options,
+      modelIdentity: session.modelIdentity,
+    }
+  }
   if (session.runtimeRecoveryLedger) {
     conversation.options = {
       ...conversation.options,
@@ -206,6 +224,9 @@ export function restoreConversation(
     restoreTaskStore(session.taskStore)
   }
   restoreAgentRunHistory(session.agentRunStore, session.runtimeRecoveryLedger, session.id)
+  if (session.jobRegistry) {
+    restoreJobRegistry(session.jobRegistry)
+  }
   applyRuntimeTruthResumeSnapshot(conversation)
   return conversation
 }

@@ -202,6 +202,88 @@ describe('TaskCreate tool', () => {
     expect((out.metadata as any).task.longTaskSnapshot.resumeCommand).toBeUndefined()
   }, 10000)
 
+  it('command-backed task registers a platform job immediately', async () => {
+    const r = await tool.execute({
+      subject: 'job-backed command',
+      description: 'platform job registration',
+      command: 'sleep 0.2; echo job-done',
+      cwd: process.cwd(),
+    })
+
+    expect(r.isError).toBe(false)
+    const taskId = (r.metadata as any).task.id
+    expect((r.metadata as any).job).toMatchObject({
+      type: 'command',
+      status: 'running',
+      stage: 'running',
+      cwd: process.cwd(),
+      command: 'sleep 0.2; echo job-done',
+      recoveryHint: `TaskOutput task_id=${taskId} block=false`,
+    })
+    expect((r.metadata as any).job.jobId).toBe(`job:task:${taskId}`)
+    expect((r.metadata as any).job.pid).toEqual(expect.any(Number))
+
+    const out = await outputTool.execute({ task_id: taskId, block: false })
+    expect((out.metadata as any).task.job).toMatchObject({
+      jobId: `job:task:${taskId}`,
+      status: 'running',
+    })
+  }, 10000)
+
+  it('deadline timeout moves the platform job to timeout and records cleanup', async () => {
+    const r = await tool.execute({
+      subject: 'deadline command',
+      description: 'timeout and cleanup',
+      command: 'sleep 5; echo never',
+      deadlineMs: 60,
+    } as any)
+
+    expect(r.isError).toBe(false)
+    const taskId = (r.metadata as any).task.id
+    await new Promise(rr => setTimeout(rr, 250))
+
+    expect(hasRunningProcess(taskId)).toBe(false)
+    const out = await outputTool.execute({ task_id: taskId, block: false })
+    expect((out.metadata as any).task.job).toMatchObject({
+      jobId: `job:task:${taskId}`,
+      status: 'timeout',
+      terminationReason: 'deadline',
+      cleanupAttempted: true,
+      cleanupSucceeded: true,
+      remainingPids: [],
+    })
+    expect((out.metadata as any).task.longTaskSnapshot).toMatchObject({
+      longTaskId: `task:${taskId}`,
+      status: 'timeout',
+      timeoutKind: 'deadline',
+    })
+  }, 10000)
+
+  it('TaskStop marks the platform job cancelled with cleanup evidence', async () => {
+    const r = await tool.execute({
+      subject: 'cancel job',
+      description: 'cancel and cleanup',
+      command: 'tail -f /dev/null',
+    })
+    expect(r.isError).toBe(false)
+    const taskId = (r.metadata as any).task.id
+    await new Promise(rr => setTimeout(rr, 20))
+
+    const stop = await stopTool.execute({ task_id: taskId })
+    expect(stop.isError).toBe(false)
+    await new Promise(rr => setTimeout(rr, 120))
+
+    const out = await outputTool.execute({ task_id: taskId, block: false })
+    expect((out.metadata as any).task.job).toMatchObject({
+      jobId: `job:task:${taskId}`,
+      status: 'cancelled',
+      terminationReason: 'user_cancel',
+      cleanupAttempted: true,
+      cleanupSucceeded: true,
+      remainingPids: [],
+    })
+  }, 10000)
+
   it('captures non-zero exit code as completed', async () => {
     const r = await tool.execute({
       subject: 'fail',

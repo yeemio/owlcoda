@@ -1,6 +1,9 @@
 dist/
 node_modules/
 *.pid
+.owlcoda/app-server/
+.playwright-cli/
+assistant.delta
 *.tsbuildinfo
 .DS_Store
 

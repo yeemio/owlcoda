@@ -30,6 +30,7 @@ export {
   listConfiguredModels,
   probeRouterModels,
   overlayAvailability,
+  resolveModelCapabilitiesForRequest,
   resolveModelContextCapability,
   resolveModelContextWindow,
   responseModelName,
@@ -152,7 +153,7 @@ export interface OwlCodaConfig {
 const DEFAULTS: OwlCodaConfig = {
   port: 8019,
   host: '127.0.0.1',
-  routerUrl: 'http://127.0.0.1:8009',
+  routerUrl: 'http://127.0.0.1:8066',
   localRuntimeProtocol: 'auto',
   routerTimeoutMs: 600_000,
   models: [],
@@ -181,9 +182,12 @@ const BUILTIN_KIMI_MODEL_ID = 'kimi-code'
 const BUILTIN_KIMI_ALIAS = 'kimi'
 const DEFAULT_KIMI_ENDPOINT = 'https://api.kimi.com/coding/v1'
 const DEFAULT_KIMI_BACKEND_MODEL = 'kimi-for-coding'
+const BUILTIN_KIMI_K27_MODEL_ID = 'kimi-k2.7-code'
+const DEFAULT_KIMI_K27_ENDPOINT = 'https://api.moonshot.ai/v1'
+const DEFAULT_KIMI_K27_BACKEND_MODEL = 'kimi-k2.7-code'
 
 export function appendBuiltinEndpointModels(config: OwlCodaConfig): void {
-  const kimiApiKey = process.env['KIMI_API_KEY'] || process.env['MOONSHOT_API_KEY']
+  const kimiApiKey = process.env['KIMI_API_KEY']
   if (kimiApiKey) {
     const hasKimi = config.models.some(model =>
       model.id === BUILTIN_KIMI_MODEL_ID
@@ -224,6 +228,33 @@ export function appendBuiltinEndpointModels(config: OwlCodaConfig): void {
           }
           return h
         })(),
+      }))
+    }
+  }
+
+  const moonshotApiKey = process.env['MOONSHOT_API_KEY']
+  if (moonshotApiKey) {
+    const endpoint = process.env['OWLCODA_KIMI_K27_ENDPOINT'] || DEFAULT_KIMI_K27_ENDPOINT
+    const hasKimiK27 = config.models.some(model =>
+      model.id === BUILTIN_KIMI_K27_MODEL_ID
+      || model.endpoint === endpoint
+      || model.aliases.includes('kimi27')
+      || model.aliases.includes('kimi-2.7')
+    )
+
+    if (!hasKimiK27) {
+      config.models.push(normalizeModel({
+        id: BUILTIN_KIMI_K27_MODEL_ID,
+        label: 'Kimi K2.7 Code',
+        backendModel: process.env['OWLCODA_KIMI_K27_BACKEND_MODEL'] || DEFAULT_KIMI_K27_BACKEND_MODEL,
+        aliases: kimiApiKey
+          ? ['kimi27', 'kimi-2.7', 'kimi-vision']
+          : [BUILTIN_KIMI_ALIAS, 'kimi27', 'kimi-2.7', 'kimi-vision'],
+        provider: 'moonshot',
+        tier: 'cloud',
+        endpoint,
+        apiKey: moonshotApiKey,
+        contextWindow: 256_000,
       }))
     }
   }

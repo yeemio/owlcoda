@@ -82,6 +82,33 @@ export function getOpenApiSpec(): object {
           },
         },
       },
+      '/v1/structured-output/rerun': {
+        post: {
+          summary: 'Rerun a structured output role artifact',
+          description: 'Rerun one role/artifact-level structured output from a RunWorkspace artifact reference, preserving lineage and attempts without requiring the caller to restart the full business workflow.',
+          operationId: 'rerunStructuredOutput',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/StructuredOutputRerunRequest' },
+              },
+            },
+          },
+          responses: {
+            '200': {
+              description: 'Structured output rerun result with new artifact lineage.',
+              content: {
+                'application/json': {
+                  schema: { $ref: '#/components/schemas/StructuredOutputResponse' },
+                },
+              },
+            },
+            '400': { description: 'Invalid rerun request', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+            '502': { description: 'Upstream model error', content: { 'application/json': { schema: { $ref: '#/components/schemas/ErrorResponse' } } } },
+          },
+        },
+      },
       '/v1/chat/completions': {
         post: {
           summary: 'OpenAI Chat Completions',
@@ -812,11 +839,45 @@ export function getOpenApiSpec(): object {
               type: 'object',
               properties: {
                 forbiddenPhrases: { type: 'array', items: { type: 'string' } },
+                forbiddenPhraseAction: {
+                  type: 'string',
+                  enum: ['reject', 'sanitize_to_risks'],
+                  description: 'How forbidden phrases are handled. Defaults to reject; sanitize_to_risks replaces affected artifact strings and records risk entries.',
+                },
                 maxArrayItems: { type: 'integer' },
                 maxStringLength: { type: 'integer' },
               },
             },
+            persist: { type: 'boolean', description: 'When true, persist result artifacts into a RunWorkspace ledger' },
+            runRef: { type: 'string', description: 'RunWorkspace output root or .owlcoda-run path; required when persist=true' },
+            role: { type: 'string', description: 'Caller-defined role for role-level artifact lineage' },
+            threadId: { type: 'string' },
+            turnId: { type: 'string' },
+            runId: { type: 'string' },
+            taskId: { type: 'string' },
+            stepId: { type: 'string' },
+            jobId: { type: 'string' },
+            proofId: { type: 'string' },
+            previousArtifactId: { type: 'string', description: 'Parent structured output artifact for rerun lineage' },
+            inputRef: { type: 'string', description: 'RunWorkspace artifact id/path used as rerun input' },
+            artifactRef: { type: 'string', description: 'Alias for an artifact id/path used as rerun input' },
           },
+        },
+        StructuredOutputRerunRequest: {
+          allOf: [
+            { $ref: '#/components/schemas/StructuredOutputRequest' },
+            {
+              type: 'object',
+              required: ['model', 'runRef', 'previousArtifactId', 'role'],
+              properties: {
+                previousArtifactId: { type: 'string', description: 'Artifact id being rerun' },
+                inputRef: { type: 'string', description: 'RunWorkspace artifact id/path used as rerun input when user is omitted' },
+                artifactRef: { type: 'string', description: 'RunWorkspace artifact id/path used as rerun input when user is omitted' },
+                role: { type: 'string', description: 'Caller-defined role being rerun, e.g. evidence, analyst, judge' },
+                runRef: { type: 'string', description: 'RunWorkspace output root or .owlcoda-run path' },
+              },
+            },
+          ],
         },
         StructuredOutputAttempt: {
           type: 'object',
@@ -830,6 +891,18 @@ export function getOpenApiSpec(): object {
             parsed: { type: 'boolean' },
             schemaValid: { type: 'boolean' },
             error: { type: 'string' },
+          },
+        },
+        StructuredOutputCapabilityGate: {
+          type: 'object',
+          properties: {
+            ok: { type: 'boolean' },
+            source: { type: 'string', enum: ['declared', 'probed', 'manual', 'fallback'] },
+            requestedMaxTokens: { type: 'integer' },
+            appliedMaxTokens: { type: 'integer' },
+            errors: { type: 'array', items: { type: 'string' } },
+            warnings: { type: 'array', items: { type: 'string' } },
+            modelCapabilities: { type: 'object', description: 'Registry-derived model capability packet used for structured output gating' },
           },
         },
         StructuredOutputResponse: {
@@ -850,6 +923,16 @@ export function getOpenApiSpec(): object {
             inputTokens: { type: 'integer' },
             outputTokens: { type: 'integer' },
             durationMs: { type: 'integer' },
+            capabilityGate: { $ref: '#/components/schemas/StructuredOutputCapabilityGate' },
+            persisted: { type: 'boolean' },
+            artifactId: { type: 'string' },
+            attemptLedgerId: { type: 'string' },
+            runRef: { type: 'string' },
+            rerun: { type: 'boolean' },
+            parentArtifactId: { type: 'string' },
+            rerunOf: { type: 'string' },
+            inputRef: { type: 'string' },
+            artifactRef: { type: 'string' },
           },
         },
         ErrorResponse: {

@@ -1,6 +1,6 @@
 {
   "name": "owlcoda",
-  "version": "0.15.15",
+  "version": "0.15.16",
   "description": "OwlCoda — independent local-first AI coding platform with a native REPL, 42+ tools, and local model routing.",
   "license": "GPL-3.0-or-later",
   "author": "yeemio <yeemio@gmail.com>",
@@ -45,6 +45,11 @@
   "main": "dist/server.js",
   "exports": {
     ".": "./dist/server.js",
+    "./desktop": {
+      "types": "./dist/desktop.d.ts",
+      "import": "./dist/desktop.js",
+      "default": "./dist/desktop.js"
+    },
     "./headless": "./dist/headless.js",
     "./package.json": "./package.json"
   },
@@ -55,15 +60,9 @@
     "prebuild": "rm -rf dist",
     "build": "tsc && npm --prefix admin ci && npm --prefix admin run build && node scripts/postbuild.mjs",
     "dev": "node --import tsx src/cli.ts",
+    "desktop:dev": "node scripts/start-owlcoda-desktop-preview.mjs",
     "smoke": "bash scripts/smoke-test.sh",
-    "release:decision-packet": "npx tsx scripts/release-decision-packet.ts",
-    "release:install-smoke": "npx tsx scripts/release-install-smoke.ts",
-    "release:package-audit": "npx tsx scripts/release-package-audit.ts",
-    "release:prepublish-gate": "npm run build && npm run release:smoke && rm -rf .tmp/release-prepublish-gate && mkdir -p .tmp/release-prepublish-gate && npm_config_dry_run=false npm pack --ignore-scripts --pack-destination .tmp/release-prepublish-gate --json > .tmp/release-prepublish-gate/pack.json && npm run release:package-audit -- --tarball=.tmp/release-prepublish-gate/owlcoda-$npm_package_version.tgz && npm run release:install-smoke -- --tarball=.tmp/release-prepublish-gate/owlcoda-$npm_package_version.tgz",
-    "release:readiness": "npx tsx scripts/release-readiness.ts",
-    "release:surface-readiness": "npx tsx scripts/release-surface-readiness.ts",
     "release:smoke": "npx tsx scripts/release-smoke.ts",
-    "release:structured-output-smoke": "npx tsx scripts/release-structured-output-smoke.ts",
     "test": "vitest run",
     "test:serial": "vitest run --maxWorkers=1",
     "test:watch": "vitest",
@@ -71,16 +70,16 @@
     "smoke:fast": "OWLCODA_SMOKE_FAST=1 bash scripts/smoke-test.sh",
     "blackbox": "bash scripts/smoke-longtask-blackbox.sh",
     "blackbox:build": "OWLCODA_QA_BUILD=1 bash scripts/smoke-longtask-blackbox.sh",
-    "prepublishOnly": "npm run release:prepublish-gate"
+    "prepublishOnly": "npm run release:smoke"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "^0.104.2",
+    "@anthropic-ai/sdk": "^0.81.0",
     "@types/lodash-es": "^4.17.12",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.14",
-    "tsx": "^4.22.4",
+    "tsx": "^4.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^4.1.9"
+    "vitest": "^3.0.0"
   },
   "engines": {
     "node": ">=20.19.0"

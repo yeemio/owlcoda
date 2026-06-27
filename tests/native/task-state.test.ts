@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { mkdtemp, mkdir, realpath, symlink, writeFile, utimes, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -6,6 +7,7 @@ import { createConversation, addUserMessage } from '../../src/native/conversatio
 import {
   approveTaskWriteScope,
   buildContextPressurePrompt,
+  detectCrossRepoBoundaryCheckpoint,
   buildDeliveryCheckPrompt,
   buildTaskContinuePrompt,
   buildTaskRealignPrompt,
@@ -25,11 +27,139 @@ import {
   markTaskWriteScopeBlocked,
   recordBashArtifactProgress,
   recordToolExecutionProgress,
+  formatCrossRepoBoundaryCheckpoint,
   shouldTreatTaskRunStatusAsFailure,
 } from '../../src/native/task-state.js'
 import { admit as admitProvenanceRecord } from '../../src/native/write-provenance.js'
 
 describe('native task state', () => {
+  it('detects an external prompt boundary before source edits in a dirty target repo', async () => {
+    const currentRepo = await mkdtemp(join(tmpdir(), 'owlcoda-cross-boundary-current-'))
+    const promptRepo = await mkdtemp(join(tmpdir(), 'owlcoda-cross-boundary-prompt-'))
+    try {
+      const canonicalCurrentRepo = await realpath(currentRepo)
+      const canonicalPromptRepo = await realpath(promptRepo)
+      const promptPath = join(canonicalPromptRepo, 'prompts', '48b_owlmlx_tuned_lora_runtime_apply.md')
+      const currentSourcePath = join(canonicalCurrentRepo, 'src', 'native', 'runtime.ts')
+      const checkpoint = detectCrossRepoBoundaryCheckpoint({
+        currentRepo: canonicalCurrentRepo,
+        promptSource: promptPath,
+        promptSourceRepo: canonicalPromptRepo,
+        targetRepo: canonicalCurrentRepo,
+        branch: 'dirty-branch',
+        dirtyWorktreeSummary: {
+          count: 96,
+          sample: [' M src/native/runtime.ts', '?? tests/native/runtime.test.ts'],
+          truncated: true,
+        },
+        plannedWriteRoots: [currentSourcePath],
+        now: 1,
+      })
+
+      expect(checkpoint).not.toBeNull()
+      expect(checkpoint!.status).toBe('pending')
+      expect(checkpoint!.plannedWriteRoots).toEqual([currentSourcePath])
+      const text = formatCrossRepoBoundaryCheckpoint(checkpoint!)
+      expect(text).toContain('Cross-repo boundary checkpoint')
+      expect(text).toContain('- Current repo:')
+      expect(text).toContain('- Prompt source:')
+      expect(text).toContain('- Target repo:')
+      expect(text).toContain('- Dirty worktree summary:')
+      expect(text).toContain('- Planned write roots:')
+      expect(text).toContain('- Required user confirmation:')
+    } finally {
+      await rm(currentRepo, { recursive: true, force: true })
+      await rm(promptRepo, { recursive: true, force: true })
+    }
+  })
+
+  it('does not emit a cross-repo checkpoint for ordinary same-repo clean context', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'owlcoda-cross-boundary-same-'))
+    try {
+      const promptPath = join(repo, 'prompts', 'same-repo.md')
+      const checkpoint = detectCrossRepoBoundaryCheckpoint({
+        currentRepo: repo,
+        promptSource: promptPath,
+        promptSourceRepo: repo,
+        targetRepo: repo,
+        branch: 'main',
+        dirtyWorktreeSummary: { count: 0, sample: [], truncated: false },
+        plannedWriteRoots: [join(repo, 'src', 'native')],
+        now: 1,
+      })
+
+      expect(checkpoint).toBeNull()
+    } finally {
+      await rm(repo, { recursive: true, force: true })
+    }
+  })
+
+  it('does not treat a user-declared external output path as an external prompt source', async () => {
+    const targetRepo = await mkdtemp(join(tmpdir(), 'owlcoda-cross-boundary-output-target-'))
+    const outputDir = await mkdtemp(join(tmpdir(), 'owlcoda-run-cross-boundary-output-'))
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: targetRepo, stdio: 'ignore' })
+      for (let i = 0; i < 25; i++) {
+        await writeFile(join(targetRepo, `dirty-${i}.txt`), `${i}`)
+      }
+      const outputPath = join(outputDir, 'report.md')
+      const canonicalOutputPath = join(await realpath(outputDir), 'report.md')
+      const conversation = createConversation({ system: 'test', model: 'm' })
+      addUserMessage(conversation, `Write the report to \`${outputPath}\`.`)
+
+      const taskState = ensureTaskExecutionState(conversation, targetRepo)
+
+      expect(taskState.contract.allowedWritePaths).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          path: canonicalOutputPath,
+          kind: 'file',
+          origin: 'user-external',
+        }),
+      ]))
+      expect(taskState.run.crossRepoBoundaryCheckpoint).toBeNull()
+      expect(taskState.run.status).toBe('open')
+    } finally {
+      await rm(targetRepo, { recursive: true, force: true })
+      await rm(outputDir, { recursive: true, force: true })
+    }
+  })
+
+  it('holds an external prompt task at a boundary checkpoint until user confirmation', async () => {
+    const targetRepo = await mkdtemp(join(tmpdir(), 'owlcoda-cross-boundary-target-'))
+    const promptRepo = await mkdtemp(join(tmpdir(), 'owlcoda-cross-boundary-source-'))
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: targetRepo, stdio: 'ignore' })
+      await mkdir(join(targetRepo, 'src'), { recursive: true })
+      for (let i = 0; i < 25; i++) {
+        await writeFile(join(targetRepo, `dirty-${i}.txt`), `${i}`)
+      }
+      const promptPath = join(promptRepo, 'prompts', '48b_owlmlx_tuned_lora_runtime_apply.md')
+      await mkdir(join(promptRepo, 'prompts'), { recursive: true })
+      await writeFile(promptPath, 'Apply the runtime adapter change to the target repo.')
+
+      const conversation = createConversation({ system: 'test', model: 'm' })
+      addUserMessage(conversation, `执行 ${promptPath}，只修改 \`src/runtime.ts\`。`)
+      const taskState = ensureTaskExecutionState(conversation, targetRepo)
+
+      expect(taskState.run.status).toBe('waiting_user')
+      expect(taskState.run.crossRepoBoundaryCheckpoint?.status).toBe('pending')
+      expect(describeTaskExecutionState(taskState)).toContain('Cross-repo boundary checkpoint')
+
+      addUserMessage(conversation, '确认跨仓库边界，可以继续；但写入仍需正常审批。')
+      const confirmed = ensureTaskExecutionState(conversation, targetRepo)
+
+      expect(confirmed.run.status).toBe('open')
+      expect(confirmed.run.crossRepoBoundaryCheckpoint?.status).toBe('confirmed')
+
+      const writePath = join(targetRepo, 'docs', 'unplanned.md')
+      const violation = evaluateWriteGuard('write', { path: writePath, content: 'x' }, confirmed)
+      expect(violation?.message).toContain('Task contract blocked write')
+    } finally {
+      await rm(targetRepo, { recursive: true, force: true })
+      await rm(promptRepo, { recursive: true, force: true })
+    }
+  })
+
   it('ingests user declared write targets into provenance ledger', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'owlcoda-task-state-prov-declared-'))
     try {
@@ -1137,79 +1267,6 @@ describe('native task state', () => {
       expect(ext!.origin).toBe('user-external')
     })
 
-    it('recognizes Create or update section output paths as user-external origin', () => {
-      const cwd = join(tmpdir(), 'owlcoda-create-update-output')
-      const conversation = createConversation({ system: 'test', model: 'm' })
-      addUserMessage(
-        conversation,
-        [
-          'Expected output:',
-          '',
-          'Create or update:',
-          '',
-          '```text',
-          '/Users/yeemio/AI/gitrep/owlmodel/out/control/round62_owlcoda_push_open_pr_gate_20260623.md',
-          '```',
-        ].join('\n'),
-      )
-      const taskState = ensureTaskExecutionState(conversation, cwd)
-
-      const ext = taskState.contract.allowedWritePaths.find(
-        (s) => s.path.endsWith('/round62_owlcoda_push_open_pr_gate_20260623.md'),
-      )
-      expect(ext).toBeDefined()
-      expect(ext!.origin).toBe('user-external')
-      expect(taskState.contract.confidence).toBe('high')
-    })
-
-    it('recognizes "Write exactly one report file" section paths as user-external origin', () => {
-      const cwd = join(tmpdir(), 'owlcoda-write-report-output')
-      const conversation = createConversation({ system: 'test', model: 'm' })
-      addUserMessage(
-        conversation,
-        [
-          'Write exactly one report file:',
-          '',
-          '```text',
-          '/Users/yeemio/AI/gitrep/owlmodel/out/control/round67_headless_dogfood_worker_report_20260623.md',
-          '```',
-        ].join('\n'),
-      )
-      const taskState = ensureTaskExecutionState(conversation, cwd)
-
-      const ext = taskState.contract.allowedWritePaths.find(
-        (s) => s.path.endsWith('/round67_headless_dogfood_worker_report_20260623.md'),
-      )
-      expect(ext).toBeDefined()
-      expect(ext!.origin).toBe('user-external')
-      expect(taskState.contract.confidence).toBe('high')
-    })
-
-    it('recognizes "Write a triage report to" output paths as user-external origin', () => {
-      const cwd = join(tmpdir(), 'owlcoda-write-triage-report-output')
-      const conversation = createConversation({ system: 'test', model: 'm' })
-      addUserMessage(
-        conversation,
-        [
-          '## Output',
-          '',
-          'Write a triage report to:',
-          '',
-          '```text',
-          '/Users/yeemio/AI/gitrep/owlmodel/out/control/round73_owlcoda_exact_bash_command_guard_triage_20260623.md',
-          '```',
-        ].join('\n'),
-      )
-      const taskState = ensureTaskExecutionState(conversation, cwd)
-
-      const ext = taskState.contract.allowedWritePaths.find(
-        (s) => s.path.endsWith('/round73_owlcoda_exact_bash_command_guard_triage_20260623.md'),
-      )
-      expect(ext).toBeDefined()
-      expect(ext!.origin).toBe('user-external')
-      expect(taskState.contract.confidence).toBe('high')
-    })
-
     it('does NOT collect forbidden external paths (禁止写到 <abs path>)', () => {
       const cwd = join(tmpdir(), 'owlcoda-ext-forbidden')
       const conversation = createConversation({ system: 'test', model: 'm' })
@@ -2301,156 +2358,5 @@ describe('evaluateIntentGuard reasonKind', () => {
     const v = evaluateIntentGuard('write', 'neutral', {}, undefined, true)
     expect(v).not.toBeNull()
     expect(v!.reasonKind).toBe('probeplan')
-  })
-})
-
-// OC-20260623-17: model id / version tokens in backticks must NOT be
-// treated as allowed write paths. The path extractor's isLikelyPathCandidate
-// filter was passing them through because extname('mimo-v2.5-pro') → '.5-pro'.
-describe('OC-20260623-17 — model id / version tokens must not become write scopes', () => {
-  it('mimo-v2.5-pro in backticks must not be added to allowedWritePaths', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'oc17-mimo-'))
-    try {
-      const conversation = createConversation({ system: 'test', model: 'm' })
-      addUserMessage(
-        conversation,
-        'Use `mimo-v2.5-pro` only.\nDo not switch models.',
-      )
-      const taskState = ensureTaskExecutionState(conversation, cwd)
-      const canonicalCwd = await realpath(cwd)
-
-      expect(taskState.contract.allowedWritePaths.some(
-        (s) => s.path === join(canonicalCwd, 'mimo-v2.5-pro'),
-      )).toBe(false)
-      // scopeMode should be workspace (no explicit paths extracted)
-      expect(taskState.contract.scopeMode).toBe('workspace')
-    } finally {
-      await rm(cwd, { recursive: true, force: true })
-    }
-  })
-
-  it('gpt-4.1 in backticks must not be a write scope', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'oc17-gpt-'))
-    try {
-      const conversation = createConversation({ system: 'test', model: 'm' })
-      addUserMessage(
-        conversation,
-        'Use `gpt-4.1` for this task.',
-      )
-      const taskState = ensureTaskExecutionState(conversation, cwd)
-      const canonicalCwd = await realpath(cwd)
-
-      expect(taskState.contract.allowedWritePaths.some(
-        (s) => s.path === join(canonicalCwd, 'gpt-4.1'),
-      )).toBe(false)
-    } finally {
-      await rm(cwd, { recursive: true, force: true })
-    }
-  })
-
-  it('Qwen3.6-35B-A3B in backticks must not be a write scope', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'oc17-qwen-'))
-    try {
-      const conversation = createConversation({ system: 'test', model: 'm' })
-      addUserMessage(
-        conversation,
-        'Use `Qwen3.6-35B-A3B` as the model.',
-      )
-      const taskState = ensureTaskExecutionState(conversation, cwd)
-      const canonicalCwd = await realpath(cwd)
-
-      expect(taskState.contract.allowedWritePaths.some(
-        (s) => s.path === join(canonicalCwd, 'Qwen3.6-35B-A3B'),
-      )).toBe(false)
-    } finally {
-      await rm(cwd, { recursive: true, force: true })
-    }
-  })
-
-  it('v0.15.10 in backticks must not be a write scope', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'oc17-version-'))
-    try {
-      const conversation = createConversation({ system: 'test', model: 'm' })
-      addUserMessage(
-        conversation,
-        'Bump to `v0.15.10` before release.',
-      )
-      const taskState = ensureTaskExecutionState(conversation, cwd)
-      const canonicalCwd = await realpath(cwd)
-
-      expect(taskState.contract.allowedWritePaths.some(
-        (s) => s.path === join(canonicalCwd, 'v0.15.10'),
-      )).toBe(false)
-    } finally {
-      await rm(cwd, { recursive: true, force: true })
-    }
-  })
-
-  it('model id mixed with legitimate paths does not pollute write scope', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'oc17-mixed-'))
-    try {
-      const conversation = createConversation({ system: 'test', model: 'm' })
-      addUserMessage(
-        conversation,
-        'Use `mimo-v2.5-pro` only.\nWrite the result to `report.md`.',
-      )
-      const taskState = ensureTaskExecutionState(conversation, cwd)
-      const canonicalCwd = await realpath(cwd)
-
-      // model id must NOT appear
-      expect(taskState.contract.allowedWritePaths.some(
-        (s) => s.path === join(canonicalCwd, 'mimo-v2.5-pro'),
-      )).toBe(false)
-      // legitimate output filename SHOULD still appear
-      expect(taskState.contract.allowedWritePaths.some(
-        (s) => s.path === join(canonicalCwd, 'report.md'),
-      )).toBe(true)
-    } finally {
-      await rm(cwd, { recursive: true, force: true })
-    }
-  })
-
-  it('Create or update: absolute path still works as user-external', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'oc17-abs-'))
-    try {
-      const conversation = createConversation({ system: 'test', model: 'm' })
-      addUserMessage(
-        conversation,
-        [
-          'Create or update:',
-          '',
-          '```text',
-          '/tmp/out/report.md',
-          '```',
-        ].join('\n'),
-      )
-      const taskState = ensureTaskExecutionState(conversation, cwd)
-
-      // user-external absolute path must still be recognized
-      expect(taskState.contract.allowedWritePaths.some(
-        (s) => s.path.endsWith('/out/report.md') && s.origin === 'user-external',
-      )).toBe(true)
-    } finally {
-      await rm(cwd, { recursive: true, force: true })
-    }
-  })
-
-  it('explicit src/native/task-state.ts remains allowed when named', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'oc17-explicit-'))
-    try {
-      const conversation = createConversation({ system: 'test', model: 'm' })
-      addUserMessage(
-        conversation,
-        'Fix `src/native/task-state.ts` and its tests.',
-      )
-      const taskState = ensureTaskExecutionState(conversation, cwd)
-      const canonicalCwd = await realpath(cwd)
-
-      expect(taskState.contract.allowedWritePaths.some(
-        (s) => s.path === join(canonicalCwd, 'src', 'native'),
-      )).toBe(true)
-    } finally {
-      await rm(cwd, { recursive: true, force: true })
-    }
   })
 })

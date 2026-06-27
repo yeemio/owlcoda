@@ -85,39 +85,6 @@ describe('runtime event contract', () => {
     expect(conv.options?.runtimeEventLog?.events ?? []).toHaveLength(0)
   })
 
-  it('rejects new assistant response events that lack response summary fields', () => {
-    const conv = createConversation({ system: 'test', model: 'test-model' })
-
-    expect(() => appendRuntimeEvent(conv, {
-      kind: 'assistant_response_recorded',
-      turnId: 'turn-1',
-      payload: { response_index: 1 },
-    })).toThrow(/assistant_response|payload|response/)
-    expect(conv.options?.runtimeEventLog?.events ?? []).toHaveLength(0)
-  })
-
-  it('rejects new assistant stream events that lack stream summary fields', () => {
-    const conv = createConversation({ system: 'test', model: 'test-model' })
-
-    expect(() => appendRuntimeEvent(conv, {
-      kind: 'assistant_stream_recorded',
-      turnId: 'turn-1',
-      payload: { response_index: 1 },
-    })).toThrow(/assistant_stream|payload|stream/)
-    expect(conv.options?.runtimeEventLog?.events ?? []).toHaveLength(0)
-  })
-
-  it('rejects new assistant response disposition events that lack decision fields', () => {
-    const conv = createConversation({ system: 'test', model: 'test-model' })
-
-    expect(() => appendRuntimeEvent(conv, {
-      kind: 'assistant_response_disposition_recorded',
-      turnId: 'turn-1',
-      payload: { response_index: 1 },
-    })).toThrow(/assistant_response_disposition|payload|action/)
-    expect(conv.options?.runtimeEventLog?.events ?? []).toHaveLength(0)
-  })
-
   it('rejects new context replacement checkpoint install events without replay metadata', () => {
     const conv = createConversation({ system: 'test', model: 'test-model' })
 
@@ -154,64 +121,6 @@ describe('runtime event contract', () => {
       validation_status: 'valid',
     })
     expect((event.payload?.['normalized_report'] as any)?.kind).toBe('normalized_runtime_recovery_report')
-  })
-
-  it('rejects recovery guard hard-stop interventions without the guard payload contract', () => {
-    const conv = createConversation({ system: 'test', model: 'test-model' })
-
-    expect(() => appendRuntimeEvent(conv, {
-      kind: 'runtime_intervention',
-      checkpointId: 'long_task_checkpoint-1',
-      checkpointKind: 'long_task_checkpoint',
-      payload: {
-        intervention_kind: 'recovery_guard_hard_stop',
-      },
-    })).toThrow(/guard_kind/)
-    expect(conv.options?.runtimeEventLog?.events ?? []).toHaveLength(0)
-  })
-
-  it('rejects long-task wait-policy interventions without the wait payload contract', () => {
-    const conv = createConversation({ system: 'test', model: 'test-model' })
-
-    expect(() => appendRuntimeEvent(conv, {
-      kind: 'runtime_intervention',
-      itemId: 'sleep-policy-violation',
-      payload: {
-        intervention_kind: 'long_task_wait_policy',
-        action: 'skipped_tool_use',
-      },
-    })).toThrow(/long_task_id/)
-    expect(conv.options?.runtimeEventLog?.events ?? []).toHaveLength(0)
-  })
-
-  it('rejects post-recovery overrun interventions without the overrun payload contract', () => {
-    const conv = createConversation({ system: 'test', model: 'test-model' })
-
-    expect(() => appendRuntimeEvent(conv, {
-      kind: 'runtime_intervention',
-      itemId: 'tool-redundant-update',
-      checkpointId: 'verification_repair_checkpoint-1',
-      checkpointKind: 'verification_repair_checkpoint',
-      payload: {
-        intervention_kind: 'post_recovery_overrun_guard',
-        action: 'skipped_redundant_task_update',
-      },
-    })).toThrow(/tool_use_id/)
-    expect(conv.options?.runtimeEventLog?.events ?? []).toHaveLength(0)
-  })
-
-  it('rejects runtime truth resume report-gate interventions without the report-gate payload contract', () => {
-    const conv = createConversation({ system: 'test', model: 'test-model' })
-
-    expect(() => appendRuntimeEvent(conv, {
-      kind: 'runtime_intervention',
-      checkpointId: 'context_replacement_checkpoint-1',
-      checkpointKind: 'context_replacement_checkpoint',
-      payload: {
-        intervention_kind: 'runtime_truth_resume_report_gate',
-      },
-    })).toThrow(/action/)
-    expect(conv.options?.runtimeEventLog?.events ?? []).toHaveLength(0)
   })
 
   it('surfaces replay-time event contract diagnostics in runtime truth resume snapshots', () => {
@@ -405,30 +314,6 @@ describe('runtime event contract', () => {
         }, {
           id: 'runtime_event-3',
           seq: 3,
-          kind: 'runtime_intervention',
-          at: '2026-06-19T09:10:01.500Z',
-          conversationId: conv.id,
-          checkpointId: 'long_task_checkpoint-guard-1',
-          checkpointKind: 'long_task_checkpoint',
-          payload: {
-            intervention_kind: 'recovery_guard_hard_stop',
-            action: 'hard_stop',
-            guard_kind: 'long_task_checkpoint',
-            stop_reason: 'tool_loop',
-            ignored_tool_count: 1,
-            response_index: 1,
-            reason: 'Model ignored the long-task checkpoint and attempted tool use.',
-          },
-          contract: {
-            schema_version: 1,
-            kind: 'runtime_event_contract',
-            event_kind: 'runtime_intervention',
-            payload_schema: 'runtime_intervention.v1',
-            validation_status: 'valid',
-          },
-        }, {
-          id: 'runtime_event-4',
-          seq: 4,
           kind: 'checkpoint_resolved',
           at: '2026-06-19T09:10:02.000Z',
           conversationId: conv.id,
@@ -454,20 +339,14 @@ describe('runtime event contract', () => {
 
     expect(payload.event_contract_diagnostics).toMatchObject({
       kind: 'runtime_event_contract_diagnostics',
-      valid_event_count: 2,
+      valid_event_count: 1,
       malformed_event_count: 1,
     })
     expect(payload.event_contract_diagnostics.events).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        seq: 4,
+        seq: 3,
         status: 'malformed_saved_event',
         validation_errors: expect.arrayContaining(['contract.event_kind:mismatch']),
-      }),
-    ]))
-    expect(payload.runtime_interventions).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        intervention_kind: 'recovery_guard_hard_stop',
-        checkpoint_id: 'long_task_checkpoint-guard-1',
       }),
     ]))
   })

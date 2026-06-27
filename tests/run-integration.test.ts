@@ -18,7 +18,7 @@ import { parseArgs, VERSION } from '../dist/cli-core.js'
 
 const REPO_ROOT = join(import.meta.dirname, '..')
 const CLI_ENTRY = join(REPO_ROOT, 'src', 'cli.ts')
-const CLI_SUBPROCESS_TEST_TIMEOUT_MS = 60000
+const CLI_SUBPROCESS_TEST_TIMEOUT_MS = 15000
 
 const runtimeDirs = new Set<string>()
 const heldServers = new Set<Server>()
@@ -659,7 +659,7 @@ describe('run: tool_result transcript completeness', () => {
       runtimeDir,
       { HOME: isolatedHome },
       undefined,
-      60_000,
+      25_000,
     )
 
     expect(result.code).toBe(0)
@@ -725,7 +725,7 @@ describe('run: tool_result transcript completeness', () => {
       runtimeDir,
       { HOME: isolatedHome },
       undefined,
-      60_000,
+      25_000,
     )
 
     expect(result.code).toBe(1)
@@ -797,7 +797,7 @@ describe('run: tool_result transcript completeness', () => {
       runtimeDir,
       { HOME: isolatedHome },
       undefined,
-      60_000,
+      25_000,
     )
 
     expect(result.code).toBe(1)
@@ -872,7 +872,7 @@ describe('run: tool_result transcript completeness', () => {
       runtimeDir,
       { HOME: isolatedHome },
       undefined,
-      60_000,
+      25_000,
     )
 
     expect(result.code).toBe(1)
@@ -951,7 +951,7 @@ describe('run: tool_result transcript completeness', () => {
       runtimeDir,
       { OWLCODA_HEADLESS_RUNTIME_RESUME_RETRY_DELAY_MS: '0' },
       undefined,
-      60_000,
+      25_000,
     )
 
     expect(result.code).toBe(0)

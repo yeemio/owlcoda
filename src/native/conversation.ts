@@ -14,11 +14,9 @@ import type {
   AnthropicTextBlock,
   AnthropicToolUseBlock,
   Conversation,
+  ConversationModelIdentity,
   AssistantResponse,
-  AssistantStreamSummary,
   RuntimeRecoveryLedger,
-  RuntimeEventCheckpointKind,
-  RuntimeRecoveryCheckpointKind,
 } from './protocol/types.js'
 import type { AnthropicMessagesRequest } from './protocol/types.js'
 import { computeAdaptiveTimeoutMs } from '../middleware/adaptive-timeout.js'
@@ -112,7 +110,8 @@ import {
   consumeNudge,
   createNudgeCounter,
 } from './task-execution-policy.js'
-import { findNextStep, listTasks, getCurrentOrNextStep, taskHasOpenRequiredSteps, type Task, type TaskStep } from './tools/task-store.js'
+import { routeUserMessageImages, type UserImageAttachment } from './image-message.js'
+import { findNextStep, listTasks, getCurrentOrNextStep, getTaskStep, taskHasOpenRequiredSteps, type Task, type TaskStep } from './tools/task-store.js'
 import { decideRepairPolicy } from './repair-policy.js'
 import type { VerificationPackResult } from './verification-packs/types.js'
 import { classifyToolRisk } from './tool-risk.js'
@@ -808,11 +807,18 @@ export interface ConversationCallbacks {
   /** Called when text is streamed from the model */
   onText?: (text: string) => void
   /** Called when a tool starts executing */
-  onToolStart?: (toolName: string, input: Record<string, unknown>) => void
+  onToolStart?: (toolName: string, input: Record<string, unknown>, runtime?: ToolRuntimeItemMetadata) => void
   /** Called when a tool finishes */
-  onToolEnd?: (toolName: string, result: string, isError: boolean, durationMs: number, metadata?: Record<string, unknown>) => void
+  onToolEnd?: (
+    toolName: string,
+    result: string,
+    isError: boolean,
+    durationMs: number,
+    metadata?: Record<string, unknown>,
+    runtime?: ToolRuntimeItemMetadata,
+  ) => void
   /** Called with live progress updates during tool execution (e.g. bash output). */
-  onToolProgress?: (toolName: string, event: ToolProgressEvent) => void
+  onToolProgress?: (toolName: string, event: ToolProgressEvent, runtime?: ToolRuntimeItemMetadata) => void
   /** Called when the model responds (text + any tool calls) */
   onResponse?: (response: AssistantResponse) => void
   /** Called on error */
@@ -900,6 +906,12 @@ export interface ConversationCallbacks {
     /** 0.13.98 Batch B: ms taken by the LLM attempt (when one was made). */
     llmMs?: number
   }) => void
+}
+
+export interface ToolRuntimeItemMetadata {
+  toolUseId: string
+  itemId: string
+  runtimeTurnId: string
 }
 
 export interface ConversationLoopOptions {
@@ -1033,25 +1045,6 @@ export async function runConversationLoop(
   // schemaFailCounts; reset per-tool on a genuine success of that tool.
   const crossTurnFailureClasses = new Map<string, number>()
   const turnResponseSummary = createTurnResponseSummary()
-  let assistantResponseEventIndex = 0
-  const recordAssistantResponseEvent = (response: AssistantResponse, phase: AssistantResponseRuntimePhase): void => {
-    assistantResponseEventIndex += 1
-    if (response.streamSummary) {
-      appendRuntimeEvent(conversation, {
-        kind: 'assistant_stream_recorded',
-        turnId: runtimeTurnId,
-        payload: buildAssistantStreamRecordedPayload(response.streamSummary, assistantResponseEventIndex),
-      })
-    }
-    appendRuntimeEvent(conversation, {
-      kind: 'assistant_response_recorded',
-      turnId: runtimeTurnId,
-      payload: buildAssistantResponseRecordedPayload(response, {
-        responseIndex: assistantResponseEventIndex,
-        phase,
-      }),
-    })
-  }
   // 0.13.63 (D): rolling window of assistant text-output sizes (in
   // chars) for the most recent iterations. When the last 3 in a row
   // each exceed OUTPUT_BLOAT_CHARS, fire `[Runtime output-bloat check]`
@@ -1099,6 +1092,41 @@ export async function runConversationLoop(
   }
   const taskState = ensureTaskExecutionState(conversation, opts.cwd)
   ensureConversationProjectMap(conversation, opts.cwd)
+  const crossRepoBoundaryCheckpoint = taskState.run.crossRepoBoundaryCheckpoint
+  const crossRepoBoundaryNotice = crossRepoBoundaryCheckpoint?.status === 'pending'
+    ? describeTaskExecutionState(taskState)
+    : null
+  if (crossRepoBoundaryNotice && crossRepoBoundaryCheckpoint) {
+    finalText = crossRepoBoundaryNotice
+    lastStopReason = 'cross_repo_boundary_checkpoint'
+    opts.callbacks?.onNotice?.(crossRepoBoundaryNotice)
+    appendRuntimeEvent(conversation, {
+      kind: 'runtime_intervention',
+      turnId: runtimeTurnId,
+      payload: {
+        intervention_kind: 'cross_repo_boundary_checkpoint',
+        intervention: 'cross_repo_boundary_checkpoint',
+        current_repo: crossRepoBoundaryCheckpoint.currentRepo,
+        prompt_source: crossRepoBoundaryCheckpoint.promptSource,
+        target_repo: crossRepoBoundaryCheckpoint.targetRepo,
+        dirty_count: crossRepoBoundaryCheckpoint.dirtyWorktreeSummary?.count ?? null,
+        planned_write_roots: crossRepoBoundaryCheckpoint.plannedWriteRoots,
+      },
+    })
+    appendRuntimeEvent(conversation, {
+      kind: 'turn_completed',
+      turnId: runtimeTurnId,
+      payload: buildTurnCompletedPayload({
+        stop_reason: lastStopReason,
+        iterations,
+        usage: totalUsage,
+        finalText,
+        responseSummary: turnResponseSummary,
+        closure_reason: 'cross_repo_boundary_checkpoint',
+      }),
+    })
+    return { conversation, finalText, iterations, stopReason: lastStopReason, usage: totalUsage, runtimeFailure }
+  }
   let runtimeRecoveryLedgerAuditPending = injectRuntimeRecoveryLedgerPromptIfNeeded(conversation)
   if (runtimeRecoveryLedgerAuditPending) {
     const synthesisIds = activeLongTaskSynthesisIdsFromRecoveryLedger(conversation)
@@ -1894,7 +1922,6 @@ export async function runConversationLoop(
     if (opts.signal?.aborted) break
     recordResponseUsage(totalUsage, convergence, response)
     recordTurnResponseObserved(turnResponseSummary, response)
-    recordAssistantResponseEvent(response, turnPlan.mode === 'synthesis' ? 'synthesis_initial' : 'main')
 
     if (turnPlan.mode === 'synthesis') {
       const settled = await settleSynthesisResponse(
@@ -1904,7 +1931,6 @@ export async function runConversationLoop(
         taskState,
         totalUsage,
         turnResponseSummary,
-        recordAssistantResponseEvent,
         opts,
       )
       if (settled.response) {
@@ -1923,31 +1949,9 @@ export async function runConversationLoop(
         })
         finalText = settled.response.text
         lastStopReason = settled.response.stopReason
-        recordAssistantResponseDispositionEvent(conversation, runtimeTurnId, {
-          responseIndex: assistantResponseEventIndex,
-          phase: 'synthesis',
-          action: 'accept_synthesis_text',
-          stopReason: settled.response.stopReason ?? 'end_turn',
-          textChars: settled.response.text.length,
-          originalToolUseCount: response.toolUseBlocks.length,
-          executedToolCount: 0,
-          deferredToolCount: 0,
-          runtimeToolCount: 0,
-        })
         break
       }
       lastStopReason = settled.stopReason
-      recordAssistantResponseDispositionEvent(conversation, runtimeTurnId, {
-        responseIndex: assistantResponseEventIndex,
-        phase: 'synthesis',
-        action: 'synthesis_hard_stop',
-        stopReason: settled.stopReason,
-        textChars: response.text.length,
-        originalToolUseCount: response.toolUseBlocks.length,
-        executedToolCount: 0,
-        deferredToolCount: 0,
-        runtimeToolCount: 0,
-      })
       break
     }
 
@@ -1995,7 +1999,6 @@ export async function runConversationLoop(
               intervention_kind: 'runtime_truth_resume_report_gate',
               action,
               report_source: reportSource,
-              checkpoint_id: runtimeTruthResumeReportPending.checkpointId,
               ...(assistantHasReportText && !assistantReportSatisfied
                 ? {
                     original_report_source: 'assistant_text',
@@ -2035,14 +2038,6 @@ export async function runConversationLoop(
             'Stopping before tool execution so saved runtime truth is not overwritten by speculative recovery.'
           opts.callbacks?.onError?.(loopReason)
           markRuntimeTruthResumeReportGate(conversation, 'ignored')
-          recordRecoveryGuardHardStopEvent(conversation, runtimeTurnId, {
-            checkpointId: runtimeTruthResumeReportPending.checkpointId,
-            checkpointKind: runtimeTruthResumeCheckpointKind,
-            guardKind: 'runtime_truth_resume_report_gate',
-            reason: loopReason,
-            ignoredToolCount: response.toolUseBlocks.length > 0 ? response.toolUseBlocks.length : 1,
-            responseIndex: assistantResponseEventIndex,
-          })
           recordGateEvent({
             ts: Date.now(),
             kind: 'tool_loop',
@@ -2081,7 +2076,6 @@ export async function runConversationLoop(
                 intervention_kind: 'runtime_truth_resume_report_gate',
                 action: 'replaced_incomplete_report_with_synthetic_report',
                 report_source: 'runtime_synthetic',
-                checkpoint_id: runtimeTruthResumeReportPending.checkpointId,
                 original_report_source: 'assistant_text',
                 missing_report_fields: reportValidation.missingReportFields,
               },
@@ -2112,14 +2106,6 @@ export async function runConversationLoop(
           'Model ignored the long-task synthesis checkpoint and attempted tool use instead of a structured JSON recovery synthesis report. ' +
           'Stopping to avoid reconstructing scattered long-task state from memory.'
         opts.callbacks?.onError?.(loopReason)
-        recordRecoveryGuardHardStopEvent(conversation, runtimeTurnId, {
-          checkpointId: latestActiveRecoveryCheckpointId(conversation, 'long_task_synthesis_checkpoint'),
-          checkpointKind: 'long_task_synthesis_checkpoint',
-          guardKind: 'long_task_synthesis_checkpoint',
-          reason: loopReason,
-          ignoredToolCount: response.toolUseBlocks.length > 0 ? response.toolUseBlocks.length : 1,
-          responseIndex: assistantResponseEventIndex,
-        })
         recordGateEvent({
           ts: Date.now(),
           kind: 'tool_loop',
@@ -2143,14 +2129,6 @@ export async function runConversationLoop(
           'Model ignored the long-task checkpoint and attempted tool use instead of a structured JSON checkpoint report. ' +
           'Stopping to avoid continued no-value polling.'
         opts.callbacks?.onError?.(loopReason)
-        recordRecoveryGuardHardStopEvent(conversation, runtimeTurnId, {
-          checkpointId: latestActiveRecoveryCheckpointId(conversation, 'long_task_checkpoint'),
-          checkpointKind: 'long_task_checkpoint',
-          guardKind: 'long_task_checkpoint',
-          reason: loopReason,
-          ignoredToolCount: response.toolUseBlocks.length > 0 ? response.toolUseBlocks.length : 1,
-          responseIndex: assistantResponseEventIndex,
-        })
         recordGateEvent({
           ts: Date.now(),
           kind: 'tool_loop',
@@ -2182,14 +2160,6 @@ export async function runConversationLoop(
           `step ${blockedTaskFinalizationPending.stepId} and attempted tool use instead of a structured JSON blocked report. ` +
           'Stopping to avoid continued no-value task churn.'
         opts.callbacks?.onError?.(loopReason)
-        recordRecoveryGuardHardStopEvent(conversation, runtimeTurnId, {
-          checkpointId: latestActiveRecoveryCheckpointId(conversation, 'blocked_task_checkpoint'),
-          checkpointKind: 'blocked_task_checkpoint',
-          guardKind: 'blocked_task_checkpoint',
-          reason: loopReason,
-          ignoredToolCount: response.toolUseBlocks.length > 0 ? response.toolUseBlocks.length : 1,
-          responseIndex: assistantResponseEventIndex,
-        })
         recordGateEvent({
           ts: Date.now(),
           kind: 'tool_loop',
@@ -2227,14 +2197,6 @@ export async function runConversationLoop(
           `Model ignored the child-run synthesis checkpoint for ${childRunSynthesisPending.childCount} child runs ` +
           'and attempted tool use instead of a structured JSON per-child report. Stopping to avoid hiding child failures.'
         opts.callbacks?.onError?.(loopReason)
-        recordRecoveryGuardHardStopEvent(conversation, runtimeTurnId, {
-          checkpointId: latestActiveRecoveryCheckpointId(conversation, 'child_run_synthesis_checkpoint'),
-          checkpointKind: 'child_run_synthesis_checkpoint',
-          guardKind: 'child_run_synthesis_checkpoint',
-          reason: loopReason,
-          ignoredToolCount: response.toolUseBlocks.length > 0 ? response.toolUseBlocks.length : 1,
-          responseIndex: assistantResponseEventIndex,
-        })
         recordGateEvent({
           ts: Date.now(),
           kind: 'tool_loop',
@@ -2271,14 +2233,6 @@ export async function runConversationLoop(
             `step ${pending.stepId} and attempted tool use instead of a structured JSON repair report. ` +
             'Stopping to avoid repeated verification churn or workaround completion.'
           opts.callbacks?.onError?.(loopReason)
-          recordRecoveryGuardHardStopEvent(conversation, runtimeTurnId, {
-            checkpointId: latestActiveRecoveryCheckpointId(conversation, 'verification_repair_checkpoint'),
-            checkpointKind: 'verification_repair_checkpoint',
-            guardKind: 'verification_repair_checkpoint',
-            reason: loopReason,
-            ignoredToolCount: response.toolUseBlocks.length > 0 ? response.toolUseBlocks.length : 1,
-            responseIndex: assistantResponseEventIndex,
-          })
           recordGateEvent({
             ts: Date.now(),
             kind: 'tool_loop',
@@ -2362,17 +2316,6 @@ export async function runConversationLoop(
     }
 
     const effectiveResponse = applyToolExecutionPlan(response, toolPlan.executeBlocks)
-    recordAssistantResponseDispositionEvent(conversation, runtimeTurnId, {
-      responseIndex: assistantResponseEventIndex,
-      phase: 'main',
-      action: assistantResponseDispositionAction(effectiveResponse),
-      stopReason: effectiveResponse.stopReason ?? 'unknown',
-      textChars: effectiveResponse.text.length,
-      originalToolUseCount: response.toolUseBlocks.length,
-      executedToolCount: toolPlan.executeBlocks.length,
-      deferredToolCount: Math.max(0, response.toolUseBlocks.length - toolPlan.executeBlocks.length),
-      runtimeToolCount: toolPlan.runtimeBlocks.length,
-    })
     opts.callbacks?.onResponse?.(effectiveResponse)
 
     // Detect stall: tool_use with no blocks, or empty response entirely
@@ -3237,8 +3180,6 @@ interface TurnResponseSummary {
   emptyResponseCount: number
 }
 
-type AssistantResponseRuntimePhase = 'main' | 'synthesis_initial' | 'synthesis_fallback'
-
 function createTurnResponseSummary(): TurnResponseSummary {
   return {
     assistantResponseCount: 0,
@@ -3247,119 +3188,6 @@ function createTurnResponseSummary(): TurnResponseSummary {
     executedToolUseCount: 0,
     emptyResponseCount: 0,
   }
-}
-
-function buildAssistantResponseRecordedPayload(
-  response: AssistantResponse,
-  input: { responseIndex: number; phase: AssistantResponseRuntimePhase },
-): Record<string, unknown> {
-  const text = response.text ?? ''
-  return {
-    response_index: input.responseIndex,
-    phase: input.phase,
-    stop_reason: response.stopReason ?? 'unknown',
-    text_chars: text.length,
-    text_digest: digestRuntimeEventText(text),
-    tool_use_count: response.toolUseBlocks.length,
-    has_tool_use: response.hasToolUse,
-    thinking_block_count: response.thinkingBlocks.length,
-    input_tokens: response.usage.inputTokens,
-    output_tokens: response.usage.outputTokens,
-    is_empty_response: !text && response.toolUseBlocks.length === 0 && !response.hasToolUse,
-  }
-}
-
-function buildAssistantStreamRecordedPayload(
-  summary: AssistantStreamSummary,
-  responseIndex: number,
-): Record<string, unknown> {
-  return {
-    response_index: responseIndex,
-    source: summary.source,
-    text_delta_count: summary.textDeltaCount,
-    text_chars: summary.textChars,
-    thinking_start_count: summary.thinkingStartCount,
-    thinking_delta_count: summary.thinkingDeltaCount,
-    thinking_chars: summary.thinkingChars,
-    thinking_end_count: summary.thinkingEndCount,
-    usage_update_count: summary.usageUpdateCount,
-    input_tokens: summary.inputTokens,
-    output_tokens: summary.outputTokens,
-  }
-}
-
-function recordAssistantResponseDispositionEvent(
-  conversation: Conversation,
-  turnId: string,
-  input: {
-    responseIndex: number
-    phase: 'main' | 'synthesis'
-    action: string
-    stopReason: string
-    textChars: number
-    originalToolUseCount: number
-    executedToolCount: number
-    deferredToolCount: number
-    runtimeToolCount: number
-  },
-): void {
-  appendRuntimeEvent(conversation, {
-    kind: 'assistant_response_disposition_recorded',
-    turnId,
-    payload: {
-      response_index: input.responseIndex,
-      phase: input.phase,
-      action: input.action,
-      stop_reason: input.stopReason,
-      text_chars: input.textChars,
-      original_tool_use_count: input.originalToolUseCount,
-      executed_tool_count: input.executedToolCount,
-      deferred_tool_count: input.deferredToolCount,
-      runtime_tool_count: input.runtimeToolCount,
-    },
-  })
-}
-
-function recordRecoveryGuardHardStopEvent(
-  conversation: Conversation,
-  turnId: string,
-  input: {
-    checkpointId?: string
-    checkpointKind: RuntimeEventCheckpointKind
-    guardKind: string
-    reason: string
-    ignoredToolCount: number
-    responseIndex: number
-  },
-): void {
-  appendRuntimeEvent(conversation, {
-    kind: 'runtime_intervention',
-    turnId,
-    ...(input.checkpointId ? { checkpointId: input.checkpointId } : {}),
-    checkpointKind: input.checkpointKind,
-    payload: {
-      intervention_kind: 'recovery_guard_hard_stop',
-      action: 'hard_stop',
-      guard_kind: input.guardKind,
-      gate_kind: input.guardKind,
-      stop_reason: 'tool_loop',
-      ignored_tool_count: input.ignoredToolCount,
-      response_index: input.responseIndex,
-      reason: input.reason,
-      ...(input.checkpointId ? { checkpoint_id: input.checkpointId } : {}),
-    },
-  })
-}
-
-function assistantResponseDispositionAction(response: AssistantResponse): string {
-  if (response.toolUseBlocks.length > 0) return 'execute_tools'
-  if (response.text.trim()) return 'accept_final_text'
-  if (response.stopReason === 'tool_use' && response.hasToolUse) return 'stalled_tool_use_without_blocks'
-  return 'empty_response'
-}
-
-function digestRuntimeEventText(text: string): string {
-  return `sha256:${createHash('sha256').update(text).digest('hex')}`
 }
 
 function recordTurnResponseObserved(summary: TurnResponseSummary, response: AssistantResponse): void {
@@ -3448,6 +3276,12 @@ function buildPostRecoveryOverrunResult(
     return true
   })
   if (!checkpoint) return null
+  if (stepId && stepStatus === 'completed') {
+    const currentStep = getTaskStep(taskId, stepId)
+    if (currentStep && currentStep.status !== 'completed') {
+      return null
+    }
+  }
 
   const scope = stepId
     ? `task ${taskId} step ${stepId}`
@@ -4433,7 +4267,6 @@ async function settleSynthesisResponse(
   taskState: ActiveTaskState,
   totalUsage: { inputTokens: number; outputTokens: number; requestCount: number },
   turnResponseSummary: TurnResponseSummary,
-  recordAssistantResponseEvent: (response: AssistantResponse, phase: AssistantResponseRuntimePhase) => void,
   opts: ConversationLoopOptions,
 ): Promise<{ response?: AssistantResponse; stopReason: string }> {
   const validation = validateFinalAnswerContract(response)
@@ -4464,7 +4297,6 @@ async function settleSynthesisResponse(
 
   recordResponseUsage(totalUsage, convergence, fallbackResponse)
   recordTurnResponseObserved(turnResponseSummary, fallbackResponse)
-  recordAssistantResponseEvent(fallbackResponse, 'synthesis_fallback')
   const fallbackValidation = validateFinalAnswerContract(fallbackResponse)
   if (fallbackValidation.ok) {
     convergence.phase = 'exploring'
@@ -5238,27 +5070,16 @@ async function sendRequest(
             // callback so interactive UIs still render the assistant reply.
             opts.callbacks?.onText?.(response.text)
           }
-          response.streamSummary = buildJsonStreamFallbackSummary(response)
           recordAdaptiveSuccess(adaptiveKey)
           return response
         }
         let streamedResponse: AssistantResponse
-        const streamSummary = createAssistantStreamSummary('sse')
         try {
           streamedResponse = await consumeStream(
             res.body,
-            (text) => {
-              recordAssistantStreamText(streamSummary, text)
-              opts.callbacks?.onText?.(text)
-            },
-            (tokens) => {
-              recordAssistantStreamUsage(streamSummary, tokens)
-              opts.callbacks?.onUsage?.(tokens)
-            },
-            (event, text) => {
-              recordAssistantStreamThinking(streamSummary, event, text)
-              opts.callbacks?.onThinking?.(event, text)
-            },
+            opts.callbacks?.onText,
+            opts.callbacks?.onUsage,
+            opts.callbacks?.onThinking,
             opts.signal,
           )
         } catch (err: unknown) {
@@ -5285,7 +5106,6 @@ async function sendRequest(
           recordAdaptiveSuccess(adaptiveKey)
           return fallbackResponse
         }
-        streamedResponse.streamSummary = streamSummary
         recordAdaptiveSuccess(adaptiveKey)
         return streamedResponse
       }
@@ -5335,67 +5155,6 @@ async function sendRequest(
   }
 
   throw lastError ?? new Error('Request failed after retries')
-}
-
-function createAssistantStreamSummary(source: AssistantStreamSummary['source']): AssistantStreamSummary {
-  return {
-    source,
-    textDeltaCount: 0,
-    textChars: 0,
-    thinkingStartCount: 0,
-    thinkingDeltaCount: 0,
-    thinkingChars: 0,
-    thinkingEndCount: 0,
-    usageUpdateCount: 0,
-    inputTokens: 0,
-    outputTokens: 0,
-  }
-}
-
-function buildJsonStreamFallbackSummary(response: AssistantResponse): AssistantStreamSummary {
-  return {
-    source: 'json_stream_fallback',
-    textDeltaCount: response.text ? 1 : 0,
-    textChars: response.text.length,
-    thinkingStartCount: response.thinkingBlocks.length > 0 ? 1 : 0,
-    thinkingDeltaCount: response.thinkingBlocks.length,
-    thinkingChars: response.thinkingBlocks.reduce((sum, block) => sum + block.thinking.length, 0),
-    thinkingEndCount: response.thinkingBlocks.length > 0 ? 1 : 0,
-    usageUpdateCount: response.usage.inputTokens > 0 || response.usage.outputTokens > 0 ? 1 : 0,
-    inputTokens: response.usage.inputTokens,
-    outputTokens: response.usage.outputTokens,
-  }
-}
-
-function recordAssistantStreamText(summary: AssistantStreamSummary, text: string): void {
-  summary.textDeltaCount += 1
-  summary.textChars += text.length
-}
-
-function recordAssistantStreamThinking(
-  summary: AssistantStreamSummary,
-  event: 'start' | 'delta' | 'end',
-  text: string | undefined,
-): void {
-  if (event === 'start') {
-    summary.thinkingStartCount += 1
-  } else if (event === 'delta') {
-    summary.thinkingDeltaCount += 1
-    summary.thinkingChars += text?.length ?? 0
-  } else {
-    summary.thinkingEndCount += 1
-  }
-}
-
-function recordAssistantStreamUsage(
-  summary: AssistantStreamSummary,
-  tokens: { input: number; output: number },
-): void {
-  if (tokens.input !== summary.inputTokens || tokens.output !== summary.outputTokens) {
-    summary.usageUpdateCount += 1
-    summary.inputTokens = tokens.input
-    summary.outputTokens = tokens.output
-  }
 }
 
 function shouldRetryEmptyStream(response: AssistantResponse): boolean {
@@ -7181,19 +6940,6 @@ function activeLongTaskSynthesisIdsFromRecoveryLedger(conversation: Conversation
   return latest ? longTaskIdsFromPayload(latest.payload) : []
 }
 
-function latestActiveRecoveryCheckpointId(
-  conversation: Conversation,
-  kind: RuntimeRecoveryCheckpointKind,
-): string | undefined {
-  return getUnresolvedRuntimeRecoveryCheckpoints(conversation.options?.runtimeRecoveryLedger)
-    .filter((checkpoint) =>
-      checkpoint.kind === kind
-      && (checkpoint.disposition ?? 'active') === 'active'
-    )
-    .at(-1)
-    ?.id
-}
-
 function activeVerificationRepairCheckpointFromRecoveryLedger(
   conversation: Conversation,
 ): VerificationRepairCheckpoint | null {
@@ -7950,6 +7696,11 @@ async function executeTools(
 
   for (const block of blocks) {
     if (signal?.aborted) break
+    const runtimeItemMetadata: ToolRuntimeItemMetadata = {
+      toolUseId: block.id,
+      itemId: block.id,
+      runtimeTurnId: runtimeTurnId ?? '',
+    }
 
     // 0.13.62 (B): schema-fail dispatcher-level short-circuit. Pre-
     // flight check using the same checkers the tools themselves use.
@@ -8449,7 +8200,7 @@ async function executeTools(
         },
       })
     }
-    callbacks?.onToolStart?.(block.name, block.input)
+    callbacks?.onToolStart?.(block.name, block.input, runtimeItemMetadata)
 
     // --- Slice 1: shadow-record execution start (guarded; taskState may be undefined) ---
     if (proposedToolCall && taskState) {
@@ -8477,7 +8228,7 @@ async function executeTools(
     }
     if (callbacks?.onToolProgress) {
       context.onProgress = (event: ToolProgressEvent) => {
-        if (!signal?.aborted) callbacks.onToolProgress!(block.name, event)
+        if (!signal?.aborted) callbacks.onToolProgress!(block.name, event, runtimeItemMetadata)
       }
     }
     if (callbacks?.onUserQuestion) {
@@ -8617,13 +8368,14 @@ async function executeTools(
         recordCrossTurnFailureClass(crossTurnFailureClasses, completedAttempt)
       }
     }
-    callbacks?.onToolEnd?.(
-      block.name,
-      displayOutput,
-      result.result.isError,
-      result.durationMs,
-      result.result.metadata,
-    )
+      callbacks?.onToolEnd?.(
+        block.name,
+        displayOutput,
+        result.result.isError,
+        result.durationMs,
+        result.result.metadata,
+        runtimeItemMetadata,
+      )
     results.push(result)
     if (result.result.metadata?.['terminalToolFailure'] === true) {
       const reason = typeof result.result.metadata['terminalFailureReason'] === 'string'
@@ -9079,8 +8831,9 @@ export function createConversation(opts: {
   model: string
   maxTokens?: number
   tools?: Conversation['tools']
+  modelIdentity?: ConversationModelIdentity
 }): Conversation {
-  return {
+  const conversation: Conversation = {
     id: `conv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     system: opts.system,
     turns: [],
@@ -9088,6 +8841,13 @@ export function createConversation(opts: {
     model: opts.model,
     maxTokens: opts.maxTokens ?? resolveDefaultMaxOutputTokens(),
   }
+  if (opts.modelIdentity) {
+    conversation.options = {
+      ...conversation.options,
+      modelIdentity: opts.modelIdentity,
+    }
+  }
+  return conversation
 }
 
 /**
@@ -9132,10 +8892,60 @@ export function resolveDefaultMaxOutputTokens(): number {
 }
 
 /** Add a user message to the conversation. */
-export function addUserMessage(conversation: Conversation, text: string): void {
+export function addUserMessage(conversation: Conversation, text: string | AnthropicContentBlock[]): void {
+  const routed = typeof text === 'string'
+    ? routeUserMessageImages(text, {
+        model: conversation.options?.modelIdentity ?? {
+          id: conversation.model,
+          backendModel: conversation.model,
+        },
+        threadId: conversation.id,
+      })
+    : null
   conversation.turns.push({
     role: 'user',
-    content: [{ type: 'text', text }],
+    content: routed
+      ? routed.blocks
+      : (text as AnthropicContentBlock[]).map(block => ({ ...block })),
     timestamp: Date.now(),
+  })
+  if (routed?.attachments.length) {
+    recordImageInputRoutingEvent(conversation, routed.attachments, routed.capability)
+  }
+}
+
+function recordImageInputRoutingEvent(
+  conversation: Conversation,
+  attachments: UserImageAttachment[],
+  capability: ReturnType<typeof routeUserMessageImages>['capability'],
+): void {
+  const attached = attachments.filter(attachment => attachment.status === 'attached')
+  const blocked = attachments.filter(attachment => attachment.status === 'blocked')
+  appendRuntimeEvent(conversation, {
+    kind: 'runtime_intervention',
+    factRefs: {
+      threadId: conversation.id,
+      ...(attachments.length === 1 ? {
+        artifactId: attachments[0]!.artifactId,
+        artifactPath: attachments[0]!.path,
+      } : {}),
+      coveredIds: attachments.map(attachment => attachment.artifactId),
+    },
+    payload: {
+      intervention_kind: 'image_input_routed',
+      model: conversation.model,
+      vision_status: capability?.status ?? 'unknown',
+      vision_source: capability?.source ?? 'unknown',
+      attached_count: attached.length,
+      blocked_count: blocked.length,
+      artifacts: attachments.map(attachment => ({
+        artifact_id: attachment.artifactId,
+        path: attachment.path,
+        media_type: attachment.mediaType,
+        size: attachment.size,
+        status: attachment.status,
+        ...(attachment.reason ? { reason: attachment.reason } : {}),
+      })),
+    },
   })
 }

@@ -55,7 +55,7 @@ export function getConfigDisplay(configPath?: string): ConfigDisplay {
       isDefault: m.id === effectiveDefaultId,
       configuredDefault: m.default === true,
       aliases: m.aliases || [],
-      capabilityLabels: capabilities.sustainedWork.labels,
+      capabilityLabels: [...capabilities.sustainedWork.labels, ...capabilities.vision.labels],
       contextLabels: capabilities.context.labels,
     }
   }) : []
@@ -83,7 +83,7 @@ export function getConfigDisplay(configPath?: string): ConfigDisplay {
     configExists,
     version: VERSION,
     listen: config ? `${config.host}:${config.port}` : '127.0.0.1:8019',
-    routerUrl: config?.routerUrl ?? 'http://127.0.0.1:8009',
+    routerUrl: config?.routerUrl ?? 'http://127.0.0.1:8066',
     models,
     launchMode,
     skillInjection: config?.skillInjection !== false,

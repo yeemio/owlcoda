@@ -7,12 +7,17 @@ import type {
   RuntimeRecoveryCheckpointKind,
   RuntimeRecoveryCheckpointRecord,
   RuntimeRecoveryLedger,
+  RuntimeFactRefs,
 } from './protocol/types.js'
 import {
   recordCheckpointDispositionChangedEvent,
   recordCheckpointInstalledEvent,
   recordCheckpointResolvedEvent,
 } from './runtime-events.js'
+import {
+  mergeRuntimeFactRefs,
+  runtimeFactRefsFromPayload,
+} from './runtime-facts.js'
 
 const MAX_RUNTIME_RECOVERY_CHECKPOINTS = 20
 
@@ -23,6 +28,10 @@ export function appendRuntimeRecoveryCheckpoint(
     payload: Record<string, unknown>
     inspectCommands?: string[]
     generatedAt?: string
+    threadId?: string
+    turnId?: string
+    runId?: string
+    factRefs?: RuntimeFactRefs
   },
 ): RuntimeRecoveryCheckpointRecord {
   const generatedAt = input.generatedAt ?? stringField(input.payload['generated_at']) ?? new Date().toISOString()
@@ -31,11 +40,25 @@ export function appendRuntimeRecoveryCheckpoint(
   const inspectCommands = normalizeInspectCommands(input.inspectCommands ?? extractInspectCommands(input.payload))
   const id = `${input.kind}-${previous.length + 1}`
   const identity = checkpointIdentity(input.kind, input.payload)
+  const factRefs = mergeRuntimeFactRefs(
+    runtimeFactRefsFromPayload(input.payload),
+    input.factRefs,
+    {
+      threadId: input.threadId ?? conversation.id,
+      turnId: input.turnId,
+      runId: input.runId,
+      checkpointId: id,
+    },
+  )
   const record: RuntimeRecoveryCheckpointRecord = {
     id,
     kind: input.kind,
     generatedAt,
     conversationId: conversation.id,
+    ...(factRefs?.threadId ? { threadId: factRefs.threadId } : {}),
+    ...(factRefs?.turnId ? { turnId: factRefs.turnId } : {}),
+    ...(factRefs?.runId ? { runId: factRefs.runId } : {}),
+    ...(factRefs ? { factRefs } : {}),
     disposition: 'active',
     payload: input.payload,
     inspectCommands,
@@ -92,6 +115,10 @@ export function appendContextReplacementCheckpoint(
   return appendRuntimeRecoveryCheckpoint(conversation, {
     kind: 'context_replacement_checkpoint',
     generatedAt,
+    turnId: input.sourceTurnId,
+    factRefs: {
+      turnId: input.sourceTurnId,
+    },
     payload: {
       schema_version: 1,
       kind: 'context_replacement_checkpoint',

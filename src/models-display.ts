@@ -66,7 +66,7 @@ export async function getModelsDisplay(configPath?: string): Promise<ModelsDispl
       tier: getTier(m),
       alias: m.aliases?.[0],
       backend: m.channel,
-      capabilityLabels: capabilities.sustainedWork.labels,
+      capabilityLabels: [...capabilities.sustainedWork.labels, ...capabilities.vision.labels],
       contextLabels: capabilities.context.labels,
     }
   })

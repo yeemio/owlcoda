@@ -45,19 +45,30 @@ npm config set prefix ~/.local && export PATH=~/.local/bin:$PATH
 npm install -g owlcoda@latest
 ```
 
-## Quickstart — Ollama in 30 seconds
+## Quickstart — owlmlx local runtime
 
-Starting from zero, with no model configured:
+With owlmlx already running on `:8066`, initialize OwlCoda against that runtime:
 
 ```bash
-brew install ollama && ollama serve &
-ollama pull qwen2.5-coder:7b
-owlcoda init --endpoint http://127.0.0.1:11434/v1
+owlcoda init --endpoint http://127.0.0.1:8066
 owlcoda
 ```
 
-LM Studio uses `http://127.0.0.1:1234/v1`; vLLM uses `http://127.0.0.1:8000/v1`.
-Cloud providers are configured in `owlcoda admin`.
+OwlCoda's committed local default is owlmlx on `http://127.0.0.1:8066`. Ollama
+uses `http://127.0.0.1:11434/v1`; LM Studio uses
+`http://127.0.0.1:1234/v1`; vLLM uses `http://127.0.0.1:8000/v1`. Cloud
+providers are configured in `owlcoda admin`.
+
+### Images and Kimi K2.7
+
+Vision-capable OpenAI-compatible models can receive local images from the REPL.
+Paste a local image path, insert one with `@image.png`, or use a Markdown image
+reference like `![shot](./shot.png)`; OwlCoda sends the image as a base64
+multimodal content block. Supported extensions are `png`, `jpg`/`jpeg`, `webp`,
+and `gif`.
+
+For Kimi K2.7 Code, set `MOONSHOT_API_KEY` or add the **Kimi K2.7 Code** provider
+in `owlcoda admin`, then use `--model kimi27` or `--model kimi-k2.7-code`.
 
 Don't start by asking it to rewrite a large project. In a repo you know, begin
 read-only, then give it one small, clearly-scoped change:
@@ -119,11 +130,13 @@ array.
 ```json
 {
   "port": 8019,
+  "routerUrl": "http://127.0.0.1:8066",
   "models": [
     {
-      "id": "qwen2.5-coder:32b",
-      "backendModel": "qwen2.5-coder:32b",
-      "endpoint": "http://127.0.0.1:11434/v1",
+      "id": "Qwen3.6-27B",
+      "label": "Qwen3.6 27B (owlmlx)",
+      "backendModel": "Qwen3.6-27B",
+      "endpoint": "http://127.0.0.1:8066/v1",
       "aliases": ["balanced", "default"],
       "default": true
     }

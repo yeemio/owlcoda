@@ -56,6 +56,17 @@ owlcoda
 LM Studio 用 `http://127.0.0.1:1234/v1`，vLLM 用 `http://127.0.0.1:8000/v1`。
 云端 provider 在 `owlcoda admin` 里配。
 
+### 图片与 Kimi K2.7
+
+支持视觉输入的 OpenAI-compatible 模型可以在 REPL 里直接接收本地图片。你可以
+粘贴本地图片路径、用 `@image.png` 插入，或写 Markdown 图片引用
+`![shot](./shot.png)`；OwlCoda 会把图片转成 base64 多模态 content block 发送。
+当前支持 `png`、`jpg`/`jpeg`、`webp`、`gif`。
+
+Kimi K2.7 Code 走 Kimi API Platform / Moonshot 的 OpenAI-compatible 路由：
+设置 `MOONSHOT_API_KEY`，或在 `owlcoda admin` 里添加 **Kimi K2.7 Code** provider，
+然后用 `--model kimi27` 或 `--model kimi-k2.7-code`。
+
 别一上来就让它改大项目。先在一个你熟悉的仓库里从只读任务开始，再给它一个
 范围明确的小改动：
 

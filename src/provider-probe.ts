@@ -33,6 +33,18 @@ export interface ProviderProbeResult {
   resolvedModel?: ModelDescriptor
 }
 
+export interface ProviderVisionProbeResult {
+  supported: boolean
+  status: number
+  latencyMs: number
+  detail: string
+  provider: string
+  endpoint: string
+  backendModel: string
+  credentialSource?: 'env' | 'config' | 'unset'
+  bodySnippet?: string
+}
+
 export type ProviderProbeMode = 'models' | 'chat' | 'messages'
 
 export interface DryRunProviderPayload {
@@ -112,6 +124,25 @@ const PROVIDER_TEMPLATES: ProviderTemplate[] = [
     backendModelHint: 'Default is kimi-for-coding. Change only if your Kimi model picker shows a newer exact id.',
     featured: true,
     docs: 'https://www.kimi.com/code/docs/en/kimi-code-cli/configuration/providers-and-models.html',
+  },
+  {
+    id: 'kimi-k2.7-code',
+    provider: 'moonshot',
+    label: 'Kimi K2.7 Code',
+    tier: 'cloud',
+    endpoint: 'https://api.moonshot.ai/v1',
+    defaultModelId: 'kimi-k2.7-code',
+    defaultModelLabel: 'Kimi K2.7 Code',
+    defaultBackendModel: 'kimi-k2.7-code',
+    defaultAliases: ['kimi27', 'kimi-2.7', 'kimi-vision'],
+    defaultContextWindow: 256000,
+    testPath: '/chat/completions',
+    testMode: 'chat',
+    family: 'single-model',
+    description: 'Kimi API Platform route for K2.7 Code. Supports text and base64 image inputs through OpenAI-compatible chat completions.',
+    backendModelHint: 'Default is kimi-k2.7-code. Use kimi-k2.7-code-highspeed only if your account has access.',
+    featured: true,
+    docs: 'https://platform.kimi.ai/docs/guide/kimi-k2-7-code-quickstart',
   },
   {
     id: 'deepseek',
@@ -322,12 +353,12 @@ const PROVIDER_TEMPLATES: ProviderTemplate[] = [
     label: 'owlmlx (Apple MLX)',
     tier: 'local',
     endpoint: 'http://localhost:8066/v1',
-    testPath: '/models',
+    testPath: '/openai/models',
     testMode: 'models',
     family: 'multi-model',
     description: 'Local owlmlx runtime for Apple Silicon. Default port 8066, OpenAI-compatible surface.',
     endpointHint: 'Default is http://localhost:8066/v1. owlmlx exposes /v1/openai/models for visibility and /v1/chat/completions for generation.',
-    backendModelHint: 'Enter the exact model id owlmlx has loaded (visible via /v1/openai/models).',
+    backendModelHint: 'Enter the exact model id visible via owlmlx /v1/openai/models.',
     requiresBackendModel: true,
   },
 ]
@@ -466,6 +497,88 @@ export class ProviderProbe {
     }
   }
 
+  async testVision(input: ConfiguredModel | DryRunProviderPayload): Promise<ProviderVisionProbeResult> {
+    const request = normalizeProbeInput(input)
+    const credentialSource: 'env' | 'config' | 'unset' = request.model.apiKeySource ?? 'unset'
+    const breadcrumb = {
+      provider: request.providerId,
+      backendModel: request.model.backendModel ?? request.model.id ?? '',
+      credentialSource,
+    }
+
+    if (!request.model.endpoint) {
+      return {
+        supported: false,
+        status: 400,
+        latencyMs: 0,
+        detail: 'Missing endpoint',
+        ...breadcrumb,
+        endpoint: '',
+      }
+    }
+
+    if (!this.deps.fetch) {
+      return {
+        supported: false,
+        status: 500,
+        latencyMs: 0,
+        detail: 'Fetch API is unavailable',
+        ...breadcrumb,
+        endpoint: request.model.endpoint,
+      }
+    }
+
+    const { url, init } = buildVisionProbeRequest(request)
+    const start = this.deps.now()
+    try {
+      const response = await this.deps.fetch(url, init)
+      const latencyMs = Math.max(0, this.deps.now() - start)
+      const rawBody = await response.text()
+      if (!response.ok) {
+        const diagnostic = createProviderHttpDiagnostic(response.status, rawBody, {
+          provider: request.providerId,
+          model: request.model.id,
+          endpointUrl: request.model.endpoint,
+          headers: request.model.headers,
+          upstreamRequestId: upstreamRequestIdFromHeaders(response.headers),
+        })
+        return {
+          supported: false,
+          status: diagnostic.status ?? response.status,
+          latencyMs,
+          detail: formatProviderDiagnostic(diagnostic, { includeRequestId: true }),
+          ...breadcrumb,
+          endpoint: url,
+          ...(rawBody ? { bodySnippet: truncateBody(rawBody) } : {}),
+        }
+      }
+
+      return {
+        supported: true,
+        status: response.status,
+        latencyMs,
+        detail: `${request.providerId} vision probe succeeded for ${breadcrumb.backendModel || request.model.id}`,
+        ...breadcrumb,
+        endpoint: url,
+      }
+    } catch (error) {
+      const diagnostic = classifyProviderRequestError(error, {
+        provider: request.providerId,
+        model: request.model.id,
+        endpointUrl: request.model.endpoint,
+        headers: request.model.headers,
+      })
+      return {
+        supported: false,
+        status: diagnostic.status ?? 0,
+        latencyMs: Math.max(0, this.deps.now() - start),
+        detail: formatProviderDiagnostic(diagnostic, { includeRequestId: true }),
+        ...breadcrumb,
+        endpoint: url,
+      }
+    }
+  }
+
   /**
    * Best-effort GET /models to discover the endpoint's real model. Returns
    * undefined on any failure (no list, non-2xx, parse error, network/timeout) —
@@ -543,11 +656,12 @@ function buildRequest(request: ProbeRequest): { url: string, init: RequestInit }
   const apiKey = request.model.apiKey
 
   if (usesAnthropicMessagesProbe(request)) {
+    const testPath = request.testMode === 'messages' ? (request.testPath ?? '/v1/messages') : '/v1/messages'
     if (apiKey) headers.set('x-api-key', apiKey)
     headers.set('anthropic-version', '2023-06-01')
     headers.set('content-type', 'application/json')
     return {
-      url: resolveTargetUrl(request.model.endpoint!, request.testPath ?? '/v1/messages', 'anthropic'),
+      url: resolveTargetUrl(request.model.endpoint!, testPath, 'anthropic'),
       init: {
         method: 'POST',
         headers,
@@ -590,6 +704,71 @@ function buildRequest(request: ProbeRequest): { url: string, init: RequestInit }
   }
 }
 
+function buildVisionProbeRequest(request: ProbeRequest): { url: string, init: RequestInit } {
+  const headers = new Headers(request.model.headers ?? {})
+  const timeoutMs = resolveProbeTimeoutMs(request.model.timeoutMs)
+  const apiKey = request.model.apiKey
+
+  if (usesAnthropicMessagesProbe(request)) {
+    const testPath = request.testMode === 'messages' ? (request.testPath ?? '/v1/messages') : '/v1/messages'
+    if (apiKey) headers.set('x-api-key', apiKey)
+    headers.set('anthropic-version', '2023-06-01')
+    headers.set('content-type', 'application/json')
+    return {
+      url: resolveTargetUrl(request.model.endpoint!, testPath, 'anthropic'),
+      init: {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: request.model.backendModel,
+          max_tokens: 1,
+          messages: [{
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: VISION_PROBE_PNG_BASE64,
+                },
+              },
+              { type: 'text', text: VISION_PROBE_TEXT },
+            ],
+          }],
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+    }
+  }
+
+  if (apiKey) headers.set('authorization', `Bearer ${apiKey}`)
+  headers.set('content-type', 'application/json')
+  const testPath = request.testMode === 'chat' ? (request.testPath ?? '/chat/completions') : '/chat/completions'
+  return {
+    url: resolveTargetUrl(request.model.endpoint!, testPath, request.provider),
+    init: {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: request.model.backendModel,
+        max_tokens: 1,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: VISION_PROBE_TEXT },
+            {
+              type: 'image_url',
+              image_url: { url: `data:image/png;base64,${VISION_PROBE_PNG_BASE64}` },
+            },
+          ],
+        }],
+      }),
+      signal: AbortSignal.timeout(timeoutMs),
+    },
+  }
+}
+
 function resolveProbeTimeoutMs(timeoutMs: number | undefined): number {
   return typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
     ? timeoutMs
@@ -600,6 +779,9 @@ const PROBE_BODY_SNIPPET_MAX = 500
 
 // Best-effort /models discovery should not stall the Test-connection UI.
 const MODELS_LIST_PROBE_TIMEOUT_MS = 5_000
+
+const VISION_PROBE_TEXT = 'Reply with one short word describing the image.'
+const VISION_PROBE_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lwP2WQAAAABJRU5ErkJggg=='
 
 /**
  * Build the `/models` URL for an endpoint base, independent of resolveTargetUrl

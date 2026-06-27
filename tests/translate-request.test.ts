@@ -34,6 +34,38 @@ describe('translateRequest', () => {
     expect(result.messages[0]).toEqual({ role: 'system', content: 'Part 1\n\nPart 2' })
   })
 
+  it('translates user image blocks into OpenAI multimodal image_url parts', () => {
+    const result = translateRequest({
+      model: 'x',
+      max_tokens: 100,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'text', text: 'Describe this screenshot.' },
+          {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: 'image/png',
+              data: 'aW1hZ2U=',
+            },
+          },
+        ],
+      }],
+    }, 'kimi-k2.7-code')
+
+    expect(result.messages).toEqual([{
+      role: 'user',
+      content: [
+        { type: 'text', text: 'Describe this screenshot.' },
+        {
+          type: 'image_url',
+          image_url: { url: 'data:image/png;base64,aW1hZ2U=' },
+        },
+      ],
+    }])
+  })
+
   it('translates assistant message with tool_use', () => {
     const result = translateRequest({
       model: 'x', max_tokens: 100,

@@ -26,6 +26,9 @@ afterEach(() => {
   delete process.env['OWLCODA_LOG_LEVEL']
   delete process.env['OWLCODA_CATALOG_PATH']
   delete process.env['KIMI_API_KEY']
+  delete process.env['MOONSHOT_API_KEY']
+  delete process.env['OWLCODA_KIMI_K27_ENDPOINT']
+  delete process.env['OWLCODA_KIMI_K27_BACKEND_MODEL']
 })
 
 describe('loadConfig', () => {
@@ -40,7 +43,7 @@ describe('loadConfig', () => {
       const cfg = loadConfig()
       expect(cfg.port).toBe(8019)
       expect(cfg.host).toBe('127.0.0.1')
-      expect(cfg.routerUrl).toBe('http://127.0.0.1:8009')
+      expect(cfg.routerUrl).toBe('http://127.0.0.1:8066')
       expect(cfg.routerTimeoutMs).toBe(600_000)
       expect(cfg.logLevel).toBe('info')
       expect(cfg.models).toEqual([])
@@ -126,6 +129,52 @@ describe('loadConfig', () => {
         'User-Agent': 'KimiCLI/1.33.0',
       })
       expect(cfg.modelMap['kimi']).toBe(kimi?.backendModel)
+    } finally {
+      process.chdir(original)
+      delete process.env['OWLCODA_HOME']
+    }
+  })
+
+  it('auto-appends Kimi K2.7 Code through Moonshot when MOONSHOT_API_KEY is set', () => {
+    process.env['MOONSHOT_API_KEY'] = 'sk-moonshot-auto'
+    process.env['OWLCODA_CATALOG_PATH'] = join(TEST_DIR, 'no-catalog.json')
+    process.env['OWLCODA_HOME'] = TEST_DIR
+    const original = process.cwd()
+    process.chdir(TEST_DIR)
+    try {
+      const cfg = loadConfig()
+      const kimi = cfg.models.find(m => m.id === 'kimi-k2.7-code')
+      expect(kimi).toBeDefined()
+      expect(kimi?.label).toBe('Kimi K2.7 Code')
+      expect(kimi?.provider).toBe('moonshot')
+      expect(kimi?.endpoint).toBe('https://api.moonshot.ai/v1')
+      expect(kimi?.backendModel).toBe('kimi-k2.7-code')
+      expect(kimi?.apiKey).toBe('sk-moonshot-auto')
+      expect(kimi?.aliases).toContain('kimi')
+      expect(kimi?.aliases).toContain('kimi27')
+      expect(cfg.modelMap['kimi']).toBe('kimi-k2.7-code')
+    } finally {
+      process.chdir(original)
+      delete process.env['OWLCODA_HOME']
+    }
+  })
+
+  it('keeps the legacy kimi alias on KIMI_API_KEY when both Kimi keys are set', () => {
+    process.env['KIMI_API_KEY'] = 'sk-kimi-auto'
+    process.env['MOONSHOT_API_KEY'] = 'sk-moonshot-auto'
+    process.env['OWLCODA_CATALOG_PATH'] = join(TEST_DIR, 'no-catalog.json')
+    process.env['OWLCODA_HOME'] = TEST_DIR
+    const original = process.cwd()
+    process.chdir(TEST_DIR)
+    try {
+      const cfg = loadConfig()
+      const legacy = cfg.models.find(m => m.id === 'kimi-code')
+      const k27 = cfg.models.find(m => m.id === 'kimi-k2.7-code')
+      expect(legacy?.aliases).toContain('kimi')
+      expect(k27?.aliases).not.toContain('kimi')
+      expect(k27?.aliases).toContain('kimi27')
+      expect(cfg.modelMap['kimi']).toBe('kimi-for-coding')
+      expect(cfg.modelMap['kimi27']).toBe('kimi-k2.7-code')
     } finally {
       process.chdir(original)
       delete process.env['OWLCODA_HOME']

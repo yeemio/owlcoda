@@ -19,12 +19,20 @@ import {
   __resetAgentRunHistoryForTesting,
   restoreAgentRunHistory,
 } from '../../src/native/tools/agent.js'
+import { createJobGetTool } from '../../src/native/tools/job.js'
 import {
   createTask,
   getTask,
   resetTaskStore,
   updateTaskStep,
 } from '../../src/native/tools/task-store.js'
+import {
+  createJob,
+  finishJob,
+  getJob,
+  resetJobSupervisor,
+  startJob,
+} from '../../src/native/job-supervisor.js'
 
 // Use a temp dir to avoid polluting real sessions
 const REAL_DIR = getSessionsDir()
@@ -1052,6 +1060,56 @@ describe('Native Session Persistence', { timeout: SESSION_IO_TEST_TIMEOUT_MS }, 
       status: 'failed',
       failureCategory: 'agent:watchdog_timeout',
       timeoutKind: 'idle',
+    })
+  })
+
+  it('persists and restores platform job supervisor records for resume inspection', async () => {
+    resetJobSupervisor()
+    createJob({
+      jobId: 'job:agent:agent-session-job',
+      type: 'agent',
+      stage: 'queued',
+      tool: 'Agent',
+      provider: 'mimo-v2.5-pro',
+      command: 'Slow child audit',
+      recoveryHint: 'AgentRunGet agentId=agent-session-job',
+      source: { kind: 'agent', id: 'agent-session-job' },
+    })
+    startJob('job:agent:agent-session-job', {
+      stage: 'running',
+      externalHandle: 'agent:agent-session-job',
+    })
+    finishJob('job:agent:agent-session-job', 'timeout', {
+      stage: 'timeout',
+      terminationReason: 'agent:watchdog_timeout',
+      error: 'watchdog timeout while running Slow child audit',
+    })
+
+    const conv = createConversation({ system: 'test', model: 'mimo-v2.5-pro' })
+    ;(conv as any).id = testId
+    addUserMessage(conv, 'resume platform job')
+    saveSession(conv, 'job registry session')
+
+    const loaded = loadSession(testId) as any
+    expect(loaded.jobRegistry?.jobs.map((job: { jobId: string }) => job.jobId)).toContain('job:agent:agent-session-job')
+
+    resetJobSupervisor()
+    expect(getJob('job:agent:agent-session-job')).toBeUndefined()
+
+    restoreConversation(loaded, [])
+
+    const restored = await createJobGetTool().execute({ jobId: 'job:agent:agent-session-job' })
+    expect(restored.isError).toBe(false)
+    expect(restored.output).toContain('ID: job:agent:agent-session-job')
+    expect(restored.output).toContain('Type: agent')
+    expect(restored.output).toContain('Status: timeout')
+    expect(restored.output).toContain('TerminationReason: agent:watchdog_timeout')
+    expect((restored.metadata as any).job).toMatchObject({
+      jobId: 'job:agent:agent-session-job',
+      type: 'agent',
+      status: 'timeout',
+      source: { kind: 'agent', id: 'agent-session-job' },
+      recoveryHint: 'AgentRunGet agentId=agent-session-job',
     })
   })
 

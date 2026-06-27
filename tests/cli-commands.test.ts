@@ -80,6 +80,78 @@ describe('CLI commands integration', { timeout: CLI_COMMANDS_TEST_TIMEOUT_MS }, 
     expect(result.stderr).toContain('--daemon-only')
   })
 
+  it('app-server smoke starts the structured desktop App Server contract', async () => {
+    const runtimeDir = makeRuntimeDir()
+    const result = await runCli([
+      'app-server',
+      '--app-server-host',
+      '127.0.0.1',
+      '--app-server-port',
+      '0',
+      '--app-server-smoke',
+    ], runtimeDir)
+
+    expect(result.code).toBe(0)
+    const smoke = JSON.parse(result.stdout) as {
+      ok: boolean
+      baseUrl: string
+      health: { status: string; methods: string[] }
+    }
+    expect(smoke.ok).toBe(true)
+    expect(smoke.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
+    expect(smoke.health.status).toBe('ok')
+    expect(smoke.health.methods).toContain('runtimeTranscript/read')
+    expect(smoke.health.methods).toContain('interaction/list')
+    expect(smoke.health.methods).toContain('runtimeRail/read')
+  })
+
+  it('app-server smoke loads OwlCoda config for runtime loop execution', async () => {
+    const runtimeDir = makeRuntimeDir()
+    writeFileSync(join(runtimeDir, 'config.json'), JSON.stringify({
+      port: 8125,
+      host: '127.0.0.1',
+      routerUrl: 'http://127.0.0.1:8066',
+      models: [{
+        id: 'desktop-model',
+        label: 'Desktop Model',
+        backendModel: 'backend-model',
+        aliases: ['desktop'],
+        provider: 'test',
+        tier: 'local',
+        default: true,
+      }],
+    }), 'utf8')
+
+    const result = await runCli([
+      'app-server',
+      '--app-server-host',
+      '127.0.0.1',
+      '--app-server-port',
+      '0',
+      '--app-server-smoke',
+    ], runtimeDir)
+
+    expect(result.code).toBe(0)
+    const smoke = JSON.parse(result.stdout) as {
+      ok: boolean
+      health: {
+        subsystems: {
+          appServerLoop: {
+            status: string
+            model?: string
+            apiBaseUrl?: string
+          }
+        }
+      }
+    }
+    expect(smoke.ok).toBe(true)
+    expect(smoke.health.subsystems.appServerLoop).toMatchObject({
+      status: 'ok',
+      model: 'desktop-model',
+      apiBaseUrl: 'http://127.0.0.1:8125',
+    })
+  })
+
   it('doctor runs all checks', async () => {
     const runtimeDir = makeRuntimeDir()
     const result = await runCli(['doctor'], runtimeDir)

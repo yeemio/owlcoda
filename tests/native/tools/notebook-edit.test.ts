@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdirSync, readFileSync, realpathSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createNotebookEditTool } from '../../../src/native/tools/notebook-edit.js'
@@ -59,6 +59,26 @@ describe('NotebookEdit tool', () => {
     expect(updated.cells[0].source).toBe('x = 42')
     expect(updated.cells[0].execution_count).toBeNull()
     expect(updated.cells[0].outputs).toEqual([])
+  })
+
+  it('returns durable full-file source metadata for review surfaces', async () => {
+    const path = makeNotebook(tmpDir, [
+      { cell_type: 'code', id: 'abc123', source: 'x = 1', metadata: {}, execution_count: 5, outputs: [{ text: 'hi' }] },
+    ])
+    const oldContent = readFileSync(path, 'utf-8')
+    const result = await tool.execute({
+      notebook_path: path,
+      cell_id: 'abc123',
+      new_source: 'x = 42',
+    })
+
+    expect(result.isError).toBe(false)
+    expect(result.metadata).toMatchObject({
+      notebook_path: realpathSync(path),
+      oldContent,
+      newContent: readFileSync(path, 'utf-8'),
+      changeKind: 'notebook_replace',
+    })
   })
 
   it('replaces a cell by cell-N index', async () => {

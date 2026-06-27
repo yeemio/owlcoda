@@ -129,124 +129,6 @@ function runCurrentRuntimeContractProbe(): CurrentRuntimeContractProbe {
     turnId,
   })
   appendRuntimeEvent(conversation, {
-    kind: 'assistant_stream_recorded',
-    turnId,
-    payload: {
-      response_index: 1,
-      source: 'sse',
-      text_delta_count: 1,
-      text_chars: 0,
-      thinking_start_count: 0,
-      thinking_delta_count: 0,
-      thinking_chars: 0,
-      thinking_end_count: 0,
-      usage_update_count: 1,
-      input_tokens: 1,
-      output_tokens: 1,
-    },
-  })
-  appendRuntimeEvent(conversation, {
-    kind: 'assistant_response_recorded',
-    turnId,
-    payload: {
-      response_index: 1,
-      phase: 'main',
-      stop_reason: 'tool_use',
-      text_chars: 0,
-      text_digest: 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-      tool_use_count: 1,
-      has_tool_use: true,
-      thinking_block_count: 0,
-      input_tokens: 1,
-      output_tokens: 1,
-      is_empty_response: false,
-    },
-  })
-  appendRuntimeEvent(conversation, {
-    kind: 'assistant_response_disposition_recorded',
-    turnId,
-    payload: {
-      response_index: 1,
-      phase: 'main',
-      action: 'execute_tools',
-      stop_reason: 'tool_use',
-      text_chars: 0,
-      original_tool_use_count: 1,
-      executed_tool_count: 1,
-      deferred_tool_count: 0,
-      runtime_tool_count: 0,
-    },
-  })
-  appendRuntimeEvent(conversation, {
-    kind: 'runtime_intervention',
-    turnId,
-    checkpointId: 'release-smoke-runtime-event-contract-checkpoint',
-    checkpointKind: 'long_task_checkpoint',
-    payload: {
-      intervention_kind: 'recovery_guard_hard_stop',
-      action: 'hard_stop',
-      guard_kind: 'long_task_checkpoint',
-      gate_kind: 'long_task_checkpoint',
-      stop_reason: 'tool_loop',
-      ignored_tool_count: 1,
-      response_index: 1,
-      reason: 'release smoke guard hard-stop probe',
-      checkpoint_id: 'release-smoke-runtime-event-contract-checkpoint',
-    },
-  })
-  appendRuntimeEvent(conversation, {
-    kind: 'runtime_intervention',
-    turnId,
-    itemId: 'release-smoke-long-task-wait-policy-item',
-    payload: {
-      intervention_kind: 'long_task_wait_policy',
-      action: 'skipped_tool_use',
-      tool_use_id: 'release-smoke-long-task-wait-policy-item',
-      tool_name: 'Sleep',
-      violation_kind: 'sleep_polling',
-      long_task_id: 'task:release-smoke-long-task',
-      wait_strategy: 'runtime_await',
-      stop_polling: false,
-      next_check_command: 'LongTaskAwait longTaskId=task:release-smoke-long-task timeoutMs=5000',
-      reason: 'release smoke wait-policy probe',
-    },
-  })
-  appendRuntimeEvent(conversation, {
-    kind: 'runtime_intervention',
-    turnId,
-    itemId: 'release-smoke-post-recovery-overrun-item',
-    checkpointId: 'release-smoke-verification-repair-checkpoint',
-    checkpointKind: 'verification_repair_checkpoint',
-    payload: {
-      intervention_kind: 'post_recovery_overrun_guard',
-      action: 'skipped_redundant_task_update',
-      tool_use_id: 'release-smoke-post-recovery-overrun-item',
-      tool_name: 'TaskUpdate',
-      task_id: 'release-smoke-task',
-      step_id: 'release-smoke-step',
-      checkpoint_id: 'release-smoke-verification-repair-checkpoint',
-      requested_status_field: 'stepStatus',
-      requested_status: 'completed',
-      ledger_status: 'clean',
-      recovery_resolved_this_run: true,
-      scope: 'task release-smoke-task step release-smoke-step',
-      reason: 'release smoke post-recovery overrun probe',
-    },
-  })
-  appendRuntimeEvent(conversation, {
-    kind: 'runtime_intervention',
-    turnId,
-    checkpointId: 'release-smoke-runtime-truth-resume-checkpoint',
-    checkpointKind: 'context_replacement_checkpoint',
-    payload: {
-      intervention_kind: 'runtime_truth_resume_report_gate',
-      action: 'replaced_incomplete_report_with_synthetic_report',
-      report_source: 'runtime_synthetic',
-      original_report_source: 'assistant_text',
-      checkpoint_id: 'release-smoke-runtime-truth-resume-checkpoint',
-    },
-  })
-  appendRuntimeEvent(conversation, {
     kind: 'item_started',
     turnId,
     itemId,
@@ -295,8 +177,8 @@ function runCurrentRuntimeContractProbe(): CurrentRuntimeContractProbe {
   const audit = auditRuntimeEventSessions([probeSession])
   const totals = audit.totals
   return {
-    passed: totals.event_count === 11
-      && totals.contract_valid === 11
+    passed: totals.event_count === 4
+      && totals.contract_valid === 4
       && totals.legacy_replay_compatible === 0
       && totals.malformed_saved_event === 0,
     event_count: totals.event_count,

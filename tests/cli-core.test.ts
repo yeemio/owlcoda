@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { parseArgs, printHelp, VERSION, loadEffectiveConfig, doLaunch, doUi, warnIfDaemonStale, buildCloudFallbackHint } from '../src/cli-core.js'
+import { parseArgs, printHelp, VERSION, loadEffectiveConfig, doLaunch, doUi, warnIfDaemonStale, buildCloudFallbackHint, resolveStalePidStopCleanup } from '../src/cli-core.js'
 
 describe('buildCloudFallbackHint (bare-startup escape hatch)', () => {
   it('lists configured cloud (direct-endpoint) models + the -m command when the local default is down', () => {
@@ -29,6 +29,17 @@ describe('buildCloudFallbackHint (bare-startup escape hatch)', () => {
     expect(buildCloudFallbackHint(localOnly, 'gemma')).toBeNull()
     expect(buildCloudFallbackHint([], 'x')).toBeNull()
     expect(buildCloudFallbackHint(undefined, 'x')).toBeNull()
+  })
+})
+
+describe('resolveStalePidStopCleanup', () => {
+  it('treats stale PID cleanup during stop as a successful cleanup, not a stop failure', () => {
+    const result = resolveStalePidStopCleanup(72984)
+
+    expect(result.exitCode).toBe(0)
+    expect(result.message).toContain('stale PID file')
+    expect(result.message).toContain('cleared stale PID/runtime metadata')
+    expect(result.message).not.toContain('is not running')
   })
 })
 
@@ -113,20 +124,6 @@ describe('parseArgs', () => {
 
   it('parses --auto-approve', () => {
     expect(parse(['--auto-approve']).autoApprove).toBe(true)
-  })
-
-  it('parses exact bash command policy flags', () => {
-    const result = parse([
-      'run',
-      '--allow-bash-command', './node_modules/.bin/vitest run tests/native/headless-approval.test.ts --testNamePattern node_modules/.bin',
-      '--allow-bash-command', 'pwd',
-      '--max-bash-calls', '1',
-    ])
-    expect(result.allowBashCommands).toEqual([
-      './node_modules/.bin/vitest run tests/native/headless-approval.test.ts --testNamePattern node_modules/.bin',
-      'pwd',
-    ])
-    expect(result.maxBashCalls).toBe(1)
   })
 
   it('parses --resume with value', () => {

@@ -1,4 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   createConversation,
   addUserMessage,
@@ -171,6 +175,44 @@ describe('cross-model fallback policy', () => {
 })
 
 describe('runConversationLoop', () => {
+  it('returns a cross-repo boundary checkpoint before any model request', async () => {
+    const targetRepo = await mkdtemp(join(tmpdir(), 'owlcoda-loop-cross-boundary-target-'))
+    const promptRepo = await mkdtemp(join(tmpdir(), 'owlcoda-loop-cross-boundary-prompt-'))
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: targetRepo, stdio: 'ignore' })
+      for (let i = 0; i < 25; i++) {
+        await writeFile(join(targetRepo, `dirty-${i}.txt`), `${i}`)
+      }
+      const promptPath = join(promptRepo, 'prompts', '48b_owlmlx_tuned_lora_runtime_apply.md')
+      await mkdir(join(promptRepo, 'prompts'), { recursive: true })
+      await writeFile(promptPath, 'Apply the source edit to the target repo.')
+
+      const conv = createConversation({ system: 'test', model: 'm' })
+      addUserMessage(conv, `执行 ${promptPath}，只修改 \`src/runtime.ts\`。`)
+      const notices: string[] = []
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('model request should not start'))
+
+      const result = await runConversationLoop(conv, new ToolDispatcher(), {
+        apiBaseUrl: 'http://localhost:1',
+        apiKey: 'test',
+        cwd: targetRepo,
+        callbacks: {
+          onNotice: (message) => { notices.push(message) },
+        },
+      })
+
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(result.stopReason).toBe('cross_repo_boundary_checkpoint')
+      expect(result.iterations).toBe(0)
+      expect(result.finalText).toContain('Cross-repo boundary checkpoint')
+      expect(notices.join('\n')).toContain('Cross-repo boundary checkpoint')
+      expect(result.conversation.options?.taskState?.run.status).toBe('waiting_user')
+    } finally {
+      await rm(targetRepo, { recursive: true, force: true })
+      await rm(promptRepo, { recursive: true, force: true })
+    }
+  })
+
   function makePrematureCloseStream(options: { withText?: boolean } = {}) {
     const encoder = new TextEncoder()
     return new ReadableStream<Uint8Array>({

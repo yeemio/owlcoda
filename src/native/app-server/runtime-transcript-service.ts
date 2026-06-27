@@ -1,0 +1,303 @@
+import { realpathSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { loadSession, type SessionFile } from '../session.js'
+import type {
+  AnthropicContentBlock,
+  AnthropicTextBlock,
+  AnthropicThinkingBlock,
+  AnthropicToolResultBlock,
+  AnthropicToolUseBlock,
+} from '../../types.js'
+import type { ConversationTurn, RuntimeEventRecord } from '../protocol/types.js'
+
+export type RuntimeTranscriptItemStatus = 'pending' | 'completed' | 'failed'
+
+export interface RuntimeTranscriptReadInput {
+  projectRoot: string
+  projectId?: string
+  threadId: string
+}
+
+export interface RuntimeTranscriptResult {
+  threadId: string
+  projectId?: string
+  title?: string
+  model: string
+  status: 'ready'
+  createdAt: number
+  updatedAt: number
+  itemCount: number
+  runtimeEventCount: number
+  items: RuntimeTranscriptItem[]
+}
+
+export type RuntimeTranscriptItem =
+  | RuntimeTranscriptMessageItem
+  | RuntimeTranscriptThinkingItem
+  | RuntimeTranscriptToolCallItem
+  | RuntimeTranscriptToolResultItem
+
+export interface RuntimeTranscriptMessageItem {
+  id: string
+  kind: 'message'
+  role: ConversationTurn['role']
+  text: string
+  timestamp: number
+  turnIndex: number
+  contentIndex: number
+}
+
+export interface RuntimeTranscriptThinkingItem {
+  id: string
+  kind: 'thinking'
+  role: 'assistant'
+  text: string
+  timestamp: number
+  turnIndex: number
+  contentIndex: number
+}
+
+export interface RuntimeTranscriptToolCallItem {
+  id: string
+  kind: 'tool_call'
+  toolUseId: string
+  toolName: string
+  input: Record<string, unknown>
+  status: RuntimeTranscriptItemStatus
+  timestamp: number
+  turnIndex: number
+  contentIndex: number
+  result?: RuntimeTranscriptToolResult
+  resultTurnIndex?: number
+  resultContentIndex?: number
+  completedAt?: number
+  runtime?: RuntimeTranscriptRuntimeAnchor
+}
+
+export interface RuntimeTranscriptToolResultItem {
+  id: string
+  kind: 'tool_result'
+  toolUseId: string
+  status: RuntimeTranscriptItemStatus
+  timestamp: number
+  turnIndex: number
+  contentIndex: number
+  result: RuntimeTranscriptToolResult
+  runtime?: RuntimeTranscriptRuntimeAnchor
+}
+
+export interface RuntimeTranscriptToolResult {
+  content: string
+  isError: boolean
+  metadata?: Record<string, unknown>
+}
+
+export interface RuntimeTranscriptRuntimeAnchor {
+  turnId?: string
+  runId?: string
+  itemId?: string
+  startedAt?: string
+  completedAt?: string
+  eventIds: string[]
+}
+
+interface ToolResultLocation {
+  block: AnthropicToolResultBlock
+  turn: ConversationTurn
+  turnIndex: number
+  contentIndex: number
+}
+
+export function readRuntimeTranscript(input: RuntimeTranscriptReadInput): RuntimeTranscriptResult | null {
+  const session = loadTranscriptSession(input)
+  if (!session) return null
+
+  const toolUseIds = collectToolUseIds(session.turns)
+  const toolResults = collectToolResults(session.turns)
+  const runtimeAnchors = runtimeAnchorsByItem(session.runtimeEventLog?.events ?? [])
+  const items: RuntimeTranscriptItem[] = []
+
+  session.turns.forEach((turn, turnIndex) => {
+    turn.content.forEach((block, contentIndex) => {
+      if (isTextBlock(block)) {
+        items.push({
+          id: `turn:${turnIndex}:text:${contentIndex}`,
+          kind: 'message',
+          role: turn.role,
+          text: block.text,
+          timestamp: turn.timestamp,
+          turnIndex,
+          contentIndex,
+        })
+        return
+      }
+      if (isThinkingBlock(block)) {
+        items.push({
+          id: `turn:${turnIndex}:thinking:${contentIndex}`,
+          kind: 'thinking',
+          role: 'assistant',
+          text: block.thinking,
+          timestamp: turn.timestamp,
+          turnIndex,
+          contentIndex,
+        })
+        return
+      }
+      if (isToolUseBlock(block)) {
+        const result = toolResults.get(block.id)
+        const anchor = runtimeAnchors.get(block.id)
+        const item: RuntimeTranscriptToolCallItem = {
+          id: `tool:${block.id}`,
+          kind: 'tool_call',
+          toolUseId: block.id,
+          toolName: block.name,
+          input: block.input,
+          status: result ? (result.block.is_error === true ? 'failed' : 'completed') : 'pending',
+          timestamp: turn.timestamp,
+          turnIndex,
+          contentIndex,
+        }
+        if (result) {
+          item.result = toolResultFromBlock(result.block)
+          item.resultTurnIndex = result.turnIndex
+          item.resultContentIndex = result.contentIndex
+          item.completedAt = result.turn.timestamp
+        }
+        if (anchor) item.runtime = anchor
+        items.push(item)
+        return
+      }
+      if (isToolResultBlock(block) && !toolUseIds.has(block.tool_use_id)) {
+        const anchor = runtimeAnchors.get(block.tool_use_id)
+        items.push({
+          id: `tool-result:${block.tool_use_id}:${turnIndex}:${contentIndex}`,
+          kind: 'tool_result',
+          toolUseId: block.tool_use_id,
+          status: block.is_error === true ? 'failed' : 'completed',
+          timestamp: turn.timestamp,
+          turnIndex,
+          contentIndex,
+          result: toolResultFromBlock(block),
+          ...(anchor ? { runtime: anchor } : {}),
+        })
+      }
+    })
+  })
+
+  return {
+    threadId: session.id,
+    ...(input.projectId ? { projectId: input.projectId } : {}),
+    ...(session.title ? { title: session.title } : {}),
+    model: session.model,
+    status: 'ready',
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+    itemCount: items.length,
+    runtimeEventCount: session.runtimeEventLog?.events.length ?? 0,
+    items,
+  }
+}
+
+function loadTranscriptSession(input: RuntimeTranscriptReadInput): SessionFile | null {
+  const session = loadSession(input.threadId)
+  if (!session) return null
+  const root = canonicalExistingPath(input.projectRoot)
+  const cwd = session.cwd ? canonicalExistingPath(session.cwd) : root
+  if (cwd !== root) return null
+  return session
+}
+
+function collectToolUseIds(turns: ConversationTurn[]): Set<string> {
+  const ids = new Set<string>()
+  for (const turn of turns) {
+    for (const block of turn.content) {
+      if (isToolUseBlock(block)) ids.add(block.id)
+    }
+  }
+  return ids
+}
+
+function collectToolResults(turns: ConversationTurn[]): Map<string, ToolResultLocation> {
+  const results = new Map<string, ToolResultLocation>()
+  turns.forEach((turn, turnIndex) => {
+    turn.content.forEach((block, contentIndex) => {
+      if (isToolResultBlock(block)) {
+        results.set(block.tool_use_id, {
+          block,
+          turn,
+          turnIndex,
+          contentIndex,
+        })
+      }
+    })
+  })
+  return results
+}
+
+function runtimeAnchorsByItem(events: RuntimeEventRecord[]): Map<string, RuntimeTranscriptRuntimeAnchor> {
+  const anchors = new Map<string, RuntimeTranscriptRuntimeAnchor>()
+  for (const event of events) {
+    const itemId = event.itemId ?? stringField(event.payload, 'tool_use_id') ?? stringField(event.payload, 'toolUseId')
+    if (!itemId) continue
+    const anchor = anchors.get(itemId) ?? {
+      itemId,
+      eventIds: [],
+    }
+    if (event.turnId && !anchor.turnId) anchor.turnId = event.turnId
+    const runId = event.runId ?? event.factRefs?.runId
+    if (runId && !anchor.runId) anchor.runId = runId
+    anchor.eventIds.push(event.id)
+    if (event.kind === 'item_started') anchor.startedAt = event.at
+    if (event.kind === 'item_completed') anchor.completedAt = event.at
+    anchors.set(itemId, anchor)
+  }
+  return anchors
+}
+
+function toolResultFromBlock(block: AnthropicToolResultBlock): RuntimeTranscriptToolResult {
+  return {
+    content: toolResultContentText(block.content),
+    isError: block.is_error === true,
+    ...(block.metadata ? { metadata: block.metadata } : {}),
+  }
+}
+
+function toolResultContentText(content: AnthropicToolResultBlock['content']): string {
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) {
+    return content
+      .filter(isTextBlock)
+      .map(block => block.text)
+      .join('\n')
+  }
+  return ''
+}
+
+function canonicalExistingPath(path: string): string {
+  try {
+    return realpathSync(resolve(path))
+  } catch {
+    return resolve(path)
+  }
+}
+
+function stringField(input: Record<string, unknown> | undefined, key: string): string | null {
+  const value = input?.[key]
+  return typeof value === 'string' && value.trim() ? value : null
+}
+
+function isTextBlock(block: AnthropicContentBlock): block is AnthropicTextBlock {
+  return block.type === 'text'
+}
+
+function isThinkingBlock(block: AnthropicContentBlock): block is AnthropicThinkingBlock {
+  return block.type === 'thinking'
+}
+
+function isToolUseBlock(block: AnthropicContentBlock): block is AnthropicToolUseBlock {
+  return block.type === 'tool_use'
+}
+
+function isToolResultBlock(block: AnthropicContentBlock): block is AnthropicToolResultBlock {
+  return block.type === 'tool_result'
+}

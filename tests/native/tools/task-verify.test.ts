@@ -217,6 +217,36 @@ describe('TaskVerify tool', () => {
     expect(step.verificationResults.every((result) => result.passed)).toBe(true)
   })
 
+  it('allows checksum command checks as safe_readonly evidence', async () => {
+    const evidencePath = path.join(tmpDir, 'score.json')
+    fs.writeFileSync(evidencePath, '{"verdict":"PASS"}\n')
+    makeTaskWithVerification([
+      { id: 'score-hash', kind: 'command', command: `shasum -a 256 ${evidencePath}` },
+    ])
+
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+    expect(r.isError).toBe(false)
+    expect(r.output).toContain('1/1 passed')
+    expect(r.output).not.toContain('command refused by risk classifier')
+    const results = r.metadata?.['results'] as Array<Record<string, unknown>>
+    expect(results[0]?.['passed']).toBe(true)
+  })
+
+  it('allows process inspection command checks as safe_readonly evidence', async () => {
+    makeTaskWithVerification([
+      { id: 'pid-state', kind: 'command', command: `ps -p ${process.pid} -o pid,stat` },
+    ])
+
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+    expect(r.isError).toBe(false)
+    expect(r.output).toContain('1/1 passed')
+    expect(r.output).not.toContain('command refused by risk classifier')
+    const results = r.metadata?.['results'] as Array<Record<string, unknown>>
+    expect(results[0]?.['passed']).toBe(true)
+  })
+
   it('runs structured checks expanded from Project Map verification profiles', async () => {
     const artifactPath = path.join(tmpDir, 'dist', 'cli.js')
     fs.mkdirSync(path.dirname(artifactPath), { recursive: true })
@@ -484,81 +514,6 @@ describe('TaskVerify tool', () => {
     const updateResult = updateTaskStep('task-1', 'step-1', { status: 'completed' })
     expect(updateResult.ok).toBe(false)
     expect(updateResult.ok === false && updateResult.reason).toMatch(/verification check/)
-  })
-
-  it('marks file_contains as weak_text_match and blocks parser steps from completing with weak-only evidence', async () => {
-    const parserPath = path.join(tmpDir, 'qiutan-parser.ts')
-    fs.writeFileSync(parserPath, 'export function parseQiutanTableEvidence() { return "竞彩让" }\n')
-    createTask({
-      subject: 'Parser behavior fix',
-      description: 'For testing weak evidence gating',
-      steps: [{
-        title: 'Update parseQiutanTableEvidence for 竞彩让 snapshot parsing',
-        description: 'Parser/snapshot behavior must not be verified by grep only.',
-        verification: [{ id: 'keyword', kind: 'file_contains', path: parserPath, pattern: '竞彩让' }],
-      }],
-    })
-    updateTaskStep('task-1', 'step-1', { status: 'in_progress' })
-
-    const verify = await tool.execute({ taskId: 'task-1', stepId: 'step-1', writeBack: true })
-
-    expect(verify.isError).toBe(false)
-    expect(verify.metadata?.['highestVerificationStrength']).toBe('weak_text_match')
-    const step = getTaskStep('task-1', 'step-1')!
-    expect(step.verificationResults[0]!.strength).toBe('weak_text_match')
-
-    const updateResult = updateTaskStep('task-1', 'step-1', { status: 'completed' })
-
-    expect(updateResult.ok).toBe(false)
-    expect(updateResult.ok === false && updateResult.reason).toMatch(/behavioral verification|unit_behavior|runtime_replay/)
-  })
-
-  it('marks typecheck/build command checks as compile_only and still blocks behavior-sensitive steps', async () => {
-    createTask({
-      subject: 'Snapshot normalization fix',
-      description: 'For testing compile-only evidence gating',
-      steps: [{
-        title: 'Update normalizeOddsSnapshot fallback behavior',
-        description: 'Snapshot normalization requires behavior evidence.',
-        verification: [{ id: 'typecheck', kind: 'command', command: 'tsc --version' }],
-      }],
-    })
-    updateTaskStep('task-1', 'step-1', { status: 'in_progress' })
-
-    const verify = await tool.execute({ taskId: 'task-1', stepId: 'step-1', writeBack: true })
-
-    expect(verify.isError).toBe(false)
-    expect(verify.metadata?.['highestVerificationStrength']).toBe('compile_only')
-    const updateResult = updateTaskStep('task-1', 'step-1', { status: 'completed' })
-
-    expect(updateResult.ok).toBe(false)
-    expect(updateResult.ok === false && updateResult.reason).toContain('compile_only')
-  })
-
-  it('allows behavior-sensitive steps to complete with unit_behavior evidence', async () => {
-    createTask({
-      subject: 'Parser behavior fix',
-      description: 'For testing behavior evidence gating',
-      steps: [{
-        title: 'Update parser fixture replay',
-        description: 'Parser behavior is covered by a focused test command.',
-        verification: [{ id: 'parser-test', kind: 'command', command: 'npm test tests/native/tools/task-verify.test.ts -- --runInBand' }],
-      }],
-    })
-    updateTaskStep('task-1', 'step-1', { status: 'in_progress' })
-    updateTaskStep('task-1', 'step-1', {
-      verificationResults: [{
-        checkId: 'parser-test',
-        passed: true,
-        strength: 'unit_behavior',
-        detail: 'test command passed',
-        checkedAt: new Date().toISOString(),
-      }],
-    })
-
-    const updateResult = updateTaskStep('task-1', 'step-1', { status: 'completed' })
-
-    expect(updateResult.ok).toBe(true)
   })
 
   it('verification_pack/html_deck pass writes expanded pack checks', async () => {

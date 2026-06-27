@@ -1,17 +1,27 @@
 import * as http from 'node:http'
 import type { OwlCodaConfig } from '../config.js'
-import { LocalRuntimeProtocolUnresolvedError, resolveModelRoute } from '../model-registry.js'
+import {
+  LocalRuntimeProtocolUnresolvedError,
+  resolveModelCapabilitiesForRequest,
+  resolveModelRoute,
+} from '../model-registry.js'
 import type { AnthropicMessagesRequest, AnthropicMessagesResponse, AnthropicTextBlock, AnthropicThinkingBlock } from '../types.js'
 import { translateRequest } from '../translate/request.js'
 import { translateResponse } from '../translate/response.js'
 import { computeAdaptiveTimeoutMs } from '../middleware/adaptive-timeout.js'
 import { readBody } from '../server.js'
 import {
+  applyStructuredOutputPresetDefaults,
   runModelOutputHarness,
   type StructuredOutputExecutor,
   type StructuredOutputModelResponse,
   type StructuredOutputRequest,
 } from '../model-output-harness.js'
+import {
+  findRunWorkspaceArtifact,
+  persistStructuredOutputResult,
+  readStructuredOutputArtifactInput,
+} from '../structured-output-persistence.js'
 
 function sendJson(res: http.ServerResponse, statusCode: number, body: unknown): void {
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -33,6 +43,22 @@ function validateStructuredOutputBody(body: unknown): body is StructuredOutputRe
   const record = body as Record<string, unknown>
   return typeof record.model === 'string' && record.model.length > 0
     && typeof record.user === 'string' && record.user.length > 0
+}
+
+function validateStructuredOutputRerunBody(body: unknown): body is Partial<StructuredOutputRequest> & { model: string } {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return false
+  const record = body as Record<string, unknown>
+  return typeof record.model === 'string' && record.model.length > 0
+}
+
+function withRegistryStructuredOutputCapabilities(
+  config: OwlCodaConfig,
+  request: StructuredOutputRequest,
+): StructuredOutputRequest {
+  return {
+    ...request,
+    modelCapabilities: resolveModelCapabilitiesForRequest(config, request.model).structuredOutput,
+  }
 }
 
 function textFromAnthropicResponse(resp: AnthropicMessagesResponse): { text: string; thinkingText: string } {
@@ -57,6 +83,7 @@ export function createStructuredOutputModelExecutor(config: OwlCodaConfig): Stru
       max_tokens: request.maxTokens,
       messages: [{ role: 'user', content: request.user }],
       stream: false,
+      temperature: 0,
     }
     const upstreamBody = route.translate
       ? translateRequest(anthropicBody, route.backendModel)
@@ -130,9 +157,31 @@ export async function handleStructuredOutput(
     invalidRequest(res, 'model and user are required strings')
     return
   }
+  if (body.persist === true && !body.runRef) {
+    invalidRequest(res, 'runRef is required when persist=true')
+    return
+  }
+
+  let harnessRequest: StructuredOutputRequest
+  try {
+    harnessRequest = applyStructuredOutputPresetDefaults(withRegistryStructuredOutputCapabilities(config, body))
+  } catch (err) {
+    invalidRequest(res, err instanceof Error ? err.message : String(err))
+    return
+  }
 
   try {
-    const result = await runModelOutputHarness(body, createStructuredOutputModelExecutor(config))
+    let result = await runModelOutputHarness(harnessRequest, createStructuredOutputModelExecutor(config))
+    if (harnessRequest.persist === true) {
+      const persisted = await persistStructuredOutputResult(harnessRequest, result)
+      result = {
+        ...result,
+        persisted: true,
+        artifactId: persisted.artifactId,
+        attemptLedgerId: persisted.attemptLedgerId,
+        runRef: harnessRequest.runRef,
+      }
+    }
     sendJson(res, 200, result)
   } catch (err) {
     if (err instanceof LocalRuntimeProtocolUnresolvedError) {
@@ -150,4 +199,120 @@ export async function handleStructuredOutput(
       },
     })
   }
+}
+
+export async function handleStructuredOutputRerun(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  config: OwlCodaConfig,
+): Promise<void> {
+  let rawBody = ''
+  try {
+    rawBody = await readBody(req, config.middleware?.maxRequestBodyBytes ?? 10_485_760)
+  } catch (err) {
+    invalidRequest(res, err instanceof Error ? err.message : String(err))
+    return
+  }
+
+  let body: unknown
+  try {
+    body = JSON.parse(rawBody)
+  } catch {
+    invalidRequest(res, 'Invalid JSON in request body')
+    return
+  }
+
+  if (!validateStructuredOutputRerunBody(body)) {
+    invalidRequest(res, 'model is required')
+    return
+  }
+  if (!body.runRef) {
+    invalidRequest(res, 'runRef is required for structured output rerun')
+    return
+  }
+  if (!body.previousArtifactId) {
+    invalidRequest(res, 'previousArtifactId is required for structured output rerun')
+    return
+  }
+  if (!body.role) {
+    invalidRequest(res, 'role is required for structured output rerun')
+    return
+  }
+  if (!body.user && !body.inputRef && !body.artifactRef) {
+    invalidRequest(res, 'user, inputRef, or artifactRef is required for structured output rerun')
+    return
+  }
+
+  let rerunRequest: StructuredOutputRequest
+  try {
+    await findRunWorkspaceArtifact(body.runRef, body.previousArtifactId)
+    rerunRequest = applyStructuredOutputPresetDefaults(
+      withRegistryStructuredOutputCapabilities(config, await buildRerunRequest(body)),
+    )
+  } catch (err) {
+    invalidRequest(res, err instanceof Error ? err.message : String(err))
+    return
+  }
+
+  try {
+    let result = await runModelOutputHarness(rerunRequest, createStructuredOutputModelExecutor(config))
+    const persisted = await persistStructuredOutputResult(rerunRequest, result)
+    result = {
+      ...result,
+      persisted: true,
+      artifactId: persisted.artifactId,
+      attemptLedgerId: persisted.attemptLedgerId,
+      runRef: rerunRequest.runRef,
+      rerun: true,
+      parentArtifactId: rerunRequest.previousArtifactId,
+      rerunOf: rerunRequest.previousArtifactId,
+      ...(rerunRequest.inputRef ? { inputRef: rerunRequest.inputRef } : {}),
+      ...(rerunRequest.artifactRef ? { artifactRef: rerunRequest.artifactRef } : {}),
+    }
+    sendJson(res, 200, result)
+  } catch (err) {
+    if (err instanceof LocalRuntimeProtocolUnresolvedError) {
+      sendJson(res, 503, {
+        type: 'error',
+        error: { type: 'api_error', message: err.message },
+      })
+      return
+    }
+    sendJson(res, 502, {
+      type: 'error',
+      error: {
+        type: 'api_error',
+        message: err instanceof Error ? err.message : String(err),
+      },
+    })
+  }
+}
+
+async function buildRerunRequest(
+  body: Partial<StructuredOutputRequest> & { model: string },
+): Promise<StructuredOutputRequest> {
+  const user = typeof body.user === 'string' && body.user.trim()
+    ? body.user
+    : await userFromArtifactRef(body)
+
+  return {
+    ...body,
+    user,
+    persist: true,
+  } as StructuredOutputRequest
+}
+
+async function userFromArtifactRef(
+  body: Partial<StructuredOutputRequest> & { model: string },
+): Promise<string> {
+  const ref = body.inputRef ?? body.artifactRef
+  if (!body.runRef || !ref) {
+    throw new Error('user, inputRef, or artifactRef is required for structured output rerun')
+  }
+  const input = await readStructuredOutputArtifactInput(body.runRef, ref)
+  return [
+    `Rerun structured output role artifact from ${body.inputRef ? 'inputRef' : 'artifactRef'} ${input.record.id}.`,
+    'Use the referenced artifact payload as the input for this rerun.',
+    JSON.stringify(input.payload, null, 2),
+  ].join('\n\n')
 }

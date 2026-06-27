@@ -346,6 +346,9 @@ describe('Slash Commands', () => {
     expect(output).toContain('Environment')
     expect(output).toContain('Node.js')
     expect(output).toContain('Transcript Interaction')
+    expect(output).toContain('Runtime Subsystems')
+    expect(output).toContain('Job supervisor')
+    expect(output).toContain('Tool risk')
   })
 
   // ─── Round 33: session management command tests ───────
@@ -2097,7 +2100,7 @@ describe('Additional slash commands', () => {
     await handleSlashCommand('/quit', conv, usage)
     expect(exitSpy).toHaveBeenCalledWith(0)
     exitSpy.mockRestore()
-  }, 15000)
+  })
 
   it('/exit calls process.exit', async () => {
     const conv = makeConv()
@@ -2105,7 +2108,7 @@ describe('Additional slash commands', () => {
     await handleSlashCommand('/exit', conv, usage)
     expect(exitSpy).toHaveBeenCalledWith(0)
     exitSpy.mockRestore()
-  }, 15000)
+  })
 
   it('/theme with name switches theme', async () => {
     const conv = makeConv()

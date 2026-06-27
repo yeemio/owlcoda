@@ -52,29 +52,33 @@ export async function detectRouterModels(
   fetchJson: RouterModelFetcher = httpGetJson,
 ): Promise<string[]> {
   // Normalize so a candidate / --endpoint that carries a trailing `/v1`
-  // probes `${base}/v1/models` once, not `/v1/v1/models` (Issue #2).
+  // probes a single canonical API layer, not `/v1/v1/...` (Issue #2).
   const base = normalizeRouterBaseUrl(routerUrl)
-  try {
-    const data = await fetchJson(`${base}/v1/models`) as { data?: DetectedModel[] }
-    if (data?.data && Array.isArray(data.data)) {
-      return data.data.map((m: DetectedModel) => m.id).filter(Boolean)
+  for (const modelsPath of ['/v1/openai/models', '/v1/models']) {
+    try {
+      const data = await fetchJson(`${base}${modelsPath}`) as { data?: DetectedModel[] }
+      if (data?.data && Array.isArray(data.data)) {
+        return data.data.map((m: DetectedModel) => m.id).filter(Boolean)
+      }
+    } catch {
+      // Router not available at this visibility surface — try the next one.
     }
-  } catch {
-    // Router not available — not an error for init
   }
   return []
 }
 
 /**
  * Default candidate backends, probed in order when the user does not pass
- * --router. First responder wins. Covers the three OpenAI-compatible local
- * runtimes most users actually run.
+ * --router. First responder wins. owlmlx is first because it owns the local
+ * replacement path; the other OpenAI-compatible local runtimes remain explicit
+ * fallbacks.
  *
  * The legacy :8009 router is intentionally not probed here — `owlcoda doctor`
  * downgrades it to `deprecated_router_models`, so auto-selecting it would put
  * fresh users on the deprecated path on their very first run.
  */
 const DEFAULT_ROUTER_CANDIDATES: { url: string; label: string }[] = [
+  { url: 'http://127.0.0.1:8066', label: 'owlmlx' },
   { url: 'http://127.0.0.1:11434', label: 'Ollama' },
   { url: 'http://127.0.0.1:1234', label: 'LM Studio' },
   { url: 'http://127.0.0.1:8000', label: 'vLLM' },
@@ -93,8 +97,8 @@ async function probeDefaultRouters(): Promise<ProbeResult> {
       return { routerUrl: candidate.url, routerLabel: candidate.label, models }
     }
   }
-  // Nothing answered — keep Ollama as the most-likely default the user will
-  // install next, and let buildConfigFromModels fall back to a placeholder.
+  // Nothing answered — keep owlmlx as the committed local default and let
+  // buildConfigFromModels write an empty model list.
   return {
     routerUrl: DEFAULT_ROUTER_CANDIDATES[0]!.url,
     routerLabel: DEFAULT_ROUTER_CANDIDATES[0]!.label,

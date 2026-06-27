@@ -429,6 +429,14 @@ function classifySafeRead(chunk: string): ChunkVerdict | null {
     return { level: 'safe_readonly', reason: `${head} (read-only)` }
   }
 
+  if (head === 'ps' || head === 'pgrep') {
+    return { level: 'safe_readonly', reason: `${head} (process inspection)` }
+  }
+
+  if (head === 'shasum' || head === 'sha256sum') {
+    return { level: 'safe_readonly', reason: `${head} (checksum read)` }
+  }
+
   // Tool subcommand carve-outs
   if (head === 'git') {
     if (sub && SAFE_GIT_SUBCMDS.has(sub)) {

@@ -3,6 +3,8 @@ import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, normalize, resolve } from 'node:path'
 import type { DeliverableMode } from './deliverable-contract.js'
 import type { ProjectMapSnapshot } from './protocol/project-map-types.js'
+import type { RuntimeFactRefs } from './protocol/types.js'
+import { mergeRuntimeFactRefs } from './runtime-facts.js'
 
 export const RUN_WORKSPACE_DIR = '.owlcoda-run'
 export const RUN_WORKSPACE_STRUCTURE_VERSION = 2
@@ -64,6 +66,16 @@ export interface RunArtifactRecord {
   id: string
   path: string
   origin: RunArtifactOrigin
+  environment?: string
+  project?: string
+  threadId?: string
+  turnId?: string
+  runId?: string
+  taskId?: string
+  jobId?: string
+  proofId?: string
+  factRefs?: RuntimeFactRefs
+  artifactType?: string
   size: number | null
   mtime: string | null
   mtimeMs: number | null
@@ -87,12 +99,14 @@ export interface RunWorkspaceEvent {
   at?: string
   stepId?: string
   message?: string
+  factRefs?: RuntimeFactRefs
   data?: Record<string, unknown>
 }
 
 export interface StoredRunWorkspaceEvent extends RunWorkspaceEvent {
   at: string
   runId: string
+  factRefs?: RuntimeFactRefs
 }
 
 export interface CreateRunWorkspaceOptions {
@@ -118,6 +132,16 @@ export interface CreateRunWorkspaceResult {
 export interface RecordArtifactOptions {
   path: string
   origin: RunArtifactOrigin
+  environment?: string
+  project?: string
+  threadId?: string
+  turnId?: string
+  runId?: string
+  taskId?: string
+  jobId?: string
+  proofId?: string
+  factRefs?: RuntimeFactRefs
+  artifactType?: string
   stepId?: string
   participatesInFinal?: boolean
   sourcePath?: string
@@ -126,6 +150,15 @@ export interface RecordArtifactOptions {
 
 export interface ReadArtifactLedgerOptions {
   refresh?: boolean
+  environment?: string
+  project?: string
+  runId?: string
+  jobId?: string
+  artifactType?: string
+  origin?: string
+  status?: string
+  stepId?: string
+  participatesInFinal?: boolean
 }
 
 export type RunCheckpoint = Record<string, unknown>
@@ -231,10 +264,10 @@ export async function readArtifactLedger(
   cwd = process.cwd(),
 ): Promise<ArtifactLedger> {
   if (options.refresh) {
-    return refreshArtifactLedger(runRef, cwd)
+    return filterArtifactLedger(await refreshArtifactLedger(runRef, cwd), options)
   }
   const paths = getRunWorkspacePathsFromRef(runRef, cwd)
-  return readJson<ArtifactLedger>(paths.artifactsPath)
+  return filterArtifactLedger(await readJson<ArtifactLedger>(paths.artifactsPath), options)
 }
 
 export async function recordArtifact(
@@ -250,10 +283,33 @@ export async function recordArtifact(
   const observed = await observeArtifact(artifactPath)
   const existingIndex = ledger.artifacts.findIndex((artifact) => normalize(artifact.path) === normalize(artifactPath))
   const existing = existingIndex >= 0 ? ledger.artifacts[existingIndex] : undefined
+  const artifactId = options.id ?? existing?.id ?? `artifact-${ledger.artifacts.length + 1}`
+  const runId = options.runId ?? existing?.runId ?? manifest.runId
+  const factRefs = mergeRuntimeFactRefs(options.factRefs, existing?.factRefs, {
+    threadId: options.threadId ?? existing?.threadId,
+    turnId: options.turnId ?? existing?.turnId,
+    runId,
+    taskId: options.taskId ?? existing?.taskId,
+    stepId: options.stepId ?? existing?.stepId,
+    jobId: options.jobId ?? existing?.jobId,
+    artifactId,
+    artifactPath,
+    proofId: options.proofId ?? existing?.proofId,
+  })
   const record: RunArtifactRecord = {
-    id: options.id ?? existing?.id ?? `artifact-${ledger.artifacts.length + 1}`,
+    id: artifactId,
     path: artifactPath,
     origin: options.origin,
+    ...(options.environment ? { environment: options.environment } : existing?.environment ? { environment: existing.environment } : {}),
+    ...(options.project ? { project: options.project } : existing?.project ? { project: existing.project } : {}),
+    ...(factRefs?.threadId ? { threadId: factRefs.threadId } : {}),
+    ...(factRefs?.turnId ? { turnId: factRefs.turnId } : {}),
+    runId,
+    ...(factRefs?.taskId ? { taskId: factRefs.taskId } : {}),
+    ...(options.jobId ? { jobId: options.jobId } : existing?.jobId ? { jobId: existing.jobId } : {}),
+    ...(factRefs?.proofId ? { proofId: factRefs.proofId } : {}),
+    ...(factRefs ? { factRefs } : {}),
+    ...(options.artifactType ? { artifactType: options.artifactType } : existing?.artifactType ? { artifactType: existing.artifactType } : {}),
     size: observed.size,
     mtime: observed.mtime,
     mtimeMs: observed.mtimeMs,
@@ -324,10 +380,15 @@ export async function recordEvent(
 ): Promise<StoredRunWorkspaceEvent> {
   const paths = getRunWorkspacePathsFromRef(runRef, cwd)
   const manifest = await readManifest(paths.runDir)
+  const factRefs = mergeRuntimeFactRefs(event.factRefs, {
+    runId: manifest.runId,
+    stepId: event.stepId,
+  })
   const stored: StoredRunWorkspaceEvent = {
     ...event,
     at: event.at ?? new Date().toISOString(),
     runId: manifest.runId,
+    ...(factRefs ? { factRefs } : {}),
   }
   await appendFile(paths.eventsPath, `${JSON.stringify(stored)}\n`, 'utf8')
   return stored
@@ -347,6 +408,39 @@ export function getRunWorkspacePathsFromRef(runRef: string, cwd = process.cwd())
 function pathsFromRunDir(runDir: string): RunWorkspacePaths {
   const outputRoot = dirname(runDir)
   return buildRunWorkspacePaths(outputRoot, runDir)
+}
+
+function filterArtifactLedger(ledger: ArtifactLedger, options: ReadArtifactLedgerOptions): ArtifactLedger {
+  const filters = artifactLedgerFilters(options)
+  if (filters.length === 0) return ledger
+  return {
+    ...ledger,
+    artifacts: ledger.artifacts.filter(artifact => filters.every(filter => filter(artifact))),
+  }
+}
+
+function artifactLedgerFilters(options: ReadArtifactLedgerOptions): Array<(artifact: RunArtifactRecord) => boolean> {
+  const filters: Array<(artifact: RunArtifactRecord) => boolean> = []
+  const stringFields = [
+    'environment',
+    'project',
+    'runId',
+    'jobId',
+    'artifactType',
+    'origin',
+    'status',
+    'stepId',
+  ] as const
+  for (const field of stringFields) {
+    const value = options[field]
+    if (typeof value === 'string' && value.trim()) {
+      filters.push((artifact) => artifact[field] === value.trim())
+    }
+  }
+  if (typeof options.participatesInFinal === 'boolean') {
+    filters.push((artifact) => artifact.participatesInFinal === options.participatesInFinal)
+  }
+  return filters
 }
 
 function buildRunWorkspacePaths(outputRoot: string, runDir: string): RunWorkspacePaths {

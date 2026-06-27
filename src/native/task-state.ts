@@ -1,10 +1,13 @@
 import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, normalize, relative, resolve } from 'node:path'
 import { classifyDeliverableContract } from './deliverable-contract.js'
 import type {
   Conversation,
+  CrossRepoBoundaryCheckpoint,
+  CrossRepoBoundaryDirtySummary,
   TaskContractScopeConfidence,
   TaskExecutionState,
   TaskPathScope,
@@ -34,7 +37,7 @@ const SHELL_ARTIFACT_TOOLS = new Set(['bash', 'PowerShell'])
 const EXECUTION_PROGRESS_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskVerify', 'RunWorkspace', 'ArtifactVerify'])
 const BOOTSTRAP_SCOPE_FILE_EXTS = new Set(['.md', '.mdx', '.txt'])
 const BOOTSTRAP_SCOPE_MAX_BYTES = 256 * 1024
-const ALLOW_WRITE_SECTION_RE = /(允许写入|允许修改|可改动|allowed write|allowed files|allowed paths|create or update|create\/update|expected output|expected deliverable|required output|output artifact|write exactly one report file|write (?:a\s+)?(?:triage\s+)?report\s+to|report file|triage report|final report)/i
+const ALLOW_WRITE_SECTION_RE = /(允许写入|允许修改|可改动|allowed write|allowed files|allowed paths)/i
 const FORBIDDEN_WRITE_SECTION_RE = /(禁止改动|禁止修改|禁止写入|forbidden|do not modify|do not edit|not allowed)/i
 const FORBIDDEN_INLINE_WRITE_SECTION_RE = /^(?:[#>*\-\s]*|【)?(?:禁止|严禁|不得|不允许|禁止改动|禁止修改|禁止写入|forbidden|do not modify|do not edit|not allowed)(?:】)?[:：]?\s*$/i
 const ALLOW_INLINE_WRITE_TARGET_RE = /(?:只许|只允许|只能|允许|可(?:以)?|输出|allowed|only|output)[^。！？\n.!?]{0,80}(?:写|写入|写到|修改|改动|保存|落盘|输出到|write|edit|modify|save|output)|(?:输出到|保存到|落盘到|写到|写入到|生成到|导出到|output\s+to|save\s+to|write\s+to|export\s+to|generate\s+to)|\b(?:write|save|output|export|generate|create)\b[^。！？\n.!?]{0,100}\b(?:to|into|at)\b|(?:生成|创建|导出)[^。！？\n.!?]{0,100}(?:到|至)/i
@@ -43,6 +46,13 @@ const SUGGESTED_FILENAME_RE = /(?:建议文件名|推荐文件名|suggested\s+fi
 const WRITE_SCOPE_APPROVAL_RE = /\b(?:approve|approved|authorize|authorized|allow|allowed|permission granted|go ahead|yes|ok|okay|confirm|confirmed)\b|(?:批准|授权|允许|同意|确认|可以|准许|继续写|继续执行|放行|没问题|是的)/i
 const WRITE_SCOPE_DENIAL_RE = /\b(?:deny|denied|no|nope|reject|rejected|do not|don't|stop)\b|(?:不行|不要|拒绝|禁止|停止|别写|不能写)/i
 const PROJECT_PATH_PREFIX_RE = /^(?:src|tests?|docs?|admin|site|scripts?|assets?|examples?|internal|dist|config|\.github|\.claude)\//
+const CROSS_REPO_DIRTY_THRESHOLD = 20
+const CROSS_REPO_DIRTY_SAMPLE_LIMIT = 8
+const CROSS_REPO_BOUNDARY_CONFIRMATION =
+  'Reply with an explicit confirmation that names the cross-repo boundary before OwlCoda starts source edits. This does not approve any later write-scope expansion.'
+const PROMPT_SOURCE_PREFIX_RE = /(?:执行|运行|按照|按|读取|读|使用|加载|\b(?:execute|run|use|load|follow)\b)\s*(?:[:：]?\s*)$/i
+const OUTPUT_TARGET_PREFIX_RE = /(?:输出到|保存到|落盘到|写到|写入到|生成到|导出到|output\s+to|save\s+to|write\s+to|export\s+to|generate\s+to|\b(?:write|save|output|export|generate|create)\b[^。！？\n.!?]{0,100}\b(?:to|into|at)\b|(?:生成|创建|导出)[^。！？\n.!?]{0,100}(?:到|至))\s*$/i
+const PROMPT_SOURCE_PATH_RE = /((?:\/|~\/|\.\.?\/)[^\s`'")，。！？；：,;]+?\.(?:md|markdown|txt))(?=$|[\s`'")，。！？；：,;])/gi
 
 export interface WriteGuardViolation {
   attemptedPath: string
@@ -54,6 +64,107 @@ export interface WriteGuardViolation {
 interface SubstantiveUserInput {
   rawText: string
   normalizedText: string
+}
+
+export interface CrossRepoBoundaryDetectorInput {
+  currentRepo: string
+  promptSource: string | null
+  promptSourceRepo: string | null
+  targetRepo: string
+  branch: string | null
+  dirtyWorktreeSummary: CrossRepoBoundaryDirtySummary | null
+  plannedWriteRoots: string[]
+  now?: number
+  dirtyThreshold?: number
+}
+
+export function detectCrossRepoBoundaryCheckpoint(
+  input: CrossRepoBoundaryDetectorInput,
+): CrossRepoBoundaryCheckpoint | null {
+  if (!input.promptSource) return null
+
+  const currentRepo = canonicalizePath(input.currentRepo)
+  const targetRepo = canonicalizePath(input.targetRepo || input.currentRepo)
+  const promptSource = canonicalizePath(input.promptSource)
+  const promptSourceRepo = input.promptSourceRepo ? canonicalizePath(input.promptSourceRepo) : null
+  const threshold = input.dirtyThreshold ?? CROSS_REPO_DIRTY_THRESHOLD
+  const promptOutsideCurrentRepo = !isWithinRoot(promptSource, currentRepo)
+  if (!promptOutsideCurrentRepo) return null
+
+  const plannedWriteRoots = dedupeStrings(
+    input.plannedWriteRoots.length > 0 ? input.plannedWriteRoots : [targetRepo],
+  )
+  const plannedOutsidePromptProject = promptSourceRepo
+    ? plannedWriteRoots.some((root) => !isWithinRoot(root, promptSourceRepo))
+    : true
+  const dirtyCount = input.dirtyWorktreeSummary?.count ?? 0
+  const targetIsDirty = dirtyCount >= threshold
+  const targetDiffersFromPromptProject = promptSourceRepo
+    ? !isWithinRoot(targetRepo, promptSourceRepo) && !isWithinRoot(promptSourceRepo, targetRepo)
+    : true
+
+  if (!plannedOutsidePromptProject && !targetIsDirty && !targetDiffersFromPromptProject) {
+    return null
+  }
+
+  const riskParts = [
+    `Prompt source is outside the current repo (${promptSource}).`,
+  ]
+  if (targetDiffersFromPromptProject) {
+    riskParts.push('The target repo differs from the prompt/source project.')
+  }
+  if (targetIsDirty) {
+    riskParts.push(`The target worktree is already dirty (${dirtyCount} pending path${dirtyCount === 1 ? '' : 's'}).`)
+  } else if (dirtyCount > 0) {
+    riskParts.push(`The target worktree has ${dirtyCount} pending path${dirtyCount === 1 ? '' : 's'}.`)
+  }
+  if (plannedOutsidePromptProject) {
+    riskParts.push('Planned writes are outside the prompt/source project.')
+  }
+
+  return {
+    status: 'pending',
+    currentRepo,
+    promptSource,
+    promptSourceRepo,
+    targetRepo,
+    branch: input.branch,
+    dirtyWorktreeSummary: input.dirtyWorktreeSummary
+      ? {
+          count: input.dirtyWorktreeSummary.count,
+          sample: [...input.dirtyWorktreeSummary.sample],
+          truncated: input.dirtyWorktreeSummary.truncated,
+        }
+      : null,
+    plannedWriteRoots,
+    risk: riskParts.join(' '),
+    requiredUserConfirmation: CROSS_REPO_BOUNDARY_CONFIRMATION,
+    installedAt: input.now ?? Date.now(),
+  }
+}
+
+export function formatCrossRepoBoundaryCheckpoint(checkpoint: CrossRepoBoundaryCheckpoint): string {
+  const dirty = checkpoint.dirtyWorktreeSummary
+    ? `${checkpoint.dirtyWorktreeSummary.count} pending path${checkpoint.dirtyWorktreeSummary.count === 1 ? '' : 's'}${
+        checkpoint.dirtyWorktreeSummary.sample.length > 0
+          ? ` (${checkpoint.dirtyWorktreeSummary.sample.join('; ')}${checkpoint.dirtyWorktreeSummary.truncated ? '; ...' : ''})`
+          : ''
+      }`
+    : 'unknown'
+  const planned = checkpoint.plannedWriteRoots.length > 0
+    ? checkpoint.plannedWriteRoots.join(', ')
+    : checkpoint.targetRepo
+  return [
+    'Cross-repo boundary checkpoint',
+    `- Current repo: ${checkpoint.currentRepo}`,
+    `- Prompt source: ${checkpoint.promptSource}`,
+    `- Target repo: ${checkpoint.targetRepo}`,
+    `- Branch: ${checkpoint.branch ?? 'unknown'}`,
+    `- Dirty worktree summary: ${dirty}`,
+    `- Planned write roots: ${planned}`,
+    `- Risk: ${checkpoint.risk}`,
+    `- Required user confirmation: ${checkpoint.requiredUserConfirmation}`,
+  ].join('\n')
 }
 
 export function ensureTaskExecutionState(
@@ -71,11 +182,17 @@ export function ensureTaskExecutionState(
     && latestControlInput
     && isWriteScopeApprovalInput(latestControlInput.normalizedText),
   )
+  const shouldConsumePendingBoundary = Boolean(
+    existing?.run.crossRepoBoundaryCheckpoint?.status === 'pending'
+    && latestControlInput
+    && isWriteScopeApprovalInput(latestControlInput.normalizedText),
+  )
   if (
     existing
     && existing.contract.sourceTurnHash === sourceTurnHash
     && canonicalizePath(existing.contract.cwd) === canonicalCwd
     && !shouldConsumePendingApproval
+    && !shouldConsumePendingBoundary
   ) {
     return existing
   }
@@ -105,7 +222,17 @@ export function deriveTaskExecutionState(
   )
   const latestInput = source.at(-1)
   const latestControlInput = latestUserInputForTaskControl(conversation)
-  const approvesPendingWriteScope = Boolean(previous && latestControlInput && isWriteScopeApprovalInput(latestControlInput.normalizedText))
+  const latestApprovesControl = Boolean(latestControlInput && isWriteScopeApprovalInput(latestControlInput.normalizedText))
+  const approvesPendingBoundary = Boolean(
+    previous?.run.crossRepoBoundaryCheckpoint?.status === 'pending'
+    && latestApprovesControl,
+  )
+  const approvesPendingWriteScope = Boolean(
+    previous
+    && previous.run.pendingWriteApproval
+    && latestApprovesControl
+    && !approvesPendingBoundary,
+  )
   const previousPendingPaths = previous?.run.pendingWriteApproval?.attemptedPaths ?? []
   const explicitResult = collectExplicitWriteTargets(source, canonicalCwd)
   const explicitWriteTargets = dedupeStrings([
@@ -131,6 +258,31 @@ export function deriveTaskExecutionState(
   const resolvedPermissions: ResolvedPermissions = loadResolvedPermissions({
     projectRoot: canonicalCwd,
   })
+  const gitSummary = readGitWorktreeSummary(canonicalCwd)
+  const targetRepo = gitSummary?.root ?? canonicalCwd
+  const promptSource = extractExternalPromptSourcePath(source, canonicalCwd)
+  const promptSourceRepo = promptSource ? readGitRootForPath(promptSource) : null
+  const previousBoundary = sameTaskAsPrevious ? previous?.run.crossRepoBoundaryCheckpoint ?? null : null
+  const detectedBoundary = previousBoundary
+    ? null
+    : detectCrossRepoBoundaryCheckpoint({
+        currentRepo: canonicalCwd,
+        promptSource,
+        promptSourceRepo,
+        targetRepo,
+        branch: gitSummary?.branch ?? null,
+        dirtyWorktreeSummary: gitSummary?.dirtyWorktreeSummary ?? null,
+        plannedWriteRoots: derivePlannedWriteRoots(allowedWritePaths, targetRepo),
+        now,
+      })
+  const crossRepoBoundaryCheckpoint = approvesPendingBoundary && previous?.run.crossRepoBoundaryCheckpoint
+    ? {
+        ...previous.run.crossRepoBoundaryCheckpoint,
+        status: 'confirmed' as const,
+        confirmedAt: now,
+      }
+    : previousBoundary ?? detectedBoundary
+  const crossRepoBoundaryPending = crossRepoBoundaryCheckpoint?.status === 'pending'
 
   return {
     contract: {
@@ -151,7 +303,11 @@ export function deriveTaskExecutionState(
       confidence,
     },
     run: {
-      status: approvesPendingWriteScope ? 'open' : previous?.run.status ?? 'open',
+      status: approvesPendingWriteScope || approvesPendingBoundary
+        ? 'open'
+        : crossRepoBoundaryPending
+          ? 'waiting_user'
+          : previous?.run.status ?? 'open',
       iterations: previous?.run.iterations ?? 0,
       lifetimeIterations: previous?.run.lifetimeIterations ?? 0,
       productionGateFired: previous?.run.productionGateFired ?? false,
@@ -162,8 +318,13 @@ export function deriveTaskExecutionState(
       lastArtifactProgressIteration: previous?.run.lastArtifactProgressIteration,
       currentFocus: previous?.run.currentFocus ?? null,
       lastProgressAt: previous?.run.lastProgressAt ?? now,
-      lastGuardReason: approvesPendingWriteScope ? null : previous?.run.lastGuardReason ?? null,
+      lastGuardReason: approvesPendingWriteScope || approvesPendingBoundary
+        ? null
+        : crossRepoBoundaryPending
+          ? 'Cross-repo boundary checkpoint requires explicit user confirmation.'
+          : previous?.run.lastGuardReason ?? null,
       pendingWriteApproval: approvesPendingWriteScope ? null : previous?.run.pendingWriteApproval ?? null,
+      crossRepoBoundaryCheckpoint,
       runWorkspace: sameTaskAsPrevious ? previous?.run.runWorkspace ?? null : null,
       lastUpdatedAt: now,
     },
@@ -217,6 +378,9 @@ function provenanceRecordFromUserExtraction(
 }
 
 export function describeTaskExecutionState(taskState: TaskExecutionState): string | null {
+  if (taskState.run.crossRepoBoundaryCheckpoint?.status === 'pending') {
+    return formatCrossRepoBoundaryCheckpoint(taskState.run.crossRepoBoundaryCheckpoint)
+  }
   // workspace scope is the default — emitting a banner each turn would just spam the transcript
   // without adding signal (the workspace boundary is implicit). Stay silent until an explicit
   // write scope has been derived from user input.
@@ -1293,6 +1457,139 @@ function latestUserText(conversation: Conversation): string | null {
   return null
 }
 
+interface GitWorktreeBoundarySummary {
+  root: string
+  branch: string | null
+  dirtyWorktreeSummary: CrossRepoBoundaryDirtySummary
+}
+
+function readGitWorktreeSummary(cwd: string): GitWorktreeBoundarySummary | null {
+  const root = readGitRootForPath(cwd)
+  if (!root) return null
+  const branch = readGitBranch(root)
+  try {
+    const raw = execFileSync('git', ['status', '--short'], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 2000,
+      maxBuffer: 1024 * 1024,
+    })
+    const lines = raw.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean)
+    return {
+      root,
+      branch,
+      dirtyWorktreeSummary: {
+        count: lines.length,
+        sample: lines.slice(0, CROSS_REPO_DIRTY_SAMPLE_LIMIT),
+        truncated: lines.length > CROSS_REPO_DIRTY_SAMPLE_LIMIT,
+      },
+    }
+  } catch {
+    return {
+      root,
+      branch,
+      dirtyWorktreeSummary: {
+        count: 0,
+        sample: [],
+        truncated: false,
+      },
+    }
+  }
+}
+
+function readGitRootForPath(pathToCheck: string): string | null {
+  try {
+    const cwd = existsSync(pathToCheck) && statSync(pathToCheck).isDirectory()
+      ? pathToCheck
+      : dirname(pathToCheck)
+    const root = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd,
+      encoding: 'utf8',
+      timeout: 2000,
+      maxBuffer: 1024 * 64,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    return root ? canonicalizePath(root) : null
+  } catch {
+    return null
+  }
+}
+
+function readGitBranch(root: string): string | null {
+  try {
+    const branch = execFileSync('git', ['branch', '--show-current'], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 2000,
+      maxBuffer: 1024 * 64,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    return branch || null
+  } catch {
+    return null
+  }
+}
+
+function extractExternalPromptSourcePath(source: SubstantiveUserInput[], cwd: string): string | null {
+  for (const entry of source) {
+    for (const line of entry.rawText.split(/\r?\n/)) {
+      for (const candidate of extractPromptSourceCandidates(line)) {
+        const resolved = resolvePromptSourceCandidate(candidate, cwd)
+        if (!resolved) continue
+        if (isWithinRoot(resolved, cwd)) continue
+        const promptish = !candidateLooksLikeOutputTarget(line, candidate)
+          && (candidateLooksLikePromptSourceCommand(line, candidate) || resolved.includes('/prompts/'))
+        const ext = extname(resolved).toLowerCase()
+        if (promptish && (ext === '.md' || ext === '.markdown' || ext === '.txt')) {
+          return resolved
+        }
+      }
+    }
+  }
+  return null
+}
+
+function extractPromptSourceCandidates(line: string): string[] {
+  const candidates = new Set(extractPathCandidates(line))
+  for (const match of line.matchAll(PROMPT_SOURCE_PATH_RE)) {
+    if (match[1]) candidates.add(match[1])
+  }
+  return [...candidates]
+}
+
+function candidateLooksLikePromptSourceCommand(line: string, candidate: string): boolean {
+  const prefix = prefixBeforeCandidate(line, candidate)
+  return PROMPT_SOURCE_PREFIX_RE.test(prefix)
+}
+
+function candidateLooksLikeOutputTarget(line: string, candidate: string): boolean {
+  const prefix = prefixBeforeCandidate(line, candidate)
+  return OUTPUT_TARGET_PREFIX_RE.test(prefix)
+}
+
+function prefixBeforeCandidate(line: string, candidate: string): string {
+  const index = line.indexOf(candidate)
+  return index >= 0 ? line.slice(0, index) : line
+}
+
+function resolvePromptSourceCandidate(candidate: string, cwd: string): string | null {
+  const cleaned = cleanCandidatePath(candidate)
+  if (!cleaned || cleaned.includes('://')) return null
+  const home = process.env['HOME']
+  const expanded = cleaned.startsWith('~/') && home
+    ? resolve(home, cleaned.slice(2))
+    : cleaned
+  const resolved = isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded)
+  return canonicalizePath(resolved)
+}
+
+function derivePlannedWriteRoots(allowedWritePaths: TaskPathScope[], fallbackRoot: string): string[] {
+  const writeScopes = allowedWritePaths
+    .filter((scope) => scope.origin !== 'external_reference')
+    .map((scope) => scope.path)
+  return writeScopes.length > 0 ? dedupeStrings(writeScopes) : [canonicalizePath(fallbackRoot)]
+}
+
 function collectSubstantiveUserInputs(conversation: Conversation): SubstantiveUserInput[] {
   const collected: SubstantiveUserInput[] = []
   for (const turn of conversation.turns) {
@@ -1379,7 +1676,7 @@ function collectExplicitWriteTargets(source: SubstantiveUserInput[], cwd: string
           if (cleaned && isAbsolute(cleaned) && !isWithinRoot(resolve(cleaned), cwd)) {
             const canonicalized = canonicalizePath(resolve(cleaned))
             candidates.add(canonicalized)
-            if (isAllowLine || inAllowWriteSection) {
+            if (isAllowLine) {
               userExternalPaths.add(canonicalized)
             }
             continue
@@ -1615,23 +1912,7 @@ function extractPathCandidates(text: string): string[] {
   return allCandidates
 }
 
-// OC-20260623-17: model id / version tokens like `mimo-v2.5-pro`, `gpt-4.1`,
-// `Qwen3.6-35B-A3B`, `v0.15.10` contain dots that extname() misinterprets as
-// file extensions (e.g. '.5-pro').  These must never become write-scope paths.
-function looksLikeModelOrVersionId(candidate: string): boolean {
-  // Tokens with a leading 'v' followed by a digit (e.g. v0.15.10)
-  if (/^v\d/.test(candidate)) return true
-  // Tokens like mimo-v2.5-pro, gpt-4.1 — pure-alpha prefix then -v?digit
-  if (/^[A-Za-z]+-v?\d/.test(candidate)) return true
-  // Tokens like Qwen3.6-35B-A3B — alpha prefix with inline digits, then
-  // dot-or-hyphen followed by digits (version-like, not a file extension).
-  // The digit-after-dot check distinguishes `Qwen3.6` from `file2.ts`.
-  if (/^[A-Za-z]+\d+[.-]\d/.test(candidate) && !candidate.includes('/')) return true
-  return false
-}
-
 function isLikelyPathCandidate(candidate: string): boolean {
-  if (looksLikeModelOrVersionId(candidate)) return false
   return candidate.startsWith('/')
     || candidate.startsWith('./')
     || candidate.startsWith('../')

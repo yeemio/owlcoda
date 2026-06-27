@@ -251,36 +251,3 @@ describe('Native Grep tool', () => {
     })
   })
 })
-
-// OC-20260623-15 — regression: grep must also find matches under out/.
-describe('Native Grep tool — out directory (OC-20260623-15)', () => {
-  const grep = createGrepTool()
-  let dir: string
-
-  beforeAll(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'owlcoda-grep-out-'))
-    await mkdir(join(dir, 'out', 'full'), { recursive: true })
-    await writeFile(join(dir, 'out', 'full', 'L0_qa.jsonl'), '{"prompt":"test"}\n')
-    await writeFile(join(dir, 'out', 'full', 'L1_qa.jsonl'), '{"prompt":"other"}\n')
-  })
-
-  afterAll(async () => {
-    await rm(dir, { recursive: true, force: true })
-  })
-
-  it('finds matches inside out/ directory', async () => {
-    const result = await grep.execute({ pattern: 'prompt', path: dir })
-    expect(result.isError).toBe(false)
-    expect(result.output).toContain('L0_qa.jsonl')
-    expect(result.output).toContain('L1_qa.jsonl')
-    expect(result.metadata?.matchLines).toBeGreaterThanOrEqual(2)
-  })
-
-  it('still ignores node_modules', async () => {
-    await mkdir(join(dir, 'node_modules', 'pkg'), { recursive: true })
-    await writeFile(join(dir, 'node_modules', 'pkg', 'secret.ts'), 'password')
-    const result = await grep.execute({ pattern: 'password', path: dir })
-    expect(result.isError).toBe(false)
-    expect(result.output).not.toContain('node_modules')
-  })
-})

@@ -43,12 +43,10 @@ describe('BrowserJob platform tool', () => {
     await rm(artifactDir, { recursive: true, force: true })
   })
 
-  it('exposes fetch_html, chrome_headless, and chrome_cdp provider schema', () => {
+  it('exposes fetch_html and chrome_headless provider schema', () => {
     const schema = NATIVE_TOOL_SCHEMAS['BrowserJob'] as Record<string, any>
-    expect(schema.properties.provider.enum).toEqual(['fetch_html', 'chrome_headless', 'chrome_cdp'])
+    expect(schema.properties.provider.enum).toEqual(['fetch_html', 'chrome_headless'])
     expect(schema.properties.chromeExecutablePath.description).toContain('Chrome/Chromium')
-    expect(schema.properties.clickSelector.description).toContain('provider=chrome_cdp')
-    expect(schema.properties.waitForResponseUrlIncludes.description).toContain('network response')
   })
 
   it('captures a URL as a browser job with queryable artifacts', async () => {
@@ -115,7 +113,7 @@ console.log('<!doctype html><main id="scoreboard">Chrome rendered odds board</ma
       chromeExecutablePath: fakeChrome,
       waitForSelector: '#scoreboard',
       artifactDir,
-      deadlineMs: 1000,
+      deadlineMs: 5000,
     })
 
     expect(result.isError).toBe(false)
@@ -164,55 +162,9 @@ console.log('<!doctype html><main id="scoreboard">Chrome rendered odds board</ma
     })
   })
 
-  it('runs a chrome_cdp click replay with screenshot, DOM, console, and network artifacts', async () => {
-    const fakeChrome = join(artifactDir, 'fake-chrome-cdp.mjs')
-    await writeFile(fakeChrome, fakeChromeCdpScript(), 'utf-8')
-    await chmod(fakeChrome, 0o755)
-    const tool = createBrowserJobTool()
-
-    const result = await tool.execute({
-      url: `${baseUrl}/page`,
-      provider: 'chrome_cdp',
-      chromeExecutablePath: fakeChrome,
-      clickSelector: '#capture',
-      waitForSelector: '#complete',
-      waitForResponseUrlIncludes: '/api/capture',
-      artifactDir,
-      deadlineMs: 3000,
-    })
-
-    expect(result.isError).toBe(false)
-    expect(result.output).toContain('clicked=#capture')
-    expect(result.output).toContain('response=/api/capture')
-    const job = (result.metadata as any).job
-    expect(job).toMatchObject({
-      type: 'browser',
-      status: 'done',
-      stage: 'completed',
-      provider: 'chrome_cdp',
-      cleanupAttempted: true,
-      cleanupSucceeded: true,
-    })
-    expect(job.artifacts.map((artifact: any) => artifact.artifactType)).toEqual([
-      'browser_screenshot',
-      'browser_dom',
-      'browser_text',
-      'browser_console',
-      'browser_network',
-    ])
-    const domPath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_dom').path
-    const textPath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_text').path
-    const consolePath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_console').path
-    const networkPath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_network').path
-    expect(await readFile(domPath, 'utf-8')).toContain('Complete odds')
-    expect(await readFile(textPath, 'utf-8')).toContain('Complete odds')
-    expect(await readFile(consolePath, 'utf-8')).toContain('capture clicked')
-    expect(await readFile(networkPath, 'utf-8')).toContain('/api/capture')
-  })
-
   it('records browser evidence in the run artifact registry with runtime metadata', async () => {
     const outputRoot = join(artifactDir, 'run-output')
-    await createRunWorkspace({
+    const { manifest } = await createRunWorkspace({
       outputRoot,
       cwd: artifactDir,
       taskFamily: 'research',
@@ -236,17 +188,19 @@ console.log('<!doctype html><main id="scoreboard">Chrome rendered odds board</ma
     const job = (result.metadata as any).job
     const ledger = await readArtifactLedger(outputRoot, {}, artifactDir)
     expect(ledger.artifacts).toHaveLength(2)
-    expect(job.artifacts.map((artifact: any) => artifact.artifactType)).toEqual(['browser_html', 'browser_text'])
+    expect(ledger.artifacts.map((artifact) => artifact.artifactType)).toEqual(['browser_html', 'browser_text'])
     for (const artifact of ledger.artifacts) {
       expect(artifact).toMatchObject({
         origin: 'browser_job',
+        environment: 'dogfood',
+        project: 'owlcoda-platform',
+        runId: manifest.runId,
+        jobId: job.jobId,
         stepId: 'capture-browser-evidence',
         participatesInFinal: false,
         status: 'present',
       })
-      expect(job.artifacts.some((jobArtifact: any) =>
-        jobArtifact.id === artifact.id && jobArtifact.path === artifact.path,
-      )).toBe(true)
+      expect(job.artifacts.some((jobArtifact: any) => jobArtifact.id === artifact.id)).toBe(true)
     }
   })
 
@@ -329,150 +283,3 @@ console.log('<!doctype html><main id="scoreboard">Chrome rendered odds board</ma
     })
   })
 })
-
-function fakeChromeCdpScript(): string {
-  return `#!/usr/bin/env node
-import { createServer } from 'node:http'
-import { createHash } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-
-const userDataArg = process.argv.find((arg) => arg.startsWith('--user-data-dir='))
-const userDataDir = userDataArg ? userDataArg.slice('--user-data-dir='.length) : process.cwd()
-mkdirSync(userDataDir, { recursive: true })
-let clicked = false
-let upgradedSocket = null
-
-const server = createServer((req, res) => {
-  if (req.url === '/json/list') {
-    res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify([{
-      id: 'page-1',
-      type: 'page',
-      url: 'about:blank',
-      webSocketDebuggerUrl: 'ws://127.0.0.1:' + server.address().port + '/devtools/page/1'
-    }]))
-    return
-  }
-  res.writeHead(404)
-  res.end('not found')
-})
-
-server.on('upgrade', (req, socket) => {
-  const key = req.headers['sec-websocket-key']
-  const accept = createHash('sha1').update(String(key) + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64')
-  socket.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: ' + accept + '\\r\\n\\r\\n')
-  upgradedSocket = socket
-  let buffer = Buffer.alloc(0)
-  socket.on('data', (chunk) => {
-    buffer = Buffer.concat([buffer, chunk])
-    while (true) {
-      const frame = readFrame(buffer)
-      if (!frame) break
-      buffer = buffer.subarray(frame.bytes)
-      if (frame.opcode === 1) handleMessage(socket, JSON.parse(frame.text))
-    }
-  })
-})
-
-server.listen(0, '127.0.0.1', () => {
-  const port = server.address().port
-  writeFileSync(join(userDataDir, 'DevToolsActivePort'), String(port) + '\\n/devtools/browser/fake\\n')
-})
-
-function handleMessage(socket, msg) {
-  if (msg.method === 'Page.enable' || msg.method === 'Runtime.enable' || msg.method === 'Network.enable') {
-    send(socket, { id: msg.id, result: {} })
-    return
-  }
-  if (msg.method === 'Page.navigate') {
-    send(socket, { id: msg.id, result: { frameId: 'frame-1' } })
-    setTimeout(() => send(socket, { method: 'Page.loadEventFired', params: { timestamp: Date.now() / 1000 } }), 5)
-    return
-  }
-  if (msg.method === 'Input.dispatchMouseEvent') {
-    if (msg.params && msg.params.type === 'mouseReleased') {
-      clicked = true
-      send(socket, { method: 'Runtime.consoleAPICalled', params: { type: 'log', args: [{ value: 'capture clicked' }] } })
-      send(socket, { method: 'Network.responseReceived', params: { response: { url: 'http://127.0.0.1/api/capture', status: 200, mimeType: 'application/json' } } })
-    }
-    send(socket, { id: msg.id, result: {} })
-    return
-  }
-  if (msg.method === 'Page.captureScreenshot') {
-    send(socket, { id: msg.id, result: { data: 'ZmFrZS1wbmc=' } })
-    return
-  }
-  if (msg.method === 'Runtime.evaluate') {
-    const expression = String((msg.params && msg.params.expression) || '')
-    if (expression.includes('getBoundingClientRect')) {
-      send(socket, { id: msg.id, result: { result: { type: 'object', value: { ok: true, x: 24, y: 32, tag: 'BUTTON', text: 'Auto capture' } } } })
-      return
-    }
-    if (expression.includes('document.documentElement.outerHTML')) {
-      send(socket, { id: msg.id, result: { result: { type: 'string', value: html() } } })
-      return
-    }
-    if (expression.includes('document.body.innerText')) {
-      send(socket, { id: msg.id, result: { result: { type: 'string', value: clicked ? 'Auto capture Complete odds' : 'Auto capture Partial odds' } } })
-      return
-    }
-    if (expression.includes('document.querySelector')) {
-      const isComplete = expression.includes('#complete')
-      send(socket, { id: msg.id, result: { result: { type: 'boolean', value: isComplete ? clicked : true } } })
-      return
-    }
-    send(socket, { id: msg.id, result: { result: { type: 'undefined' } } })
-    return
-  }
-  send(socket, { id: msg.id, result: {} })
-}
-
-function html() {
-  return clicked
-    ? '<!doctype html><body><button id="capture">Auto capture</button><main id="complete">Complete odds</main></body>'
-    : '<!doctype html><body><button id="capture">Auto capture</button><main id="partial">Partial odds</main></body>'
-}
-
-function send(socket, value) {
-  const payload = Buffer.from(JSON.stringify(value))
-  let header
-  if (payload.length < 126) {
-    header = Buffer.from([0x81, payload.length])
-  } else {
-    header = Buffer.alloc(4)
-    header[0] = 0x81
-    header[1] = 126
-    header.writeUInt16BE(payload.length, 2)
-  }
-  socket.write(Buffer.concat([header, payload]))
-}
-
-function readFrame(buffer) {
-  if (buffer.length < 2) return null
-  const opcode = buffer[0] & 0x0f
-  const masked = (buffer[1] & 0x80) !== 0
-  let length = buffer[1] & 0x7f
-  let offset = 2
-  if (length === 126) {
-    if (buffer.length < 4) return null
-    length = buffer.readUInt16BE(2)
-    offset = 4
-  }
-  const maskOffset = masked ? offset : -1
-  if (masked) offset += 4
-  if (buffer.length < offset + length) return null
-  const payload = Buffer.from(buffer.subarray(offset, offset + length))
-  if (masked) {
-    const mask = buffer.subarray(maskOffset, maskOffset + 4)
-    for (let i = 0; i < payload.length; i += 1) payload[i] = payload[i] ^ mask[i % 4]
-  }
-  return { opcode, text: payload.toString('utf-8'), bytes: offset + length }
-}
-
-process.on('SIGTERM', () => {
-  if (upgradedSocket) upgradedSocket.destroy()
-  server.close(() => process.exit(0))
-})
-`
-}

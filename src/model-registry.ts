@@ -9,6 +9,7 @@ import {
   resolveEffectiveContextWindow,
   resolveModelCapabilities,
   type ModelContextCapability,
+  type ModelCapabilities,
 } from './model-capabilities.js'
 import { normalizeProviderKind } from './provider-kind.js'
 import { normalizeRouterBaseUrl } from './url-normalize.js'
@@ -32,6 +33,9 @@ export interface ConfiguredModel {
   apiKeySource?: 'env' | 'config' | 'unset'
   headers?: Record<string, string>
   contextWindow?: number
+  supportsImages?: boolean
+  supportsStructuredOutput?: boolean
+  maxOutputTokens?: number
   timeoutMs?: number
 }
 
@@ -48,6 +52,9 @@ export interface ResolvedModel {
   apiKeySource?: 'env' | 'config' | 'unset'
   headers?: Record<string, string>
   contextWindow?: number
+  supportsImages?: boolean
+  supportsStructuredOutput?: boolean
+  maxOutputTokens?: number
   timeoutMs?: number
 }
 
@@ -103,13 +110,20 @@ export function normalizeModel(raw: Record<string, unknown>): ConfiguredModel {
     apiKeyEnv,
     apiKeySource,
     headers: customHeaders,
+    supportsImages: typeof raw.supportsImages === 'boolean' ? raw.supportsImages : undefined,
+    supportsStructuredOutput: typeof raw.supportsStructuredOutput === 'boolean' ? raw.supportsStructuredOutput : undefined,
+    maxOutputTokens: typeof raw.maxOutputTokens === 'number' ? raw.maxOutputTokens : undefined,
     contextWindow: resolveEffectiveContextWindow({
       id,
       label: typeof raw.label === 'string' && raw.label ? raw.label : id,
       backendModel,
       aliases: Array.isArray(raw.aliases) ? raw.aliases.filter((a): a is string => typeof a === 'string') : [],
+      provider: typeof raw.provider === 'string' && raw.provider.trim() ? raw.provider.trim() : undefined,
       endpoint,
       contextWindow: typeof raw.contextWindow === 'number' ? raw.contextWindow : undefined,
+      supportsImages: typeof raw.supportsImages === 'boolean' ? raw.supportsImages : undefined,
+      supportsStructuredOutput: typeof raw.supportsStructuredOutput === 'boolean' ? raw.supportsStructuredOutput : undefined,
+      maxOutputTokens: typeof raw.maxOutputTokens === 'number' ? raw.maxOutputTokens : undefined,
     }),
     timeoutMs: typeof raw.timeoutMs === 'number' ? raw.timeoutMs : undefined,
   }
@@ -146,6 +160,9 @@ function toResolved(m: ConfiguredModel): ResolvedModel {
     apiKeySource: m.apiKeySource,
     headers: m.headers,
     contextWindow: m.contextWindow,
+    supportsImages: m.supportsImages,
+    supportsStructuredOutput: m.supportsStructuredOutput,
+    maxOutputTokens: m.maxOutputTokens,
     timeoutMs: m.timeoutMs,
   }
 }
@@ -388,6 +405,10 @@ export function resolveModelContextWindow(config: ModelRegistryConfig, requestMo
 }
 
 export function resolveModelContextCapability(config: ModelRegistryConfig, requestModel: string): ModelContextCapability {
+  return resolveModelCapabilitiesForRequest(config, requestModel).context
+}
+
+export function resolveModelCapabilitiesForRequest(config: ModelRegistryConfig, requestModel: string): ModelCapabilities {
   const matched = findConfiguredModel(config, requestModel)
   if (matched) {
     return resolveModelCapabilities({
@@ -395,16 +416,20 @@ export function resolveModelContextCapability(config: ModelRegistryConfig, reque
       label: matched.label,
       backendModel: matched.backendModel,
       aliases: matched.aliases,
+      provider: matched.provider,
       endpoint: matched.endpoint,
       contextWindow: matched.contextWindow,
-    }).context
+      supportsImages: matched.supportsImages,
+      supportsStructuredOutput: matched.supportsStructuredOutput,
+      maxOutputTokens: matched.maxOutputTokens,
+    })
   }
 
   return resolveModelCapabilities({
     id: requestModel,
     label: requestModel,
     backendModel: requestModel,
-  }).context
+  })
 }
 
 // ─── Model Routing ───

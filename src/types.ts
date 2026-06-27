@@ -30,6 +30,8 @@ export interface AnthropicToolResultBlock {
   tool_use_id: string
   content?: string | AnthropicTextBlock[]
   is_error?: boolean
+  /** Internal-only tool metadata persisted in sessions; stripped before provider requests. */
+  metadata?: Record<string, unknown>
   cache_control?: { type: string }
 }
 

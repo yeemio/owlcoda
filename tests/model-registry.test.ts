@@ -128,6 +128,24 @@ describe('resolveModelRoute', () => {
     expect(route.headers['anthropic-version']).toBeUndefined()
   })
 
+  it('routes Kimi K2.7 Moonshot base URL to OpenAI chat completions', () => {
+    const m = makeModel({
+      id: 'kimi-k2.7-code',
+      backendModel: 'kimi-k2.7-code',
+      aliases: ['kimi27'],
+      provider: 'moonshot',
+      endpoint: 'https://api.moonshot.ai/v1',
+      apiKey: 'sk-moonshot',
+    })
+    const config = makeRegistryConfig([m])
+    const route = resolveModelRoute(config, 'kimi27')
+    expect(route.endpointUrl).toBe('https://api.moonshot.ai/v1/chat/completions')
+    expect(route.translate).toBe(true)
+    expect(route.headers['Authorization']).toBe('Bearer sk-moonshot')
+    expect(route.headers['x-api-key']).toBeUndefined()
+    expect(route.headers['anthropic-version']).toBeUndefined()
+  })
+
   it('honors explicit Anthropic provider on Kimi-hosted messages endpoints', () => {
     const m = makeModel({
       id: 'kimi-2.6',

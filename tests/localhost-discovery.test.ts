@@ -67,7 +67,7 @@ describe('discoverLocalRuntimes', () => {
       'http://localhost:11434/v1/models',
       'http://localhost:1234/v1/models',
       'http://localhost:8000/v1/models',
-      'http://localhost:8066/v1/models',
+      'http://localhost:8066/v1/openai/models',
     ])
   })
 

@@ -49,11 +49,16 @@ import {
   type LongTaskSnapshot,
 } from '../long-task-lifecycle.js'
 import {
-  forgetRunLifecycleSnapshotsByKind,
-  recordRunLifecycleSnapshot,
-  type RunLifecycleStatus,
-  type RunRecoveryPolicy,
-} from '../run-lifecycle.js'
+  appendJobOutput,
+  createJob,
+  finishJob,
+  getJob,
+  recordJobCleanup,
+  registerJobAbortAdapter,
+  startJob,
+  unregisterJobAbortAdapter,
+  type JobTerminalStatus,
+} from '../job-supervisor.js'
 
 export interface AgentInput {
   /** Short 3-5 word description of the task */
@@ -130,6 +135,7 @@ export type AgentRunStatus = 'running' | 'success' | 'failed' | 'partial' | 'inf
 
 export interface AgentRunRecord {
   agentId: string
+  jobId?: string
   description: string
   agentType: string
   model?: string
@@ -152,21 +158,11 @@ export interface AgentRunRecord {
   outputSnippet?: string
   errorSnippet?: string
   longTaskSnapshot?: LongTaskSnapshot
-  recoveryPolicy?: AgentRunRecoveryPolicy
 }
 
 export interface AgentRunHistorySnapshot {
   schemaVersion: 1
   records: AgentRunRecord[]
-}
-
-export interface AgentRunRecoveryPolicy {
-  schema_version: 1
-  strategy: 'inspect_before_retry'
-  retry_allowed: 'manual_only'
-  verbatim_retry_allowed: false
-  inspect_commands: string[]
-  reason: string
 }
 
 const MAX_AGENT_RUN_HISTORY = 50
@@ -176,7 +172,6 @@ export function __resetAgentRunHistoryForTesting(): void {
   agentRunHistory.clear()
   runningAgents.clear()
   forgetLongTaskSnapshotsBySource('agent')
-  forgetRunLifecycleSnapshotsByKind('agent_run')
 }
 
 function rememberAgentRun(record: AgentRunRecord): void {
@@ -185,7 +180,6 @@ function rememberAgentRun(record: AgentRunRecord): void {
     if (oldest) agentRunHistory.delete(oldest)
   }
   agentRunHistory.set(record.agentId, record)
-  recordAgentRunLifecycleSnapshot(record)
 }
 
 export function snapshotAgentRunHistory(conversationId?: string): AgentRunHistorySnapshot {
@@ -235,9 +229,9 @@ function normalizeAgentRunRecord(raw: unknown): AgentRunRecord | null {
     ? 'agent:run_handle_missing_after_resume'
     : stringField(data['failureCategory'])
   const longTaskSnapshot = normalizeLongTaskSnapshot(data['longTaskSnapshot'])
-  const recoveryPolicy = normalizeAgentRunRecoveryPolicy(data['recoveryPolicy'])
   return {
     agentId,
+    ...(stringField(data['jobId']) ? { jobId: stringField(data['jobId']) } : {}),
     description,
     agentType: stringField(data['agentType']) ?? 'general-purpose',
     ...(stringField(data['model']) ? { model: stringField(data['model']) } : {}),
@@ -260,7 +254,6 @@ function normalizeAgentRunRecord(raw: unknown): AgentRunRecord | null {
     ...(stringField(data['outputSnippet']) ? { outputSnippet: stringField(data['outputSnippet']) } : {}),
     ...(stringField(data['errorSnippet']) ? { errorSnippet: stringField(data['errorSnippet']) } : {}),
     ...(longTaskSnapshot ? { longTaskSnapshot } : {}),
-    ...(recoveryPolicy ? { recoveryPolicy } : {}),
   }
 }
 
@@ -287,12 +280,7 @@ function rememberRestoredAgentRun(record: AgentRunRecord): void {
       lastProgress: formatProgress(record.lastProgress),
       outputSnippet: record.outputSnippet,
     })
-  const restored = { ...record, longTaskSnapshot }
-  const recoveryPolicy = record.recoveryPolicy ?? buildAgentRunRecoveryPolicy(restored)
-  rememberAgentRun({
-    ...restored,
-    ...(recoveryPolicy ? { recoveryPolicy } : {}),
-  })
+  rememberAgentRun({ ...record, longTaskSnapshot })
 }
 
 function restoreAgentRunHistoryFromLedger(
@@ -395,6 +383,21 @@ function recordAgentRunStarted(opts: {
   conversationId?: string
 }): void {
   const now = new Date().toISOString()
+  const jobId = agentJobId(opts.agentId)
+  createJob({
+    jobId,
+    type: 'agent',
+    stage: 'queued',
+    tool: 'Agent',
+    provider: opts.model,
+    command: opts.description,
+    recoveryHint: `AgentRunGet agentId=${opts.agentId}`,
+    source: { kind: 'agent', id: opts.agentId },
+  })
+  startJob(jobId, {
+    stage: 'running',
+    externalHandle: `agent:${opts.agentId}`,
+  })
   const longTaskSnapshot = recordAgentLongTaskSnapshot({
     agentId: opts.agentId,
     status: 'running',
@@ -407,6 +410,7 @@ function recordAgentRunStarted(opts: {
   })
   rememberAgentRun({
     agentId: opts.agentId,
+    jobId,
     description: opts.description,
     agentType: opts.agentType,
     model: opts.model,
@@ -443,6 +447,21 @@ function recordAgentRunSettled(opts: {
   const timeoutKind = typeof metadata['timeoutKind'] === 'string' ? metadata['timeoutKind'] : undefined
   const lastProgress = isAgentProgressMark(metadata['lastProgress']) ? metadata['lastProgress'] : undefined
   const outputSnippet = snippet(opts.result.output)
+  const jobId = existing?.jobId ?? agentJobId(opts.agentId)
+  appendJobOutput(jobId, `${outputSnippet}\n`)
+  const jobAlreadyCancelled = getJob(jobId)?.status === 'cancelled'
+  if (!jobAlreadyCancelled) {
+    finishJob(jobId, mapAgentRunStatusToJobStatus(opts.status, failureCategory), {
+      stage: mapAgentRunStatusToJobStage(opts.status, failureCategory),
+      ...(opts.result.isError ? { error: outputSnippet } : {}),
+      ...(failureCategory ? { terminationReason: failureCategory } : {}),
+    })
+    recordJobCleanup(jobId, {
+      attempted: true,
+      succeeded: true,
+      remainingPids: [],
+    })
+  }
   const agentType = existing?.agentType ?? String(opts.input.subagent_type ?? 'general-purpose')
   const longTaskSnapshot = recordAgentLongTaskSnapshot({
     agentId: opts.agentId,
@@ -459,8 +478,9 @@ function recordAgentRunSettled(opts: {
     outputSnippet,
   })
   metadata['longTaskSnapshot'] = longTaskSnapshot
-  const settledRecord: AgentRunRecord = {
+  rememberAgentRun({
     agentId: opts.agentId,
+    jobId,
     description: existing?.description ?? opts.input.description,
     agentType,
     ...(existing?.model ? { model: existing.model } : {}),
@@ -483,14 +503,7 @@ function recordAgentRunSettled(opts: {
     outputSnippet,
     ...(opts.result.isError ? { errorSnippet: outputSnippet } : {}),
     longTaskSnapshot,
-  }
-  const recoveryPolicy = buildAgentRunRecoveryPolicy(settledRecord)
-  if (recoveryPolicy) {
-    metadata['agent_recovery_policy'] = recoveryPolicy
-    opts.result.output = appendAgentRecoveryPolicy(opts.result.output, recoveryPolicy)
-    settledRecord.recoveryPolicy = recoveryPolicy
-  }
-  rememberAgentRun(settledRecord)
+  })
 }
 
 function recordAgentLongTaskSnapshot(opts: {
@@ -540,6 +553,32 @@ function mapAgentRunStatusToLongTaskStatus(
   return status
 }
 
+function agentJobId(agentId: string): string {
+  return `job:agent:${agentId}`
+}
+
+function mapAgentRunStatusToJobStatus(
+  status: AgentRunStatus,
+  failureCategory: string | undefined,
+): JobTerminalStatus {
+  if (failureCategory === 'agent:watchdog_timeout') return 'timeout'
+  if (status === 'success') return 'done'
+  if (status === 'cancelled') return 'cancelled'
+  if (status === 'incomplete') return 'timeout'
+  return 'failed'
+}
+
+function mapAgentRunStatusToJobStage(
+  status: AgentRunStatus,
+  failureCategory: string | undefined,
+): string {
+  if (failureCategory === 'agent:watchdog_timeout') return 'timeout'
+  if (status === 'success') return 'completed'
+  if (status === 'cancelled') return 'cancelled'
+  if (status === 'incomplete') return 'incomplete'
+  return status
+}
+
 function isAgentProgressMark(value: unknown): value is AgentProgressMark {
   if (!value || typeof value !== 'object') return false
   const mark = value as Record<string, unknown>
@@ -559,7 +598,6 @@ function cloneAgentRunRecord(record: AgentRunRecord): AgentRunRecord {
     touchedPaths: [...record.touchedPaths],
     ...(record.lastProgress ? { lastProgress: { ...record.lastProgress } } : {}),
     ...(record.longTaskSnapshot ? { longTaskSnapshot: { ...record.longTaskSnapshot } } : {}),
-    ...(record.recoveryPolicy ? { recoveryPolicy: { ...record.recoveryPolicy, inspect_commands: [...record.recoveryPolicy.inspect_commands] } } : {}),
   }
 }
 
@@ -638,26 +676,6 @@ function normalizeLongTaskSnapshot(value: unknown): LongTaskSnapshot | undefined
   }
 }
 
-function normalizeAgentRunRecoveryPolicy(value: unknown): AgentRunRecoveryPolicy | undefined {
-  if (!value || typeof value !== 'object') return undefined
-  const data = value as Record<string, unknown>
-  if (data['schema_version'] !== 1) return undefined
-  if (data['strategy'] !== 'inspect_before_retry') return undefined
-  if (data['retry_allowed'] !== 'manual_only') return undefined
-  if (data['verbatim_retry_allowed'] !== false) return undefined
-  const inspectCommands = stringArrayField(data['inspect_commands'])
-  const reason = stringField(data['reason'])
-  if (inspectCommands.length === 0 || !reason) return undefined
-  return {
-    schema_version: 1,
-    strategy: 'inspect_before_retry',
-    retry_allowed: 'manual_only',
-    verbatim_retry_allowed: false,
-    inspect_commands: inspectCommands,
-    reason,
-  }
-}
-
 function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim().length > 0 ? value : undefined
 }
@@ -690,112 +708,6 @@ function parsePositiveLimit(value: unknown, fallback: number): number {
 function formatProgress(mark: AgentProgressMark | undefined): string {
   if (!mark) return 'none'
   return mark.detail ? `${mark.type}:${mark.detail}` : mark.type
-}
-
-function buildAgentRunRecoveryPolicy(record: AgentRunRecord): AgentRunRecoveryPolicy | undefined {
-  const timeoutOrLostHandle = record.failureCategory === 'agent:watchdog_timeout'
-    || record.failureCategory === 'agent:run_handle_missing_after_resume'
-    || record.timeoutKind === 'agent_run_handle_missing_after_resume'
-    || record.longTaskSnapshot?.status === 'timeout'
-    || (
-      record.longTaskSnapshot?.status === 'incomplete'
-      && record.longTaskSnapshot.timeoutKind === 'agent_run_handle_missing_after_resume'
-    )
-  if (!timeoutOrLostHandle) return undefined
-
-  return {
-    schema_version: 1,
-    strategy: 'inspect_before_retry',
-    retry_allowed: 'manual_only',
-    verbatim_retry_allowed: false,
-    inspect_commands: [
-      `AgentRunGet agentId=${record.agentId}`,
-      `LongTaskGet longTaskId=agent:${record.agentId}`,
-    ],
-    reason:
-      'Agent run lost its live handle or timed out under the watchdog. Inspect the saved run and long-task record before launching a narrower manual retry; do not retry the original prompt verbatim.',
-  }
-}
-
-function formatAgentRecoveryPolicyLine(policy: AgentRunRecoveryPolicy | undefined): string {
-  if (!policy) return ''
-  return [
-    'AgentRecoveryPolicy:',
-    `strategy=${policy.strategy}`,
-    `retry_allowed=${policy.retry_allowed}`,
-    `verbatim_retry_allowed=${String(policy.verbatim_retry_allowed)}`,
-    `inspect="${policy.inspect_commands[0] ?? ''}"`,
-    `long_task_inspect="${policy.inspect_commands[1] ?? ''}"`,
-  ].join(' ')
-}
-
-function appendAgentRecoveryPolicy(output: string, policy: AgentRunRecoveryPolicy): string {
-  const line = formatAgentRecoveryPolicyLine(policy)
-  if (!line || output.includes(line)) return output
-  return [output.trimEnd(), '', line].join('\n')
-}
-
-function recordAgentRunLifecycleSnapshot(record: AgentRunRecord): void {
-  const recoveryPolicy = agentRunLifecycleRecoveryPolicy(record)
-  recordRunLifecycleSnapshot({
-    runId: `agent:${record.agentId}`,
-    kind: 'agent_run',
-    status: mapAgentRunRecordToRunStatus(record),
-    objective: record.description,
-    startedAt: record.startedAt,
-    updatedAt: record.updatedAt,
-    ...(record.finishedAt ? { finishedAt: record.finishedAt } : {}),
-    owner: 'agent_control',
-    ...(record.parentTaskId ? { parentRunId: runIdFromTaskId(record.parentTaskId) } : {}),
-    inspectCommand: `AgentRunGet agentId=${record.agentId}`,
-    recoveryPolicy,
-    evidence: {
-      ...(record.timeoutKind ? { timeout_kind: record.timeoutKind } : {}),
-      ...(record.lastProgress ? { last_progress: formatProgress(record.lastProgress) } : {}),
-      ...(record.outputSnippet ? { last_output_summary: record.outputSnippet } : {}),
-      ...(record.errorSnippet ? { terminal_summary: record.errorSnippet } : {}),
-    },
-  })
-}
-
-function mapAgentRunRecordToRunStatus(record: AgentRunRecord): RunLifecycleStatus {
-  if (record.failureCategory === 'agent:watchdog_timeout' || record.longTaskSnapshot?.status === 'timeout') {
-    return 'timeout'
-  }
-  if (record.status === 'success') return 'completed'
-  if (record.status === 'cancelled') return 'cancelled'
-  if (record.status === 'incomplete' || record.status === 'partial' || record.status === 'inferred') return 'incomplete'
-  if (record.status === 'running') return 'running'
-  return 'failed'
-}
-
-function agentRunLifecycleRecoveryPolicy(record: AgentRunRecord): RunRecoveryPolicy {
-  if (record.recoveryPolicy) {
-    return {
-      schema_version: 1,
-      strategy: record.recoveryPolicy.strategy,
-      next_command: record.recoveryPolicy.inspect_commands[0] ?? `AgentRunGet agentId=${record.agentId}`,
-      reason: record.recoveryPolicy.reason,
-    }
-  }
-  if (record.status === 'running') {
-    return {
-      schema_version: 1,
-      strategy: 'inspect_later',
-      next_command: `AgentRunGet agentId=${record.agentId}`,
-      reason: 'Agent run is live in this process; inspect the run record before deciding to wait or intervene.',
-    }
-  }
-  return {
-    schema_version: 1,
-    strategy: 'report_terminal',
-    next_command: `AgentRunGet agentId=${record.agentId}`,
-    reason: 'Agent run is terminal; report saved evidence instead of retrying blindly.',
-  }
-}
-
-function runIdFromTaskId(taskId: string): string {
-  return taskId.startsWith('task:') ? taskId : `task:${taskId}`
 }
 
 function formatAgentRunSummary(record: AgentRunRecord): string {
@@ -831,8 +743,6 @@ function formatAgentRunDetail(record: AgentRunRecord): string {
   if (lifecycleLine) lines.push(lifecycleLine)
   const waitPolicyLine = formatLongTaskWaitPolicyLine(record.longTaskSnapshot)
   if (waitPolicyLine) lines.push(waitPolicyLine)
-  const recoveryPolicyLine = formatAgentRecoveryPolicyLine(record.recoveryPolicy ?? buildAgentRunRecoveryPolicy(record))
-  if (recoveryPolicyLine) lines.push(recoveryPolicyLine)
   if (record.iterations !== undefined) lines.push(`iterations=${record.iterations}`)
   if (record.stopReason !== undefined) lines.push(`stopReason=${record.stopReason ?? 'none'}`)
   if (record.elapsedSeconds !== undefined) lines.push(`elapsed=${record.elapsedSeconds.toFixed(1)}s`)
@@ -878,7 +788,6 @@ export function createAgentRunGetTool(): NativeToolDef<{ agentId: string }> {
       if (!agentId) return { output: 'agentId is required.', isError: true }
       const record = agentRunHistory.get(agentId)
       if (!record) return { output: `Agent run "${agentId}" not found.`, isError: true, metadata: { agentId } }
-      const recoveryPolicy = record.recoveryPolicy ?? buildAgentRunRecoveryPolicy(record)
       return {
         output: formatAgentRunDetail(record),
         isError: false,
@@ -887,7 +796,6 @@ export function createAgentRunGetTool(): NativeToolDef<{ agentId: string }> {
           ...(record.longTaskSnapshot
             ? { long_task_lifecycle: buildLongTaskLifecycleVerdict(record.longTaskSnapshot) }
             : {}),
-          ...(recoveryPolicy ? { agent_recovery_policy: recoveryPolicy } : {}),
         },
       }
     },
@@ -1398,9 +1306,13 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
         }
       }
 
+      let liveCancelJobId: string | undefined
       try {
       const agentType = subagent_type ?? 'general-purpose'
       const agentId = `agent-${randomUUID().slice(0, 8)}`
+      const jobId = agentJobId(agentId)
+      liveCancelJobId = jobId
+      const liveCancelController = new AbortController()
       const isExplore = agentType.toLowerCase() === 'explore'
       // Model precedence: explicit per-call input.model > OWLCODA_SUBAGENT_MODEL
       // operator default > parent conversation model. Blank/whitespace inputs
@@ -1448,6 +1360,9 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
         input,
         conversationId: context?.conversationId,
       })
+      registerJobAbortAdapter(jobId, (reason) => {
+        liveCancelController.abort(new Error(`JobCancel: ${reason}`))
+      })
 
       // 0.13.57 agent_timeout_policy_v1 — two-axis watchdog. Idle timeout
       // resets on any progress signal (assistant text, tool start/end,
@@ -1461,7 +1376,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
       const watchdog = createAgentWatchdog({
         idleTimeoutMs: policy.idleTimeoutMs,
         maxRuntimeMs: policy.maxRuntimeMs,
-        externalSignal: context?.signal,
+        externalSignal: composeAgentExternalSignal(context?.signal, liveCancelController.signal),
       })
 
       // Wrap callbacks to prefix with agent label AND record progress
@@ -1984,10 +1899,20 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
         return toolResult
       }
       } finally {
+        if (liveCancelJobId) unregisterJobAbortAdapter(liveCancelJobId)
         releaseSlot()
       }
     },
   }
+}
+
+function composeAgentExternalSignal(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const active = signals.filter((signal): signal is AbortSignal => Boolean(signal))
+  if (active.length === 0) return undefined
+  if (active.length === 1) return active[0]
+  return typeof AbortSignal !== 'undefined' && typeof AbortSignal.any === 'function'
+    ? AbortSignal.any(active)
+    : active[0]
 }
 
 // ---------------------------------------------------------------------------

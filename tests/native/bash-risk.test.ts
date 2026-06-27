@@ -72,6 +72,13 @@ const SAFE_READ_CASES: Case[] = [
   { input: 'sleep 0.3', level: 'safe_readonly' },
   { input: 'sleep 5; echo done', level: 'safe_readonly' },
   { input: 'echo start; sleep 1; echo end', level: 'safe_readonly' },
+  // OC-20260621-10A: process/hash inspection commands are read-only and are
+  // used by TaskVerify preflight checks for long-running training state.
+  { input: 'ps -ax', level: 'safe_readonly' },
+  { input: 'ps -p 123 -o pid,stat,etime,command', level: 'safe_readonly' },
+  { input: 'pgrep -fl mlx_lm', level: 'safe_readonly' },
+  { input: 'shasum -a 256 some/file.json', level: 'safe_readonly' },
+  { input: 'sha256sum some/file.json', level: 'safe_readonly' },
 ]
 
 const NEEDS_APPROVAL_CASES: Case[] = [
@@ -152,6 +159,8 @@ const UNKNOWN_CASES: Case[] = [
   // `env VAR=val <cmd>` RUNS <cmd>; classify by the wrapped command, not by a
   // blanket trust of `env`. Here the wrapped command is a test run.
   { input: 'env PYTHONPATH=src python3 -m pytest x.py -q', level: 'unknown' },
+  { input: 'pgrep -fl mlx_lm | xargs kill', level: 'unknown' },
+  { input: 'kill $(pgrep mlx_lm)', level: 'unknown' },
 ]
 
 const COMPOUND_CASES: Case[] = [

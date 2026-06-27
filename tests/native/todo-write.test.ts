@@ -59,23 +59,13 @@ describe('TodoWrite Tool', () => {
     expect(result.output).toContain('Progress: 1/3')
   })
 
-  it('accepts skipped and blocked todos with explicit failure reasons without counting them as done', async () => {
+  it('accepts skipped and blocked todos without counting them as done', async () => {
     const tool = createTodoWriteTool()
     const result = await tool.execute({
       todos: [
         { content: 'Wave 1 shipped', status: 'completed', activeForm: 'Wave 1 shipped' },
-        {
-          content: 'Wave 4 blocked by runtime adapter_path gap',
-          status: 'blocked',
-          activeForm: 'Recording runtime blocker',
-          failureReason: 'runtime adapter_path gap prevents serving Wave 4',
-        },
-        {
-          content: 'Wave 5 skipped because Wave 4 did not serve',
-          status: 'skipped',
-          activeForm: 'Skipping dependent smoke',
-          failureReason: 'dependent smoke requires Wave 4 runtime to serve',
-        },
+        { content: 'Wave 4 blocked by runtime adapter_path gap', status: 'blocked' as any, activeForm: 'Recording runtime blocker' },
+        { content: 'Wave 5 skipped because Wave 4 did not serve', status: 'skipped' as any, activeForm: 'Skipping dependent smoke' },
         { content: 'Wave 6 report blocked outcome', status: 'pending', activeForm: 'Writing blocked outcome' },
       ],
     })
@@ -93,37 +83,6 @@ describe('TodoWrite Tool', () => {
       successful: 1,
       terminalNonSuccess: 2,
     })
-  })
-
-  it('rejects skipped todos without a non-empty failureReason', async () => {
-    const tool = createTodoWriteTool()
-    const result = await tool.execute({
-      todos: [
-        { content: 'Skip dependent smoke', status: 'skipped', activeForm: 'Skipping dependent smoke' } as any,
-      ],
-    })
-
-    expect(result.isError).toBe(true)
-    expect(result.output).toContain('failureReason')
-    expect(getTodos()).toHaveLength(0)
-  })
-
-  it('rejects blocked todos with a blank failureReason', async () => {
-    const tool = createTodoWriteTool()
-    const result = await tool.execute({
-      todos: [
-        {
-          content: 'Wait for runtime adapter',
-          status: 'blocked',
-          activeForm: 'Waiting for runtime adapter',
-          failureReason: '   ',
-        },
-      ],
-    })
-
-    expect(result.isError).toBe(true)
-    expect(result.output).toContain('failureReason')
-    expect(getTodos()).toHaveLength(0)
   })
 
   it('handles empty todo list', async () => {

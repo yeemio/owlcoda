@@ -6,11 +6,16 @@ import type {
   RuntimeEventKind,
   RuntimeEventLog,
   RuntimeEventRecord,
+  RuntimeFactRefs,
   RuntimeRecoveryCheckpointDisposition,
   RuntimeRecoveryCheckpointKind,
   RuntimeRecoveryCheckpointRecord,
   RuntimeRecoveryLedger,
 } from './protocol/types.js'
+import {
+  mergeRuntimeFactRefs,
+  runtimeFactRefsFromPayload,
+} from './runtime-facts.js'
 
 const MAX_RUNTIME_EVENTS = 200
 const MAX_RESUME_SUFFIX_EVENTS = 12
@@ -192,26 +197,43 @@ export function appendRuntimeEvent(
   input: {
     kind: RuntimeEventKind
     at?: string
+    threadId?: string
     turnId?: string
+    runId?: string
     itemId?: string
     checkpointId?: string
     checkpointKind?: RuntimeEventCheckpointKind
+    factRefs?: RuntimeFactRefs
     payload?: Record<string, unknown>
   },
 ): RuntimeEventRecord {
   const at = input.at ?? new Date().toISOString()
   const existing = conversation.options?.runtimeEventLog
   const seq = existing?.nextSeq ?? ((existing?.events.length ?? 0) + 1)
+  const factRefs = mergeRuntimeFactRefs(
+    runtimeFactRefsFromPayload(input.payload),
+    input.factRefs,
+    {
+      threadId: input.threadId ?? conversation.id,
+      turnId: input.turnId,
+      runId: input.runId,
+      itemId: input.itemId,
+      checkpointId: input.checkpointId,
+    },
+  )
   const eventBase = {
     id: `runtime_event-${seq}`,
     seq,
     kind: input.kind,
     at,
     conversationId: conversation.id,
+    ...(factRefs?.threadId ? { threadId: factRefs.threadId } : {}),
     ...(input.turnId ? { turnId: input.turnId } : {}),
+    ...(factRefs?.runId ? { runId: factRefs.runId } : {}),
     ...(input.itemId ? { itemId: input.itemId } : {}),
     ...(input.checkpointId ? { checkpointId: input.checkpointId } : {}),
     ...(input.checkpointKind ? { checkpointKind: input.checkpointKind } : {}),
+    ...(factRefs ? { factRefs } : {}),
     ...(input.payload ? { payload: input.payload } : {}),
   }
   const event: RuntimeEventRecord = {
@@ -875,7 +897,7 @@ export function buildRuntimeTruthResumeFallbackReport(conversation: Conversation
     .map((event) => stringField(objectField(event.payload)?.['next_check_command']))
     .filter((value): value is string => Boolean(value))
   const runtimeInterventionCheckpointIds = runtimeInterventions
-    .map((event) => runtimeInterventionCheckpointId(event))
+    .map((event) => stringField(objectField(event.payload)?.['checkpoint_id']))
     .filter((value): value is string => Boolean(value))
   const runtimeClosures = suffixEvents
     .filter((event) => event.kind === 'turn_completed')
@@ -931,7 +953,7 @@ export function buildRuntimeTruthResumeFallbackReport(conversation: Conversation
         seq: event.seq,
         intervention_kind: stringField(payload?.['intervention_kind']),
         next_check_command: stringField(payload?.['next_check_command']),
-        checkpoint_id: runtimeInterventionCheckpointId(event),
+        checkpoint_id: stringField(payload?.['checkpoint_id']),
         payload: compactJsonValue(event.payload),
       }
     }),
@@ -1174,7 +1196,7 @@ export function validateRuntimeTruthResumeReport(
         `runtime_intervention_next_check:${nextCheckCommand}`,
         missingReportFields,
       )
-      const interventionCheckpointId = runtimeInterventionCheckpointId(event)
+      const interventionCheckpointId = stringField(payload?.['checkpoint_id'])
       requireStructuredReportString(
         structuredIntervention,
         'checkpoint_id',
@@ -1190,7 +1212,7 @@ export function validateRuntimeTruthResumeReport(
       `runtime_intervention_next_check:${nextCheckCommand}`,
       missingReportFields,
     )
-    const interventionCheckpointId = runtimeInterventionCheckpointId(event)
+    const interventionCheckpointId = stringField(payload?.['checkpoint_id'])
     requireReportValue(
       normalized,
       interventionCheckpointId,
@@ -1405,11 +1427,6 @@ function objectField(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined
-}
-
-function runtimeInterventionCheckpointId(event: RuntimeEventRecord): string | undefined {
-  const payload = objectField(event.payload)
-  return stringField(payload?.['checkpoint_id']) ?? event.checkpointId
 }
 
 function stringField(value: unknown): string | undefined {
@@ -1732,11 +1749,7 @@ function validateRuntimeEventContractForReplay(event: RuntimeEventRecord): strin
   if (contract.event_kind !== event.kind) errors.push('contract.event_kind:mismatch')
   if (contract.payload_schema !== `${event.kind}.v1`) errors.push('contract.payload_schema:mismatch')
   if (contract.validation_status !== 'valid') errors.push('contract.validation_status')
-  errors.push(...validateRuntimeEventRecord(event, {
-    strictLongTaskWaitPolicy: false,
-    strictPostRecoveryOverrun: false,
-    strictRuntimeTruthResumeReportGate: false,
-  }))
+  errors.push(...validateRuntimeEventRecord(event))
   return uniqueStrings(errors)
 }
 
@@ -1761,16 +1774,8 @@ function validateLegacyRuntimeEventForReplay(event: RuntimeEventRecord): string[
     case 'runtime_intervention':
       requirePayloadObject(errors, objectField(event.payload))
       requirePayloadString(errors, objectField(event.payload), 'intervention_kind')
-      requireRuntimeInterventionPayload(errors, event, {
-        strictLongTaskWaitPolicy: false,
-        strictPostRecoveryOverrun: false,
-        strictRuntimeTruthResumeReportGate: false,
-      })
       break
     case 'turn_started':
-    case 'assistant_stream_recorded':
-    case 'assistant_response_recorded':
-    case 'assistant_response_disposition_recorded':
     case 'turn_completed':
     case 'item_started':
     case 'item_completed':
@@ -1799,9 +1804,6 @@ function legacyRuntimeEventPayloadSchema(event: RuntimeEventRecord): string {
 
 function isRuntimeEventKind(value: unknown): value is RuntimeEventKind {
   return value === 'turn_started'
-    || value === 'assistant_stream_recorded'
-    || value === 'assistant_response_recorded'
-    || value === 'assistant_response_disposition_recorded'
     || value === 'item_started'
     || value === 'item_completed'
     || value === 'checkpoint_installed'
@@ -1827,67 +1829,12 @@ function buildRuntimeEventContract(event: Omit<RuntimeEventRecord, 'contract'>):
   }
 }
 
-function validateRuntimeEventRecord(
-  event: Omit<RuntimeEventRecord, 'contract'>,
-  options: {
-    strictLongTaskWaitPolicy?: boolean
-    strictPostRecoveryOverrun?: boolean
-    strictRuntimeTruthResumeReportGate?: boolean
-  } = {},
-): string[] {
+function validateRuntimeEventRecord(event: Omit<RuntimeEventRecord, 'contract'>): string[] {
   const errors: string[] = []
-  errors.push(...validateRuntimeEventEnvelope(event as RuntimeEventRecord))
   const payload = objectField(event.payload)
   switch (event.kind) {
     case 'turn_started':
       requireEventString(errors, event.turnId, 'turnId')
-      break
-    case 'assistant_stream_recorded':
-      requireEventString(errors, event.turnId, 'turnId')
-      requirePayloadObject(errors, payload)
-      requirePayloadNumber(errors, payload, 'response_index')
-      requirePayloadString(errors, payload, 'source')
-      requirePayloadNumber(errors, payload, 'text_delta_count')
-      requirePayloadNumber(errors, payload, 'text_chars')
-      requirePayloadNumber(errors, payload, 'thinking_start_count')
-      requirePayloadNumber(errors, payload, 'thinking_delta_count')
-      requirePayloadNumber(errors, payload, 'thinking_chars')
-      requirePayloadNumber(errors, payload, 'thinking_end_count')
-      requirePayloadNumber(errors, payload, 'usage_update_count')
-      requirePayloadNumber(errors, payload, 'input_tokens')
-      requirePayloadNumber(errors, payload, 'output_tokens')
-      break
-    case 'assistant_response_recorded':
-      requireEventString(errors, event.turnId, 'turnId')
-      requirePayloadObject(errors, payload)
-      requirePayloadNumber(errors, payload, 'response_index')
-      requirePayloadString(errors, payload, 'phase')
-      requirePayloadString(errors, payload, 'stop_reason')
-      requirePayloadNumber(errors, payload, 'text_chars')
-      requirePayloadString(errors, payload, 'text_digest')
-      requirePayloadNumber(errors, payload, 'tool_use_count')
-      if (payload && typeof payload['has_tool_use'] !== 'boolean') {
-        errors.push('payload.has_tool_use')
-      }
-      requirePayloadNumber(errors, payload, 'thinking_block_count')
-      requirePayloadNumber(errors, payload, 'input_tokens')
-      requirePayloadNumber(errors, payload, 'output_tokens')
-      if (payload && typeof payload['is_empty_response'] !== 'boolean') {
-        errors.push('payload.is_empty_response')
-      }
-      break
-    case 'assistant_response_disposition_recorded':
-      requireEventString(errors, event.turnId, 'turnId')
-      requirePayloadObject(errors, payload)
-      requirePayloadNumber(errors, payload, 'response_index')
-      requirePayloadString(errors, payload, 'phase')
-      requirePayloadString(errors, payload, 'action')
-      requirePayloadString(errors, payload, 'stop_reason')
-      requirePayloadNumber(errors, payload, 'text_chars')
-      requirePayloadNumber(errors, payload, 'original_tool_use_count')
-      requirePayloadNumber(errors, payload, 'executed_tool_count')
-      requirePayloadNumber(errors, payload, 'deferred_tool_count')
-      requirePayloadNumber(errors, payload, 'runtime_tool_count')
       break
     case 'turn_completed':
       requireEventString(errors, event.turnId, 'turnId')
@@ -1958,7 +1905,6 @@ function validateRuntimeEventRecord(
     case 'runtime_intervention':
       requirePayloadObject(errors, payload)
       requirePayloadString(errors, payload, 'intervention_kind')
-      requireRuntimeInterventionPayload(errors, event, options)
       break
   }
   return uniqueStrings(errors)
@@ -2066,80 +2012,6 @@ function requirePayloadNumber(
   key: string,
 ): void {
   if (!payload || typeof payload[key] !== 'number') {
-    errors.push(`payload.${key}`)
-  }
-}
-
-function requireRuntimeInterventionPayload(
-  errors: string[],
-  event: Omit<RuntimeEventRecord, 'contract'>,
-  options: {
-    strictLongTaskWaitPolicy?: boolean
-    strictPostRecoveryOverrun?: boolean
-    strictRuntimeTruthResumeReportGate?: boolean
-  } = {},
-): void {
-  const payload = objectField(event.payload)
-  const interventionKind = stringField(payload?.['intervention_kind'])
-  if (interventionKind === 'runtime_truth_resume_report_gate'
-    && options.strictRuntimeTruthResumeReportGate !== false) {
-    requirePayloadString(errors, payload, 'action')
-    requirePayloadString(errors, payload, 'report_source')
-    requirePayloadString(errors, payload, 'checkpoint_id')
-    const payloadCheckpointId = stringField(payload?.['checkpoint_id'])
-    if (event.checkpointId && payloadCheckpointId && payloadCheckpointId !== event.checkpointId) {
-      errors.push('payload.checkpoint_id:mismatch')
-    }
-    return
-  }
-  if (interventionKind === 'long_task_wait_policy' && options.strictLongTaskWaitPolicy !== false) {
-    requirePayloadString(errors, payload, 'action')
-    requirePayloadString(errors, payload, 'tool_use_id')
-    requirePayloadString(errors, payload, 'tool_name')
-    requirePayloadString(errors, payload, 'long_task_id')
-    requirePayloadString(errors, payload, 'wait_strategy')
-    requirePayloadBoolean(errors, payload, 'stop_polling')
-    requirePayloadString(errors, payload, 'next_check_command')
-    requirePayloadString(errors, payload, 'reason')
-    return
-  }
-  if (interventionKind === 'post_recovery_overrun_guard' && options.strictPostRecoveryOverrun !== false) {
-    requirePayloadString(errors, payload, 'action')
-    requirePayloadString(errors, payload, 'tool_use_id')
-    requirePayloadString(errors, payload, 'tool_name')
-    requirePayloadString(errors, payload, 'task_id')
-    requirePayloadString(errors, payload, 'checkpoint_id')
-    requirePayloadString(errors, payload, 'requested_status_field')
-    requirePayloadString(errors, payload, 'requested_status')
-    requirePayloadString(errors, payload, 'ledger_status')
-    requirePayloadBoolean(errors, payload, 'recovery_resolved_this_run')
-    requirePayloadString(errors, payload, 'scope')
-    requirePayloadString(errors, payload, 'reason')
-    const payloadCheckpointId = stringField(payload?.['checkpoint_id'])
-    if (event.checkpointId && payloadCheckpointId && payloadCheckpointId !== event.checkpointId) {
-      errors.push('payload.checkpoint_id:mismatch')
-    }
-    return
-  }
-  if (interventionKind !== 'recovery_guard_hard_stop') return
-  requirePayloadString(errors, payload, 'action')
-  requirePayloadString(errors, payload, 'guard_kind')
-  requirePayloadString(errors, payload, 'stop_reason')
-  requirePayloadNumber(errors, payload, 'ignored_tool_count')
-  requirePayloadNumber(errors, payload, 'response_index')
-  requirePayloadString(errors, payload, 'reason')
-  const payloadCheckpointId = stringField(payload?.['checkpoint_id'])
-  if (event.checkpointId && payloadCheckpointId && payloadCheckpointId !== event.checkpointId) {
-    errors.push('payload.checkpoint_id:mismatch')
-  }
-}
-
-function requirePayloadBoolean(
-  errors: string[],
-  payload: Record<string, unknown> | undefined,
-  key: string,
-): void {
-  if (!payload || typeof payload[key] !== 'boolean') {
     errors.push(`payload.${key}`)
   }
 }

@@ -33,7 +33,7 @@ describe('config-display module', () => {
       configExists: true,
       version: '1.0.3',
       listen: '127.0.0.1:8019',
-      routerUrl: 'http://127.0.0.1:8009',
+      routerUrl: 'http://127.0.0.1:8066',
       models: [
         { id: 'gpt-4', label: 'GPT-4', backendModel: 'gpt-4', tier: 'balanced', isDefault: true, aliases: ['default'], contextLabels: ['1M ctx', 'ctx documented'] },
         { id: 'gpt-3.5', label: 'GPT-3.5', backendModel: 'gpt-3.5-turbo', tier: 'fast', isDefault: false, aliases: ['fast'] },
@@ -46,7 +46,7 @@ describe('config-display module', () => {
     const output = formatConfigDisplay(display)
     expect(output).toContain('owlcoda config')
     expect(output).toContain('127.0.0.1:8019')
-    expect(output).toContain('http://127.0.0.1:8009')
+    expect(output).toContain('http://127.0.0.1:8066')
     expect(output).toContain('native')
     expect(output).toContain('gpt-4')
     expect(output).toContain('1M ctx')
@@ -63,7 +63,7 @@ describe('config-display module', () => {
       configExists: false,
       version: '1.0.3',
       listen: '127.0.0.1:8019',
-      routerUrl: 'http://127.0.0.1:8009',
+      routerUrl: 'http://127.0.0.1:8066',
       models: [],
       launchMode: 'native',
       skillInjection: false,
@@ -82,7 +82,7 @@ describe('config-display module', () => {
       configExists: true,
       version: '1.0.3',
       listen: '127.0.0.1:8019',
-      routerUrl: 'http://127.0.0.1:8009',
+      routerUrl: 'http://127.0.0.1:8066',
       models: [
         {
           id: 'kimi-code',

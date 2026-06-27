@@ -54,6 +54,15 @@ const MAX_RUNTIME_RESUME_RETRY_DELAY_MS = 30_000
 const HEADLESS_JSON_TOOL_OUTPUT_MAX_CHARS = 20_000
 const HEADLESS_POLICY_CONTEXT_MARKER = '[Runtime headless approval policy]'
 
+export interface HeadlessToolCall {
+  tool: string
+  input: Record<string, unknown>
+  output?: string
+  metadata?: Record<string, unknown>
+  output_truncated?: boolean
+  output_original_chars?: number
+}
+
 interface HeadlessToolCallLog {
   tool: string
   input: Record<string, unknown>
@@ -69,28 +78,6 @@ interface SerializedHeadlessToolCall extends HeadlessToolCallLog {
 type SerializedRuntimeIntercept = RuntimeInterventionSummary | {
   kind: 'post_recovery_overrun' | 'long_task_wait_policy'
   message: string
-}
-
-export type HeadlessPolicyViolation =
-  | {
-      type: 'bash_command_not_allowed'
-      toolName: 'bash' | 'TaskCreate'
-      command: string
-      allowedCommands: string[]
-    }
-  | {
-      type: 'max_bash_calls_exceeded'
-      toolName: 'bash' | 'TaskCreate'
-      command: string
-      max: number
-      attempted: number
-    }
-
-interface HeadlessBashPolicyState {
-  allowedCommands: string[]
-  maxCalls?: number
-  attempted: number
-  violations: HeadlessPolicyViolation[]
 }
 
 interface HeadlessProjectMapRuntimeEvidence {
@@ -138,10 +125,6 @@ export interface HeadlessOptions {
   allowTools?: readonly string[]
   /** Optional comma/list style tool denylist. Deny wins over allow and base policy. */
   denyTools?: readonly string[]
-  /** Optional exact-command allowlist for bash-like headless calls. */
-  allowBashCommands?: readonly string[]
-  /** Optional maximum number of attempted bash-like calls. */
-  maxBashCalls?: number
   /** Resume an existing session by ID ('last' resolves to most recent) */
   resumeSession?: string
   /** Whether to save the session after completion */
@@ -161,8 +144,6 @@ export interface HeadlessResult {
   approvalToolDenylist?: string[]
   /** Tools that the policy denied (with reason); useful for callers/tests. */
   approvalDenials?: Array<{ toolName: string; reason: string; bashRiskLevel?: string; bashRiskReasons?: string[] }>
-  /** Runtime-enforced harness policy violations. */
-  policyViolations?: HeadlessPolicyViolation[]
   /** Conversation loop stop reason, exposed so batch runners can detect incomplete work. */
   stopReason?: string | null
   /** Final task execution status when the task contract subsystem is active. */
@@ -175,6 +156,8 @@ export interface HeadlessResult {
   projectMapAcceptance?: HeadlessProjectMapAcceptanceEvidence
   /** Runtime synthetic intercepts that did not execute as normal tools. */
   runtimeIntercepts?: SerializedRuntimeIntercept[]
+  /** Structured tool calls captured during the headless run. */
+  toolCalls?: HeadlessToolCall[]
 }
 
 /** Outcome of resolving a `--resume` request, before any I/O side effects. */
@@ -223,14 +206,11 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       callbacks: createHeadlessAgentCallbackForwarder(() => callbacks),
     }))
   }
-  const allowBashCommands = normalizeHeadlessBashCommands(opts.allowBashCommands)
-  const maxBashCalls = normalizeHeadlessMaxBashCalls(opts.maxBashCalls)
-  const bashPolicyState = createHeadlessBashPolicyState(allowBashCommands, maxBashCalls)
   const toolDefs = filterHeadlessToolDefs(buildNativeToolDefs(dispatcher), allowTools, denyTools)
   const approvalPolicy = describeApprovalPolicy(autoApprove)
   const systemPrompt = appendHeadlessPolicyContext(
     opts.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
-    buildHeadlessPolicyContext({ autoApprove, approvalPolicy, allowTools, denyTools, allowBashCommands, maxBashCalls }),
+    buildHeadlessPolicyContext({ autoApprove, approvalPolicy, allowTools, denyTools }),
   )
 
   // Resolve resume session
@@ -259,7 +239,6 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
         approval_tool_allowlist: allowTools,
         approval_tool_denylist: denyTools,
         approval_denials: [],
-        policy_violations: bashPolicyState.violations,
       }))
     } else {
       process.stderr.write(formatError(resumeOutcome.message) + '\n')
@@ -274,7 +253,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       approvalToolAllowlist: allowTools,
       approvalToolDenylist: denyTools,
       approvalDenials: [],
-      policyViolations: bashPolicyState.violations,
+      toolCalls: [],
     }
   }
   if (resumeOutcome.kind === 'resume') {
@@ -284,7 +263,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     conversation.model = loaded.model
     conversation.system = appendHeadlessPolicyContext(
       loaded.system ?? conversation.system,
-      buildHeadlessPolicyContext({ autoApprove, approvalPolicy, allowTools, denyTools, allowBashCommands, maxBashCalls }),
+      buildHeadlessPolicyContext({ autoApprove, approvalPolicy, allowTools, denyTools }),
     )
     conversation.maxTokens = loaded.maxTokens ?? conversation.maxTokens
     conversation.turns = [...loaded.turns]
@@ -327,7 +306,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
   // denies unsafe tools (write/edit/NotebookEdit/bash) unless autoApprove
   // was explicitly requested via CLI/config; safe tools (read/glob/grep/…)
   // remain low-friction.
-  const baseOnToolApproval = buildHeadlessApprovalCallback({
+  const onToolApproval = buildHeadlessApprovalCallback({
     autoApprove,
     allowTools,
     denyTools,
@@ -351,16 +330,6 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       }
     },
   })
-  const onToolApproval: NonNullable<ConversationCallbacks['onToolApproval']> = async (toolName, input) => {
-    const violations = recordHeadlessBashPolicyViolations(toolName, input, bashPolicyState)
-    if (violations.length > 0) {
-      for (const violation of violations) {
-        process.stderr.write(formatHeadlessError(describeHeadlessPolicyViolation(violation)) + '\n')
-      }
-      return false
-    }
-    return baseOnToolApproval(toolName, input)
-  }
   const onUserQuestion: ConversationCallbacks['onUserQuestion'] = async (toolName, question) => {
     const firstLine = question.trim().split(/\r?\n/, 1)[0] ?? ''
     process.stderr.write(formatError(
@@ -529,7 +498,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
             `/v1/chat/completions), not at a raw runtime's /v1/messages.`,
           ) + '\n')
         }
-        const exitCode = (shouldHeadlessExitNonZero(stopReason, taskStatus, finalText) || emittedToolMarker !== null || bashPolicyState.violations.length > 0) ? 1 : 0
+        const exitCode = (shouldHeadlessExitNonZero(stopReason, taskStatus, finalText) || emittedToolMarker !== null) ? 1 : 0
         const projectMapRuntime = buildHeadlessProjectMapRuntimeEvidence(conversation, noticeLog)
         const projectMapAcceptance = buildHeadlessProjectMapAcceptanceEvidence({
           conversation,
@@ -577,7 +546,6 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
             approval_tool_denylist: denyTools,
             approval_denials: serializeDenials(approvalDecisions),
             ...(runtimeIntercepts.length > 0 ? { runtime_intercepts: runtimeIntercepts } : {}),
-            policy_violations: bashPolicyState.violations,
             ...(projectMapRuntime ? { project_map_runtime: projectMapRuntime } : {}),
             ...(projectMapAcceptance ? { project_map_acceptance: projectMapAcceptance } : {}),
           })
@@ -605,10 +573,10 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
           approvalToolAllowlist: allowTools,
           approvalToolDenylist: denyTools,
           approvalDenials: serializeDenials(approvalDecisions),
-          policyViolations: bashPolicyState.violations,
           stopReason,
           taskStatus,
           taskGuardReason,
+          toolCalls: serializeToolCalls(toolCallLog),
           projectMapRuntime,
           projectMapAcceptance,
           runtimeIntercepts,
@@ -664,7 +632,6 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
             approval_tool_denylist: denyTools,
             approval_denials: serializeDenials(approvalDecisions),
             ...(runtimeIntercepts.length > 0 ? { runtime_intercepts: runtimeIntercepts } : {}),
-            policy_violations: bashPolicyState.violations,
           })
           await writeStdoutLine(output)
         } else {
@@ -681,7 +648,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
           approvalToolAllowlist: allowTools,
           approvalToolDenylist: denyTools,
           approvalDenials: serializeDenials(approvalDecisions),
-          policyViolations: bashPolicyState.violations,
+          toolCalls: serializeToolCalls(toolCallLog),
         }
       }
 
@@ -718,7 +685,6 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
         approval_tool_denylist: denyTools,
         approval_denials: serializeDenials(approvalDecisions),
         ...(runtimeIntercepts.length > 0 ? { runtime_intercepts: runtimeIntercepts } : {}),
-        policy_violations: bashPolicyState.violations,
       })
       await writeStdoutLine(output)
     } else {
@@ -735,7 +701,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
       approvalToolAllowlist: allowTools,
       approvalToolDenylist: denyTools,
       approvalDenials: serializeDenials(approvalDecisions),
-      policyViolations: bashPolicyState.violations,
+      toolCalls: serializeToolCalls(toolCallLog),
     }
   }
 }
@@ -761,8 +727,6 @@ function buildHeadlessPolicyContext(input: {
   approvalPolicy: string
   allowTools: readonly string[]
   denyTools: readonly string[]
-  allowBashCommands: readonly string[]
-  maxBashCalls?: number
 }): string {
   const lines = [
     HEADLESS_POLICY_CONTEXT_MARKER,
@@ -774,8 +738,6 @@ function buildHeadlessPolicyContext(input: {
     '- Mutating, networked, dangerous, or unknown bash remains denied even when it appears in the tool allowlist.',
     `- Tool allowlist: ${input.allowTools.length > 0 ? input.allowTools.join(', ') : '(none)'}.`,
     `- Tool denylist: ${input.denyTools.length > 0 ? input.denyTools.join(', ') : '(none)'}.`,
-    `- Exact bash command allowlist: ${input.allowBashCommands.length > 0 ? input.allowBashCommands.map(command => JSON.stringify(command)).join(', ') : '(none)'}.`,
-    `- Max bash calls: ${input.maxBashCalls === undefined ? '(none)' : input.maxBashCalls}.`,
   ]
   return lines.join('\n')
 }
@@ -833,85 +795,6 @@ function filterHeadlessToolDefs<T extends { name: string }>(
     if (allow && !allow.has(tool.name)) return false
     return true
   })
-}
-
-function normalizeHeadlessBashCommands(commands: readonly string[] | undefined): string[] {
-  if (!commands) return []
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const command of commands) {
-    if (command === '') continue
-    if (seen.has(command)) continue
-    seen.add(command)
-    out.push(command)
-  }
-  return out
-}
-
-function normalizeHeadlessMaxBashCalls(value: number | undefined): number | undefined {
-  if (value === undefined) return undefined
-  if (!Number.isInteger(value) || value < 0) return undefined
-  return value
-}
-
-function createHeadlessBashPolicyState(allowedCommands: string[], maxCalls: number | undefined): HeadlessBashPolicyState {
-  return {
-    allowedCommands,
-    maxCalls,
-    attempted: 0,
-    violations: [],
-  }
-}
-
-function recordHeadlessBashPolicyViolations(
-  toolName: string,
-  input: Record<string, unknown> | undefined,
-  state: HeadlessBashPolicyState,
-): HeadlessPolicyViolation[] {
-  const call = extractHeadlessBashPolicyCall(toolName, input)
-  if (!call) return []
-  state.attempted += 1
-
-  const violations: HeadlessPolicyViolation[] = []
-  if (state.allowedCommands.length > 0 && !state.allowedCommands.includes(call.command)) {
-    violations.push({
-      type: 'bash_command_not_allowed',
-      toolName: call.toolName,
-      command: call.command,
-      allowedCommands: state.allowedCommands,
-    })
-  }
-  if (state.maxCalls !== undefined && state.attempted > state.maxCalls) {
-    violations.push({
-      type: 'max_bash_calls_exceeded',
-      toolName: call.toolName,
-      command: call.command,
-      max: state.maxCalls,
-      attempted: state.attempted,
-    })
-  }
-  state.violations.push(...violations)
-  return violations
-}
-
-function extractHeadlessBashPolicyCall(
-  toolName: string,
-  input: Record<string, unknown> | undefined,
-): { toolName: 'bash' | 'TaskCreate'; command: string } | null {
-  if (toolName === 'bash') {
-    return { toolName: 'bash', command: typeof input?.['command'] === 'string' ? input['command'] : '' }
-  }
-  if (toolName === 'TaskCreate' && typeof input?.['command'] === 'string') {
-    return { toolName: 'TaskCreate', command: input['command'] }
-  }
-  return null
-}
-
-function describeHeadlessPolicyViolation(violation: HeadlessPolicyViolation): string {
-  if (violation.type === 'bash_command_not_allowed') {
-    return `Tool ${violation.toolName} denied by headless bash policy: command ${JSON.stringify(violation.command)} is not in --allow-bash-command.`
-  }
-  return `Tool ${violation.toolName} denied by headless bash policy: bash call budget exceeded (${violation.attempted}/${violation.max}).`
 }
 
 function buildHeadlessProjectMapRuntimeEvidence(

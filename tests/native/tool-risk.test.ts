@@ -32,14 +32,6 @@ describe('classifyToolRisk — safe tools', () => {
     ['RuntimeRecoveryGet', { checkpointId: 'blocked_task_checkpoint-1' }],
     ['JobList', {}],
     ['JobGet', { jobId: 'job:task:task-1' }],
-    ['RuntimeLifecycleList', {}],
-    ['RuntimeLifecycleGet', { runId: 'task:task-1' }],
-    ['RuntimeSupervisorList', {}],
-    ['RuntimeSupervisorGet', { processId: 'process:task-1' }],
-    ['AgentControlList', {}],
-    ['AgentControlGet', { agentId: 'agent-1234' }],
-    ['AgentMailboxList', {}],
-    ['AgentMailboxGet', { messageId: 'mailbox-1' }],
   ])('classifies %s as safe', (toolName, args) => {
     expect(classifyToolRisk(toolName, args as Record<string, unknown>)).toBe<RiskClass>('safe')
   })
@@ -53,6 +45,7 @@ describe('classifyToolRisk — internal_state tools', () => {
     ['ExitPlanMode', {}],
     ['EnterPlanMode', {}],
     ['TaskStop', { taskId: '1' }],
+    ['JobCancel', { jobId: 'job:task:task-1' }],
     ['TaskVerify', { taskId: '1' }],
     ['Config', { key: 'x', value: 'y' }],
     ['TeamCreate', { name: 't' }],
@@ -63,9 +56,6 @@ describe('classifyToolRisk — internal_state tools', () => {
     ['TaskCreate', { subject: 't', description: 'd' }],
     ['TaskCreate', { subject: 't', description: 'd', command: '' }],
     ['LongTaskReplace', { longTaskId: 'task:task-1' }],
-    ['AgentMailboxSend', { author: 'root', recipient: 'agent:agent-1', body: 'inspect before retry' }],
-    ['AgentMailboxResolve', { messageId: 'mailbox-1' }],
-    ['JobCancel', { jobId: 'job:task:task-1' }],
   ])('classifies %s%j as internal_state', (toolName, args) => {
     expect(classifyToolRisk(toolName, args as Record<string, unknown>)).toBe<RiskClass>('internal_state')
   })
@@ -118,17 +108,29 @@ describe('classifyToolRisk — Edit/Write/NotebookEdit path-aware', () => {
 describe('classifyToolRisk — external_effect tools', () => {
   it.each([
     ['WebFetch', { url: 'https://x.com' }, 'external_effect'],
+    ['WebFetch', { url: 'http://127.0.0.1:3000/admin/stats' }, 'external_effect'],
+    ['WebFetch', { url: 'http://127.0.0.1:3000/health', method: 'POST' }, 'external_effect'],
+    ['WebFetch', { url: 'http://127.0.0.1:3000/health', body: '{}' }, 'external_effect'],
     ['WebSearch', { query: 'foo' }, 'external_effect'],
     ['Task', { description: 'd', prompt: 'p' }, 'external_effect'],
     ['RemoteTrigger', { url: 'https://x.com/hook' }, 'external_effect'],
     ['EnterWorktree', { name: 'feature-x' }, 'external_effect'],
     ['ExitWorktree', {}, 'external_effect'],
-    ['JudgeBackendProbe', { endpoint: 'http://127.0.0.1:8019/v1/chat/completions', models: ['mimo'] }, 'external_effect'],
     ['BrowserJob', { url: 'http://127.0.0.1:3000/health' }, 'external_effect'],
-    ['ApiJob', { url: 'http://127.0.0.1:3000/health' }, 'external_effect'],
-    ['ServiceJob', { action: 'start', serviceName: 'demo', command: 'node' }, 'external_effect'],
+    ['JudgeBackendProbe', { endpoint: 'http://127.0.0.1:8019/v1/chat/completions', models: ['mimo'] }, 'external_effect'],
   ] as const)('classifies %s as external_effect', (toolName, args, expected) => {
     expect(classifyToolRisk(toolName, args as Record<string, unknown>)).toBe<RiskClass>(expected)
+  })
+})
+
+describe('classifyToolRisk — safe_readonly_local health checks', () => {
+  it.each([
+    ['WebFetch', { url: 'http://127.0.0.1:3000/health' }],
+    ['WebFetch', { url: 'http://localhost:3000/healthz' }],
+    ['WebFetch', { url: 'http://[::1]:3000/health' }],
+    ['WebFetch', { url: 'http://127.0.0.1:3000/api/health', method: 'HEAD' }],
+  ] as const)('classifies %s %o as safe_readonly_local', (toolName, args) => {
+    expect(classifyToolRisk(toolName, args as Record<string, unknown>)).toBe('safe_readonly_local')
   })
 })
 
@@ -201,18 +203,6 @@ describe('classifyToolRisk — exhaustive against ToolDispatcher registry', () =
     JobGet: { jobId: 'job:task:task-1' },
     JobCancel: { jobId: 'job:task:task-1' },
     BrowserJob: { url: 'http://127.0.0.1:3000/health' },
-    ApiJob: { url: 'http://127.0.0.1:3000/health' },
-    ServiceJob: { action: 'start', serviceName: 'demo', command: 'node' },
-    RuntimeLifecycleList: {},
-    RuntimeLifecycleGet: { runId: 'task:task-1' },
-    RuntimeSupervisorList: {},
-    RuntimeSupervisorGet: { processId: 'process:task-1' },
-    AgentControlList: {},
-    AgentControlGet: { agentId: 'agent-1234' },
-    AgentMailboxSend: { author: 'root', recipient: 'agent:agent-1', body: 'inspect before retry' },
-    AgentMailboxList: {},
-    AgentMailboxGet: { messageId: 'mailbox-1' },
-    AgentMailboxResolve: { messageId: 'mailbox-1' },
     JudgeBackendProbe: { endpoint: 'http://127.0.0.1:8019/v1/chat/completions', models: ['mimo'] },
     EnterPlanMode: {},
     ExitPlanMode: {},
@@ -255,7 +245,7 @@ describe('classifyToolRisk — exhaustive against ToolDispatcher registry', () =
     // SAMPLE_ARGS and either to one of the explicit Sets in
     // classifyToolRisk or to DEFAULT_MUTATING_EXPLICIT_ACK.
     // Update the expected count when intentionally adding a tool.
-    expect(registered.length).toBe(68)
+    expect(registered.length).toBe(56)
   })
 
   it.each(registered.map((name) => [name]))(

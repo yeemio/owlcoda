@@ -37,7 +37,10 @@ import {
   getJob,
   recordJobCleanup,
   resetJobSupervisor,
+  restoreJobRegistry,
+  snapshotJobRegistry,
   startJob,
+  type JobRecord,
 } from '../job-supervisor.js'
 import {
   compactLongTaskText,
@@ -45,18 +48,7 @@ import {
   forgetLongTaskSnapshotsBySource,
   recordLongTaskSnapshot,
   type LongTaskSnapshot,
-  type LongTaskProcessIdentity,
 } from '../long-task-lifecycle.js'
-import {
-  forgetRunLifecycleSnapshotsByKind,
-  recordRunLifecycleSnapshot,
-  type RunLifecycleStatus,
-  type RunRecoveryPolicy,
-} from '../run-lifecycle.js'
-import {
-  forgetRuntimeSupervisorProcessesByRunPrefix,
-  recordRuntimeSupervisorProcessFromLongTaskSnapshot,
-} from '../runtime-supervisor.js'
 
 /** Task status values matching upstream TaskStatusSchema. */
 export type TaskStatus =
@@ -93,14 +85,6 @@ export type TaskVerificationKind =
   | 'command'
   | 'none'
 
-export type TaskVerificationStrength =
-  | 'none'
-  | 'weak_text_match'
-  | 'compile_only'
-  | 'unit_behavior'
-  | 'integration_behavior'
-  | 'runtime_replay'
-
 export interface TaskVerificationRequiredMarker {
   marker: string
   label?: string
@@ -130,7 +114,6 @@ export interface TaskVerificationCheck {
 export interface TaskVerificationResult {
   checkId: string
   passed: boolean
-  strength?: TaskVerificationStrength
   detail?: string
   checkedAt: string
   /**
@@ -202,10 +185,10 @@ export interface Task {
   currentStepId?: string
   /** Runtime lifecycle snapshot for command-backed long tasks. */
   longTaskSnapshot?: LongTaskSnapshot
-  /** Serializable identity for the spawned command process. Handles are never restored. */
-  processIdentity?: LongTaskProcessIdentity
-  /** Platform job supervisor record id for command-backed work. */
+  /** Platform job supervisor record id for long/background work. */
   jobId?: string
+  /** Optional total deadline for command-backed task execution. */
+  deadlineMs?: number
 }
 
 let nextId = 1
@@ -216,6 +199,7 @@ export interface TaskStoreSnapshot {
   schemaVersion: 1
   nextId: number
   tasks: Task[]
+  jobs?: JobRecord[]
 }
 
 /** Generate a sequential task ID. */
@@ -231,6 +215,7 @@ export function createTask(opts: {
   metadata?: Record<string, unknown>
   command?: string
   cwd?: string
+  deadlineMs?: number
   conversationId?: string
   bashRisk?: BashRiskClassification
   deliverables?: TaskPathScope[]
@@ -273,6 +258,7 @@ export function createTask(opts: {
     updatedAt: now,
     command: opts.command,
     cwd: opts.cwd,
+    deadlineMs: opts.deadlineMs,
     conversationId: opts.conversationId,
     bashRisk: opts.bashRisk,
     deliverables: opts.deliverables ?? [],
@@ -360,7 +346,7 @@ export function updateTaskStep(
 
     // completed requires all verification results passed (if any exist)
     if (newStatus === 'completed') {
-      const verificationBlocker = verificationCompletionBlocker(stepId, step, effectiveVerification, effectiveResults)
+      const verificationBlocker = verificationCompletionBlocker(stepId, effectiveVerification, effectiveResults)
       if (verificationBlocker) {
         return {
           ok: false,
@@ -419,7 +405,6 @@ export function updateTaskStep(
 
 function verificationCompletionBlocker(
   stepId: string,
-  step: TaskStep,
   checks: TaskVerificationCheck[],
   results: TaskVerificationResult[],
 ): string | null {
@@ -440,49 +425,7 @@ function verificationCompletionBlocker(
   if (missing.length > 0) {
     return `Cannot complete step "${stepId}": missing passing verification result(s) for check(s): ${missing.join(', ')}. Run TaskVerify after updating the artifact or verification spec.`
   }
-  const requiredStrength = requiredCompletionStrength(step)
-  if (requiredStrength) {
-    const highest = highestVerificationStrength(results)
-    if (verificationStrengthRank(highest) < verificationStrengthRank(requiredStrength)) {
-      return `Cannot complete step "${stepId}": this parser/snapshot/browser/replay-sensitive step requires behavioral verification (${requiredStrength} or stronger). Current highest verification strength is ${highest}. Add a focused unit test, integration test, verification pack, or runtime replay evidence before marking completed.`
-    }
-  }
   return null
-}
-
-const VERIFICATION_STRENGTH_RANK: Record<TaskVerificationStrength, number> = {
-  none: 0,
-  weak_text_match: 1,
-  compile_only: 2,
-  unit_behavior: 3,
-  integration_behavior: 4,
-  runtime_replay: 5,
-}
-
-function verificationStrengthRank(strength: TaskVerificationStrength): number {
-  return VERIFICATION_STRENGTH_RANK[strength] ?? 0
-}
-
-function highestVerificationStrength(results: TaskVerificationResult[]): TaskVerificationStrength {
-  let highest: TaskVerificationStrength = 'none'
-  for (const result of results) {
-    const strength = result.strength ?? 'none'
-    if (verificationStrengthRank(strength) > verificationStrengthRank(highest)) highest = strength
-  }
-  return highest
-}
-
-function requiredCompletionStrength(step: TaskStep): TaskVerificationStrength | null {
-  const text = [
-    step.title,
-    step.description,
-    ...step.touchedPaths,
-    ...step.expectedArtifacts.map(artifact => artifact.path ?? ''),
-    ...step.verification.flatMap(check => [check.path ?? '', check.root ?? '', check.deckPath ?? '', check.command ?? '']),
-  ].join(' ')
-  return /(?:parse|parser|normalize|snapshot|browser|capture|scrape|crawler|dom|selector|fixture|replay|qiutan|odds|竞彩|赔率|解析|归一化|快照|抓取|浏览器)/i.test(text)
-    ? 'unit_behavior'
-    : null
 }
 
 function verificationSpecWeakeningBlocker(
@@ -620,6 +563,7 @@ export function snapshotTaskStore(conversationId?: string): TaskStoreSnapshot {
     schemaVersion: 1,
     nextId,
     tasks: scopedTasks.map(cloneTaskRecord),
+    jobs: snapshotJobRegistry(new Set(scopedTasks.map((task) => task.id))).jobs,
   }
 }
 
@@ -629,6 +573,10 @@ export function restoreTaskStore(snapshot: TaskStoreSnapshot | null | undefined)
   if (!snapshot || snapshot.schemaVersion !== 1 || !Array.isArray(snapshot.tasks)) {
     return
   }
+  restoreJobRegistry({
+    schemaVersion: 1,
+    jobs: snapshot.jobs ?? [],
+  })
 
   let nextIdFromTasks = 1
   for (const task of snapshot.tasks) {
@@ -704,6 +652,13 @@ export function deleteTask(id: string): boolean {
     try { child.kill('SIGKILL') } catch { /* ignore */ }
     runningProcesses.delete(id)
   }
+  if (task.jobId) {
+    finishJob(task.jobId, 'cancelled', {
+      stage: 'deleted',
+      terminationReason: 'task_deleted',
+    })
+    recordJobCleanup(task.jobId, { attempted: true, succeeded: true, remainingPids: [] })
+  }
   forgetLongTaskSnapshot(`task:${id}`)
   return tasks.delete(id)
 }
@@ -721,21 +676,22 @@ export function stopTask(id: string): Task | undefined {
   if (task.status === 'completed' || task.status === 'cancelled') return task
   const updated = updateTask(id, { status: 'cancelled' })
   const child = runningProcesses.get(id)
+  let killSent = false
   if (child) {
-    try { child.kill('SIGTERM') } catch { /* ignore */ }
+    try { killSent = child.kill('SIGTERM') } catch { killSent = false }
   }
-  if (updated?.command) recordTaskLongTaskSnapshot(updated, 'cancelled')
-  if (updated?.jobId) {
-    finishJob(updated.jobId, 'cancelled', {
+  if (task.jobId) {
+    finishJob(task.jobId, 'cancelled', {
       stage: 'cancelled',
       terminationReason: 'user_cancel',
     })
-    recordJobCleanup(updated.jobId, {
+    recordJobCleanup(task.jobId, {
       attempted: Boolean(child),
-      succeeded: true,
-      remainingPids: [],
+      succeeded: !child || !killSent ? !child : false,
+      remainingPids: child?.pid ? [child.pid] : [],
     })
   }
+  if (updated?.command) recordTaskLongTaskSnapshot(updated, 'cancelled')
   return updated
 }
 
@@ -747,8 +703,6 @@ export function resetTaskStore(): void {
   runningProcesses.clear()
   tasks.clear()
   forgetLongTaskSnapshotsBySource('task_command')
-  forgetRunLifecycleSnapshotsByKind('task_command')
-  forgetRuntimeSupervisorProcessesByRunPrefix('task:')
   resetJobSupervisor()
   nextId = 1
 }
@@ -774,18 +728,22 @@ export function spawnTaskCommand(taskId: string): void {
   task.stderr = ''
   task.jobId = task.jobId ?? `job:task:${task.id}`
   const jobId = task.jobId
-  createJob({
+  const job = createJob({
     jobId,
     type: 'command',
     stage: 'queued',
     cwd: task.cwd ?? process.cwd(),
     command: task.command,
     recoveryHint: `TaskOutput task_id=${task.id} block=false`,
+    deadlineMs: task.deadlineMs,
     source: { kind: 'task', id: task.id },
   })
+  const jobCreatedAt = job.createdAt
   recordTaskLongTaskSnapshot(task, 'running')
 
   let child: ChildProcess
+  let deadlineTimer: NodeJS.Timeout | undefined
+  let deadlineTimedOut = false
   try {
     child = spawn('bash', ['-c', task.command], {
       cwd: task.cwd ?? process.cwd(),
@@ -797,7 +755,7 @@ export function spawnTaskCommand(taskId: string): void {
     task.error = err instanceof Error ? err.message : String(err)
     task.exitCode = -1
     task.updatedAt = new Date().toISOString()
-    finishJob(jobId, 'failed', {
+    finishTaskJobIfCurrent(jobId, jobCreatedAt, 'failed', {
       stage: 'spawn_failed',
       error: task.error,
       terminationReason: 'spawn_error',
@@ -806,22 +764,39 @@ export function spawnTaskCommand(taskId: string): void {
     return
   }
 
-  if (typeof child.pid === 'number' && child.pid > 0) {
-    task.processIdentity = {
-      schema_version: 1,
-      pid: child.pid,
-      command: task.command,
-      cwd: task.cwd ?? process.cwd(),
-      spawnedAt: new Date().toISOString(),
-    }
-    recordTaskLongTaskSnapshot(task, 'running')
-  }
   runningProcesses.set(taskId, child)
-  startJob(jobId, {
+  startTaskJobIfCurrent(jobId, jobCreatedAt, {
     pid: child.pid,
     processGroup: child.pid,
     stage: 'running',
   })
+  if (task.deadlineMs && task.deadlineMs > 0) {
+    deadlineTimer = setTimeout(() => {
+      if (!runningProcesses.has(taskId)) return
+      deadlineTimedOut = true
+      task.status = 'cancelled'
+      task.error = `deadline exceeded after ${task.deadlineMs}ms`
+      task.updatedAt = new Date().toISOString()
+      finishTaskJobIfCurrent(jobId, jobCreatedAt, 'timeout', {
+        stage: 'timeout',
+        error: task.error,
+        terminationReason: 'deadline',
+      })
+      const pid = child.pid
+      let killSent = false
+      try { killSent = child.kill('SIGTERM') } catch { killSent = false }
+      recordTaskJobCleanupIfCurrent(jobId, jobCreatedAt, {
+        attempted: true,
+        succeeded: false,
+        remainingPids: pid ? [pid] : [],
+      })
+      recordTaskLongTaskSnapshot(task, 'timeout', {
+        timeoutKind: 'deadline',
+        lastProgress: task.error,
+      })
+    }, task.deadlineMs)
+    deadlineTimer.unref?.()
+  }
 
   // Cap captured I/O to keep a runaway `cat /dev/zero`-style command
   // from ballooning memory. 1 MiB per stream is plenty for an audit
@@ -833,7 +808,7 @@ export function spawnTaskCommand(taskId: string): void {
     const text = chunk.toString('utf8')
     task.stdout = (task.stdout ?? '') + text
     task.updatedAt = new Date().toISOString()
-    appendJobOutput(jobId, text)
+    appendTaskJobOutputIfCurrent(jobId, jobCreatedAt, text)
     recordTaskLongTaskSnapshot(task, 'running')
     if (task.stdout!.length > MAX_BUF) {
       task.stdout = task.stdout!.slice(0, MAX_BUF) + '\n[truncated]'
@@ -847,7 +822,7 @@ export function spawnTaskCommand(taskId: string): void {
     const text = chunk.toString('utf8')
     task.stderr = (task.stderr ?? '') + text
     task.updatedAt = new Date().toISOString()
-    appendJobOutput(jobId, text)
+    appendTaskJobOutputIfCurrent(jobId, jobCreatedAt, text)
     recordTaskLongTaskSnapshot(task, 'running')
     if (task.stderr!.length > MAX_BUF) {
       task.stderr = task.stderr!.slice(0, MAX_BUF) + '\n[truncated]'
@@ -856,7 +831,7 @@ export function spawnTaskCommand(taskId: string): void {
   })
   child.on('error', (err) => {
     task.error = err instanceof Error ? err.message : String(err)
-    finishJob(jobId, 'failed', {
+    finishTaskJobIfCurrent(jobId, jobCreatedAt, 'failed', {
       stage: 'process_error',
       error: task.error,
       terminationReason: 'process_error',
@@ -864,7 +839,10 @@ export function spawnTaskCommand(taskId: string): void {
     recordTaskLongTaskSnapshot(task, 'failed')
   })
   child.on('exit', (code, signal) => {
-    runningProcesses.delete(taskId)
+    if (deadlineTimer) clearTimeout(deadlineTimer)
+    if (runningProcesses.get(taskId) === child) {
+      runningProcesses.delete(taskId)
+    }
     // If `stopTask` already wrote 'cancelled', preserve it. Otherwise
     // transition to 'completed' regardless of code (non-zero exits are
     // still completion in the bash-task sense — the consumer reads
@@ -874,18 +852,24 @@ export function spawnTaskCommand(taskId: string): void {
     }
     task.exitCode = typeof code === 'number' ? code : (signal ? -1 : 0)
     task.updatedAt = new Date().toISOString()
-    const job = getJob(jobId)
-    if (job?.status === 'cancelled') {
-      recordJobCleanup(jobId, { attempted: true, succeeded: true, remainingPids: [] })
+    const currentJob = getCurrentTaskJob(jobId, jobCreatedAt)
+    if (currentJob?.status === 'timeout' || currentJob?.status === 'cancelled') {
+      recordTaskJobCleanupIfCurrent(jobId, jobCreatedAt, {
+        attempted: currentJob.cleanupAttempted ?? true,
+        succeeded: true,
+        remainingPids: [],
+      })
     } else {
-      finishJob(jobId, task.exitCode === 0 ? 'done' : 'failed', {
+      finishTaskJobIfCurrent(jobId, jobCreatedAt, task.exitCode === 0 ? 'done' : 'failed', {
         stage: 'exited',
         ...(task.exitCode === 0 ? {} : { error: `exit code ${task.exitCode}` }),
         terminationReason: 'process_exit',
       })
     }
-    const status = task.status === 'cancelled'
-      ? 'cancelled'
+    const status = deadlineTimedOut
+      ? 'timeout'
+      : task.status === 'cancelled'
+        ? 'cancelled'
       : task.exitCode === 0
         ? 'completed'
         : 'failed'
@@ -923,71 +907,56 @@ function recordTaskLongTaskSnapshot(
     ...(extra.timeoutKind ? { timeoutKind: extra.timeoutKind } : {}),
     ...(extra.lastProgress ? { lastProgress: extra.lastProgress } : {}),
     ...(outputSnippet ? { outputSnippet } : {}),
-    ...(task.processIdentity ? { processIdentity: task.processIdentity } : {}),
   })
   task.longTaskSnapshot = snapshot
-  recordTaskRunLifecycleSnapshot(snapshot)
-  recordRuntimeSupervisorProcessFromLongTaskSnapshot(snapshot)
   return snapshot
-}
-
-function recordTaskRunLifecycleSnapshot(snapshot: LongTaskSnapshot): void {
-  recordRunLifecycleSnapshot({
-    runId: snapshot.longTaskId,
-    kind: 'task_command',
-    status: mapTaskLongStatusToRunStatus(snapshot.status),
-    objective: snapshot.objective,
-    startedAt: snapshot.startedAt,
-    updatedAt: snapshot.updatedAt,
-    ...(snapshot.finishedAt ? { finishedAt: snapshot.finishedAt } : {}),
-    owner: 'runtime_supervisor',
-    inspectCommand: snapshot.inspectCommand,
-    recoveryPolicy: taskRunRecoveryPolicy(snapshot),
-    evidence: {
-      ...(snapshot.lastProgress ? { last_progress: snapshot.lastProgress } : {}),
-      ...(snapshot.outputSnippet ? { last_output_summary: snapshot.outputSnippet } : {}),
-      ...(snapshot.timeoutKind ? { timeout_kind: snapshot.timeoutKind } : {}),
-    },
-  })
-}
-
-function mapTaskLongStatusToRunStatus(status: LongTaskSnapshot['status']): RunLifecycleStatus {
-  if (status === 'completed') return 'completed'
-  if (status === 'failed') return 'failed'
-  if (status === 'cancelled') return 'cancelled'
-  if (status === 'timeout') return 'timeout'
-  if (status === 'incomplete' || status === 'partial' || status === 'inferred') return 'incomplete'
-  return 'running'
-}
-
-function taskRunRecoveryPolicy(snapshot: LongTaskSnapshot): RunRecoveryPolicy {
-  if (snapshot.status === 'running') {
-    return {
-      schema_version: 1,
-      strategy: 'runtime_await',
-      next_command: `LongTaskAwait longTaskId=${snapshot.longTaskId} timeoutMs=5000`,
-      reason: 'Runtime has a live command task handle and can perform bounded awaits.',
-    }
-  }
-  if (snapshot.status === 'incomplete' || snapshot.status === 'timeout') {
-    return {
-      schema_version: 1,
-      strategy: 'replace_or_retry',
-      next_command: `LongTaskReplace longTaskId=${snapshot.longTaskId}`,
-      reason: 'Runtime cannot make progress by waiting; inspect captured output before replacing or retrying.',
-    }
-  }
-  return {
-    schema_version: 1,
-    strategy: 'report_terminal',
-    next_command: snapshot.inspectCommand,
-    reason: 'The command task is terminal; report the terminal evidence instead of waiting or replacing.',
-  }
 }
 
 /** True iff this task currently has a live child process. */
 export function hasRunningProcess(taskId: string): boolean {
   return runningProcesses.has(taskId)
+}
+
+export function getTaskJob(taskId: string): JobRecord | undefined {
+  return getJob(tasks.get(taskId)?.jobId)
+}
+
+function getCurrentTaskJob(jobId: string, createdAt: string): JobRecord | undefined {
+  const job = getJob(jobId)
+  return job?.createdAt === createdAt ? job : undefined
+}
+
+function startTaskJobIfCurrent(
+  jobId: string,
+  createdAt: string,
+  details: Parameters<typeof startJob>[1],
+): JobRecord | undefined {
+  if (!getCurrentTaskJob(jobId, createdAt)) return undefined
+  return startJob(jobId, details)
+}
+
+function appendTaskJobOutputIfCurrent(jobId: string, createdAt: string, output: string): JobRecord | undefined {
+  if (!getCurrentTaskJob(jobId, createdAt)) return undefined
+  return appendJobOutput(jobId, output)
+}
+
+function finishTaskJobIfCurrent(
+  jobId: string,
+  createdAt: string,
+  status: Parameters<typeof finishJob>[1],
+  details: Parameters<typeof finishJob>[2],
+): JobRecord | undefined {
+  if (!getCurrentTaskJob(jobId, createdAt)) return undefined
+  return finishJob(jobId, status, details)
+}
+
+function recordTaskJobCleanupIfCurrent(
+  jobId: string,
+  createdAt: string,
+  details: Parameters<typeof recordJobCleanup>[1],
+): JobRecord | undefined {
+  if (!getCurrentTaskJob(jobId, createdAt)) return undefined
+  return recordJobCleanup(jobId, details)
 }
 
 /** Test/debug helper. */

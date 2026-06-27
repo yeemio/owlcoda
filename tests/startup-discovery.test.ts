@@ -46,7 +46,7 @@ function makeConfig(overrides?: Partial<OwlCodaConfig>): OwlCodaConfig {
   return {
     port: 8019,
     host: '127.0.0.1',
-    routerUrl: 'http://127.0.0.1:8009',
+    routerUrl: 'http://127.0.0.1:8066',
     routerTimeoutMs: 600_000,
     models: [],
     responseModelStyle: 'platform',

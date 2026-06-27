@@ -24,7 +24,9 @@ export function recordProposal(
   list: ProposedToolCall[],
   args: RecordProposalArgs,
 ): ProposedToolCall {
-  const initial: PermissionState = args.riskClass === 'safe' ? 'not_needed' : 'needed'
+  const initial: PermissionState = args.riskClass === 'safe' || args.riskClass === 'safe_readonly_local'
+    ? 'not_needed'
+    : 'needed'
   const entry: ProposedToolCall = {
     tool: args.tool,
     riskClass: args.riskClass,

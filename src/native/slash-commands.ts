@@ -83,6 +83,7 @@ import { loadPermissions, addGlobalPermission, clearGlobalPermissions } from "./
 import { probeRuntimeSurface } from "../runtime-probe.js"
 import { isInteractiveChatModelName } from "../model-registry.js"
 import { getTranscriptInteractionCapability } from "./repl-compat.js"
+import { buildRuntimeHealthSnapshot, type RuntimeSubsystemStatus } from "./runtime-health.js"
 import { resolveLiveReplResumeTarget, updateLiveReplClientSession } from "../repl-lease.js"
 import { ModelConfigMutator } from "../model-config-mutator.js"
 import {
@@ -159,6 +160,30 @@ export type SlashCommandSideEffect =
 
 export interface SlashCommandHooks {
   onSideEffect?: (effect: SlashCommandSideEffect) => void
+}
+
+function runtimeSubsystemIcon(status: RuntimeSubsystemStatus): string {
+  if (status === 'ok') return `${ansi.green}✓${ansi.reset}`
+  if (status === 'error') return `${ansi.red}✗${ansi.reset}`
+  return `${ansi.yellow}⚠${ansi.reset}`
+}
+
+function formatRuntimeSubsystemDoctorLines(projectRoot: string): string[] {
+  const snapshot = buildRuntimeHealthSnapshot({ projectRoot })
+  const { jobSupervisor, browserRuntime, artifactRegistry, toolRisk } = snapshot.subsystems
+  const lines = [
+    `  ${runtimeSubsystemIcon(jobSupervisor.status)} Job supervisor: ${jobSupervisor.jobCount} job(s), ${jobSupervisor.running} running, ${jobSupervisor.failed} failed, ${jobSupervisor.timeout} timeout`,
+    `  ${runtimeSubsystemIcon(browserRuntime.status)} Browser runtime: providers=${browserRuntime.providers.join(', ')} real_browser=${browserRuntime.realBrowserProvider ? 'yes' : 'no'}`,
+    `  ${runtimeSubsystemIcon(artifactRegistry.status)} Artifact registry: ${artifactRegistry.artifactCount} artifact(s), ${artifactRegistry.missingCount} missing`,
+    `  ${ansi.dim}   ${artifactRegistry.path}${ansi.reset}`,
+    `  ${runtimeSubsystemIcon(toolRisk.status)} Tool risk: ${toolRisk.schemaCount} schema(s), safe_readonly_local=${toolRisk.safeReadonlyLocal ? 'on' : 'off'}`,
+  ]
+  for (const failure of jobSupervisor.recentFailures) {
+    const reason = failure.terminationReason ? ` reason=${failure.terminationReason}` : ''
+    const recovery = failure.recoveryHint ? ` recovery=${failure.recoveryHint}` : ''
+    lines.push(`${ansi.dim}   recent job failure: ${failure.jobId} ${failure.status}/${failure.stage}${reason}${recovery}${ansi.reset}`)
+  }
+  return lines
 }
 
 async function openAdminHandoffFromSlash(
@@ -1424,6 +1449,11 @@ ${isModesEnabled() ? `    /mode [mode]      Approval mode (${OPERATING_MODES.joi
       lines.push(`  ${ok} Mode: ${interaction.selectionSummary}`)
       lines.push(`  ${interaction.wheelSupport === 'verified' ? ok : warn} Wheel: ${interaction.wheelSummary}`)
       lines.push(`  ${ansi.dim}   Detected environment: ${interaction.environmentLabel}${ansi.reset}`)
+      lines.push('')
+
+      // ── Runtime subsystems ──
+      lines.push(`  ${ansi.bold}Runtime Subsystems${ansi.reset}`)
+      lines.push(...formatRuntimeSubsystemDoctorLines(process.cwd()))
       lines.push('')
 
       // ── Proxy + Models ──

@@ -173,8 +173,6 @@ export function parseArgs(argv: string[]): {
   autoApprove?: boolean
   allowTools?: string[]
   denyTools?: string[]
-  allowBashCommands?: string[]
-  maxBashCalls?: number
   resumeSession?: string
   force?: boolean
   dryRun?: boolean
@@ -200,8 +198,6 @@ export function parseArgs(argv: string[]): {
   let autoApprove = false
   const allowTools: string[] = []
   const denyTools: string[] = []
-  const allowBashCommands: string[] = []
-  let maxBashCalls: number | undefined
   let resumeSession: string | undefined
   let force = false
   let dryRun = false
@@ -285,12 +281,6 @@ export function parseArgs(argv: string[]): {
       case '--deny-tool':
         appendCommaSeparatedValues(denyTools, args[++i])
         break
-      case '--allow-bash-command':
-        appendRawValue(allowBashCommands, args[++i])
-        break
-      case '--max-bash-calls':
-        maxBashCalls = parseNonNegativeInteger(args[++i])
-        break
       case '--resume':
         resumeSession = args[++i] ?? 'last'
         break
@@ -321,6 +311,9 @@ export function parseArgs(argv: string[]): {
         break
       case 'server':
         command = 'server'
+        break
+      case 'app-server':
+        command = 'app-server'
         break
       case 'start':
         command = 'start'
@@ -430,8 +423,6 @@ export function parseArgs(argv: string[]): {
     autoApprove,
     allowTools,
     denyTools,
-    allowBashCommands,
-    maxBashCalls,
     resumeSession,
     force,
     dryRun,
@@ -452,16 +443,11 @@ function appendCommaSeparatedValues(out: string[], raw: string | undefined): voi
   }
 }
 
-function appendRawValue(out: string[], raw: string | undefined): void {
-  if (raw === undefined || raw === '') return
-  out.push(raw)
-}
-
-function parseNonNegativeInteger(raw: string | undefined): number | undefined {
-  if (raw === undefined || raw === '') return undefined
-  const parsed = Number.parseInt(raw, 10)
-  if (!Number.isFinite(parsed) || parsed < 0) return undefined
-  return parsed
+function getFlagValue(args: readonly string[], flag: string): string | undefined {
+  const index = args.indexOf(flag)
+  if (index < 0) return undefined
+  const value = args[index + 1]
+  return value && !value.startsWith('-') ? value : undefined
 }
 
 
@@ -498,6 +484,8 @@ Setup & diagnostics:
   owlcoda logs                  Show recent log entries
   owlcoda export [--json|--env] Export sanitized config for sharing
   owlcoda benchmark             Latency/throughput benchmark across models
+  owlcoda benchmark provider-eval-report [--record-path P] [--json]
+                                Local provider eval leaderboard/case matrix
   owlcoda completions <shell>   Generate shell completion (bash/zsh/fish)
 
 Daemon & live clients:
@@ -505,6 +493,7 @@ Daemon & live clients:
   owlcoda stop [--force]        Stop background proxy
   owlcoda status                Daemon health + live client registry
   owlcoda server                Start proxy server in foreground
+  owlcoda app-server            Start structured desktop App Server (JSON-RPC + SSE)
   owlcoda serve                 Standalone API server (preflight + health)
   owlcoda clients               List active live REPL clients
   owlcoda clients detach <id> [--force]   Detach a client
@@ -543,9 +532,6 @@ Options:
   --auto-approve          Auto-approve safe tools and task-contract file writes (non-interactive; mutating bash remains policy-gated)
   --allow-tool <list>     Restrict non-interactive run to comma-separated tool names
   --deny-tool <list>      Deny comma-separated tool names even when otherwise safe
-  --allow-bash-command <cmd>
-                          Allow only this exact bash command in non-interactive policy; repeatable
-  --max-bash-calls <N>    Deny bash attempts after N calls in non-interactive policy
   --resume [id|last]      Resume a previous session
   --dry-run               Validate environment without launching
   --print-url             Print the browser admin URL without opening a browser
@@ -573,6 +559,136 @@ Exit Codes:
   1  Preflight / startup failure
   2  Model / proxy error
   3  Tool execution loop limit`)
+}
+
+interface AppServerCliOptions {
+  host: string
+  port: number
+  smoke: boolean
+  configPath?: string
+  runtimePort?: number
+  routerUrl?: string
+  model?: string
+}
+
+interface AppServerCliContext {
+  configPath?: string
+  runtimePort?: number
+  routerUrl?: string
+  model?: string
+}
+
+export async function doAppServer(args: string[] = [], context: AppServerCliContext = {}): Promise<void> {
+  const options = parseAppServerCliOptions(args)
+  const config = loadEffectiveConfig(
+    options.configPath ?? context.configPath,
+    options.runtimePort ?? context.runtimePort,
+    options.routerUrl ?? context.routerUrl,
+  )
+  const { createAppServer, listenAppServer } = await import('./native/app-server/http-server.js')
+  const server = createAppServer({
+    projectRoot: process.cwd(),
+    config,
+    loopModelId: options.model ?? context.model,
+  })
+  await listenAppServer(server, { host: options.host, port: options.port })
+
+  const address = server.address()
+  const port = typeof address === 'object' && address ? address.port : options.port
+  const baseUrl = `http://${options.host}:${port}`
+
+  if (options.smoke) {
+    try {
+      const response = await fetch(`${baseUrl}/healthz`)
+      const health = await response.json()
+      process.stdout.write(JSON.stringify({
+        ok: response.ok,
+        baseUrl,
+        health,
+      }) + '\n')
+    } finally {
+      await closeAppServer(server)
+    }
+    return
+  }
+
+  console.error(`OwlCoda App Server listening at ${baseUrl}`)
+  await waitForAppServerShutdown(server)
+}
+
+function parseAppServerCliOptions(args: string[]): AppServerCliOptions {
+  const options: AppServerCliOptions = {
+    host: process.env.OWLCODA_APP_SERVER_HOST || '127.0.0.1',
+    port: parseAppServerPort(process.env.OWLCODA_APP_SERVER_PORT, 6199),
+    smoke: false,
+    configPath: process.env.OWLCODA_APP_SERVER_CONFIG || undefined,
+    runtimePort: parseOptionalAppServerPort(process.env.OWLCODA_APP_SERVER_RUNTIME_PORT),
+    routerUrl: process.env.OWLCODA_APP_SERVER_ROUTER_URL || undefined,
+    model: process.env.OWLCODA_APP_SERVER_MODEL || undefined,
+  }
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]
+    if (arg === '--app-server-host' || arg === '--host') {
+      options.host = requireAppServerArgValue(args, ++index, arg)
+    } else if (arg === '--app-server-port' || arg === '--port') {
+      options.port = parseAppServerPort(requireAppServerArgValue(args, ++index, arg), options.port)
+    } else if (arg === '--runtime-port') {
+      options.runtimePort = parseAppServerPort(requireAppServerArgValue(args, ++index, arg), options.runtimePort ?? 0)
+    } else if (arg === '--config') {
+      options.configPath = requireAppServerArgValue(args, ++index, arg)
+    } else if (arg === '--router' || arg === '--endpoint') {
+      options.routerUrl = requireAppServerArgValue(args, ++index, arg)
+    } else if (arg === '--app-server-model' || arg === '--model' || arg === '-m') {
+      options.model = requireAppServerArgValue(args, ++index, arg)
+    } else if (arg === '--app-server-smoke' || arg === '--smoke') {
+      options.smoke = true
+    } else {
+      throw new Error(`Unknown app-server option: ${arg}`)
+    }
+  }
+
+  return options
+}
+
+function requireAppServerArgValue(args: string[], index: number, flag: string): string {
+  const value = args[index]
+  if (!value || value.startsWith('--')) throw new Error(`${flag} requires a value`)
+  return value
+}
+
+function parseAppServerPort(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw === '') return fallback
+  const port = Number.parseInt(raw, 10)
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`Invalid App Server port: ${raw}`)
+  }
+  return port
+}
+
+function parseOptionalAppServerPort(raw: string | undefined): number | undefined {
+  if (raw === undefined || raw === '') return undefined
+  return parseAppServerPort(raw, 0)
+}
+
+function closeAppServer(server: import('node:http').Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close(error => {
+      if (error) reject(error)
+      else resolve()
+    })
+  })
+}
+
+function waitForAppServerShutdown(server: import('node:http').Server): Promise<void> {
+  return new Promise((resolve) => {
+    const shutdown = () => {
+      void closeAppServer(server).finally(resolve)
+    }
+    process.once('SIGINT', shutdown)
+    process.once('SIGTERM', shutdown)
+    server.once('close', resolve)
+  })
 }
 
 export async function doStart(configPath?: string, port?: number, routerUrl?: string): Promise<void> {
@@ -1294,8 +1410,6 @@ export async function main(): Promise<void> {
     autoApprove,
     allowTools,
     denyTools,
-    allowBashCommands,
-    maxBashCalls,
     resumeSession,
     force,
     dryRun,
@@ -1352,6 +1466,15 @@ export async function main(): Promise<void> {
     case 'server': {
       const config = loadEffectiveConfig(configPath, port, routerUrl)
       startServer(config)
+      break
+    }
+    case 'app-server': {
+      await doAppServer(passthroughArgs, {
+        configPath,
+        runtimePort: port,
+        routerUrl,
+        model,
+      })
       break
     }
     case 'serve': {
@@ -1483,6 +1606,20 @@ export async function main(): Promise<void> {
       process.exit(0)
     }
     case 'benchmark': {
+      if (passthroughArgs[0] === 'provider-eval-report') {
+        const recordPath = getFlagValue(passthroughArgs, '--record-path')
+        const { readBenchmarkProviderEvalRecords } = await import('./benchmark/provider-eval-store.js')
+        const {
+          buildBenchmarkProviderEvalBatchReport,
+          formatBenchmarkProviderEvalBatchReport,
+        } = await import('./benchmark/provider-eval-report.js')
+        const records = await readBenchmarkProviderEvalRecords(recordPath ? { recordPath } : {})
+        const report = buildBenchmarkProviderEvalBatchReport(records)
+        process.stdout.write((jsonOutput || passthroughArgs.includes('--json'))
+          ? `${JSON.stringify(report, null, 2)}\n`
+          : `${formatBenchmarkProviderEvalBatchReport(report)}\n`)
+        process.exit(0)
+      }
       const config = loadEffectiveConfig(configPath, port, routerUrl)
       const baseUrl = getBaseUrl(config)
       const modelIds = config.models.map(m => m.id)
@@ -2419,8 +2556,6 @@ export async function main(): Promise<void> {
               autoApprove,
               allowTools,
               denyTools,
-              allowBashCommands,
-              maxBashCalls,
               resumeSession: effectiveResumeSession,
             })
             process.exit(result.exitCode)
@@ -2450,8 +2585,6 @@ export async function main(): Promise<void> {
         autoApprove,
         allowTools,
         denyTools,
-        allowBashCommands,
-        maxBashCalls,
         resumeSession: effectiveResumeSession,
         saveSessionOnComplete: true,
       })

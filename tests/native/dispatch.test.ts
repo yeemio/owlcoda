@@ -29,7 +29,7 @@ describe('Native Tool Dispatcher', () => {
     }
   })
 
-  it('registers all 68 default tools', () => {
+  it('registers all 56 default tools', () => {
     const dispatcher = new ToolDispatcher()
     const names = dispatcher.getToolNames()
     expect(names).toContain('bash')
@@ -51,22 +51,10 @@ describe('Native Tool Dispatcher', () => {
     expect(names).toContain('AgentRunGet')
     expect(names).toContain('RuntimeRecoveryList')
     expect(names).toContain('RuntimeRecoveryGet')
-    expect(names).toContain('RuntimeLifecycleList')
-    expect(names).toContain('RuntimeLifecycleGet')
-    expect(names).toContain('RuntimeSupervisorList')
-    expect(names).toContain('RuntimeSupervisorGet')
-    expect(names).toContain('AgentControlList')
-    expect(names).toContain('AgentControlGet')
-    expect(names).toContain('AgentMailboxSend')
-    expect(names).toContain('AgentMailboxList')
-    expect(names).toContain('AgentMailboxGet')
-    expect(names).toContain('AgentMailboxResolve')
     expect(names).toContain('JobList')
     expect(names).toContain('JobGet')
     expect(names).toContain('JobCancel')
     expect(names).toContain('BrowserJob')
-    expect(names).toContain('ApiJob')
-    expect(names).toContain('ServiceJob')
     expect(names).toContain('EnterPlanMode')
     expect(names).toContain('ExitPlanMode')
     expect(names).toContain('Config')
@@ -100,7 +88,7 @@ describe('Native Tool Dispatcher', () => {
     expect(names).toContain('ArtifactVerify')
     expect(names).toContain('ProbePlan')
     expect(names).toContain('JudgeBackendProbe')
-    expect(names).toHaveLength(68)
+    expect(names).toHaveLength(56)
   })
 
   it('has() returns true for registered tools', () => {
@@ -282,6 +270,34 @@ describe('Native Tool Dispatcher', () => {
     expect((contentBlocks[0] as any).content).toContain('ok')
     expect((contentBlocks[0] as any).content).toContain('[exit code: 0]')
     expect((contentBlocks[0] as any).is_error).toBe(false)
+  })
+
+  it('toContentBlocks preserves internal tool metadata for durable review surfaces', () => {
+    const dispatcher = new ToolDispatcher()
+    const contentBlocks = dispatcher.toContentBlocks([{
+      toolUseId: 'write-1',
+      toolName: 'write',
+      durationMs: 1,
+      result: {
+        output: 'Wrote file',
+        isError: false,
+        metadata: {
+          path: '/tmp/example.txt',
+          oldContent: 'before',
+          newContent: 'after',
+        },
+      },
+    }])
+
+    expect(contentBlocks[0]).toMatchObject({
+      type: 'tool_result',
+      tool_use_id: 'write-1',
+      metadata: {
+        path: '/tmp/example.txt',
+        oldContent: 'before',
+        newContent: 'after',
+      },
+    })
   })
 
   it('handles tool execution errors gracefully', async () => {

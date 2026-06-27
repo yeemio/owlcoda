@@ -1,9 +1,6 @@
 import {
   buildLongTaskLifecycleVerdict,
-  buildLongTaskProcessLiveness,
   formatLongTaskLifecycleVerdictLine,
-  formatLongTaskProcessIdentityLine,
-  formatLongTaskProcessLivenessLine,
   formatLongTaskReplacementPolicyLine,
   formatLongTaskWaitPolicyLine,
   getLongTaskSnapshot,
@@ -92,14 +89,12 @@ export function createLongTaskGetTool(): NativeToolDef<LongTaskGetInput> {
         }
       }
 
-      const processLiveness = buildLongTaskProcessLiveness(snapshot)
       return {
         output: formatLongTaskDetail(snapshot),
         isError: false,
         metadata: {
           snapshot,
           long_task_lifecycle: buildLongTaskLifecycleVerdict(snapshot),
-          ...(processLiveness ? { process_liveness: processLiveness } : {}),
         },
       }
     },
@@ -201,29 +196,6 @@ export function createLongTaskReplaceTool(): NativeToolDef<LongTaskReplaceInput>
 
       if (!replacementPolicy?.available || replacementPolicy.strategy !== 'task_command_replace') {
         return replacementNotSupported(snapshot, replacementPolicy?.reason ?? 'No replacement policy is available for this long task.')
-      }
-
-      const processLiveness = buildLongTaskProcessLiveness(snapshot)
-      if (
-        processLiveness
-        && (processLiveness.status === 'alive'
-          || processLiveness.status === 'permission_unknown'
-          || processLiveness.status === 'unknown')
-      ) {
-        return {
-          output: [
-            `LongTaskReplace: inspect_process_first ${snapshot.longTaskId}`,
-            formatLongTaskProcessLivenessLine(snapshot),
-            'Runtime is refusing automatic replacement until the restored process identity is inspected; replacing now could duplicate still-running work.',
-            `Inspect: ${snapshot.inspectCommand}`,
-          ].filter(Boolean).join('\n'),
-          isError: false,
-          metadata: {
-            replacement_status: 'inspect_process_first',
-            original_long_task_id: snapshot.longTaskId,
-            process_liveness: processLiveness,
-          },
-        }
       }
 
       const commandToRun = normalizeOptionalString(input.command) ?? snapshot.command?.trim()
@@ -369,10 +341,6 @@ function formatLongTaskDetail(snapshot: LongTaskSnapshot): string {
   if (snapshot.timeoutKind) lines.push(`timeoutKind=${snapshot.timeoutKind}`)
   const lifecycleLine = formatLongTaskLifecycleVerdictLine(snapshot)
   if (lifecycleLine) lines.push(lifecycleLine)
-  const processIdentityLine = formatLongTaskProcessIdentityLine(snapshot)
-  if (processIdentityLine) lines.push(processIdentityLine)
-  const processLivenessLine = formatLongTaskProcessLivenessLine(snapshot)
-  if (processLivenessLine) lines.push(processLivenessLine)
   const waitPolicyLine = formatLongTaskWaitPolicyLine(snapshot)
   if (waitPolicyLine) lines.push(waitPolicyLine)
   const replacementPolicyLine = formatLongTaskReplacementPolicyLine(snapshot)

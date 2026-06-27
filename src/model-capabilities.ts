@@ -1,3 +1,8 @@
+import type {
+  StructuredOutputCapabilitySource,
+  StructuredOutputModelCapabilities,
+} from './model-output-harness.js'
+
 export const DEFAULT_CONTEXT_WINDOW = 32_768
 
 /**
@@ -21,9 +26,13 @@ export type ModelIdentity = {
   label?: string
   backendModel?: string
   aliases?: string[]
+  provider?: string
   endpoint?: string
   contextWindow?: number
   contextWindowSource?: ContextWindowSource
+  supportsImages?: boolean
+  supportsStructuredOutput?: boolean
+  maxOutputTokens?: number
 }
 
 type ContextCapability = {
@@ -55,9 +64,22 @@ export interface SustainedWorkCapability {
   reason?: string
 }
 
+export type VisionCapabilityStatus = 'supported' | 'unsupported' | 'unknown'
+export type VisionCapabilitySource = 'configured' | 'known' | 'unknown'
+
+export interface ModelVisionCapability {
+  status: VisionCapabilityStatus
+  inputImages: boolean
+  source: VisionCapabilitySource
+  labels: string[]
+  reason?: string
+}
+
 export interface ModelCapabilities {
   context: ModelContextCapability
   sustainedWork: SustainedWorkCapability
+  vision: ModelVisionCapability
+  structuredOutput: StructuredOutputModelCapabilities
 }
 
 const KNOWN_CONTEXT_CAPABILITIES: ContextCapability[] = [
@@ -200,12 +222,26 @@ const KIMI_IDENTITY_PATTERNS = [
   /\bkimi[-_\s]?for[-_\s]?coding\b/i,
 ]
 
+const KNOWN_VISION_PATTERNS: RegExp[] = [
+  /\bkimi[-_\s]?k2[._-]?7[-_\s]?code(?:[-_\s]?highspeed)?\b/i,
+  /\bkimi[-_\s]?k2[._-]?(?:5|6)\b/i,
+  /\bmoonshot[-_\s]?v1[-_\s]?(?:8k|32k|128k)[-_\s]?vision[-_\s]?preview\b/i,
+  /\bqwen\d*(?:\.\d+)?[-_\s]?vl\b/i,
+  /\bqwen[-_\s]?vl\b/i,
+  /\bgemini[-_\s]?(?:1\.5|2(?:\.0|\.5)?|3(?:\.1)?)\b/i,
+  /\bgpt[-_\s]?4o\b/i,
+  /\bgpt[-_\s]?4\.1(?:[-_\s](?:mini|nano))?\b/i,
+  /\bgpt[-_\s]?5(?:\.\d+)?(?:[-_\s](?:mini|nano|pro))?\b/i,
+  /\bclaude[-_\s]?(?:3(?:\.|-)?5|3(?:\.|-)?7|sonnet|opus|haiku)\b/i,
+]
+
 function identityHaystack(identity: ModelIdentity): string {
   return [
     identity.id,
     identity.label,
     identity.backendModel,
     ...(identity.aliases ?? []),
+    identity.provider,
     identity.endpoint,
   ]
     .filter((value): value is string => typeof value === 'string' && value.length > 0)
@@ -347,9 +383,124 @@ export function resolveEffectiveContextWindow(identity: ModelIdentity): number {
 }
 
 export function resolveModelCapabilities(identity: ModelIdentity): ModelCapabilities {
+  const context = resolveContextCapability(identity)
   return {
-    context: resolveContextCapability(identity),
+    context,
     sustainedWork: resolveSustainedWorkCapability(identity),
+    vision: resolveVisionCapability(identity),
+    structuredOutput: resolveStructuredOutputCapability(identity, context),
+  }
+}
+
+export function resolveStructuredOutputCapability(
+  identity: ModelIdentity,
+  context: ModelContextCapability = resolveContextCapability(identity),
+): StructuredOutputModelCapabilities {
+  return {
+    jsonMode: resolveJsonModeCapability(identity),
+    maxContextTokens: {
+      tokens: context.contextWindow,
+      source: contextCapabilitySource(context.source),
+    },
+    maxOutputTokens: resolveMaxOutputTokenCapability(identity),
+    streaming: {
+      status: 'unknown',
+      source: 'fallback',
+      reason: 'Structured output currently uses non-streaming prompt+parse unless a provider route proves otherwise.',
+    },
+    thinking: {
+      behavior: 'unknown',
+      source: 'fallback',
+      reason: 'Thinking/reasoning behavior is provider-specific; harness treats thinking text as raw evidence, not artifact success.',
+    },
+  }
+}
+
+function resolveJsonModeCapability(identity: ModelIdentity): StructuredOutputModelCapabilities['jsonMode'] {
+  if (identity.supportsStructuredOutput === true) {
+    return {
+      status: 'supported',
+      source: 'declared',
+      reason: 'Structured JSON output is explicitly enabled for this configured model.',
+    }
+  }
+  if (identity.supportsStructuredOutput === false) {
+    return {
+      status: 'unsupported',
+      source: 'declared',
+      reason: 'Structured JSON output is explicitly disabled for this configured model.',
+    }
+  }
+  return {
+    status: 'unknown',
+    source: 'fallback',
+    reason: 'Structured JSON output has not been declared or probed; OwlCoda will use prompt+parse fallback.',
+  }
+}
+
+function resolveMaxOutputTokenCapability(identity: ModelIdentity): StructuredOutputModelCapabilities['maxOutputTokens'] {
+  if (typeof identity.maxOutputTokens === 'number') {
+    return {
+      tokens: Math.max(0, Math.floor(identity.maxOutputTokens)),
+      source: 'declared',
+    }
+  }
+  return {
+    tokens: 4096,
+    source: 'fallback',
+  }
+}
+
+function contextCapabilitySource(source: ContextWindowSource): StructuredOutputCapabilitySource {
+  switch (source) {
+    case 'configured':
+    case 'runtime_discovered':
+      return 'declared'
+    case 'official_known':
+      return 'manual'
+    case 'fallback':
+      return 'fallback'
+  }
+}
+
+export function resolveVisionCapability(identity: ModelIdentity): ModelVisionCapability {
+  if (identity.supportsImages === true) {
+    return {
+      status: 'supported',
+      inputImages: true,
+      source: 'configured',
+      labels: ['vision'],
+      reason: 'Image input is explicitly enabled for this configured model.',
+    }
+  }
+
+  if (identity.supportsImages === false) {
+    return {
+      status: 'unsupported',
+      inputImages: false,
+      source: 'configured',
+      labels: [],
+      reason: 'Image input is explicitly disabled for this configured model.',
+    }
+  }
+
+  const haystack = identityHaystack(identity)
+  if (haystack && KNOWN_VISION_PATTERNS.some(pattern => pattern.test(haystack))) {
+    return {
+      status: 'supported',
+      inputImages: true,
+      source: 'known',
+      labels: ['vision'],
+      reason: 'This model matches OwlCoda known multimodal model patterns.',
+    }
+  }
+
+  return {
+    status: 'unknown',
+    inputImages: false,
+    source: 'unknown',
+    labels: [],
+    reason: 'OwlCoda has not verified image-input support for this model yet.',
   }
 }
 

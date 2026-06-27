@@ -25,8 +25,10 @@ export async function handleModels(
   const snapshot = modelTruth ? await modelTruth.getSnapshot() : null
 
   const data = models.map(m => {
+    const configuredCapabilities = resolveModelCapabilities(m)
     const contextCapability = snapshot?.byModelId[m.id]?.contextCapability
-      ?? resolveModelCapabilities(m).context
+      ?? configuredCapabilities.context
+    const visionCapability = configuredCapabilities.vision
     return {
       id: m.id,
       display_name: m.label,
@@ -39,6 +41,10 @@ export async function handleModels(
       context_window_source: contextCapability.source,
       context_window_confidence: contextCapability.confidence,
       context_window_labels: contextCapability.labels,
+      vision: visionCapability.status,
+      input_images: visionCapability.inputImages,
+      vision_source: visionCapability.source,
+      vision_labels: visionCapability.labels,
     }
   })
 

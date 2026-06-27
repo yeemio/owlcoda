@@ -106,7 +106,7 @@ describe('hard budget gate', () => {
     expect(result.iterations).toBeLessThanOrEqual(1)
     // Should have an error about exceeding limit
     expect(errors.some(e => e.includes('exceeds context limit') || e.includes('still exceeds'))).toBe(true)
-  }, 15000)
+  })
 })
 
 // ─── 8.2 Fallback model selection ──────────────────────────────

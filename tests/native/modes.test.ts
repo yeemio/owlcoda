@@ -110,18 +110,19 @@ describe('evaluateAutoApproval', () => {
     expect(evaluateAutoApproval('auto', 'external_effect')).toBe(false)
   })
 
-  it('auto does not auto-approve safe (safe never prompts anyway)', () => {
+  it('auto does not auto-approve safe tiers (they never prompt anyway)', () => {
     expect(evaluateAutoApproval('auto', 'safe')).toBe(false)
+    expect(evaluateAutoApproval('auto', 'safe_readonly_local')).toBe(false)
   })
 
   it('yolo auto-approves every tier (full-access: removes the prompt, hard gates still run upstream)', () => {
-    for (const rc of ['safe', 'internal_state', 'mutating', 'destructive', 'external_effect'] as const) {
+    for (const rc of ['safe', 'safe_readonly_local', 'internal_state', 'mutating', 'destructive', 'external_effect'] as const) {
       expect(evaluateAutoApproval('yolo', rc)).toBe(true)
     }
   })
 
   it.each(['normal', 'plan'] as const)('%s never auto-approves any tier', (mode) => {
-    for (const rc of ['safe', 'internal_state', 'mutating', 'destructive', 'external_effect'] as const) {
+    for (const rc of ['safe', 'safe_readonly_local', 'internal_state', 'mutating', 'destructive', 'external_effect'] as const) {
       expect(evaluateAutoApproval(mode, rc)).toBe(false)
     }
   })
