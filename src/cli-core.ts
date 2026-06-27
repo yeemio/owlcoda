@@ -388,6 +388,12 @@ export function parseArgs(argv: string[]): {
       case 'training':
         command = 'training'
         break
+      case 'workflow':
+        command = 'workflow'
+        break
+      case 'resume':
+        command = 'resume'
+        break
       case 'cutover-status':
         command = 'cutover-status'
         break
@@ -487,6 +493,11 @@ Setup & diagnostics:
   owlcoda benchmark provider-eval-report [--record-path P] [--json]
                                 Local provider eval leaderboard/case matrix
   owlcoda completions <shell>   Generate shell completion (bash/zsh/fish)
+  owlcoda workflow execute --plan <file> [--receipt <file>] [--artifact-dir <dir>]
+  owlcoda workflow execute --contract <harness_task_contract.json> --base-url <url>
+  owlcoda workflow resume --run-id <workflow-run-id> [--cwd <dir>]
+  owlcoda resume --run-id <workflow-run-id> [--cwd <dir>]
+                                Execute native workflow/API plan or OwlFootball harness contract
 
 Daemon & live clients:
   owlcoda start                 Start proxy in background (daemon only)
@@ -1052,6 +1063,87 @@ export async function doServe(configPath?: string, port?: number, routerUrl?: st
   await new Promise<void>(() => {})
 }
 
+export async function doWorkflow(passthroughArgs: string[], jsonOutput = false): Promise<void> {
+  const action = passthroughArgs[0]
+  if (action !== 'execute' && action !== 'run-contract' && action !== 'resume') {
+    console.error('Usage: owlcoda workflow execute --plan <file> [--receipt <file>] [--artifact-dir <dir>]')
+    console.error('   or: owlcoda workflow execute --contract <harness_task_contract.json> --base-url <url>')
+    console.error('   or: owlcoda workflow resume --run-id <workflow-run-id> [--cwd <dir>]')
+    process.exit(1)
+  }
+
+  const args = passthroughArgs.slice(1)
+  const value = (flag: string): string | undefined => getFlagValue(args, flag)
+  const planPath = value('--plan')
+  const contractRef = value('--contract') ?? value('--contract-ref')
+  const baseUrl = value('--base-url') ?? value('--baseUrl')
+  const receiptPath = value('--receipt') ?? value('--receipt-path')
+  const artifactDir = value('--artifact-dir') ?? value('--artifactDir')
+  const runRef = value('--run-ref') ?? value('--runRef')
+  const receiptEndpoint = value('--receipt-endpoint') ?? value('--receiptEndpoint')
+  const taskRunId = value('--task-run-id') ?? value('--taskRunId')
+  const resumeRunId = value('--run-id') ?? value('--runId') ?? value('--resume-run-id') ?? value('--resumeRunId')
+  const structuredOutputModel = value('--structured-output-model') ?? value('--model') ?? value('-m')
+  const structuredOutputUser = value('--structured-output-user')
+  const cwd = value('--cwd')
+  const cliJson = jsonOutput || args.includes('--json')
+
+  if (action === 'resume' && !resumeRunId) {
+    console.error('Workflow resume requires --run-id <workflow-run-id>.')
+    process.exit(1)
+  }
+  if (action !== 'resume' && !planPath && !contractRef) {
+    console.error('Workflow execute requires --plan <file> or --contract <harness_task_contract.json>.')
+    process.exit(1)
+  }
+  if (planPath && contractRef) {
+    console.error('Workflow execute accepts either --plan or --contract, not both.')
+    process.exit(1)
+  }
+
+  const { readFile } = await import('node:fs/promises')
+  const { runWorkflow, formatWorkflowRunSummary, WorkflowPlanValidationError } = await import('./native/workflow-runner.js')
+  let plan: Record<string, unknown> | undefined
+  if (planPath) {
+    try {
+      plan = JSON.parse(await readFile(planPath, 'utf-8')) as Record<string, unknown>
+    } catch (err) {
+      console.error(`Failed to read workflow plan ${planPath}: ${err instanceof Error ? err.message : String(err)}`)
+      process.exit(1)
+    }
+  }
+
+  try {
+    const result = await runWorkflow({
+      ...(plan ? { plan: plan as never } : {}),
+      ...(contractRef ? { contractRef } : {}),
+      ...(baseUrl ? { baseUrl } : {}),
+      ...(runRef ? { runRef } : {}),
+      ...(receiptEndpoint ? { receiptEndpoint } : {}),
+      ...(taskRunId ? { taskRunId } : {}),
+      ...(resumeRunId ? { resumeRunId } : {}),
+      ...(structuredOutputModel ? { structuredOutputModel } : {}),
+      ...(structuredOutputUser ? { structuredOutputUser } : {}),
+      ...(receiptPath ? { receiptPath } : {}),
+      ...(artifactDir ? { artifactDir } : {}),
+      ...(cwd ? { cwd } : {}),
+    })
+    if (cliJson) {
+      process.stdout.write(`${JSON.stringify(result.receipt, null, 2)}\n`)
+    } else {
+      console.error(formatWorkflowRunSummary(result))
+    }
+    process.exit(result.receipt.acceptance === 'pass' ? 0 : 1)
+  } catch (err) {
+    if (err instanceof WorkflowPlanValidationError) {
+      console.error(err.message)
+    } else {
+      console.error(`Workflow execute failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    process.exit(1)
+  }
+}
+
 export interface UiLaunchResult {
   url: string
   bundleAvailable: boolean
@@ -1483,6 +1575,14 @@ export async function main(): Promise<void> {
     }
     case 'service': {
       await doService(passthroughArgs, configPath, port, routerUrl)
+      break
+    }
+    case 'workflow': {
+      await doWorkflow(passthroughArgs, jsonOutput)
+      break
+    }
+    case 'resume': {
+      await doWorkflow(['resume', ...passthroughArgs], jsonOutput)
       break
     }
     case 'doctor': {

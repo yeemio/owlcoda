@@ -1,11 +1,11 @@
 # OwlCoda Tools — Maturity Matrix
 
-> Refreshed 2026-06-23, owlcoda 0.15.12
+> Refreshed 2026-06-27, owlcoda 0.15.x
 > Source of truth: `src/native/dispatch.ts` default registration,
 > `src/native/tool-defs.ts` schemas, and `src/native/tools/*.ts`
 > behavioral audit (not comments).
-> Scope: 69 native tool schemas/factories are tracked below. The default
-> dispatcher currently advertises **68 registered tool_defs** through
+> Scope: 58 native tool schemas/factories are tracked below. The default
+> dispatcher currently advertises **57 registered tool_defs** through
 > `buildNativeToolDefs(new ToolDispatcher())`. `Agent` is host-wired by
 > `ink-repl.tsx` because it needs provider deps and is the only remaining
 > schema-only surface. The "42+ tools" headline is therefore a
@@ -16,15 +16,11 @@
 - **production**: 13
   bash, read, write, edit, glob, grep, NotebookEdit, WebFetch, WebSearch,
   EnterWorktree, ExitWorktree, TeamCreate, TeamDelete
-- **beta**: 50
+- **beta**: 39
   Agent, AgentRunList, AgentRunGet, LongTaskList, LongTaskGet, LongTaskAwait,
   LongTaskReplace,
-  RuntimeRecoveryList, RuntimeRecoveryGet,
-  RuntimeLifecycleList, RuntimeLifecycleGet,
-  RuntimeSupervisorList, RuntimeSupervisorGet,
-  AgentControlList, AgentControlGet,
-  AgentMailboxSend, AgentMailboxList, AgentMailboxGet, AgentMailboxResolve,
-  JobList, JobGet, JobCancel, BrowserJob, ApiJob, ServiceJob,
+  RuntimeRecoveryList, RuntimeRecoveryGet, JobList, JobGet, JobCancel,
+  BrowserJob, WorkflowRun,
   AskUserQuestion, Sleep,
   EnterPlanMode, ExitPlanMode, Config,
   TodoWrite, Skill, ToolSearch, StructuredOutput, Brief, PowerShell,
@@ -36,10 +32,10 @@
 - **experimental**: 5
   RemoteTrigger, LSP, MCPTool, ListMcpResources, ReadMcpResource
 
-Default registration truth: 68 registered tool_defs, 69 schema rows.
+Default registration truth: 57 registered tool_defs, 58 schema rows.
 Schema-only / host-wired surfaces: Agent (registered by `ink-repl.tsx`
 with live provider deps). Tungsten and Workflow were removed in 0.13.32 —
-they were upstream-cloud-only placeholders that returned "not available"
+Tungsten was an upstream-cloud-only placeholder that returned "not available"
 in local mode and had no realistic local implementation path.
 
 ### Maturity/registration contract
@@ -64,13 +60,13 @@ in local mode and had no realistic local implementation path.
 | glob | 398 | production | spawn rg (with fallback walker) | glob.test.ts (101) | full; uses rg-detect helper |
 | grep | 384 | production | spawn rg | grep.test.ts (145) | full |
 | NotebookEdit | 220 | production | fs read/write, JSON parse, fs-policy gate | notebook-edit.test.ts (177) — behavioral | full nbformat handling |
-| WebFetch | 137 | production | fetch() + html-to-text | none (no test file) | functional but UNTESTED |
+| WebFetch | 137 | production | fetch() + html-to-text | web-fetch.test.ts + tool-risk coverage | GET/HEAD only; local explicit-port health/healthz/ready/live diagnostics classify as `safe_readonly_local`, other URLs remain external_effect |
 | WebSearch | 153 | production | fetch() to DuckDuckGo lite + parse | none (no test file) | functional but UNTESTED; brittle DDG HTML scraping |
 | EnterWorktree | 133 | production | execSync `git worktree add` + chdir | worktree.test.ts (150) | real git ops |
 | ExitWorktree | 144 | production | execSync `git worktree remove`, change counting | worktree.test.ts (150) | real git ops |
 | TeamCreate | 91 | production (label: experimental) | mkdir + writeFile under ~/.owlcoda/teams | team-create.test.ts (55) | real disk persistence; only "experimental" because the *team* feature itself is half-built (no agents actually consume the team dir) |
 | TeamDelete | 83 | production (label: experimental) | rm + readFile under ~/.owlcoda | team-delete.test.ts (61) | real disk; same caveat |
-| Agent | 589 | beta | spawns sub-conversation via runConversationLoop, real provider calls | agent.test.ts (299) — behavioral | schema/factory exists; host-wired by ink-repl.tsx with provider deps, not default-registered |
+| Agent | 589 | beta | spawns sub-conversation via runConversationLoop, real provider calls | agent.test.ts (299) — behavioral | schema/factory exists; host-wired by ink-repl.tsx with provider deps, not default-registered; Agent jobs register a JobCancel live adapter that aborts the sub-agent watchdog signal |
 | AgentRunList | 34 | beta | reads in-memory Agent run history | agent.test.ts + dispatch/tool-risk/tool-defs coverage | read-only lifecycle inspection; bounded recent history only, no resume/retry/background scheduler |
 | AgentRunGet | 25 | beta | reads one in-memory Agent run history record | agent.test.ts + dispatch/tool-risk/tool-defs coverage | read-only detail inspection by agentId; no resume/retry/background scheduler |
 | LongTaskList | 417 | beta | reads runtime-owned long-task lifecycle snapshot registry | long-task.test.ts + dispatch/tool-risk/tool-defs coverage | read-only lifecycle registry list; reports status/supervision/waitability/inspect command, no wait/resume/retry/background scheduler |
@@ -79,22 +75,11 @@ in local mode and had no realistic local implementation path.
 | LongTaskReplace | 417 | beta | creates a classified replacement TaskCreate-style command task from a replace_or_retry lifecycle record | long-task.test.ts + dispatch/tool-risk/tool-defs/headless-approval coverage | first-class replacement gate for lost-handle command tasks; refuses unsafe commands and does not auto-replay Agent records |
 | RuntimeRecoveryList | 96 | beta | reads conversation-local runtime recovery ledger from ToolExecutionContext | runtime-recovery.test.ts + conversation-loop-guard/tool-risk/tool-defs coverage | read-only durable recovery checkpoint list; no resume/retry/background scheduler |
 | RuntimeRecoveryGet | 96 | beta | reads one conversation-local runtime recovery checkpoint from ToolExecutionContext | runtime-recovery.test.ts + conversation-loop-guard/tool-risk/tool-defs coverage | read-only checkpoint payload/detail inspection; no resume/retry/task or agent mutation |
-| RuntimeLifecycleList | 116 | beta | reads unified runtime lifecycle registry | run-lifecycle-tools.test.ts + run-lifecycle.test.ts + dispatch/tool-risk/tool-defs coverage | read-only truth spine list across task commands, agent runs, supervisor processes, mailbox messages, and checkpoints; no wait/resume/retry/mutation |
-| RuntimeLifecycleGet | 116 | beta | reads one unified runtime lifecycle record | run-lifecycle-tools.test.ts + run-lifecycle.test.ts + dispatch/tool-risk/tool-defs coverage | read-only detail inspection by runId; gives inspect command and recovery policy so resume does not rely on transcript memory |
-| RuntimeSupervisorList | 68 | beta | reads runtime-supervised command process snapshots | runtime-supervisor.test.ts + dispatch/tool-risk/tool-defs coverage | read-only process snapshot list for TaskCreate(command) work; not a daemon/job supervisor and does not kill/wait/retry work |
-| RuntimeSupervisorGet | 68 | beta | reads one runtime-supervised command process snapshot | runtime-supervisor.test.ts + dispatch/tool-risk/tool-defs coverage | read-only detail inspection by processId; exposes process identity, parent run, inspect command, and replacement caution |
-| AgentControlList | 68 | beta | projects Agent run history into parent/child control records | agent-control.test.ts + agent.test.ts + dispatch/tool-risk/tool-defs coverage | read-only AgentControl view with parent run links and recovery policy; does not spawn/resume/retry agents |
-| AgentControlGet | 68 | beta | reads one AgentControl record by agentId | agent-control.test.ts + agent.test.ts + dispatch/tool-risk/tool-defs coverage | read-only detail inspection by agentId; points back to AgentRunGet and inspect-before-retry recovery |
-| AgentMailboxSend | 150 | beta | mutates in-memory runtime mailbox queue | agent-mailbox.test.ts + dispatch/tool-risk/tool-defs coverage | queues structured parent/agent messages and mirrors them to run lifecycle; v1 does not directly wake a sub-agent turn |
-| AgentMailboxList | 150 | beta | reads in-memory runtime mailbox queue | agent-mailbox.test.ts + dispatch/tool-risk/tool-defs coverage | read-only mailbox inspection with recipient/status filters; prevents duplicate transcript-only instructions |
-| AgentMailboxGet | 150 | beta | reads one runtime mailbox message | agent-mailbox.test.ts + dispatch/tool-risk/tool-defs coverage | read-only detail by messageId; body is preserved outside free-form transcript |
-| AgentMailboxResolve | 150 | beta | marks a runtime mailbox message resolved | agent-mailbox.test.ts + dispatch/tool-risk/tool-defs coverage | internal-state resolution only; records terminal lifecycle evidence but does not deliver/resume agents |
-| JobList | 324 | beta | reads in-memory platform job supervisor records | job.test.ts + dispatch/tool-risk/tool-defs coverage | read-only job registry list for command, browser, API, and service jobs; no mutation |
-| JobGet | 324 | beta | reads one platform job supervisor record | job.test.ts + dispatch/tool-risk/tool-defs coverage | read-only detail by jobId; exposes status, artifacts, external handle, and recovery hints |
-| JobCancel | 324 | beta | mutates platform job supervisor state and invokes registered cleanup | job.test.ts + dispatch/tool-risk/tool-defs coverage | cancels command-backed jobs through the task cleanup path; non-command jobs are marked cancelled without pretending an unknown external handle was killed |
-| BrowserJob | 1139 | beta | fetch/Chrome/CDP browser replay and artifact capture | browser-job.test.ts + job-supervisor.test.ts + dispatch/tool-risk/tool-defs coverage | supervised browser capture with fetch_html, chrome_headless, and chrome_cdp providers; records screenshot/DOM/text/console/network artifacts where supported |
-| ApiJob | 310 | beta | HTTP(S) API request with response artifacts | api-job.test.ts + dispatch/tool-risk/tool-defs coverage | supervised API probe job with timeout, artifact registry integration, and live cancellation surface |
-| ServiceJob | 496 | beta | child_process spawn/stop/restart plus optional health probe | service-job.test.ts + dispatch/tool-risk/tool-defs coverage | supervised local dev service lifecycle with PID, port, log artifacts, health URL, graceful stop, and recovery hints |
+| JobList | 164 + 190 core | beta | reads runtime-owned platform job supervisor records, including durable `OWLCODA_HOME/jobs.json` reloads | job.test.ts + job-supervisor/session/dispatch/tool-risk/tool-defs coverage | read-only supervisor visibility for job identity, status, process identity, deadline, cleanup, and recovery hints; no wait/resume daemon |
+| JobGet | 164 + 190 core | beta | reads one runtime-owned platform job supervisor record | job.test.ts + agent/browser-job/session/app-server/dispatch/tool-risk/tool-defs coverage | read-only detail inspection by jobId; command-backed TaskCreate, BrowserJob, Agent, and JudgeBackendProbe API records are wired, returns structured suggested actions, session save/restore and durable job-store preserve snapshots, App Server exposes `job/get`; daemon process reattach remains future work |
+| JobCancel | 221 + 190 core | beta | mutates platform job supervisor state; command jobs route through TaskStop cleanup and registered live adapters receive abort signals | job.test.ts + browser-job/app-server/dispatch/tool-defs coverage | cancels command-backed TaskCreate jobs through the tracked child cleanup path; BrowserJob fetch/chrome captures have live cancel adapters; other non-command jobs are explicit supervisor-record cancellation unless an adapter is registered |
+| BrowserJob | 237 + 202 core | beta | fetch() HTTP(S) capture or local Chrome/Chromium headless capture + fs writeFile artifacts, recorded through Job supervisor and optional RunWorkspace artifact ledger | browser-job.test.ts + run-workspace/app-server/tool-risk/tool-defs coverage | `fetch_html` captures HTML/text; `chrome_headless` captures screenshot/DOM/text via local executable; selector miss, timeout, live cancel cleanup evidence, JobGet/JobList/App Server visibility, and runRef ledger metadata are wired; bundled Playwright/Chrome, console/network logs, and click flows remain future work |
+| WorkflowRun | 51 + 1143 core | beta | fetch() HTTP/API workflow execution, local JSON receipt write, saved plan snapshot, raw response artifact write, OwlFootball harness contract dispatch, structured-output follow-up, task receipt POST | workflow-run.test.ts + tool-risk/tool-defs/cli coverage | first native workflow runner slice: plan steps, step idempotency keys, conditional skips, expected status, projection/max-bytes, invocation receipt, `workflow resume --run-id`, OwlFootball `harness_task_contract.json`, 409 `requires_structured_output`, and `owlcoda://runs/<taskRunId>` receipt evidence are wired; no daemon supervisor/UI/history dashboard yet |
 | AskUserQuestion | 173 | beta | host UI callback or readline fallback on stdin | none directly (covered indirectly) | depends on ToolExecutionContext.askUserQuestion |
 | Sleep | 45 | beta | setTimeout | none (no test file) | trivial; works |
 | EnterPlanMode | 59 | beta | mutates shared PlanModeState | enter-plan-mode.test.ts (52) | state-only; no enforcement of "no writes during plan mode" inside the tool itself |
@@ -108,11 +93,11 @@ in local mode and had no realistic local implementation path.
 | PowerShell | 63 | beta | execFile pwsh / powershell.exe | powershell.test.ts (22) | shells out to pwsh if installed; correct error path otherwise |
 | DeliveryAudit | 583 | beta | reads git/status/files and can lint weak test assertions | delivery-audit.test.ts | local audit helper; useful for honesty checks but not a release gate by itself |
 | SkillRoutePreview | 61 | beta | classifies a prompt against skill routing logic | skill-route-preview.test.ts | read-only preview; no artifact creation |
-| RunWorkspace | 361 | beta | creates/reads `.owlcoda-run` metadata, ledger, artifacts, checkpoints | run-workspace.test.ts | real disk persistence for run metadata; not a job executor |
+| RunWorkspace | 361 | beta | creates/reads `.owlcoda-run` metadata, ledger, artifacts, checkpoints | run-workspace.test.ts | real disk persistence for run metadata; `readLedger` can filter by runtime artifact metadata; not a job executor |
 | ProjectMap | 136 | beta | bounded default-on project scan plus optional `.owlcoda-run/project-map.json` persistence | project-map.test.ts + project-map-dogfood-acceptance.test.ts | Runtime Control Plane snapshot surface; `OWLCODA_PROJECT_MAP=0` is the rollback override; not a full-repo index, does not execute commands, and does not bypass write gates |
 | ArtifactVerify | 108 | beta | runs supported artifact verification packs | artifact-verify.test.ts | currently supports `html_deck`; narrow verification helper |
 | ProbePlan | 376 | beta | stores probe plans and optionally mutates live conversation options | probe-plan.test.ts | default dispatcher has no live-conversation accessor; ink-repl re-registers it with one |
-| JudgeBackendProbe | 37 | beta | probes OpenAI-compatible chat/completions endpoints with fixed prompts | judge-backend-probe.test.ts + tools/judge-backend-probe.test.ts + dispatch/tool-risk/tool-defs coverage | real local/remote HTTP calls; useful for checking model/backend JSON reliability, not a release gate |
+| JudgeBackendProbe | 33 + 318 core | beta | fetch() to OpenAI-compatible chat/completions endpoints with fixed judge prompts, recorded as `type=api` Job supervisor entry | judge-backend-probe.test.ts + tools/judge-backend-probe.test.ts | preflight health probe for scorer/judge backends; records latency, JSON parse success, empty responses, malformed JSON, timeout, fallback recommendation, JobGet visibility, and JobCancel live abort |
 | TaskCreate | 49 | beta | in-memory task entry; optional safe_readonly bash child via task-store | task-create.test.ts (163) — behavior + safety gates | pure-TODO mode is still manual; command mode only spawns after bash-risk + headless-approval + direct safe_readonly recheck |
 | TaskList | 59 | beta | reads in-memory Map | task-list.test.ts | in-memory session task list; not a process/job discovery tool |
 | TaskGet | 57 | beta | reads in-memory Map | task-get.test.ts (48) | returns task record fields; command output is surfaced by TaskOutput |
@@ -164,7 +149,7 @@ in local mode and had no realistic local implementation path.
 ## False advertising risk
 
 The headline "42+ native tools" is still a defensible lower-bound
-because the default dispatcher advertises 68 registered tool_defs. The
+because the default dispatcher advertises 55 registered tool_defs. The
 risk is in the *implication* that all advertised tools are production
 features:
 
@@ -202,7 +187,7 @@ features:
   with a real provider.
 
 Recommendation: keep the headline "42+ tools" only when paired with an
-honest split such as "13 production, 50 beta, 1 stub, 5 experimental;
-68 default-registered tool_defs; 1 schema-only/host-wired surface".
+honest split such as "13 production, 36 beta, 1 stub, 5 experimental;
+54 default-registered tool_defs; 1 schema-only/host-wired surface".
 For user-facing marketing, lead with the production/beta capabilities
 and hide or gate the remaining stubs behind an experimental surface.

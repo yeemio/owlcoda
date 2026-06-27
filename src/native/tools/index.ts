@@ -51,6 +51,7 @@ export { createRunWorkspaceTool } from './run-workspace.js'
 export { createProjectMapTool } from './project-map.js'
 export { createArtifactVerifyTool } from './artifact-verify.js'
 export { createJudgeBackendProbeTool } from './judge-backend-probe.js'
+export { createWorkflowRunTool } from './workflow-run.js'
 export {
   applySemanticToolFailure,
   applyToolFailurePolicy,
@@ -89,3 +90,4 @@ export type { ProjectMapAction, ProjectMapInput } from './project-map.js'
 export type { ArtifactVerifyInput } from './artifact-verify.js'
 export type { JudgeBackendProbeInput } from './judge-backend-probe.js'
 export type { BrowserJobInput } from './browser-job.js'
+export type { WorkflowRunInput } from './workflow-run.js'

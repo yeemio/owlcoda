@@ -86,6 +86,8 @@ const EXTERNAL_EFFECT_TOOLS = new Set<string>([
   'JudgeBackendProbe',
   // Browser-style capture jobs fetch URLs and write artifacts.
   'BrowserJob',
+  // Native HTTP/API workflow executor and OwlFootball contract dispatcher.
+  'WorkflowRun',
 ])
 
 const LOCAL_READONLY_HEALTH_SEGMENTS = new Set(['health', 'healthz', 'ready', 'readyz', 'live', 'livez'])

@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import { spawn } from 'node:child_process'
+import { createServer, type Server } from 'node:http'
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -150,6 +151,141 @@ describe('CLI commands integration', { timeout: CLI_COMMANDS_TEST_TIMEOUT_MS }, 
       model: 'desktop-model',
       apiBaseUrl: 'http://127.0.0.1:8125',
     })
+  })
+
+  it('workflow execute runs a native HTTP plan and prints a machine-readable receipt', async () => {
+    const runtimeDir = makeRuntimeDir()
+    let server: Server | undefined
+    try {
+      server = createServer((req, res) => {
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({ ok: true, path: req.url }))
+      })
+      await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('test server did not bind')
+      const baseUrl = `http://127.0.0.1:${address.port}`
+      const planPath = join(runtimeDir, 'workflow-plan.json')
+      const receiptPath = join(runtimeDir, 'workflow-receipt.json')
+      writeFileSync(planPath, JSON.stringify({
+        run_id: 'cli-workflow-smoke',
+        base_url: baseUrl,
+        steps: [{
+          id: 'ping',
+          method: 'GET',
+          url: '/ping',
+          expected_status: 200,
+          projection: ['ok'],
+        }],
+      }), 'utf-8')
+
+      const result = await runCli([
+        'workflow',
+        'execute',
+        '--plan',
+        planPath,
+        '--receipt',
+        receiptPath,
+        '--artifact-dir',
+        join(runtimeDir, 'workflow-artifacts'),
+        '--json',
+      ], runtimeDir)
+
+      expect(result.code).toBe(0)
+      const receipt = JSON.parse(result.stdout)
+      expect(receipt).toMatchObject({
+        run_id: 'cli-workflow-smoke',
+        acceptance: 'pass',
+        required_endpoint_calls: '1/1',
+      })
+      expect(existsSync(receiptPath)).toBe(true)
+    } finally {
+      await new Promise<void>((resolve) => server?.close(() => resolve()))
+    }
+  })
+
+  it('workflow resume continues a saved native HTTP plan from the first unfinished step', async () => {
+    const runtimeDir = makeRuntimeDir()
+    let server: Server | undefined
+    let flakyStatus = 500
+    const calls: string[] = []
+    try {
+      server = createServer((req, res) => {
+        calls.push(req.url ?? '/')
+        res.setHeader('content-type', 'application/json')
+        if (req.url === '/flaky') {
+          res.statusCode = flakyStatus
+          res.end(JSON.stringify({ ok: flakyStatus === 200 }))
+          return
+        }
+        res.end(JSON.stringify({ ok: true, path: req.url }))
+      })
+      await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve))
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('test server did not bind')
+      const planPath = join(runtimeDir, 'workflow-resume-plan.json')
+      writeFileSync(planPath, JSON.stringify({
+        run_id: 'cli-workflow-resume',
+        base_url: `http://127.0.0.1:${address.port}`,
+        steps: [{
+          id: 'already_done',
+          method: 'GET',
+          url: '/done',
+          expected_status: 200,
+          projection: ['ok'],
+        }, {
+          id: 'finish_later',
+          method: 'GET',
+          url: '/flaky',
+          expected_status: 200,
+          projection: ['ok'],
+        }],
+        acceptance: {
+          required_endpoint_calls: 2,
+          must_all_ok: true,
+        },
+      }), 'utf-8')
+
+      const first = await runCli([
+        'workflow',
+        'execute',
+        '--plan',
+        planPath,
+        '--cwd',
+        runtimeDir,
+        '--json',
+      ], runtimeDir)
+
+      expect(first.code).toBe(1)
+      expect(calls).toEqual(['/done', '/flaky'])
+
+      calls.length = 0
+      flakyStatus = 200
+      const resumed = await runCli([
+        'workflow',
+        'resume',
+        '--run-id',
+        'cli-workflow-resume',
+        '--cwd',
+        runtimeDir,
+        '--json',
+      ], runtimeDir)
+
+      expect(resumed.code).toBe(0)
+      expect(calls).toEqual(['/flaky'])
+      const receipt = JSON.parse(resumed.stdout)
+      expect(receipt).toMatchObject({
+        run_id: 'cli-workflow-resume',
+        acceptance: 'pass',
+        required_endpoint_calls: '2/2',
+        resume: {
+          previous_run_id: 'cli-workflow-resume',
+          resumed_step_ids: ['already_done'],
+        },
+      })
+    } finally {
+      await new Promise<void>((resolve) => server?.close(() => resolve()))
+    }
   })
 
   it('doctor runs all checks', async () => {

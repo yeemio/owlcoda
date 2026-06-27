@@ -2,6 +2,29 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.17] — 2026-06-27
+
+Resumable workflow runner release.
+
+### Added
+
+- Added `WorkflowRun`, a native resumable workflow runner for multi-step plans
+  with persisted workflow state, step outcomes, and recovery metadata.
+- Registered `WorkflowRun` across the native tool registry, CLI command
+  surfaces, completions, tool risk classification, and public tool docs in the
+  same release slice.
+
+### Changed
+
+- Multi-step workflow execution can now move through the runtime/tool layer
+  instead of relying on transcript-only task memory.
+
+### Notes
+
+- This release keeps the `0.15.16` runtime harness consolidation boundary and
+  adds the reviewed WorkflowRun P0 slice. It does not claim complete resolution
+  of long-running degradation.
+
 ## [0.15.16] — 2026-06-27
 
 Runtime harness consolidation release for the Phase D entry point.

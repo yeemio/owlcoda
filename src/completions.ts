@@ -3,8 +3,8 @@
  * Supports bash, zsh, and fish.
  */
 
-const COMMANDS = ['start', 'stop', 'status', 'clients', 'server', 'serve', 'run', 'doctor', 'ui', 'admin', 'init', 'config', 'models', 'logs', 'completions', 'benchmark', 'export', 'inspect', 'validate', 'health', 'audit', 'cache', 'skills']
-const FLAGS = ['--port', '--config', '--endpoint', '--router', '--model', '--mode', '--daemon-only', '--prompt', '--json', '--auto-approve', '--resume', '--dry-run', '--print-url', '--open-browser', '--route', '--select', '--view', '--force', '--help', '--version']
+const COMMANDS = ['start', 'stop', 'status', 'clients', 'server', 'serve', 'run', 'doctor', 'ui', 'admin', 'init', 'config', 'models', 'logs', 'completions', 'benchmark', 'export', 'inspect', 'validate', 'health', 'audit', 'cache', 'skills', 'workflow', 'resume']
+const FLAGS = ['--port', '--config', '--endpoint', '--router', '--model', '--mode', '--daemon-only', '--prompt', '--json', '--auto-approve', '--resume', '--dry-run', '--print-url', '--open-browser', '--route', '--select', '--view', '--force', '--run-id', '--plan', '--contract', '--base-url', '--receipt', '--artifact-dir', '--cwd', '--help', '--version']
 
 export function generateBashCompletion(): string {
   return `# owlcoda bash completion
@@ -48,6 +48,8 @@ export function generateZshCompletion(): string {
     'audit:Query request audit log',
     'cache:Show or clear response cache',
     'skills:Manage learned skills (list/show/synth/delete)',
+    'workflow:Execute or resume a native workflow/API plan',
+    'resume:Resume a saved native workflow run',
   ]
   return `#compdef owlcoda
 # owlcoda zsh completion
@@ -78,6 +80,13 @@ ${cmdDescs.map(d => `    '${d}'`).join('\n')}
     '--select[Preselect a model in browser admin]:model:'
     '--view[Optional browser admin subview/filter]:view:'
     '--force[Force overwrite]'
+    '--run-id[Workflow run id for workflow resume]:run-id:'
+    '--plan[Workflow plan JSON file]:file:_files'
+    '--contract[OwlFootball harness task contract JSON file]:file:_files'
+    '--base-url[Workflow/API base URL]:url:'
+    '--receipt[Workflow receipt JSON path]:file:_files'
+    '--artifact-dir[Workflow response artifact directory]:directory:_files -/'
+    '--cwd[Workflow working directory]:directory:_files -/'
     '--help[Show help]'
     '--version[Show version]'
   )
@@ -127,6 +136,8 @@ export function generateFishCompletion(): string {
     ['audit', 'Query request audit log'],
     ['cache', 'Show or clear response cache'],
     ['skills', 'Manage learned skills'],
+    ['workflow', 'Execute or resume a native workflow/API plan'],
+    ['resume', 'Resume a saved native workflow run'],
   ]
 
   for (const [cmd, desc] of cmdDescs) {
@@ -152,6 +163,13 @@ export function generateFishCompletion(): string {
     ['select', 'Preselect a model in browser admin', true],
     ['view', 'Optional browser admin subview/filter', true],
     ['force', 'Force overwrite', false],
+    ['run-id', 'Workflow run id for workflow resume', true],
+    ['plan', 'Workflow plan JSON file', true],
+    ['contract', 'OwlFootball harness task contract JSON file', true],
+    ['base-url', 'Workflow/API base URL', true],
+    ['receipt', 'Workflow receipt JSON path', true],
+    ['artifact-dir', 'Workflow response artifact directory', true],
+    ['cwd', 'Workflow working directory', true],
     ['help', 'Show help', false],
     ['version', 'Show version', false],
   ]

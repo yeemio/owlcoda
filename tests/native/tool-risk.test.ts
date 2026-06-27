@@ -118,6 +118,7 @@ describe('classifyToolRisk — external_effect tools', () => {
     ['ExitWorktree', {}, 'external_effect'],
     ['BrowserJob', { url: 'http://127.0.0.1:3000/health' }, 'external_effect'],
     ['JudgeBackendProbe', { endpoint: 'http://127.0.0.1:8019/v1/chat/completions', models: ['mimo'] }, 'external_effect'],
+    ['WorkflowRun', { plan: { steps: [{ id: 'x', method: 'GET', url: 'https://example.com' }] } }, 'external_effect'],
   ] as const)('classifies %s as external_effect', (toolName, args, expected) => {
     expect(classifyToolRisk(toolName, args as Record<string, unknown>)).toBe<RiskClass>(expected)
   })
@@ -204,6 +205,7 @@ describe('classifyToolRisk — exhaustive against ToolDispatcher registry', () =
     JobCancel: { jobId: 'job:task:task-1' },
     BrowserJob: { url: 'http://127.0.0.1:3000/health' },
     JudgeBackendProbe: { endpoint: 'http://127.0.0.1:8019/v1/chat/completions', models: ['mimo'] },
+    WorkflowRun: { plan: { steps: [{ id: 'x', method: 'GET', url: 'https://example.com' }] } },
     EnterPlanMode: {},
     ExitPlanMode: {},
     EnterWorktree: { name: 'f' },
@@ -245,7 +247,7 @@ describe('classifyToolRisk — exhaustive against ToolDispatcher registry', () =
     // SAMPLE_ARGS and either to one of the explicit Sets in
     // classifyToolRisk or to DEFAULT_MUTATING_EXPLICIT_ACK.
     // Update the expected count when intentionally adding a tool.
-    expect(registered.length).toBe(56)
+    expect(registered.length).toBe(57)
   })
 
   it.each(registered.map((name) => [name]))(

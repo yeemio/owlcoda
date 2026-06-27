@@ -293,6 +293,63 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
     required: ['url'],
     description: 'Run a platform-supervised browser-style capture job. Providers: fetch_html and chrome_headless. Records artifacts plus job lifecycle status.',
   },
+  WorkflowRun: {
+    type: 'object',
+    properties: {
+      plan: {
+        type: 'object',
+        description:
+          'Typed HTTP/API workflow plan with run_id, plan_version, base_url, ordered steps, optional step idempotency_key, conditional gates, projection/max_response_bytes, and acceptance.',
+      },
+      contractRef: {
+        type: 'string',
+        description:
+          'Path to an OwlFootball harness_task_contract.json. When supplied, OwlCoda executes the contract task_queue, handles 409 requires_structured_output, and posts task receipts.',
+      },
+      baseUrl: {
+        type: 'string',
+        description: 'Base HTTP URL for relative plan step URLs or OwlFootball harness endpoints.',
+      },
+      runRef: {
+        type: 'string',
+        description: 'Optional OwlFootball/OwlCoda run artifact root used when dispatching structured-output tasks.',
+      },
+      receiptEndpoint: {
+        type: 'string',
+        description: 'Optional override for OwlFootball task receipt endpoint. Defaults to the contract execution receipt endpoint or /api/harness/tasks/receipt.',
+      },
+      taskRunId: {
+        type: 'string',
+        description: 'Stable OwlCoda task run id. Transcript ref is owlcoda://runs/<taskRunId>.',
+      },
+      structuredOutputModel: {
+        type: 'string',
+        description: 'Model id for OwlFootball 409 requires_structured_output follow-up calls. Defaults to mimo.',
+      },
+      structuredOutputUser: {
+        type: 'string',
+        description: 'Optional user prompt override for structured-output follow-up calls.',
+      },
+      resumeRunId: {
+        type: 'string',
+        description: 'Resume a saved native workflow run by run id. OwlCoda reloads .owlcoda-workflows/<run_id>/plan.json and receipt.json, skips successful steps, and records resume metadata.',
+      },
+      receiptPath: {
+        type: 'string',
+        description: 'Path for the local invocation receipt JSON. Defaults under .owlcoda-workflows/<run_id>/receipt.json.',
+      },
+      artifactDir: {
+        type: 'string',
+        description: 'Directory for full raw response artifacts when responses exceed max_response_bytes.',
+      },
+      cwd: {
+        type: 'string',
+        description: 'Working directory used to resolve relative paths.',
+      },
+    },
+    description:
+      'Execute or resume a native workflow plan or OwlFootball harness task contract without bash. Writes invocation receipts, preserves raw evidence, supports projection/max-bytes, conditional skips, step idempotency keys, and structured-output follow-up for 409 model tasks.',
+  },
   JudgeBackendProbe: {
     type: 'object',
     properties: {

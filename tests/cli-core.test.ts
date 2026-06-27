@@ -74,7 +74,7 @@ describe('parseArgs', () => {
     'server', 'start', 'stop', 'status', 'clients', 'run', 'serve',
     'doctor', 'ui', 'sessions', 'init', 'config', 'logs', 'completions',
     'models', 'benchmark', 'export', 'inspect', 'validate',
-    'health', 'audit', 'cache', 'skills', 'training', 'cutover-status', 'shadow-status',
+    'health', 'audit', 'cache', 'skills', 'training', 'workflow', 'resume', 'cutover-status', 'shadow-status',
   ]
 
   for (const cmd of commands) {
@@ -185,6 +185,24 @@ describe('parseArgs', () => {
     const result = parse(['skills', 'show', 'my-skill'])
     expect(result.command).toBe('skills')
     expect(result.passthroughArgs).toEqual(['show', 'my-skill'])
+  })
+
+  it('passes workflow execute subcommand args', () => {
+    const result = parse(['workflow', 'execute', '--plan', 'plan.json', '--receipt', 'receipt.json'])
+    expect(result.command).toBe('workflow')
+    expect(result.passthroughArgs).toEqual(['execute', '--plan', 'plan.json', '--receipt', 'receipt.json'])
+  })
+
+  it('passes workflow resume subcommand args', () => {
+    const result = parse(['workflow', 'resume', '--run-id', 'workflow-run-1', '--cwd', '/tmp/run'])
+    expect(result.command).toBe('workflow')
+    expect(result.passthroughArgs).toEqual(['resume', '--run-id', 'workflow-run-1', '--cwd', '/tmp/run'])
+  })
+
+  it('passes top-level workflow resume args', () => {
+    const result = parse(['resume', '--run-id', 'workflow-run-1'])
+    expect(result.command).toBe('resume')
+    expect(result.passthroughArgs).toEqual(['--run-id', 'workflow-run-1'])
   })
 
   // ─── -- separator ───
