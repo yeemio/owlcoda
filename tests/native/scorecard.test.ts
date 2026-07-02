@@ -245,6 +245,75 @@ describe('scorecard and RL-ready trajectory v0', () => {
     expect(scorecard.overallScore).toBeLessThan(80)
   })
 
+  it('scores workflow consumer manifests and emits workflow trajectory facts', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'owlcoda-scorecard-workflow-'))
+    try {
+      const runId = 'run-scorecard-workflow'
+      const outputRoot = join(dir, 'out')
+      await createRunWorkspace({ outputRoot, cwd: dir, runId })
+      const manifestPath = join(outputRoot, 'workflow-consumer-manifest.json')
+      await writeFile(manifestPath, JSON.stringify({
+        schemaVersion: 1,
+        kind: 'workflow_consumer_manifest',
+        runId,
+        normalizedState: 'failed',
+        acceptance: { status: 'fail' },
+        requiredCounts: { total: 3, completed: 1, failed: 1, skipped: 1 },
+        finalReportEligibility: {
+          allowed: false,
+          blockers: [
+            { code: 'required_step_failed', stepId: 'required_failed', message: 'required step failed' },
+            { code: 'failed_fallback_structured_output', artifactId: 'structured-output-failed', message: 'failed fallback' },
+          ],
+        },
+        diagnostics: [],
+      }, null, 2), 'utf8')
+      await recordArtifact(outputRoot, {
+        id: 'workflow-manifest-failed',
+        path: manifestPath,
+        origin: 'workflow_consumer',
+        artifactType: 'workflow_consumer_manifest',
+        runId,
+        participatesInFinal: false,
+      })
+      const artifactLedger = await readArtifactLedger(outputRoot)
+      const facts = collectRuntimeFactsForRun({
+        runId,
+        artifacts: artifactLedger.artifacts,
+      })
+
+      const scorecard = buildRunScorecard({
+        facts,
+        finalText: 'Workflow run completed successfully.',
+      })
+      const trajectory = buildRunTrajectory(facts, scorecard)
+
+      expect(scorecard.dimensions).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'workflow_outcome',
+          verdict: 'fail',
+          evidenceRefs: ['workflow-manifest-failed'],
+        }),
+      ]))
+      expect(scorecard.overallScore).toBeLessThan(80)
+      expect(trajectory).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          action: expect.objectContaining({ type: 'workflow_run_consumer_manifest' }),
+          observation: expect.objectContaining({
+            kind: 'workflow_consumer_manifest',
+            runId,
+            normalizedState: 'failed',
+            finalReportAllowed: false,
+            blockerCodes: ['required_step_failed', 'failed_fallback_structured_output'],
+          }),
+          evidence_refs: ['workflow-manifest-failed'],
+        }),
+      ]))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('treats unsupported DeliveryAudit claims as warning verification evidence', () => {
     const runId = 'run-scorecard-delivery-warn'
     const conversation = createConversation({ model: 'scorecard-model' })

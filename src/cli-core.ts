@@ -1065,10 +1065,12 @@ export async function doServe(configPath?: string, port?: number, routerUrl?: st
 
 export async function doWorkflow(passthroughArgs: string[], jsonOutput = false): Promise<void> {
   const action = passthroughArgs[0]
-  if (action !== 'execute' && action !== 'run-contract' && action !== 'resume') {
+  if (action !== 'execute' && action !== 'run-contract' && action !== 'resume' && action !== 'list' && action !== 'inspect') {
     console.error('Usage: owlcoda workflow execute --plan <file> [--receipt <file>] [--artifact-dir <dir>]')
     console.error('   or: owlcoda workflow execute --contract <harness_task_contract.json> --base-url <url>')
     console.error('   or: owlcoda workflow resume --run-id <workflow-run-id> [--cwd <dir>]')
+    console.error('   or: owlcoda workflow list [--cwd <dir>] [--json]')
+    console.error('   or: owlcoda workflow inspect --run-id <workflow-run-id> [--cwd <dir>] [--json]')
     process.exit(1)
   }
 
@@ -1083,22 +1085,93 @@ export async function doWorkflow(passthroughArgs: string[], jsonOutput = false):
   const receiptEndpoint = value('--receipt-endpoint') ?? value('--receiptEndpoint')
   const taskRunId = value('--task-run-id') ?? value('--taskRunId')
   const resumeRunId = value('--run-id') ?? value('--runId') ?? value('--resume-run-id') ?? value('--resumeRunId')
+  const inspectRunId = resumeRunId
   const structuredOutputModel = value('--structured-output-model') ?? value('--model') ?? value('-m')
   const structuredOutputUser = value('--structured-output-user')
   const cwd = value('--cwd')
+  const workflowRoot = value('--workflow-root') ?? value('--workflowRoot')
+  const limit = value('--limit') ? Number(value('--limit')) : undefined
   const cliJson = jsonOutput || args.includes('--json')
 
   if (action === 'resume' && !resumeRunId) {
     console.error('Workflow resume requires --run-id <workflow-run-id>.')
     process.exit(1)
   }
-  if (action !== 'resume' && !planPath && !contractRef) {
+  if ((action === 'execute' || action === 'run-contract') && !planPath && !contractRef) {
     console.error('Workflow execute requires --plan <file> or --contract <harness_task_contract.json>.')
     process.exit(1)
   }
   if (planPath && contractRef) {
     console.error('Workflow execute accepts either --plan or --contract, not both.')
     process.exit(1)
+  }
+  if (action === 'inspect' && !inspectRunId) {
+    const body = {
+      type: 'error',
+      error: {
+        type: 'invalid_request_error',
+        message: 'Workflow inspect requires --run-id <workflow-run-id>.',
+      },
+    }
+    if (cliJson) process.stdout.write(`${JSON.stringify(body, null, 2)}\n`)
+    else console.error(body.error.message)
+    process.exit(1)
+  }
+
+  if (action === 'list' || action === 'inspect') {
+    const {
+      buildWorkflowConsumerManifest,
+      listWorkflowRuns,
+      WorkflowRunNotFoundError,
+    } = await import('./native/workflow-consumer.js')
+    try {
+      const result = action === 'list'
+        ? await listWorkflowRuns({
+            ...(cwd ? { cwd } : {}),
+            ...(workflowRoot ? { workflowRoot } : {}),
+            ...(Number.isFinite(limit) && Number(limit) > 0 ? { limit: Number(limit) } : {}),
+          })
+        : await buildWorkflowConsumerManifest({
+            runId: inspectRunId!,
+            ...(cwd ? { cwd } : {}),
+            ...(workflowRoot ? { workflowRoot } : {}),
+          })
+      if (cliJson) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+      } else if (action === 'list') {
+        const list = result as Awaited<ReturnType<typeof listWorkflowRuns>>
+        console.error(`Workflow runs: ${list.count}`)
+        for (const run of list.runs) {
+          console.error(`- ${run.runId} ${run.normalizedState} acceptance=${run.acceptance.status}`)
+        }
+      } else {
+        const manifest = result as Awaited<ReturnType<typeof buildWorkflowConsumerManifest>>
+        console.error(`WorkflowRun ${manifest.runId}: ${manifest.normalizedState} acceptance=${manifest.acceptance.status}`)
+        console.error(`receipt=${manifest.receipt.path ?? 'missing'}`)
+      }
+      process.exit(0)
+    } catch (err) {
+      const body = err instanceof WorkflowRunNotFoundError
+        ? {
+            type: 'error',
+            error: {
+              type: 'workflow_run_not_found',
+              message: err.message,
+              runId: err.runId,
+              workflowRoot: err.workflowRoot,
+            },
+          }
+        : {
+            type: 'error',
+            error: {
+              type: 'workflow_read_failed',
+              message: err instanceof Error ? err.message : String(err),
+            },
+          }
+      if (cliJson) process.stdout.write(`${JSON.stringify(body, null, 2)}\n`)
+      else console.error(body.error.message)
+      process.exit(1)
+    }
   }
 
   const { readFile } = await import('node:fs/promises')

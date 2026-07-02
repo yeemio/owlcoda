@@ -2,6 +2,34 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.19] — 2026-07-02
+
+Workflow consumer harness read surface.
+
+### Added
+
+- Added `WorkflowConsumerManifest v1`, a read-only manifest surface for
+  workflow runs that lets consumers inspect runtime truth without parsing
+  natural-language transcripts.
+- Added `owlcoda workflow list --json` and
+  `owlcoda workflow inspect --run-id <id> --json` for scriptable workflow run
+  discovery and inspection.
+- Added App Server read methods `workflowRun/list` and `workflowRun/read`, plus
+  typed client helpers for desktop or external consumers.
+- Added workflow outcome facts to scorecard and trajectory surfaces so consumer
+  layers can reason over execution outcomes as structured runtime facts.
+
+### Fixed
+
+- Tightened final-report gating around workflow receipts, required-step
+  failures, missing artifacts, skipped steps without reasons, and structured
+  output failed-fallback artifacts.
+
+### Notes
+
+- This is a generic runtime harness capability. It is not OwlFootball-specific
+  and does not include RunKit, Mem, or OwlFootball business logic.
+
 ## [0.15.18] — 2026-06-27
 
 Release-blocking reliability fixes.

@@ -114,6 +114,8 @@ describe('method registry', () => {
     expect(res.result.methods).toContain('runtimeFacts/read')
     expect(res.result.methods).toContain('benchmark/providerEvalReport/read')
     expect(res.result.methods).toContain('structuredOutputArtifacts/read')
+    expect(res.result.methods).toContain('workflowRun/list')
+    expect(res.result.methods).toContain('workflowRun/read')
     expect(res.result.methods).toContain('job/list')
     expect(res.result.methods).toContain('job/get')
     expect(res.result.methods).toContain('job/cancel')
@@ -177,6 +179,22 @@ describe('method registry', () => {
         responseType: 'AppServerStructuredOutputArtifactsReadResult',
         requires: ['threadId', 'runId'],
         queryKeys: ['threadId', 'projectId', 'runId', 'artifactId'],
+      }),
+      expect.objectContaining({
+        method: 'workflowRun/list',
+        stability: 'experimental',
+        requestType: 'AppServerWorkflowRunListInput',
+        responseType: 'AppServerWorkflowRunListResult',
+        requires: [],
+        queryKeys: ['projectId', 'workflowRoot', 'limit'],
+      }),
+      expect.objectContaining({
+        method: 'workflowRun/read',
+        stability: 'experimental',
+        requestType: 'AppServerWorkflowRunReadInput',
+        responseType: 'WorkflowConsumerManifest',
+        requires: ['runId'],
+        queryKeys: ['projectId', 'workflowRoot', 'runId'],
       }),
       expect.objectContaining({
         method: 'thread/start',
@@ -1209,6 +1227,77 @@ describe('method registry', () => {
       artifact: 'failed_fallback.v1',
       ok: false,
       failureReason: 'forbidden_phrase',
+    })
+  })
+
+  it('lists and reads WorkflowConsumerManifest records through App Server without a thread session', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const runId = 'run-app-server-workflow'
+    const runDir = join(projectRoot, '.owlcoda-workflows', runId)
+    const artifactDir = join(runDir, `${runId}-artifacts`)
+    mkdirSync(artifactDir, { recursive: true })
+    const planPath = join(runDir, 'plan.json')
+    const receiptPath = join(runDir, 'receipt.json')
+    writeFileSync(planPath, JSON.stringify({
+      run_id: runId,
+      plan_version: 'app-server-workflow.test',
+      steps: [{ id: 'ping', method: 'GET', url: 'https://example.test/ping' }],
+    }), 'utf8')
+    writeFileSync(receiptPath, JSON.stringify({
+      schema_version: 1,
+      kind: 'workflow_invocation_receipt',
+      run_id: runId,
+      started_at: '2026-07-02T03:00:00.000Z',
+      finished_at: '2026-07-02T03:00:01.000Z',
+      plan_version: 'app-server-workflow.test',
+      plan_digest: 'digest',
+      plan_path: planPath,
+      receipt_path: receiptPath,
+      artifact_dir: artifactDir,
+      required_steps_total: 1,
+      required_steps_completed: 1,
+      failed_steps: [],
+      skipped_steps: [],
+      endpoint_calls: [],
+      acceptance: 'pass',
+      required_endpoint_calls: '1/1',
+    }), 'utf8')
+    const registry = createMethodRegistry({ projectRoot })
+
+    const listed = await handleRequest(registry, {
+      jsonrpc: '2.0',
+      id: 154,
+      method: 'workflowRun/list',
+      params: {},
+    })
+
+    expect(listed).toHaveProperty('result')
+    expect(listed.result).toMatchObject({
+      schemaVersion: 1,
+      workflowRoot: join(projectRoot, '.owlcoda-workflows'),
+      count: 1,
+      runs: [{
+        runId,
+        normalizedState: 'completed',
+        acceptance: { status: 'pass' },
+      }],
+    })
+
+    const read = await handleRequest(registry, {
+      jsonrpc: '2.0',
+      id: 155,
+      method: 'workflowRun/read',
+      params: { runId },
+    })
+
+    expect(read).toHaveProperty('result')
+    expect(read.result).toMatchObject({
+      schemaVersion: 1,
+      kind: 'workflow_consumer_manifest',
+      runId,
+      plan: { path: planPath, version: 'app-server-workflow.test' },
+      receipt: { path: receiptPath, acceptance: 'pass' },
+      finalReportEligibility: { allowed: true },
     })
   })
 

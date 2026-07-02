@@ -73,6 +73,11 @@ import {
 } from '../scorecard.js'
 import { buildStructuredOutputArtifactsPanel } from './structured-output-artifacts.js'
 import {
+  buildWorkflowConsumerManifest,
+  listWorkflowRuns,
+  WorkflowRunNotFoundError,
+} from '../workflow-consumer.js'
+import {
   createJobCancelTool,
   createJobGetTool,
   createJobListTool,
@@ -119,6 +124,8 @@ export type AppServerMethod =
   | 'runtimeFacts/read'
   | 'runtimeScorecard/read'
   | 'structuredOutputArtifacts/read'
+  | 'workflowRun/list'
+  | 'workflowRun/read'
   | 'job/list'
   | 'job/get'
   | 'job/cancel'
@@ -374,6 +381,39 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
       runRef: session.taskState?.run.runWorkspace?.outputRoot ?? session.taskState?.run.runWorkspace?.runDir,
       artifactId: extractStringParam(params, 'artifactId'),
     })
+  })
+
+  handlers.set('workflowRun/list', async (params) => {
+    const project = resolveProject(projectRoot, params)
+    const limit = numberField(params, 'limit')
+    return listWorkflowRuns({
+      cwd: project.root,
+      ...(extractStringParam(params, 'workflowRoot') ? { workflowRoot: extractStringParam(params, 'workflowRoot') } : {}),
+      ...(typeof limit === 'number' && limit > 0 ? { limit } : {}),
+    })
+  })
+
+  handlers.set('workflowRun/read', async (params) => {
+    const project = resolveProject(projectRoot, params)
+    const runId = extractStringParam(params, 'runId')
+    if (!runId) {
+      throw new JsonRpcError(-32602, 'runId is required')
+    }
+    try {
+      return await buildWorkflowConsumerManifest({
+        cwd: project.root,
+        runId,
+        ...(extractStringParam(params, 'workflowRoot') ? { workflowRoot: extractStringParam(params, 'workflowRoot') } : {}),
+      })
+    } catch (err) {
+      if (err instanceof WorkflowRunNotFoundError) {
+        throw new JsonRpcError(-32602, err.message, {
+          runId: err.runId,
+          workflowRoot: err.workflowRoot,
+        })
+      }
+      throw err
+    }
   })
 
   handlers.set('benchmark/providerEvalReport/read', async (params) => {

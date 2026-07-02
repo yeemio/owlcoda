@@ -8,6 +8,7 @@ import type {
   RuntimeFactJobLike,
   RuntimeFactStructuredOutputLike,
 } from './runtime-facts.js'
+import type { WorkflowConsumerManifest, WorkflowConsumerState } from './workflow-consumer.js'
 
 export type ScorecardVerdict = 'pass' | 'warn' | 'fail' | 'unknown'
 export type AntiCheatStatus = 'pass' | 'warn' | 'fail' | 'unknown'
@@ -23,6 +24,7 @@ export interface ScorecardDimension {
     | 'token_cost'
     | 'time_cost'
     | 'model_output_artifact'
+    | 'workflow_outcome'
   score: number
   verdict: ScorecardVerdict
   evidenceRefs: string[]
@@ -76,6 +78,7 @@ export interface TrajectoryRecord {
     verdict: ScorecardVerdict
     anti_cheat: AntiCheatStatus
     structured_output?: StructuredOutputTrajectoryReward
+    workflow_outcome?: WorkflowOutcomeTrajectoryReward
   }
   next_state: Record<string, unknown>
   evidence_refs: string[]
@@ -104,6 +107,18 @@ export interface StructuredOutputTrajectoryReward {
   consistency_penalty: number
 }
 
+export interface WorkflowOutcomeTrajectoryReward {
+  score: number
+  verdict: ScorecardVerdict
+  normalized_state: WorkflowConsumerState | 'unknown'
+  acceptance_status: 'pass' | 'fail' | 'unknown'
+  final_report_allowed: boolean
+  blocker_count: number
+  failed_required_steps: number
+  skipped_steps: number
+  resumed_steps: number
+}
+
 export function buildRunScorecard(input: BuildRunScorecardInput): RunScorecard {
   const facts = input.facts
   const finalText = input.finalText ?? ''
@@ -117,6 +132,7 @@ export function buildRunScorecard(input: BuildRunScorecardInput): RunScorecard {
     scoreTokenCost(facts),
     scoreTimeCost(facts),
     scoreModelOutputArtifacts(facts),
+    scoreWorkflowOutcomes(facts),
   ]
   const gates = buildAntiCheatGates(facts, finalText)
   const antiCheatVerdict = worstAntiCheat(gates)
@@ -165,7 +181,8 @@ export function summarizeRunScorecard(scorecard: RunScorecard): string {
 export function buildRunTrajectory(facts: RuntimeFactsForRun, scorecard: RunScorecard): TrajectoryRecord[] {
   const events = facts.events.length > 0 ? facts.events : []
   const structuredOutputArtifacts = collectScoredStructuredOutputArtifacts(facts)
-  if (events.length === 0 && structuredOutputArtifacts.length === 0) {
+  const workflowManifests = collectScoredWorkflowConsumerManifests(facts)
+  if (events.length === 0 && structuredOutputArtifacts.length === 0 && workflowManifests.length === 0) {
     return [trajectoryFromObservation({
       facts,
       scorecard,
@@ -209,7 +226,15 @@ export function buildRunTrajectory(facts: RuntimeFactsForRun, scorecard: RunScor
   const structuredRecords = structuredOutputArtifacts.map((artifact, index) =>
     trajectoryFromStructuredOutputArtifact(facts, scorecard, artifact, events.length + index),
   )
-  return [...eventRecords, ...structuredRecords]
+  const workflowRecords = workflowManifests.map((manifest, index) =>
+    trajectoryFromWorkflowConsumerManifest(
+      facts,
+      scorecard,
+      manifest,
+      events.length + structuredOutputArtifacts.length + index,
+    ),
+  )
+  return [...eventRecords, ...structuredRecords, ...workflowRecords]
 }
 
 export function scorecardToJson(scorecard: RunScorecard, pretty = true): string {
@@ -354,6 +379,27 @@ function scoreModelOutputArtifacts(facts: RuntimeFactsForRun): ScorecardDimensio
   ])
   return dimension(
     'model_output_artifact',
+    score,
+    verdict,
+    scored.flatMap(item => item.evidenceRefs),
+    notes,
+  )
+}
+
+function scoreWorkflowOutcomes(facts: RuntimeFactsForRun): ScorecardDimension {
+  const scored = collectScoredWorkflowConsumerManifests(facts)
+  if (scored.length === 0) {
+    return dimension('workflow_outcome', 0.7, 'unknown', [], ['no workflow consumer manifest artifacts recorded'])
+  }
+
+  const score = Math.min(...scored.map(item => item.reward.score))
+  const verdict = worstScorecardVerdict(scored.map(item => item.reward.verdict))
+  const notes = uniqueStrings([
+    `${scored.length} workflow consumer manifest artifact(s) scored`,
+    ...scored.flatMap(item => item.notes),
+  ])
+  return dimension(
+    'workflow_outcome',
     score,
     verdict,
     scored.flatMap(item => item.evidenceRefs),
@@ -529,6 +575,54 @@ function trajectoryFromStructuredOutputArtifact(
   })
 }
 
+function trajectoryFromWorkflowConsumerManifest(
+  facts: RuntimeFactsForRun,
+  scorecard: RunScorecard,
+  artifact: ScoredWorkflowConsumerManifest,
+  index: number,
+): TrajectoryRecord {
+  const manifest = artifact.manifest
+  const blockerCodes = (manifest.finalReportEligibility?.blockers ?? [])
+    .map(blocker => blocker.code)
+    .filter((code): code is string => Boolean(code))
+  return trajectoryFromObservation({
+    facts,
+    scorecard,
+    action: {
+      type: 'workflow_run_consumer_manifest',
+      run_id: manifest.runId,
+      normalized_state: manifest.normalizedState,
+      artifact_id: artifact.artifactId,
+    },
+    observation: {
+      kind: 'workflow_consumer_manifest',
+      runId: manifest.runId,
+      workflowRoot: manifest.workflowRoot,
+      normalizedState: manifest.normalizedState,
+      acceptanceStatus: manifest.acceptance?.status,
+      finalReportAllowed: manifest.finalReportEligibility?.allowed === true,
+      blockerCodes,
+      requiredCounts: manifest.requiredCounts,
+      stepSummary: manifest.stepSummary,
+      diagnostics: manifest.diagnostics,
+    },
+    state: {
+      workflow_manifest_index: index,
+      artifact_count: facts.artifacts.length,
+      required_counts: manifest.requiredCounts,
+    },
+    nextState: {
+      workflow_run_id: manifest.runId,
+      normalized_state: manifest.normalizedState,
+      final_report_allowed: manifest.finalReportEligibility?.allowed === true,
+    },
+    reward: {
+      workflow_outcome: artifact.reward,
+    },
+    evidenceRefs: artifact.evidenceRefs,
+  })
+}
+
 function actionFromRuntimeEvent(event: RuntimeEventRecord): Record<string, unknown> {
   const payload = event.payload ?? {}
   if (event.kind === 'item_started' || event.kind === 'item_completed') {
@@ -555,6 +649,18 @@ interface StructuredOutputFact {
 
 interface ScoredStructuredOutputArtifact extends StructuredOutputFact {
   reward: StructuredOutputTrajectoryReward
+  notes: string[]
+}
+
+interface WorkflowConsumerManifestFact {
+  artifactId: string
+  artifactRecord: RuntimeFactArtifactLike
+  manifest: WorkflowConsumerManifest
+  evidenceRefs: string[]
+}
+
+interface ScoredWorkflowConsumerManifest extends WorkflowConsumerManifestFact {
+  reward: WorkflowOutcomeTrajectoryReward
   notes: string[]
 }
 
@@ -591,6 +697,37 @@ function collectStructuredOutputArtifacts(facts: RuntimeFactsForRun): Structured
     })
   }
   return outputs
+}
+
+function collectScoredWorkflowConsumerManifests(facts: RuntimeFactsForRun): ScoredWorkflowConsumerManifest[] {
+  return collectWorkflowConsumerManifests(facts).map(item => {
+    const reward = scoreWorkflowManifest(item.manifest)
+    return {
+      ...item,
+      reward,
+      notes: workflowManifestNotes(item, reward),
+    }
+  })
+}
+
+function collectWorkflowConsumerManifests(facts: RuntimeFactsForRun): WorkflowConsumerManifestFact[] {
+  const manifests: WorkflowConsumerManifestFact[] = []
+  for (const artifact of facts.artifacts) {
+    if (!isWorkflowConsumerManifestRecord(artifact)) continue
+    const manifest = loadWorkflowConsumerManifest(artifact)
+    if (!manifest) continue
+    manifests.push({
+      artifactId: artifact.id,
+      artifactRecord: artifact,
+      manifest,
+      evidenceRefs: uniqueStrings([
+        artifact.id,
+        artifact.factRefs?.artifactId,
+        ...(artifact.factRefs?.coveredIds ?? []),
+      ]),
+    })
+  }
+  return manifests
 }
 
 function scoreStructuredOutput(output: RuntimeFactStructuredOutputLike): StructuredOutputTrajectoryReward {
@@ -663,6 +800,79 @@ function structuredOutputNotes(item: StructuredOutputFact, reward: StructuredOut
   return notes
 }
 
+function scoreWorkflowManifest(manifest: WorkflowConsumerManifest): WorkflowOutcomeTrajectoryReward {
+  const normalizedState = manifest.normalizedState ?? 'unknown'
+  const acceptanceStatus = manifest.acceptance?.status ?? manifest.receipt?.acceptance ?? 'unknown'
+  const finalReportAllowed = manifest.finalReportEligibility?.allowed === true
+  const blockers = manifest.finalReportEligibility?.blockers ?? []
+  const failedRequiredSteps = manifest.requiredCounts?.failed
+    ?? manifest.stepSummary?.failed?.filter(step => step.required).length
+    ?? 0
+  const skippedSteps = manifest.requiredCounts?.skipped ?? manifest.stepSummary?.skipped?.length ?? 0
+  const resumedSteps = manifest.stepSummary?.resumed?.length ?? 0
+
+  let score = 1
+  let verdict: ScorecardVerdict = 'pass'
+  if (normalizedState === 'completed' && acceptanceStatus === 'pass' && finalReportAllowed) {
+    score = 1
+    verdict = 'pass'
+  } else if (
+    normalizedState === 'failed'
+    || normalizedState === 'fallback'
+    || normalizedState === 'unsatisfiable'
+    || acceptanceStatus === 'fail'
+    || blockers.length > 0
+    || failedRequiredSteps > 0
+  ) {
+    score = 0.2
+    verdict = 'fail'
+  } else if (
+    normalizedState === 'incomplete'
+    || normalizedState === 'blocked'
+    || normalizedState === 'recoverable'
+    || normalizedState === 'retryable'
+    || normalizedState === 'skipped'
+  ) {
+    score = 0.45
+    verdict = 'warn'
+  } else {
+    score = 0.35
+    verdict = 'unknown'
+  }
+
+  if (!finalReportAllowed && verdict !== 'fail') {
+    score = Math.min(score, 0.35)
+    verdict = 'warn'
+  }
+  if (resumedSteps > 0 && verdict === 'pass') {
+    score = 0.9
+  }
+
+  return {
+    score,
+    verdict,
+    normalized_state: normalizedState,
+    acceptance_status: acceptanceStatus,
+    final_report_allowed: finalReportAllowed,
+    blocker_count: blockers.length,
+    failed_required_steps: failedRequiredSteps,
+    skipped_steps: skippedSteps,
+    resumed_steps: resumedSteps,
+  }
+}
+
+function workflowManifestNotes(item: WorkflowConsumerManifestFact, reward: WorkflowOutcomeTrajectoryReward): string[] {
+  const blockers = item.manifest.finalReportEligibility?.blockers ?? []
+  const blockerCodes = blockers
+    .map(blocker => blocker.code)
+    .filter((code): code is string => Boolean(code))
+  return uniqueStrings([
+    `${item.artifactId}: run=${item.manifest.runId} state=${reward.normalized_state} acceptance=${reward.acceptance_status} score=${Math.round(reward.score * 100)} verdict=${reward.verdict}`,
+    reward.final_report_allowed ? 'final report gate allowed' : 'final report gate blocked',
+    ...blockerCodes.map(code => `blocker=${code}`),
+  ])
+}
+
 function isStructuredOutputArtifactRecord(artifact: RuntimeFactArtifactLike): boolean {
   return artifact.artifactType === 'structured_output_artifact'
     || artifact.structuredOutput?.artifactKind === 'structured_output_artifact'
@@ -670,6 +880,11 @@ function isStructuredOutputArtifactRecord(artifact: RuntimeFactArtifactLike): bo
 
 function isStructuredOutputAttemptsRecord(artifact: RuntimeFactArtifactLike): boolean {
   return artifact.artifactType === 'structured_output_attempts'
+}
+
+function isWorkflowConsumerManifestRecord(artifact: RuntimeFactArtifactLike): boolean {
+  return artifact.artifactType === 'workflow_consumer_manifest'
+    || artifact.origin === 'workflow_consumer'
 }
 
 function loadStructuredOutputArtifact(artifact: RuntimeFactArtifactLike): RuntimeFactStructuredOutputLike | null {
@@ -708,6 +923,23 @@ function loadStructuredOutputArtifact(artifact: RuntimeFactArtifactLike): Runtim
       inputRef: nullableStringField(parsed['inputRef']),
       artifactRef: nullableStringField(parsed['artifactRef']),
     }
+  } catch {
+    return null
+  }
+}
+
+function loadWorkflowConsumerManifest(artifact: RuntimeFactArtifactLike): WorkflowConsumerManifest | null {
+  const embedded = objectField((artifact as unknown as Record<string, unknown>)['workflowConsumerManifest'])
+  if (embedded && embedded['kind'] === 'workflow_consumer_manifest') {
+    return embedded as unknown as WorkflowConsumerManifest
+  }
+  if (!artifact.path) return null
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(artifact.path, 'utf8'))
+    if (!isRecord(parsed)) return null
+    if (parsed['kind'] !== 'workflow_consumer_manifest') return null
+    if (parsed['schemaVersion'] !== 1) return null
+    return parsed as unknown as WorkflowConsumerManifest
   } catch {
     return null
   }

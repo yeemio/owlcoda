@@ -1,5 +1,6 @@
 import type { RuntimeFactsForRun } from '../runtime-facts.js'
 import type { RunScorecard, TrajectoryRecord } from '../scorecard.js'
+import type { WorkflowConsumerManifest, WorkflowRunListResult } from '../workflow-consumer.js'
 import type { BenchmarkProviderEvalBatchReport } from '../../benchmark/provider-eval-report.js'
 import type { AppServerMethod } from './methods.js'
 
@@ -81,6 +82,20 @@ export interface AppServerRuntimeScorecardReadResult {
 export interface AppServerStructuredOutputArtifactsReadInput extends AppServerRuntimeFactsReadInput {
   artifactId?: string
 }
+
+export interface AppServerWorkflowRunListInput {
+  projectId?: string
+  workflowRoot?: string
+  limit?: number
+}
+
+export interface AppServerWorkflowRunReadInput extends AppServerWorkflowRunListInput {
+  runId: string
+}
+
+export type AppServerWorkflowRunListResult = WorkflowRunListResult
+
+export type { WorkflowConsumerManifest }
 
 export type AppServerStructuredOutputArtifactStatus = 'success' | 'warning' | 'failed'
 
@@ -486,6 +501,26 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     requires: ['threadId', 'runId'],
     queryKeys: ['threadId', 'projectId', 'runId', 'artifactId'],
     notes: 'Reads local structured output artifacts, attempts, raw text, and rerun action metadata from RunWorkspace. It does not call models.',
+  },
+  'workflowRun/list': {
+    method: 'workflowRun/list',
+    group: 'runtime',
+    stability: 'experimental',
+    requestType: 'AppServerWorkflowRunListInput',
+    responseType: 'AppServerWorkflowRunListResult',
+    requires: [],
+    queryKeys: ['projectId', 'workflowRoot', 'limit'],
+    notes: 'Lists local WorkflowRun receipts as WorkflowConsumerManifest summaries. It does not execute or resume workflows.',
+  },
+  'workflowRun/read': {
+    method: 'workflowRun/read',
+    group: 'runtime',
+    stability: 'experimental',
+    requestType: 'AppServerWorkflowRunReadInput',
+    responseType: 'WorkflowConsumerManifest',
+    requires: ['runId'],
+    queryKeys: ['projectId', 'workflowRoot', 'runId'],
+    notes: 'Reads one local WorkflowConsumerManifest by run id. It is read-only and does not call models.',
   },
   'job/list': {
     method: 'job/list',

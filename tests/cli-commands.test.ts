@@ -288,6 +288,110 @@ describe('CLI commands integration', { timeout: CLI_COMMANDS_TEST_TIMEOUT_MS }, 
     }
   })
 
+  it('workflow list and inspect expose WorkflowConsumerManifest JSON without natural language', async () => {
+    const runtimeDir = makeRuntimeDir()
+    const runId = 'cli-workflow-inspect'
+    const runDir = join(runtimeDir, '.owlcoda-workflows', runId)
+    const artifactDir = join(runDir, `${runId}-artifacts`)
+    mkdirSync(artifactDir, { recursive: true })
+    const receiptPath = join(runDir, 'receipt.json')
+    const planPath = join(runDir, 'plan.json')
+    writeFileSync(planPath, JSON.stringify({
+      run_id: runId,
+      plan_version: 'cli-inspect.test',
+      steps: [{ id: 'ping', method: 'GET', url: 'https://example.test/ping' }],
+    }), 'utf-8')
+    writeFileSync(receiptPath, JSON.stringify({
+      schema_version: 1,
+      kind: 'workflow_invocation_receipt',
+      run_id: runId,
+      started_at: '2026-07-02T02:00:00.000Z',
+      finished_at: '2026-07-02T02:00:01.000Z',
+      plan_version: 'cli-inspect.test',
+      plan_digest: 'digest',
+      plan_path: planPath,
+      receipt_path: receiptPath,
+      artifact_dir: artifactDir,
+      required_steps_total: 1,
+      required_steps_completed: 1,
+      failed_steps: [],
+      skipped_steps: [],
+      endpoint_calls: [],
+      acceptance: 'pass',
+      required_endpoint_calls: '1/1',
+    }), 'utf-8')
+
+    const listed = await runCli([
+      'workflow',
+      'list',
+      '--cwd',
+      runtimeDir,
+      '--json',
+    ], runtimeDir)
+
+    expect(listed.code).toBe(0)
+    expect(listed.stderr.trim()).toBe('')
+    const listBody = JSON.parse(listed.stdout)
+    expect(listBody).toMatchObject({
+      schemaVersion: 1,
+      workflowRoot: join(runtimeDir, '.owlcoda-workflows'),
+      count: 1,
+      runs: [{
+        runId,
+        normalizedState: 'completed',
+        acceptance: { status: 'pass' },
+        finalReportEligibility: { allowed: true },
+      }],
+    })
+
+    const inspected = await runCli([
+      'workflow',
+      'inspect',
+      '--run-id',
+      runId,
+      '--cwd',
+      runtimeDir,
+      '--json',
+    ], runtimeDir)
+
+    expect(inspected.code).toBe(0)
+    expect(inspected.stderr.trim()).toBe('')
+    const manifest = JSON.parse(inspected.stdout)
+    expect(manifest).toMatchObject({
+      schemaVersion: 1,
+      kind: 'workflow_consumer_manifest',
+      runId,
+      plan: { path: planPath, version: 'cli-inspect.test' },
+      receipt: { path: receiptPath, acceptance: 'pass' },
+      normalizedState: 'completed',
+      finalReportEligibility: { allowed: true, blockers: [] },
+    })
+  })
+
+  it('workflow inspect returns a structured JSON error for unknown run ids', async () => {
+    const runtimeDir = makeRuntimeDir()
+    const result = await runCli([
+      'workflow',
+      'inspect',
+      '--run-id',
+      'missing-run',
+      '--cwd',
+      runtimeDir,
+      '--json',
+    ], runtimeDir)
+
+    expect(result.code).toBe(1)
+    expect(result.stderr.trim()).toBe('')
+    const body = JSON.parse(result.stdout)
+    expect(body).toMatchObject({
+      type: 'error',
+      error: {
+        type: 'workflow_run_not_found',
+        runId: 'missing-run',
+      },
+    })
+  })
+
   it('doctor runs all checks', async () => {
     const runtimeDir = makeRuntimeDir()
     const result = await runCli(['doctor'], runtimeDir)

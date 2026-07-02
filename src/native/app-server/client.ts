@@ -36,6 +36,10 @@ import type {
   AppServerRuntimeScorecardReadResult,
   AppServerStructuredOutputArtifactsReadInput,
   AppServerStructuredOutputArtifactsReadResult,
+  AppServerWorkflowRunListInput,
+  AppServerWorkflowRunListResult,
+  AppServerWorkflowRunReadInput,
+  WorkflowConsumerManifest,
 } from './protocol-contract.js'
 import type {
   AppServerTurnRecoverResult,
@@ -199,6 +203,8 @@ export interface AppServerClient {
   runtimeFactsRead(params: AppServerRuntimeFactsReadInput): Promise<AppServerRuntimeFactsReadResult>
   runtimeScorecardRead(params: AppServerRuntimeScorecardReadInput): Promise<AppServerRuntimeScorecardReadResult>
   structuredOutputArtifactsRead(params: AppServerStructuredOutputArtifactsReadInput): Promise<AppServerStructuredOutputArtifactsReadResult>
+  workflowRunList(params?: AppServerWorkflowRunListInput): Promise<AppServerWorkflowRunListResult>
+  workflowRunRead(params: AppServerWorkflowRunReadInput): Promise<WorkflowConsumerManifest>
   providerEvalReportRead(params?: AppServerProviderEvalReportReadInput): Promise<AppServerProviderEvalReportReadResult>
   turnStatus(params: { threadId: string; projectId?: string }): Promise<AppServerTurnStatusResult>
   turnRecover(params: AppServerTurnRecoverInput): Promise<AppServerTurnRecoverResult>
@@ -276,6 +282,8 @@ export function createAppServerClient(options: AppServerClientOptions): AppServe
     runtimeFactsRead: params => call('runtimeFacts/read', { ...params }),
     runtimeScorecardRead: params => call('runtimeScorecard/read', { ...params }),
     structuredOutputArtifactsRead: params => call('structuredOutputArtifacts/read', { ...params }),
+    workflowRunList: params => call('workflowRun/list', params ? { ...params } : {}),
+    workflowRunRead: params => call('workflowRun/read', { ...params }),
     providerEvalReportRead: params => call('benchmark/providerEvalReport/read', params ? { ...params } : {}),
     turnStatus: params => call('turn/status', params),
     turnRecover: params => call('turn/recover', { ...params }),

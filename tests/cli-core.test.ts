@@ -199,6 +199,17 @@ describe('parseArgs', () => {
     expect(result.passthroughArgs).toEqual(['resume', '--run-id', 'workflow-run-1', '--cwd', '/tmp/run'])
   })
 
+  it('passes workflow list and inspect subcommand args', () => {
+    const listed = parse(['workflow', 'list', '--cwd', '/tmp/run', '--json'])
+    expect(listed.command).toBe('workflow')
+    expect(listed.jsonOutput).toBe(true)
+    expect(listed.passthroughArgs).toEqual(['list', '--cwd', '/tmp/run'])
+
+    const inspected = parse(['workflow', 'inspect', '--run-id', 'workflow-run-1', '--cwd', '/tmp/run'])
+    expect(inspected.command).toBe('workflow')
+    expect(inspected.passthroughArgs).toEqual(['inspect', '--run-id', 'workflow-run-1', '--cwd', '/tmp/run'])
+  })
+
   it('passes top-level workflow resume args', () => {
     const result = parse(['resume', '--run-id', 'workflow-run-1'])
     expect(result.command).toBe('resume')

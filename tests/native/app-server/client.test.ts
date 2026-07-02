@@ -242,6 +242,92 @@ describe('app-server client adapter', () => {
     })
   })
 
+  it('reads workflow run list and manifest through typed client helpers', async () => {
+    const methods: string[] = []
+    const client = createAppServerClient({
+      baseUrl: 'http://app-server.test',
+      fetch: async (_url, init) => {
+        const request = JSON.parse(String(init?.body ?? '{}')) as { id: unknown; method: string; params: any }
+        methods.push(request.method)
+        if (request.method === 'workflowRun/list') {
+          expect(request.params).toEqual({
+            projectId: 'project-1',
+            workflowRoot: '/tmp/project/.owlcoda-workflows',
+            limit: 5,
+          })
+          return new Response(JSON.stringify({
+            jsonrpc: '2.0',
+            id: request.id,
+            result: {
+              schemaVersion: 1,
+              workflowRoot: '/tmp/project/.owlcoda-workflows',
+              count: 1,
+              runs: [{
+                runId: 'workflow-run-1',
+                normalizedState: 'completed',
+                updatedAt: '2026-07-02T03:00:01.000Z',
+                acceptance: { status: 'pass' },
+                finalReportEligibility: { allowed: true, blockers: [] },
+                diagnostics: [],
+              }],
+            },
+          }), { status: 200, headers: { 'content-type': 'application/json' } })
+        }
+        expect(request.method).toBe('workflowRun/read')
+        expect(request.params).toEqual({
+          projectId: 'project-1',
+          workflowRoot: '/tmp/project/.owlcoda-workflows',
+          runId: 'workflow-run-1',
+        })
+        return new Response(JSON.stringify({
+          jsonrpc: '2.0',
+          id: request.id,
+          result: {
+            schemaVersion: 1,
+            kind: 'workflow_consumer_manifest',
+            runId: 'workflow-run-1',
+            workflowRoot: '/tmp/project/.owlcoda-workflows',
+            plan: { exists: true, path: '/tmp/project/.owlcoda-workflows/workflow-run-1/plan.json' },
+            receipt: { exists: true, path: '/tmp/project/.owlcoda-workflows/workflow-run-1/receipt.json', acceptance: 'pass' },
+            acceptance: { status: 'pass' },
+            normalizedState: 'completed',
+            requiredCounts: { total: 1, completed: 1, failed: 0, skipped: 0 },
+            stepSummary: { failed: [], skipped: [], resumed: [] },
+            endpointCalls: [],
+            artifactRefs: [],
+            rawRefs: [],
+            structuredOutputArtifacts: [],
+            resume: { possible: true, command: 'owlcoda workflow resume --run-id workflow-run-1' },
+            finalReportEligibility: { allowed: true, blockers: [] },
+            diagnostics: [],
+          },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      },
+    })
+
+    const listed = await client.workflowRunList({
+      projectId: 'project-1',
+      workflowRoot: '/tmp/project/.owlcoda-workflows',
+      limit: 5,
+    })
+    const manifest = await client.workflowRunRead({
+      projectId: 'project-1',
+      workflowRoot: '/tmp/project/.owlcoda-workflows',
+      runId: 'workflow-run-1',
+    })
+
+    expect(methods).toEqual(['workflowRun/list', 'workflowRun/read'])
+    expect(listed.runs[0]).toMatchObject({
+      runId: 'workflow-run-1',
+      normalizedState: 'completed',
+    })
+    expect(manifest).toMatchObject({
+      kind: 'workflow_consumer_manifest',
+      runId: 'workflow-run-1',
+      finalReportEligibility: { allowed: true },
+    })
+  })
+
   it('reads provider eval batch reports through a typed client helper', async () => {
     const methods: string[] = []
     const client = createAppServerClient({
