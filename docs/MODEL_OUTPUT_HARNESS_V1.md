@@ -60,6 +60,8 @@ Kimi 只是一个可执行该能力的模型 profile，不是能力本身。
 ```json
 {
   "ok": true,
+  "usable": true,
+  "consumerReady": true,
   "artifact": {
     "artifact": "evidence-digest.v1",
     "summary": "Short digest.",
@@ -68,6 +70,35 @@ Kimi 只是一个可执行该能力的模型 profile，不是能力本身。
     "risks": []
   },
   "rawText": "{\"artifact\":\"evidence-digest.v1\",\"summary\":\"Short digest\",\"confidence\":0.74}",
+  "salvage": {
+    "used": false,
+    "fields": {},
+    "missingRequiredFields": [],
+    "confidence": "high"
+  },
+  "artifactCompleteness": {
+    "expected": ["artifact", "summary", "confidence"],
+    "produced": ["artifact", "summary", "confidence"],
+    "missing": [],
+    "validationStatus": "pass",
+    "fallbackStatus": "none",
+    "artifactRefs": []
+  },
+  "consumerReadiness": {
+    "consumerReady": true,
+    "blockers": [],
+    "warnings": [],
+    "requiredArtifactsMissing": [],
+    "fallbackUsed": false,
+    "usable": true
+  },
+  "terminationKind": "completed",
+  "presetId": "evidence-digest",
+  "presetVersion": "v1",
+  "schemaId": "evidence-digest",
+  "schemaVersion": "v1",
+  "repairPolicyVersion": "repair-policy.v1",
+  "providerMatrixVersion": "provider-preset-matrix.v1",
   "parsed": true,
   "schemaValid": true,
   "validationErrors": [],
@@ -110,20 +141,65 @@ Kimi 只是一个可执行该能力的模型 profile，不是能力本身。
 ```json
 {
   "ok": false,
+  "usable": false,
+  "unusableReason": "empty_text_with_thinking",
+  "consumerReady": false,
   "artifact": {
     "artifact": "failed_fallback.v1",
     "ok": false,
+    "usable": false,
     "failureReason": "empty_text_with_thinking",
+    "rawText": "",
+    "rawThinkingText": "Long hidden reasoning without final JSON.",
     "model": "kimi",
     "preset": "evidence-digest.v1",
+    "provider": "kimi",
     "stopReason": "max_tokens",
+    "terminationKind": "completed",
     "inputTokens": 913,
     "outputTokens": 2048,
     "repairCount": 0,
+    "repairUsed": false,
     "salvageUsed": false,
+    "fallbackUsed": true,
+    "createdAt": "2026-07-02T00:00:00.000Z",
     "retryHint": "rerun_role_artifact"
   },
   "rawText": "",
+  "rawThinkingText": "Long hidden reasoning without final JSON.",
+  "salvage": {
+    "used": false,
+    "fields": {},
+    "missingRequiredFields": ["artifact", "summary", "confidence"],
+    "confidence": "high",
+    "reason": "empty_text_with_thinking"
+  },
+  "artifactCompleteness": {
+    "expected": ["artifact", "summary", "confidence"],
+    "produced": ["failed_fallback.v1"],
+    "missing": ["artifact", "summary", "confidence"],
+    "validationStatus": "fail",
+    "fallbackStatus": "failed_fallback",
+    "artifactRefs": []
+  },
+  "consumerReadiness": {
+    "consumerReady": false,
+    "blockers": [
+      { "code": "failed_fallback", "message": "Structured output used failed fallback artifact" },
+      { "code": "missing_required_artifact", "message": "Required artifact fields are missing" }
+    ],
+    "warnings": [],
+    "requiredArtifactsMissing": ["artifact", "summary", "confidence"],
+    "fallbackUsed": true,
+    "usable": false
+  },
+  "terminationKind": "completed",
+  "presetId": "evidence-digest",
+  "presetVersion": "v1",
+  "schemaId": "evidence-digest",
+  "schemaVersion": "v1",
+  "repairPolicyVersion": "repair-policy.v1",
+  "providerMatrixVersion": "provider-preset-matrix.v1",
   "parsed": false,
   "schemaValid": false,
   "validationErrors": ["empty_text_with_thinking"],
@@ -221,5 +297,11 @@ OwlFootball 不应该：
 - v1 只支持 JSON object artifact。
 - v1 schema validator 覆盖常用 JSON Schema 子集。
 - v1 不做多轮 self-repair 模型调用，先做本地 repair/salvage。
-- v1 endpoint 使用非流式模型调用。
-- v1 不默认持久化 rawText；调用方可把响应写入 runtime artifact/ledger。
+- v1 activity-aware timeout is harness-level: executors that emit `onOutputDelta` get idle/hard timeout governance.
+- The current `/v1/structured-output` HTTP provider executor remains non-streaming and does not emit provider deltas yet.
+- Provider-level streaming delta integration is a follow-up slice before release intake can claim end-to-end provider activity awareness.
+- v1 可持久化 rawText、attempt ledger、artifact completeness、consumer readiness 和 role/step rerun lineage。
+
+## 11. Governance Extension
+
+CLI Harness Governance P0/P1 的完整 contract 见 [CLI_HARNESS_GOVERNANCE_P0P1_CONTRACT_20260702.md](./specs/CLI_HARNESS_GOVERNANCE_P0P1_CONTRACT_20260702.md)。

@@ -156,6 +156,28 @@ describe('WorkflowRun native tool', () => {
     expect(receipt.endpoint_calls[0].response_artifact).toEqual(expect.stringContaining('fetch_latest'))
     expect(existsSync(receipt.endpoint_calls[0].response_artifact)).toBe(true)
     expect(await readFile(receipt.endpoint_calls[0].response_artifact, 'utf-8')).toContain('"rows"')
+    expect(receipt.endpoint_calls[0].artifact_completeness).toMatchObject({
+      expected: [],
+      produced: [receipt.endpoint_calls[0].response_artifact],
+      missing: [],
+      validationStatus: 'pass',
+      fallbackStatus: 'none',
+    })
+    expect(receipt.artifact_completeness).toMatchObject({
+      validationStatus: 'pass',
+      fallbackStatus: 'none',
+      missing: [],
+    })
+    expect(receipt.artifact_completeness.produced).toEqual(expect.arrayContaining([
+      receipt.endpoint_calls[0].response_artifact,
+    ]))
+    expect(receipt.consumer_readiness).toMatchObject({
+      consumerReady: true,
+      blockers: [],
+      requiredArtifactsMissing: [],
+      fallbackUsed: false,
+      usable: true,
+    })
     expect(calls.map(call => `${call.method} ${call.url}`)).toEqual(['GET /large', 'POST /refresh'])
   })
 
@@ -471,6 +493,8 @@ describe('WorkflowRun native tool', () => {
           structuredOutputBodies.push(body)
           res.end(JSON.stringify({
             ok: true,
+            usable: true,
+            consumerReady: true,
             artifact: { artifact: 'evidence_digest', summary: 'model evidence' },
             rawText: 'raw model evidence text',
             attempts: [{ label: 'primary', parsed: true }],
@@ -544,10 +568,24 @@ describe('WorkflowRun native tool', () => {
       ok: true,
       projected_response: {
         ok: true,
+        usable: true,
+        consumerReady: true,
         artifactId: 'structured-output-evidence-1',
         attemptLedgerId: 'structured-output-evidence-1-attempts',
         rawText: 'raw model evidence text',
       },
     })
+    expect(structuredCall.artifact_completeness).toMatchObject({
+      expected: [],
+      produced: ['structured-output-evidence-1', 'structured-output-evidence-1-attempts'],
+      missing: [],
+      validationStatus: 'pass',
+      fallbackStatus: 'none',
+    })
+    expect(receipt.artifact_completeness.produced).toEqual(expect.arrayContaining([
+      'structured-output-evidence-1',
+      'structured-output-evidence-1-attempts',
+    ]))
+    expect(receipt.consumer_readiness.consumerReady).toBe(true)
   })
 })

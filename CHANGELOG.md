@@ -2,6 +2,45 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.20] — 2026-07-04
+
+Provider streaming delta and agent working guidelines release.
+
+### Added
+
+- Added provider-level streaming delta support for `POST /v1/structured-output`
+  when the resolved model declares streaming support and the request provides a
+  positive `idleTimeoutMs`.
+- Added activity-aware structured-output timeout handling so usable text/content
+  deltas refresh the idle timer while heartbeat-only or thinking-only streams do
+  not count as usable output.
+- Added streaming attempt metadata such as provider SSE mode and delta source,
+  while keeping non-streaming structured-output calls on the existing JSON
+  compatibility path.
+- Added root `AGENTS.md` with OwlCoda repository-level working guidelines for
+  dirty checkout handling, release truth, lane boundaries, verification
+  discipline, runtime truth, and safety expectations.
+
+### Changed
+
+- Extended model capability metadata with declared streaming support so
+  structured-output routing can decide whether to use provider SSE or remain on
+  non-streaming transport.
+- Updated CLI harness governance receipts and runtime evidence surfaces for
+  structured-output, workflow, and browser-job recovery paths.
+
+### Fixed
+
+- Preserved partial structured-output text when a provider stream interrupts
+  after usable output has started.
+- Kept thinking-only provider output as non-usable for completion, while still
+  preserving thinking text for diagnostics and fallback artifacts.
+
+### Notes
+
+- This release does not include RunKit, Mem, OwlFootball business logic, or
+  private execution prompts in the npm package.
+
 ## [0.15.19] — 2026-07-02
 
 Workflow consumer harness read surface.

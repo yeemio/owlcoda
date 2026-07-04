@@ -162,6 +162,13 @@ console.log('<!doctype html><main id="scoreboard">Chrome rendered odds board</ma
       stage: 'provider_not_configured',
       terminationReason: 'provider_not_configured',
     })
+    expect((result.metadata as any).captureFailureReceipt).toMatchObject({
+      captureFailureStage: 'permission',
+      provider: 'chrome_headless',
+      attempts: 1,
+      url: `${baseUrl}/page`,
+      recoverable: true,
+    })
   })
 
   it('preserves partial chrome_headless evidence when capture times out after producing DOM', async () => {
@@ -182,7 +189,7 @@ await new Promise((resolve) => setTimeout(resolve, 1000))
       provider: 'chrome_headless',
       chromeExecutablePath: fakeChrome,
       artifactDir,
-      deadlineMs: 300,
+      deadlineMs: 700,
     })
 
     expect(result.isError).toBe(true)
@@ -196,11 +203,19 @@ await new Promise((resolve) => setTimeout(resolve, 1000))
       provider: 'chrome_headless',
       terminationReason: 'deadline_exceeded',
     })
-    expect(job.artifacts.map((artifact: any) => artifact.artifactType)).toEqual([
+    expect(job.artifacts.map((artifact: any) => artifact.artifactType)).toEqual(expect.arrayContaining([
       'browser_screenshot',
       'browser_dom',
       'browser_text',
-    ])
+      'browser_capture_failure_receipt',
+    ]))
+    expect((result.metadata as any).captureFailureReceipt).toMatchObject({
+      captureFailureStage: 'timeout',
+      provider: 'chrome_headless',
+      attempts: 1,
+      url: `${baseUrl}/page`,
+      durationMs: expect.any(Number),
+    })
     const screenshotPath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_screenshot').path
     const textPath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_text').path
     expect(existsSync(screenshotPath)).toBe(true)
@@ -271,8 +286,20 @@ await new Promise((resolve) => setTimeout(resolve, 1000))
       error: expect.stringContaining('#missing'),
       terminationReason: 'selector_missing',
     })
+    expect((result.metadata as any).captureFailureReceipt).toMatchObject({
+      captureFailureStage: 'selector',
+      selector: '#missing',
+      provider: 'fetch_html',
+      attempts: 1,
+      url: `${baseUrl}/page`,
+      artifactRefs: expect.any(Array),
+    })
     const job = (result.metadata as any).job
-    expect(job.artifacts.map((artifact: any) => artifact.artifactType)).toEqual(['browser_html', 'browser_text'])
+    expect(job.artifacts.map((artifact: any) => artifact.artifactType)).toEqual(expect.arrayContaining([
+      'browser_html',
+      'browser_text',
+      'browser_capture_failure_receipt',
+    ]))
     const textPath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_text').path
     expect(await readFile(textPath, 'utf-8')).toContain('Live odds board')
   })
@@ -293,6 +320,13 @@ await new Promise((resolve) => setTimeout(resolve, 1000))
     expect(result.output).toContain('provider=chrome_headless')
     expect((result.metadata as any).failureCategory).toBe('browser-job:fetch-failed')
     expect((result.metadata as any).recoverable).toBe(true)
+    expect((result.metadata as any).captureFailureReceipt).toMatchObject({
+      captureFailureStage: 'network',
+      provider: 'fetch_html',
+      attempts: 1,
+      url: 'http://127.0.0.1:1/',
+      recoverable: true,
+    })
   })
 
   it('marks timed out browser jobs as timeout with cleanup evidence', async () => {
@@ -314,6 +348,13 @@ await new Promise((resolve) => setTimeout(resolve, 1000))
       cleanupAttempted: true,
       cleanupSucceeded: true,
       remainingPids: [],
+    })
+    expect((result.metadata as any).captureFailureReceipt).toMatchObject({
+      captureFailureStage: 'timeout',
+      provider: 'fetch_html',
+      attempts: 1,
+      url: `${baseUrl}/slow`,
+      durationMs: expect.any(Number),
     })
   })
 

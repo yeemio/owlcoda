@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  PROVIDER_PRESET_MATRIX,
   STRUCTURED_OUTPUT_PRESETS,
   runModelOutputHarness,
   type StructuredOutputExecutor,
@@ -28,6 +29,10 @@ const baseRequest: StructuredOutputRequest = {
   schema: digestSchema,
   user: 'Digest this evidence.',
   maxTokens: 1000,
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 describe('model output harness', () => {
@@ -467,5 +472,280 @@ describe('model output harness', () => {
     expect(result.artifact.summary).toBe('[sanitized forbidden phrase]')
     expect(result.artifact.risks).toEqual(['sanitized forbidden phrase: 建议买'])
     expect(JSON.stringify(result.artifact)).not.toContain('建议买这个方向')
+  })
+
+  it('keeps an active structured-output attempt alive when text deltas continue before idle timeout', async () => {
+    const result = await runModelOutputHarness({
+      ...baseRequest,
+      idleTimeoutMs: 25,
+      hardTimeoutMs: 250,
+    }, async request => {
+      const chunks = [
+        '{"artifact":"evidence-digest.v1",',
+        '"summary":"活跃输出摘要",',
+        '"confidence":0.73}',
+      ]
+      for (const chunk of chunks) {
+        await sleep(15)
+        request.onOutputDelta?.({ type: 'text', text: chunk })
+      }
+      return {
+        text: chunks.join(''),
+        stopReason: 'end_turn',
+        durationMs: 60,
+      }
+    })
+
+    expect(result.ok).toBe(true)
+    expect(result.terminationKind).toBe('completed')
+    expect(result.consumerReady).toBe(true)
+    expect(result.attempts[0]).toMatchObject({
+      terminationKind: 'completed',
+    })
+    expect(result.attempts[0].lastOutputAt).toMatch(/\d{4}-\d{2}-\d{2}T/)
+  })
+
+  it('returns a failed fallback artifact with telemetry when no output arrives before idle timeout', async () => {
+    const result = await runModelOutputHarness({
+      ...baseRequest,
+      idleTimeoutMs: 20,
+      hardTimeoutMs: 250,
+    }, async () => {
+      await sleep(80)
+      return {
+        text: JSON.stringify({
+          artifact: 'evidence-digest.v1',
+          summary: 'too late',
+          confidence: 0.5,
+        }),
+      }
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.terminationKind).toBe('silent_timeout')
+    expect(result.usable).toBe(false)
+    expect(result.unusableReason).toBe('silent_timeout')
+    expect(result.consumerReady).toBe(false)
+    expect(result.consumerReadiness.blockers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'silent_timeout' }),
+    ]))
+    expect(result.artifact).toMatchObject({
+      artifact: 'failed_fallback.v1',
+      ok: false,
+      usable: false,
+      unusableReason: 'silent_timeout',
+      terminationKind: 'silent_timeout',
+      rawText: '',
+    })
+    expect(result.artifact.attempts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ label: 'fallback', terminationKind: 'silent_timeout' }),
+    ]))
+  })
+
+  it('distinguishes hard timeout from silent timeout while preserving partial text', async () => {
+    const result = await runModelOutputHarness({
+      ...baseRequest,
+      idleTimeoutMs: 100,
+      hardTimeoutMs: 35,
+    }, async request => {
+      for (const chunk of ['{"artifact":"evidence-digest.v1",', '"summary":"still streaming",']) {
+        await sleep(10)
+        request.onOutputDelta?.({ type: 'text', text: chunk })
+      }
+      await sleep(80)
+      return {
+        text: '{"artifact":"evidence-digest.v1","summary":"too late","confidence":0.6}',
+      }
+    })
+
+    expect(result.ok).toBe(false)
+    expect(result.terminationKind).toBe('hard_timeout')
+    expect(result.usable).toBe(false)
+    expect(result.unusableReason).toBe('hard_timeout')
+    expect(result.rawText).toContain('still streaming')
+    expect(result.artifact).toMatchObject({
+      artifact: 'failed_fallback.v1',
+      terminationKind: 'hard_timeout',
+    })
+    expect(result.artifact.rawText).toContain('still streaming')
+    expect(result.attempts[0]).toMatchObject({
+      label: 'primary',
+      terminationKind: 'hard_timeout',
+    })
+  })
+
+  it('marks failed fallbacks as unusable and not consumer ready while preserving attempts and completeness', async () => {
+    const result = await runModelOutputHarness(baseRequest, executorReturning({
+      text: '',
+      thinkingText: 'Long hidden reasoning without final JSON.',
+      stopReason: 'max_tokens',
+      inputTokens: 80,
+      outputTokens: 1000,
+    }))
+
+    expect(result.ok).toBe(false)
+    expect(result.usable).toBe(false)
+    expect(result.unusableReason).toBe('empty_text_with_thinking')
+    expect(result.consumerReady).toBe(false)
+    expect(result.artifactCompleteness).toMatchObject({
+      expected: ['artifact', 'summary', 'confidence'],
+      produced: ['failed_fallback.v1'],
+      missing: ['artifact', 'summary', 'confidence'],
+      validationStatus: 'fail',
+      fallbackStatus: 'failed_fallback',
+    })
+    expect(result.consumerReadiness.blockers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'failed_fallback' }),
+      expect.objectContaining({ code: 'missing_required_artifact' }),
+    ]))
+    expect(result.artifact).toMatchObject({
+      artifact: 'failed_fallback.v1',
+      usable: false,
+      fallbackUsed: true,
+      repairUsed: false,
+      rawText: '',
+      rawThinkingText: 'Long hidden reasoning without final JSON.',
+    })
+    expect(result.artifact.attempts).toEqual(result.attempts)
+  })
+
+  it('marks salvaged schema-valid output usable with salvage details and completeness receipt', async () => {
+    const result = await runModelOutputHarness({
+      ...baseRequest,
+      salvagePolicy: { enabled: true, fields: ['artifact', 'summary', 'confidence'] },
+    }, executorReturning({
+      text: 'artifact: evidence-digest.v1\nsummary: Salvaged digest\nconfidence: 0.44\n{broken',
+      stopReason: 'max_tokens',
+    }))
+
+    expect(result.ok).toBe(true)
+    expect(result.usable).toBe(true)
+    expect(result.consumerReady).toBe(true)
+    expect(result.salvage).toMatchObject({
+      used: true,
+      fields: {
+        artifact: 'evidence-digest.v1',
+        summary: 'Salvaged digest',
+        confidence: 0.44,
+      },
+      missingRequiredFields: [],
+      confidence: 'medium',
+    })
+    expect(result.artifactCompleteness).toMatchObject({
+      expected: ['artifact', 'summary', 'confidence'],
+      produced: ['artifact', 'summary', 'confidence'],
+      missing: [],
+      validationStatus: 'pass',
+      fallbackStatus: 'salvage',
+    })
+  })
+
+  it('injects forceLocale into the prompt and blocks locale-mismatched artifacts as unusable', async () => {
+    let executorRequest: Parameters<StructuredOutputExecutor>[0] | undefined
+    const result = await runModelOutputHarness({
+      ...baseRequest,
+      forceLocale: 'zh-CN',
+    }, async request => {
+      executorRequest = request
+      return {
+        text: JSON.stringify({
+          artifact: 'evidence-digest.v1',
+          summary: 'English only digest',
+          confidence: 0.81,
+        }),
+        stopReason: 'end_turn',
+      }
+    })
+
+    expect(executorRequest?.system).toContain('zh-CN')
+    expect(result.ok).toBe(false)
+    expect(result.usable).toBe(false)
+    expect(result.unusableReason).toBe('locale_mismatch')
+    expect(result.consumerReady).toBe(false)
+    expect(result.validationErrors).toEqual(expect.arrayContaining(['locale_mismatch:zh-CN']))
+    expect(result.rawText).toContain('English only digest')
+    expect(result.consumerReadiness.blockers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'locale_mismatch' }),
+    ]))
+  })
+
+  it('blocks mixed-language user-facing display fields when zh-CN locale is forced', async () => {
+    const result = await runModelOutputHarness({
+      ...baseRequest,
+      forceLocale: 'zh-CN',
+    }, executorReturning({
+      text: JSON.stringify({
+        artifact: 'evidence-digest.v1',
+        summary: '中文摘要已经保留。',
+        confidence: 0.81,
+        risks: ['English risk should not pass locale gate'],
+        source_refs: ['source:1'],
+      }),
+      stopReason: 'end_turn',
+    }))
+
+    expect(result.ok).toBe(false)
+    expect(result.usable).toBe(false)
+    expect(result.unusableReason).toBe('locale_mismatch')
+    expect(result.consumerReady).toBe(false)
+    expect(result.validationErrors).toEqual(expect.arrayContaining(['locale_mismatch:zh-CN:risks[0]']))
+    expect(result.consumerReadiness.blockers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'locale_mismatch' }),
+    ]))
+  })
+
+  it('accepts zh-CN forced locale when user-facing fields contain Chinese text', async () => {
+    const result = await runModelOutputHarness({
+      ...baseRequest,
+      force_locale: 'zh-CN',
+    }, executorReturning({
+      text: JSON.stringify({
+        artifact: 'evidence-digest.v1',
+        summary: '中文摘要已经保留。',
+        confidence: 0.81,
+      }),
+      stopReason: 'end_turn',
+    }))
+
+    expect(result.ok).toBe(true)
+    expect(result.usable).toBe(true)
+    expect(result.consumerReady).toBe(true)
+    expect(result.validationErrors).toEqual([])
+  })
+
+  it('exposes provider preset matrix and preset/schema versioning without provider-first preset names', async () => {
+    expect(PROVIDER_PRESET_MATRIX.version).toBe('provider-preset-matrix.v1')
+    expect(PROVIDER_PRESET_MATRIX.presets.map(item => item.presetId)).toEqual([
+      'evidence-digest',
+      'analyst-audit',
+      'canonical-judge',
+    ])
+    expect(PROVIDER_PRESET_MATRIX.presets.some(item => /kimi|deepseek|gpt/i.test(item.presetId))).toBe(false)
+    expect(PROVIDER_PRESET_MATRIX.presets).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        presetId: 'evidence-digest',
+        provider: 'kimi',
+        idleTimeoutMs: expect.any(Number),
+        hardTimeoutMs: expect.any(Number),
+      }),
+    ]))
+
+    const result = await runModelOutputHarness(baseRequest, executorReturning({
+      text: JSON.stringify({
+        artifact: 'evidence-digest.v1',
+        summary: 'Versioned digest.',
+        confidence: 0.82,
+      }),
+      stopReason: 'end_turn',
+    }))
+
+    expect(result).toMatchObject({
+      presetId: 'evidence-digest',
+      presetVersion: 'v1',
+      schemaId: 'evidence-digest',
+      schemaVersion: 'v1',
+      repairPolicyVersion: 'repair-policy.v1',
+      providerMatrixVersion: 'provider-preset-matrix.v1',
+    })
   })
 })

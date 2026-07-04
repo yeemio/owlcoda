@@ -91,7 +91,32 @@ export interface WorkflowEndpointCallReceipt {
   raw_text?: string
   projected_response?: unknown
   response_preview?: string
+  artifact_completeness?: WorkflowArtifactCompletenessReceipt
   error?: string
+}
+
+export interface WorkflowArtifactCompletenessReceipt {
+  expected: string[]
+  produced: string[]
+  missing: string[]
+  validationStatus: 'pass' | 'warn' | 'fail' | 'unknown'
+  fallbackStatus: 'none' | 'repair' | 'salvage' | 'failed_fallback'
+  artifactRefs: Array<{
+    artifactId: string
+    kind: string
+    path?: string
+    ref?: string
+  }>
+  attemptLedgerRef?: string
+}
+
+export interface WorkflowConsumerReadinessReceipt {
+  consumerReady: boolean
+  blockers: Array<{ code: string; message: string; ref?: string }>
+  warnings: Array<{ code: string; message: string; ref?: string }>
+  requiredArtifactsMissing: string[]
+  fallbackUsed: boolean
+  usable: boolean
 }
 
 export interface WorkflowResumeReceipt {
@@ -120,6 +145,8 @@ export interface WorkflowRunReceipt {
   skipped_steps: WorkflowSkippedStepReceipt[]
   failed_steps: WorkflowFailedStepReceipt[]
   endpoint_calls: WorkflowEndpointCallReceipt[]
+  artifact_completeness: WorkflowArtifactCompletenessReceipt
+  consumer_readiness: WorkflowConsumerReadinessReceipt
   acceptance: WorkflowAcceptance
   required_endpoint_calls: string
   resume?: WorkflowResumeReceipt
@@ -294,12 +321,15 @@ export async function runWorkflowPlan(input: WorkflowRunInput & { plan: Workflow
   const mustAllOk = plan.acceptance?.must_all_ok === true
   const hasRequiredFailure = failedSteps.some(step => step.required)
   const hasAnyFailure = failedSteps.length > 0
+  const artifactCompleteness = summarizeWorkflowArtifactCompleteness(endpointCalls)
   const acceptance: WorkflowAcceptance =
     hasRequiredFailure ||
     requiredEndpointActual < requiredEndpointTarget ||
+    artifactCompleteness.validationStatus === 'fail' ||
     (mustAllOk && hasAnyFailure)
       ? 'fail'
       : 'pass'
+  const consumerReadiness = buildWorkflowConsumerReadiness(artifactCompleteness, failedSteps, acceptance)
 
   const receipt: WorkflowRunReceipt = {
     schema_version: 1,
@@ -317,6 +347,8 @@ export async function runWorkflowPlan(input: WorkflowRunInput & { plan: Workflow
     skipped_steps: skippedSteps,
     failed_steps: failedSteps,
     endpoint_calls: endpointCalls,
+    artifact_completeness: artifactCompleteness,
+    consumer_readiness: consumerReadiness,
     acceptance,
     required_endpoint_calls: `${requiredEndpointActual}/${requiredEndpointTarget}`,
     ...(resumeState
@@ -483,6 +515,8 @@ async function runOwlFootballHarnessContract(input: WorkflowRunInput, options: {
     failedSteps.some(step => step.required) || requiredStepsCompleted < requiredStepsTotal
       ? 'fail'
       : 'pass'
+  const artifactCompleteness = summarizeWorkflowArtifactCompleteness(endpointCalls)
+  const consumerReadiness = buildWorkflowConsumerReadiness(artifactCompleteness, failedSteps, acceptance)
   const receipt: WorkflowRunReceipt = {
     schema_version: 1,
     kind: 'workflow_invocation_receipt',
@@ -500,6 +534,8 @@ async function runOwlFootballHarnessContract(input: WorkflowRunInput, options: {
     skipped_steps: skippedSteps,
     failed_steps: failedSteps,
     endpoint_calls: endpointCalls,
+    artifact_completeness: artifactCompleteness,
+    consumer_readiness: consumerReadiness,
     acceptance,
     required_endpoint_calls: `${requiredStepsCompleted}/${requiredStepsTotal}`,
     contract: {
@@ -739,7 +775,7 @@ async function runStructuredOutputForOwlFootballTask(args: {
     required: true,
     body,
     expected_status: 200,
-    projection: ['ok', 'artifactId', 'attemptLedgerId', 'rawText', 'stopReason', 'persisted', 'runRef'],
+    projection: ['ok', 'usable', 'consumerReady', 'fallbackUsed', 'artifactId', 'attemptLedgerId', 'rawText', 'stopReason', 'persisted', 'runRef', 'artifactCompleteness.validationStatus'],
     max_response_bytes: 20_000,
   }, {
     baseUrl: args.baseUrl,
@@ -816,6 +852,13 @@ async function executeHttpStep(step: WorkflowStep, args: {
       const projectedResponse = parsedResponse !== undefined && step.projection
         ? projectResponse(parsedResponse, step.projection)
         : undefined
+      const artifactCompleteness = buildEndpointArtifactCompleteness({
+        ok: statusOk,
+        responseArtifact: artifactPath,
+        rawRef: artifactPath,
+        artifactRef: artifactPath,
+        projectedResponse,
+      })
       const call: WorkflowEndpointCallReceipt = {
         step_id: step.id,
         required: step.required !== false,
@@ -840,6 +883,7 @@ async function executeHttpStep(step: WorkflowStep, args: {
             }
           : {}),
         ...(projectedResponse !== undefined ? { projected_response: projectedResponse } : {}),
+        artifact_completeness: artifactCompleteness,
         ...(!statusOk && raw ? { raw_text: raw.slice(0, Math.min(raw.length, maxResponseBytes)) } : {}),
         ...(projectedResponse === undefined && raw
           ? { response_preview: raw.slice(0, Math.min(raw.length, maxResponseBytes)) }
@@ -868,6 +912,7 @@ async function executeHttpStep(step: WorkflowStep, args: {
           response_size_bytes: 0,
           max_response_bytes: maxResponseBytes,
           response_truncated: false,
+          artifact_completeness: buildEndpointArtifactCompleteness({ ok: false }),
           error: isAbortLikeError(err)
             ? `request timed out after ${timeoutMs}ms`
             : message,
@@ -925,6 +970,107 @@ function parseResponseBody(raw: string, contentType: string | undefined): unknow
     return JSON.parse(trimmed)
   } catch {
     return undefined
+  }
+}
+
+function buildEndpointArtifactCompleteness(args: {
+  ok: boolean
+  responseArtifact?: string
+  rawRef?: string
+  artifactRef?: string
+  projectedResponse?: unknown
+}): WorkflowArtifactCompletenessReceipt {
+  const projected = asRecord(args.projectedResponse)
+  const artifactId = stringField(projected?.['artifactId'])
+  const attemptLedgerId = stringField(projected?.['attemptLedgerId'])
+  const produced = uniqueStrings([
+    args.responseArtifact,
+    args.artifactRef,
+    args.rawRef,
+    artifactId,
+    attemptLedgerId,
+  ].filter((value): value is string => Boolean(value)))
+  const fallbackUsed = projected?.['fallbackUsed'] === true
+  const usable = projected?.['usable'] !== false
+  const validationStatus: WorkflowArtifactCompletenessReceipt['validationStatus'] = !args.ok || fallbackUsed || !usable
+    ? 'fail'
+    : 'pass'
+  const fallbackStatus: WorkflowArtifactCompletenessReceipt['fallbackStatus'] = fallbackUsed || !usable
+    ? 'failed_fallback'
+    : 'none'
+  const artifactRefs = [
+    ...(args.responseArtifact ? [{ artifactId: args.responseArtifact, kind: 'response_artifact', path: args.responseArtifact, ref: args.responseArtifact }] : []),
+    ...(artifactId ? [{ artifactId, kind: 'structured_output_artifact', ref: artifactId }] : []),
+    ...(attemptLedgerId ? [{ artifactId: attemptLedgerId, kind: 'structured_output_attempts', ref: attemptLedgerId }] : []),
+  ]
+  return {
+    expected: [],
+    produced,
+    missing: [],
+    validationStatus,
+    fallbackStatus,
+    artifactRefs,
+    ...(attemptLedgerId ? { attemptLedgerRef: attemptLedgerId } : {}),
+  }
+}
+
+function summarizeWorkflowArtifactCompleteness(endpointCalls: WorkflowEndpointCallReceipt[]): WorkflowArtifactCompletenessReceipt {
+  const receipts = endpointCalls.map(call => call.artifact_completeness).filter((value): value is WorkflowArtifactCompletenessReceipt => Boolean(value))
+  const expected = uniqueStrings(receipts.flatMap(receipt => receipt.expected))
+  const produced = uniqueStrings(receipts.flatMap(receipt => receipt.produced))
+  const missing = uniqueStrings(receipts.flatMap(receipt => receipt.missing))
+  const fallbackStatus: WorkflowArtifactCompletenessReceipt['fallbackStatus'] = receipts.some(receipt => receipt.fallbackStatus === 'failed_fallback')
+    ? 'failed_fallback'
+    : receipts.some(receipt => receipt.fallbackStatus === 'salvage')
+      ? 'salvage'
+      : receipts.some(receipt => receipt.fallbackStatus === 'repair')
+        ? 'repair'
+        : 'none'
+  const validationStatus: WorkflowArtifactCompletenessReceipt['validationStatus'] = missing.length > 0 || fallbackStatus === 'failed_fallback' || receipts.some(receipt => receipt.validationStatus === 'fail')
+    ? 'fail'
+    : receipts.some(receipt => receipt.validationStatus === 'warn')
+      ? 'warn'
+      : 'pass'
+  return {
+    expected,
+    produced,
+    missing,
+    validationStatus,
+    fallbackStatus,
+    artifactRefs: receipts.flatMap(receipt => receipt.artifactRefs),
+    ...(receipts.find(receipt => receipt.attemptLedgerRef)?.attemptLedgerRef
+      ? { attemptLedgerRef: receipts.find(receipt => receipt.attemptLedgerRef)?.attemptLedgerRef }
+      : {}),
+  }
+}
+
+function buildWorkflowConsumerReadiness(
+  artifactCompleteness: WorkflowArtifactCompletenessReceipt,
+  failedSteps: WorkflowFailedStepReceipt[],
+  acceptance: WorkflowAcceptance,
+): WorkflowConsumerReadinessReceipt {
+  const blockers: WorkflowConsumerReadinessReceipt['blockers'] = []
+  if (acceptance === 'fail') blockers.push({ code: 'workflow_acceptance_failed', message: 'Workflow acceptance failed' })
+  for (const step of failedSteps.filter(step => step.required)) {
+    blockers.push({ code: 'required_step_failed', message: step.reason, ref: step.step_id })
+  }
+  if (artifactCompleteness.missing.length > 0) {
+    blockers.push({
+      code: 'missing_required_artifact',
+      message: `Missing required workflow artifacts: ${artifactCompleteness.missing.join(', ')}`,
+    })
+  }
+  if (artifactCompleteness.fallbackStatus === 'failed_fallback') {
+    blockers.push({ code: 'failed_fallback', message: 'Workflow includes failed fallback artifact' })
+  }
+  const usable = blockers.length === 0 && artifactCompleteness.validationStatus !== 'fail'
+  return {
+    consumerReady: usable,
+    blockers,
+    warnings: [],
+    requiredArtifactsMissing: artifactCompleteness.missing,
+    fallbackUsed: artifactCompleteness.fallbackStatus === 'failed_fallback',
+    usable,
   }
 }
 
@@ -1127,6 +1273,10 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function stringField(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map(value => value.trim()).filter(Boolean))]
 }
 
 function requiredNonEmpty(value: unknown, _field: string): string | undefined {

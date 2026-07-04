@@ -13,6 +13,10 @@ let app: http.Server
 let appUrl = ''
 const backendBodies: any[] = []
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
 function readBody(req: http.IncomingMessage): Promise<string> {
   return new Promise(resolve => {
     let raw = ''
@@ -21,10 +25,149 @@ function readBody(req: http.IncomingMessage): Promise<string> {
   })
 }
 
+function bodyContains(body: any, marker: string): boolean {
+  return JSON.stringify(body.messages ?? []).includes(marker)
+}
+
+function writeSseChunk(res: http.ServerResponse, body: Record<string, unknown> | '[DONE]'): void {
+  res.write(`data: ${typeof body === 'string' ? body : JSON.stringify(body)}\n\n`)
+}
+
+function writeAnthropicSseChunk(res: http.ServerResponse, body: Record<string, unknown>): void {
+  res.write(`data: ${JSON.stringify(body)}\n\n`)
+}
+
+function openAiChunk(body: any, delta: Record<string, unknown>, finishReason: string | null = null, usage?: Record<string, unknown>): Record<string, unknown> {
+  return {
+    id: 'chatcmpl-stream-test',
+    object: 'chat.completion.chunk',
+    model: body.model,
+    choices: [{ index: 0, delta, finish_reason: finishReason }],
+    ...(usage ? { usage } : {}),
+  }
+}
+
+async function writeAnthropicStreamingResponse(res: http.ServerResponse, body: any): Promise<void> {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+  writeAnthropicSseChunk(res, {
+    type: 'message_start',
+    message: {
+      usage: { input_tokens: 17 },
+    },
+  })
+  await sleep(10)
+  writeAnthropicSseChunk(res, {
+    type: 'content_block_delta',
+    delta: { type: 'text_delta', text: '{"artifact":"evidence-digest.v1",' },
+  })
+  await sleep(10)
+  writeAnthropicSseChunk(res, {
+    type: 'content_block_delta',
+    delta: { type: 'text_delta', text: '"summary":"Anthropic streaming digest",' },
+  })
+  await sleep(10)
+  writeAnthropicSseChunk(res, {
+    type: 'content_block_delta',
+    delta: { type: 'text_delta', text: '"confidence":0.93}' },
+  })
+  writeAnthropicSseChunk(res, {
+    type: 'message_delta',
+    delta: { stop_reason: 'end_turn' },
+    usage: { output_tokens: 10 },
+  })
+  writeAnthropicSseChunk(res, { type: 'message_stop' })
+  res.end()
+}
+
+async function writeStreamingResponse(res: http.ServerResponse, body: any): Promise<void> {
+  if (body.model === 'anthropic-upstream-model') {
+    await writeAnthropicStreamingResponse(res, body)
+    return
+  }
+
+  res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+
+  if (bodyContains(body, 'slow-active')) {
+    writeSseChunk(res, openAiChunk(body, { role: 'assistant', content: '' }))
+    await sleep(15)
+    writeSseChunk(res, openAiChunk(body, { content: '{"artifact":"evidence-digest.v1",' }))
+    await sleep(20)
+    writeSseChunk(res, openAiChunk(body, { content: '"summary":"Slow streaming digest",' }))
+    await sleep(20)
+    writeSseChunk(res, openAiChunk(body, { content: '"confidence":0.92}' }))
+    await sleep(20)
+    writeSseChunk(res, openAiChunk(body, {}, 'stop', {
+      prompt_tokens: 12,
+      completion_tokens: 8,
+      total_tokens: 20,
+    }))
+    writeSseChunk(res, '[DONE]')
+    res.end()
+    return
+  }
+
+  if (bodyContains(body, 'thinking-only')) {
+    writeSseChunk(res, openAiChunk(body, { role: 'assistant', content: '' }))
+    await sleep(10)
+    writeSseChunk(res, openAiChunk(body, { reasoning_content: 'thinking evidence kept' }))
+    await sleep(80)
+    writeSseChunk(res, openAiChunk(body, {}, 'stop', {
+      prompt_tokens: 11,
+      completion_tokens: 0,
+      total_tokens: 11,
+    }))
+    writeSseChunk(res, '[DONE]')
+    res.end()
+    return
+  }
+
+  if (bodyContains(body, 'heartbeat-only')) {
+    writeSseChunk(res, openAiChunk(body, { role: 'assistant', content: '' }))
+    await sleep(80)
+    writeSseChunk(res, openAiChunk(body, {}, 'stop', {
+      prompt_tokens: 11,
+      completion_tokens: 0,
+      total_tokens: 11,
+    }))
+    writeSseChunk(res, '[DONE]')
+    res.end()
+    return
+  }
+
+  if (bodyContains(body, 'partial-interrupt')) {
+    writeSseChunk(res, openAiChunk(body, { role: 'assistant', content: '' }))
+    writeSseChunk(res, openAiChunk(body, { content: '{"artifact":"evidence-digest.v1","summary":"partial stream' }))
+    await sleep(10)
+    res.destroy(new Error('simulated provider stream interruption'))
+    return
+  }
+
+  writeSseChunk(res, openAiChunk(body, { role: 'assistant', content: '' }))
+  await sleep(10)
+  writeSseChunk(res, openAiChunk(body, { content: '{"artifact":"evidence-digest.v1",' }))
+  await sleep(10)
+  writeSseChunk(res, openAiChunk(body, { content: '"summary":"Streaming digest",' }))
+  await sleep(10)
+  writeSseChunk(res, openAiChunk(body, { content: '"confidence":0.91}' }))
+  writeSseChunk(res, openAiChunk(body, {}, 'stop', {
+    prompt_tokens: 13,
+    completion_tokens: 9,
+    total_tokens: 22,
+    prompt_tokens_details: { cached_tokens: 2 },
+  }))
+  writeSseChunk(res, '[DONE]')
+  res.end()
+}
+
 beforeAll(async () => {
   backend = http.createServer(async (req, res) => {
     const raw = await readBody(req)
-    backendBodies.push(JSON.parse(raw))
+    const body = JSON.parse(raw)
+    backendBodies.push(body)
+    if (body.stream === true) {
+      await writeStreamingResponse(res, body)
+      return
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
       id: 'chatcmpl-test',
@@ -62,6 +205,26 @@ beforeAll(async () => {
         tier: 'general',
         default: true,
         endpoint: `${backendUrl}/v1/chat/completions`,
+        supportsStreaming: true,
+      },
+      {
+        id: 'anthropic-stream-model',
+        label: 'Anthropic Stream Model',
+        backendModel: 'anthropic-upstream-model',
+        aliases: [],
+        tier: 'general',
+        endpoint: `${backendUrl}/v1/messages`,
+        supportsStreaming: true,
+      },
+      {
+        id: 'non-streaming-model',
+        label: 'Non Streaming Model',
+        backendModel: 'non-streaming-upstream-model',
+        aliases: [],
+        tier: 'general',
+        endpoint: `${backendUrl}/v1/chat/completions`,
+        supportsStructuredOutput: true,
+        supportsStreaming: false,
       },
       {
         id: 'prose-only-model',
@@ -131,6 +294,243 @@ describe('/v1/structured-output', () => {
     expect(backendBodies[0].messages[0].content).toContain('Return exactly one short JSON object')
     expect(backendBodies[0].messages[0].content).toContain('Required top-level keys: artifact, summary, confidence')
     expect(backendBodies[0].messages[0].content).toContain('Constant fields: artifact="evidence-digest.v1"')
+  })
+
+  it('streams provider chunks into structured output and records activity metadata', async () => {
+    const beforeCalls = backendBodies.length
+    const res = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'test-model',
+        preset: 'evidence-digest.v1',
+        schema: {
+          type: 'object',
+          required: ['artifact', 'summary', 'confidence'],
+          properties: {
+            artifact: { const: 'evidence-digest.v1' },
+            summary: { type: 'string' },
+            confidence: { type: 'number' },
+          },
+        },
+        user: 'Digest this through provider streaming delta.',
+        maxTokens: 500,
+        idleTimeoutMs: 200,
+        hardTimeoutMs: 1000,
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.ok).toBe(true)
+    expect(body.consumerReady).toBe(true)
+    expect(body.artifact).toMatchObject({
+      artifact: 'evidence-digest.v1',
+      summary: 'Streaming digest',
+      confidence: 0.91,
+    })
+    expect(body.rawText).toContain('Streaming digest')
+    expect(body.lastOutputAt).toEqual(expect.any(String))
+    expect(body.attempts[0]).toMatchObject({
+      label: 'primary',
+      streamingMode: 'streaming',
+      streamDeltaSource: 'translated_sse',
+    })
+    expect(backendBodies).toHaveLength(beforeCalls + 1)
+    expect(backendBodies.at(-1).stream).toBe(true)
+  })
+
+  it('keeps streaming request alive when active text deltas cross the idle window', async () => {
+    const beforeCalls = backendBodies.length
+    const startedAt = Date.now()
+    const res = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'test-model',
+        preset: 'evidence-digest.v1',
+        user: 'slow-active structured output stream',
+        maxTokens: 500,
+        idleTimeoutMs: 30,
+        hardTimeoutMs: 1000,
+      }),
+    })
+    const elapsedMs = Date.now() - startedAt
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(elapsedMs).toBeGreaterThan(30)
+    expect(body.ok).toBe(true)
+    expect(body.consumerReady).toBe(true)
+    expect(body.artifact).toMatchObject({
+      artifact: 'evidence-digest.v1',
+      summary: 'Slow streaming digest',
+      confidence: 0.92,
+    })
+    expect(body.terminationKind).toBe('completed')
+    expect(backendBodies).toHaveLength(beforeCalls + 1)
+    expect(backendBodies.at(-1).stream).toBe(true)
+  })
+
+  it('returns silent_timeout when provider stream emits no usable text delta', async () => {
+    const beforeCalls = backendBodies.length
+    const res = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'test-model',
+        preset: 'evidence-digest.v1',
+        user: 'heartbeat-only structured output stream',
+        maxTokens: 500,
+        idleTimeoutMs: 30,
+        hardTimeoutMs: 1000,
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.ok).toBe(false)
+    expect(body.consumerReady).toBe(false)
+    expect(body.terminationKind).toBe('silent_timeout')
+    expect(body.unusableReason).toBe('silent_timeout')
+    expect(body.artifact).toMatchObject({
+      artifact: 'failed_fallback.v1',
+      fallbackUsed: true,
+      rawText: '',
+      terminationKind: 'silent_timeout',
+    })
+    expect(backendBodies).toHaveLength(beforeCalls + 1)
+    expect(backendBodies.at(-1).stream).toBe(true)
+  })
+
+  it('preserves thinking-only stream evidence without counting it as usable output', async () => {
+    const beforeCalls = backendBodies.length
+    const res = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'test-model',
+        preset: 'evidence-digest.v1',
+        user: 'thinking-only structured output stream',
+        maxTokens: 500,
+        idleTimeoutMs: 30,
+        hardTimeoutMs: 1000,
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.ok).toBe(false)
+    expect(body.consumerReady).toBe(false)
+    expect(body.terminationKind).toBe('silent_timeout')
+    expect(body.rawText).toBe('')
+    expect(body.rawThinkingText).toContain('thinking evidence kept')
+    expect(body.artifact).toMatchObject({
+      artifact: 'failed_fallback.v1',
+      fallbackUsed: true,
+      rawText: '',
+      rawThinkingText: expect.stringContaining('thinking evidence kept'),
+      terminationKind: 'silent_timeout',
+    })
+    expect(backendBodies).toHaveLength(beforeCalls + 1)
+    expect(backendBodies.at(-1).stream).toBe(true)
+  })
+
+  it('preserves partial rawText when provider stream interrupts after text delta', async () => {
+    const beforeCalls = backendBodies.length
+    const res = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'test-model',
+        preset: 'evidence-digest.v1',
+        user: 'partial-interrupt structured output stream',
+        maxTokens: 500,
+        idleTimeoutMs: 500,
+        hardTimeoutMs: 1000,
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.ok).toBe(false)
+    expect(body.consumerReady).toBe(false)
+    expect(body.terminationKind).toBe('provider_error')
+    expect(body.rawText).toContain('partial stream')
+    expect(body.artifact).toMatchObject({
+      artifact: 'failed_fallback.v1',
+      fallbackUsed: true,
+      rawText: expect.stringContaining('partial stream'),
+      terminationKind: 'provider_error',
+    })
+    expect(backendBodies).toHaveLength(beforeCalls + 1)
+    expect(backendBodies.at(-1).stream).toBe(true)
+  })
+
+  it('streams Anthropic Messages SSE directly through the provider_sse path', async () => {
+    const beforeCalls = backendBodies.length
+    const res = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'anthropic-stream-model',
+        preset: 'evidence-digest.v1',
+        user: 'anthropic-provider-sse structured output stream',
+        maxTokens: 500,
+        idleTimeoutMs: 200,
+        hardTimeoutMs: 1000,
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.ok).toBe(true)
+    expect(body.consumerReady).toBe(true)
+    expect(body.artifact).toMatchObject({
+      artifact: 'evidence-digest.v1',
+      summary: 'Anthropic streaming digest',
+      confidence: 0.93,
+    })
+    expect(body.attempts[0]).toMatchObject({
+      streamingMode: 'streaming',
+      streamDeltaSource: 'provider_sse',
+    })
+    expect(backendBodies).toHaveLength(beforeCalls + 1)
+    expect(backendBodies.at(-1).model).toBe('anthropic-upstream-model')
+    expect(backendBodies.at(-1).stream).toBe(true)
+  })
+
+  it('keeps non-streaming JSON compatibility when streaming is unsupported', async () => {
+    const beforeCalls = backendBodies.length
+    const res = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'non-streaming-model',
+        preset: 'evidence-digest.v1',
+        user: 'Digest this with an idle timeout but no provider streaming support.',
+        maxTokens: 500,
+        idleTimeoutMs: 30,
+        hardTimeoutMs: 1000,
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.ok).toBe(true)
+    expect(body.consumerReady).toBe(true)
+    expect(body.artifact).toMatchObject({
+      artifact: 'evidence-digest.v1',
+      summary: 'Endpoint digest',
+      confidence: 0.88,
+    })
+    expect(body.attempts[0]).toMatchObject({
+      streamingMode: 'non_streaming',
+      streamDeltaSource: 'none',
+    })
+    expect(backendBodies).toHaveLength(beforeCalls + 1)
+    expect(backendBodies.at(-1).model).toBe('non-streaming-upstream-model')
+    expect(backendBodies.at(-1).stream).toBe(false)
   })
 
   it('passes caller-provided temperature through to the upstream provider', async () => {
@@ -234,13 +634,35 @@ describe('/v1/structured-output', () => {
         role: 'evidence',
         model: 'test-model',
         preset: 'evidence-digest.v1',
+        presetId: 'evidence-digest',
+        presetVersion: 'v1',
+        schemaId: 'evidence-digest',
+        schemaVersion: 'v1',
+        repairPolicyVersion: 'repair-policy.v1',
+        providerMatrixVersion: 'provider-preset-matrix.v1',
         ok: true,
+        usable: true,
+        consumerReady: true,
         schemaValid: true,
         rawText: '{"artifact":"evidence-digest.v1","summary":"Endpoint digest","confidence":0.88}',
         artifact: {
           artifact: 'evidence-digest.v1',
           summary: 'Endpoint digest',
           confidence: 0.88,
+        },
+        artifactCompleteness: {
+          expected: ['artifact', 'summary', 'confidence'],
+          produced: ['artifact', 'summary', 'confidence'],
+          missing: [],
+          validationStatus: 'pass',
+          fallbackStatus: 'none',
+        },
+        consumerReadiness: {
+          consumerReady: true,
+          blockers: [],
+          requiredArtifactsMissing: [],
+          fallbackUsed: false,
+          usable: true,
         },
         capabilityGate: {
           ok: true,
@@ -258,6 +680,10 @@ describe('/v1/structured-output', () => {
         artifactKind: 'structured_output_attempts',
         artifactId: body.artifactId,
         attemptLedgerId: body.attemptLedgerId,
+        presetId: 'evidence-digest',
+        presetVersion: 'v1',
+        schemaId: 'evidence-digest',
+        schemaVersion: 'v1',
         capabilityGate: {
           ok: true,
           source: 'fallback',
@@ -435,7 +861,16 @@ describe('/v1/structured-output', () => {
         parentArtifactId: firstBody.artifactId,
         rerunOf: firstBody.artifactId,
         inputRef: firstBody.artifactId,
+        rerun: {
+          role: 'evidence',
+          stepId: 'step-evidence-rerun',
+          parentArtifactId: firstBody.artifactId,
+          previousAttemptLedgerRef: `${firstBody.artifactId}-attempts`,
+          reason: 'role_step_rerun',
+        },
       })
+      expect(rerunPayload.rerun.rerunId).toMatch(/^rerun-/)
+      expect(rerunPayload.rerun.createdAt).toMatch(/\d{4}-\d{2}-\d{2}T/)
       expect(rerunPayload.factRefs.coveredIds).toEqual(expect.arrayContaining([firstBody.artifactId]))
 
       const attemptsPayload = JSON.parse(await readFile(rerunAttemptsRecord.path, 'utf8'))
@@ -444,6 +879,10 @@ describe('/v1/structured-output', () => {
         artifactId: rerunBody.artifactId,
         parentArtifactId: firstBody.artifactId,
         rerunOf: firstBody.artifactId,
+        rerun: {
+          parentArtifactId: firstBody.artifactId,
+          previousAttemptLedgerRef: `${firstBody.artifactId}-attempts`,
+        },
       })
       expect(attemptsPayload.attempts.map((attempt: any) => attempt.label)).toEqual(['primary', 'parse'])
 

@@ -35,6 +35,7 @@ export interface ConfiguredModel {
   contextWindow?: number
   supportsImages?: boolean
   supportsStructuredOutput?: boolean
+  supportsStreaming?: boolean
   maxOutputTokens?: number
   timeoutMs?: number
 }
@@ -54,6 +55,7 @@ export interface ResolvedModel {
   contextWindow?: number
   supportsImages?: boolean
   supportsStructuredOutput?: boolean
+  supportsStreaming?: boolean
   maxOutputTokens?: number
   timeoutMs?: number
 }
@@ -112,6 +114,7 @@ export function normalizeModel(raw: Record<string, unknown>): ConfiguredModel {
     headers: customHeaders,
     supportsImages: typeof raw.supportsImages === 'boolean' ? raw.supportsImages : undefined,
     supportsStructuredOutput: typeof raw.supportsStructuredOutput === 'boolean' ? raw.supportsStructuredOutput : undefined,
+    supportsStreaming: typeof raw.supportsStreaming === 'boolean' ? raw.supportsStreaming : undefined,
     maxOutputTokens: typeof raw.maxOutputTokens === 'number' ? raw.maxOutputTokens : undefined,
     contextWindow: resolveEffectiveContextWindow({
       id,
@@ -123,6 +126,7 @@ export function normalizeModel(raw: Record<string, unknown>): ConfiguredModel {
       contextWindow: typeof raw.contextWindow === 'number' ? raw.contextWindow : undefined,
       supportsImages: typeof raw.supportsImages === 'boolean' ? raw.supportsImages : undefined,
       supportsStructuredOutput: typeof raw.supportsStructuredOutput === 'boolean' ? raw.supportsStructuredOutput : undefined,
+      supportsStreaming: typeof raw.supportsStreaming === 'boolean' ? raw.supportsStreaming : undefined,
       maxOutputTokens: typeof raw.maxOutputTokens === 'number' ? raw.maxOutputTokens : undefined,
     }),
     timeoutMs: typeof raw.timeoutMs === 'number' ? raw.timeoutMs : undefined,
@@ -162,6 +166,7 @@ function toResolved(m: ConfiguredModel): ResolvedModel {
     contextWindow: m.contextWindow,
     supportsImages: m.supportsImages,
     supportsStructuredOutput: m.supportsStructuredOutput,
+    supportsStreaming: m.supportsStreaming,
     maxOutputTokens: m.maxOutputTokens,
     timeoutMs: m.timeoutMs,
   }
@@ -421,6 +426,7 @@ export function resolveModelCapabilitiesForRequest(config: ModelRegistryConfig, 
       contextWindow: matched.contextWindow,
       supportsImages: matched.supportsImages,
       supportsStructuredOutput: matched.supportsStructuredOutput,
+      supportsStreaming: matched.supportsStreaming,
       maxOutputTokens: matched.maxOutputTokens,
     })
   }

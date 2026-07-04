@@ -41,6 +41,20 @@ export interface StructuredOutputPolicy {
 export type StructuredOutputCapabilityStatus = 'supported' | 'unsupported' | 'unknown'
 export type StructuredOutputCapabilitySource = 'declared' | 'probed' | 'manual' | 'fallback'
 export type StructuredOutputThinkingBehavior = 'text_and_thinking' | 'thinking_only_risk' | 'unknown'
+export type StructuredOutputTerminationKind =
+  | 'completed'
+  | 'silent_timeout'
+  | 'hard_timeout'
+  | 'provider_error'
+  | 'aborted'
+  | 'unknown'
+
+export type StructuredOutputDeltaKind = 'text' | 'content' | 'thinking' | 'heartbeat'
+
+export interface StructuredOutputDelta {
+  type?: StructuredOutputDeltaKind
+  text?: string
+}
 
 export interface StructuredOutputSupportCapability {
   status: StructuredOutputCapabilityStatus
@@ -79,11 +93,35 @@ export interface StructuredOutputCapabilityGateResult {
 
 export interface StructuredOutputPresetContract {
   artifact: BuiltinStructuredOutputPreset
+  presetId: string
+  presetVersion: string
+  schemaId: string
+  schemaVersion: string
   system: string
   schema: JsonSchema
   policy: StructuredOutputPolicy
   salvagePolicy: StructuredOutputSalvagePolicy
   maxTokens?: number
+}
+
+export interface ProviderPresetMatrixEntry {
+  presetId: 'evidence-digest' | 'analyst-audit' | 'canonical-judge'
+  presetVersion: string
+  provider: string
+  modelPattern: string
+  maxTokens: number
+  temperature: number
+  idleTimeoutMs: number
+  hardTimeoutMs: number
+  repairPolicy: string
+  salvagePolicy: string
+  forceLocale?: string
+  outputDiscipline: string
+}
+
+export interface ProviderPresetMatrix {
+  version: 'provider-preset-matrix.v1'
+  presets: ProviderPresetMatrixEntry[]
 }
 
 export interface StructuredOutputRequest {
@@ -100,6 +138,14 @@ export interface StructuredOutputRequest {
   persist?: boolean
   runRef?: string
   role?: string
+  forceLocale?: string
+  force_locale?: string
+  idleTimeoutMs?: number
+  hardTimeoutMs?: number
+  presetId?: string
+  presetVersion?: string
+  schemaId?: string
+  schemaVersion?: string
   threadId?: string
   turnId?: string
   runId?: string
@@ -117,6 +163,7 @@ export interface StructuredOutputExecutorRequest extends StructuredOutputRequest
   preset: StructuredOutputPreset
   system: string
   maxTokens: number
+  onOutputDelta?: (delta: StructuredOutputDelta) => void
 }
 
 export interface StructuredOutputModelResponse {
@@ -126,6 +173,8 @@ export interface StructuredOutputModelResponse {
   inputTokens?: number
   outputTokens?: number
   durationMs?: number
+  streamingMode?: 'streaming' | 'non_streaming'
+  streamDeltaSource?: 'provider_sse' | 'translated_sse' | 'none'
 }
 
 export type StructuredOutputExecutor = (
@@ -145,6 +194,47 @@ export interface StructuredOutputAttempt {
   requestedTemperature?: number
   appliedTemperature?: number
   temperatureSource?: 'request'
+  terminationKind?: StructuredOutputTerminationKind
+  lastOutputAt?: string
+  idleMs?: number
+  partialText?: string
+  streamingMode?: 'streaming' | 'non_streaming'
+  streamDeltaSource?: 'provider_sse' | 'translated_sse' | 'none'
+}
+
+export type ArtifactCompletenessValidationStatus = 'pass' | 'warn' | 'fail' | 'unknown'
+export type ArtifactCompletenessFallbackStatus = 'none' | 'repair' | 'salvage' | 'failed_fallback'
+
+export interface ArtifactCompletenessReceipt {
+  expected: string[]
+  produced: string[]
+  missing: string[]
+  validationStatus: ArtifactCompletenessValidationStatus
+  fallbackStatus: ArtifactCompletenessFallbackStatus
+  artifactRefs: Array<{
+    artifactId: string
+    kind: string
+    path?: string
+    ref?: string
+  }>
+  attemptLedgerRef?: string
+}
+
+export interface ConsumerReadinessGate {
+  consumerReady: boolean
+  blockers: Array<{ code: string; message: string; ref?: string }>
+  warnings: Array<{ code: string; message: string; ref?: string }>
+  requiredArtifactsMissing: string[]
+  fallbackUsed: boolean
+  usable: boolean
+}
+
+export interface StructuredOutputSalvageReceipt {
+  used: boolean
+  fields: Record<string, unknown>
+  missingRequiredFields: string[]
+  confidence: 'high' | 'medium' | 'low'
+  reason?: string
 }
 
 export interface StructuredOutputResponse {
@@ -152,6 +242,21 @@ export interface StructuredOutputResponse {
   artifact: Record<string, unknown>
   rawText: string
   rawThinkingText?: string
+  usable: boolean
+  unusableReason?: string
+  salvage: StructuredOutputSalvageReceipt
+  artifactCompleteness: ArtifactCompletenessReceipt
+  consumerReady: boolean
+  consumerReadiness: ConsumerReadinessGate
+  terminationKind: StructuredOutputTerminationKind
+  lastOutputAt?: string
+  idleMs?: number
+  presetId: string
+  presetVersion: string
+  schemaId: string
+  schemaVersion: string
+  repairPolicyVersion: string
+  providerMatrixVersion: string
   parsed: boolean
   schemaValid: boolean
   validationErrors: string[]
@@ -178,6 +283,10 @@ export interface StructuredOutputResponse {
 export const STRUCTURED_OUTPUT_PRESETS: Record<BuiltinStructuredOutputPreset, StructuredOutputPresetContract> = {
   'evidence-digest.v1': {
     artifact: 'evidence-digest.v1',
+    presetId: 'evidence-digest',
+    presetVersion: 'v1',
+    schemaId: 'evidence-digest',
+    schemaVersion: 'v1',
     system:
       'Return exactly one short JSON object. Do not include chain-of-thought, markdown, or prose outside JSON.',
     schema: {
@@ -210,6 +319,10 @@ export const STRUCTURED_OUTPUT_PRESETS: Record<BuiltinStructuredOutputPreset, St
   },
   'analyst-audit.v1': {
     artifact: 'analyst-audit.v1',
+    presetId: 'analyst-audit',
+    presetVersion: 'v1',
+    schemaId: 'analyst-audit',
+    schemaVersion: 'v1',
     system:
       'Consume the provided artifact only. Return exactly one JSON object with conflicts, gaps, assumptions, and candidate findings. Do not make a final judgment.',
     schema: {
@@ -237,6 +350,10 @@ export const STRUCTURED_OUTPUT_PRESETS: Record<BuiltinStructuredOutputPreset, St
   },
   'canonical-judge.v1': {
     artifact: 'canonical-judge.v1',
+    presetId: 'canonical-judge',
+    presetVersion: 'v1',
+    schemaId: 'canonical-judge',
+    schemaVersion: 'v1',
     system:
       'Consume the provided compressed artifacts only. Return exactly one canonical JSON object. Do not fetch or reread long evidence.',
     schema: {
@@ -262,6 +379,52 @@ export const STRUCTURED_OUTPUT_PRESETS: Record<BuiltinStructuredOutputPreset, St
     },
     maxTokens: 1200,
   },
+}
+
+export const PROVIDER_PRESET_MATRIX: ProviderPresetMatrix = {
+  version: 'provider-preset-matrix.v1',
+  presets: [
+    {
+      presetId: 'evidence-digest',
+      presetVersion: 'v1',
+      provider: 'kimi',
+      modelPattern: 'kimi|moonshot',
+      maxTokens: 20_480,
+      temperature: 0.2,
+      idleTimeoutMs: 45_000,
+      hardTimeoutMs: 900_000,
+      repairPolicy: 'repair-policy.v1',
+      salvagePolicy: 'salvage-policy.v1',
+      forceLocale: 'zh-CN',
+      outputDiscipline: 'json_only_no_cot_raw_preserved',
+    },
+    {
+      presetId: 'analyst-audit',
+      presetVersion: 'v1',
+      provider: 'deepseek',
+      modelPattern: 'deepseek',
+      maxTokens: 8192,
+      temperature: 0.3,
+      idleTimeoutMs: 30_000,
+      hardTimeoutMs: 300_000,
+      repairPolicy: 'repair-policy.v1',
+      salvagePolicy: 'salvage-policy.v1',
+      outputDiscipline: 'json_only_audit_no_final_judgment',
+    },
+    {
+      presetId: 'canonical-judge',
+      presetVersion: 'v1',
+      provider: 'openai',
+      modelPattern: 'gpt|openai',
+      maxTokens: 8192,
+      temperature: 0,
+      idleTimeoutMs: 30_000,
+      hardTimeoutMs: 300_000,
+      repairPolicy: 'repair-policy.v1',
+      salvagePolicy: 'salvage-policy.v1',
+      outputDiscipline: 'canonical_json_only',
+    },
+  ],
 }
 
 export function getStructuredOutputPresetContract(
@@ -754,6 +917,12 @@ function attempt(args: {
   requestedTemperature?: number
   appliedTemperature?: number
   temperatureSource?: 'request'
+  terminationKind?: StructuredOutputTerminationKind
+  lastOutputAt?: string
+  idleMs?: number
+  partialText?: string
+  streamingMode?: 'streaming' | 'non_streaming'
+  streamDeltaSource?: 'provider_sse' | 'translated_sse' | 'none'
 }): StructuredOutputAttempt {
   return {
     label: args.label,
@@ -768,6 +937,12 @@ function attempt(args: {
     ...(args.requestedTemperature !== undefined ? { requestedTemperature: args.requestedTemperature } : {}),
     ...(args.appliedTemperature !== undefined ? { appliedTemperature: args.appliedTemperature } : {}),
     ...(args.temperatureSource ? { temperatureSource: args.temperatureSource } : {}),
+    ...(args.terminationKind ? { terminationKind: args.terminationKind } : {}),
+    ...(args.lastOutputAt ? { lastOutputAt: args.lastOutputAt } : {}),
+    ...(args.idleMs !== undefined ? { idleMs: args.idleMs } : {}),
+    ...(args.partialText ? { partialText: args.partialText } : {}),
+    ...(args.streamingMode ? { streamingMode: args.streamingMode } : {}),
+    ...(args.streamDeltaSource ? { streamDeltaSource: args.streamDeltaSource } : {}),
   }
 }
 
@@ -781,6 +956,161 @@ function providerControlAttemptFields(request: StructuredOutputRequest): Pick<St
     : {}
 }
 
+interface GovernanceTelemetry {
+  startedAtMs: number
+  lastOutputAtMs?: number
+  lastOutputAt?: string
+  idleMs?: number
+  partialText: string
+  partialThinkingText?: string
+  terminationKind: StructuredOutputTerminationKind
+}
+
+type GovernedExecutorResult =
+  | { kind: 'completed'; response: StructuredOutputModelResponse; telemetry: GovernanceTelemetry }
+  | { kind: 'timeout'; reason: 'silent_timeout' | 'hard_timeout'; telemetry: GovernanceTelemetry }
+  | { kind: 'error'; error: unknown; telemetry: GovernanceTelemetry }
+
+function clampTimeoutMs(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return undefined
+  return Math.max(1, Math.floor(value))
+}
+
+async function runExecutorWithActivityGovernance(args: {
+  request: StructuredOutputRequest
+  executorRequest: StructuredOutputExecutorRequest
+  executor: StructuredOutputExecutor
+}): Promise<GovernedExecutorResult> {
+  const idleTimeoutMs = clampTimeoutMs(args.request.idleTimeoutMs)
+  const hardTimeoutMs = clampTimeoutMs(args.request.hardTimeoutMs)
+  const telemetry: GovernanceTelemetry = {
+    startedAtMs: Date.now(),
+    partialText: '',
+    terminationKind: 'completed',
+  }
+
+  let settled = false
+  let idleTimer: ReturnType<typeof setTimeout> | undefined
+  let hardTimer: ReturnType<typeof setTimeout> | undefined
+  let settle: (result: GovernedExecutorResult) => void = () => {}
+
+  const clearTimers = () => {
+    if (idleTimer) clearTimeout(idleTimer)
+    if (hardTimer) clearTimeout(hardTimer)
+    idleTimer = undefined
+    hardTimer = undefined
+  }
+
+  const resolveOnce = (result: GovernedExecutorResult) => {
+    if (settled) return
+    settled = true
+    clearTimers()
+    settle(result)
+  }
+
+  const refreshIdleTimer = () => {
+    if (!idleTimeoutMs) return
+    if (idleTimer) clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => {
+      const now = Date.now()
+      const idleSince = telemetry.lastOutputAtMs ?? telemetry.startedAtMs
+      telemetry.idleMs = Math.max(0, now - idleSince)
+      telemetry.terminationKind = 'silent_timeout'
+      resolveOnce({ kind: 'timeout', reason: 'silent_timeout', telemetry })
+    }, idleTimeoutMs)
+  }
+
+  const onOutputDelta = (delta: StructuredOutputDelta) => {
+    const text = typeof delta.text === 'string' ? delta.text : ''
+    if (!text) return
+    if (delta.type === 'thinking') {
+      telemetry.partialThinkingText = `${telemetry.partialThinkingText ?? ''}${text}`
+      return
+    }
+    if (delta.type === 'heartbeat') return
+    telemetry.partialText += text
+    telemetry.lastOutputAtMs = Date.now()
+    telemetry.lastOutputAt = new Date(telemetry.lastOutputAtMs).toISOString()
+    refreshIdleTimer()
+  }
+
+  refreshIdleTimer()
+  if (hardTimeoutMs) {
+    hardTimer = setTimeout(() => {
+      const now = Date.now()
+      const idleSince = telemetry.lastOutputAtMs ?? telemetry.startedAtMs
+      telemetry.idleMs = Math.max(0, now - idleSince)
+      telemetry.terminationKind = 'hard_timeout'
+      resolveOnce({ kind: 'timeout', reason: 'hard_timeout', telemetry })
+    }, hardTimeoutMs)
+  }
+
+  const executorPromise: Promise<GovernedExecutorResult> = args.executor({
+    ...args.executorRequest,
+    onOutputDelta,
+  })
+    .then(response => {
+      telemetry.terminationKind = 'completed'
+      telemetry.idleMs = telemetry.lastOutputAtMs ? Math.max(0, Date.now() - telemetry.lastOutputAtMs) : undefined
+      return { kind: 'completed' as const, response, telemetry }
+    })
+    .catch(error => {
+      telemetry.terminationKind = 'provider_error'
+      const now = Date.now()
+      const idleSince = telemetry.lastOutputAtMs ?? telemetry.startedAtMs
+      telemetry.idleMs = Math.max(0, now - idleSince)
+      return { kind: 'error', error, telemetry }
+    })
+
+  const governed = new Promise<GovernedExecutorResult>(resolve => {
+    settle = resolve
+  })
+
+  try {
+    return await Promise.race([governed, executorPromise])
+  } finally {
+    clearTimers()
+  }
+}
+
+function versionPartsFromPreset(preset: StructuredOutputPreset): {
+  presetId: string
+  presetVersion: string
+} {
+  const contract = getStructuredOutputPresetContract(preset)
+  if (contract) return { presetId: contract.presetId, presetVersion: contract.presetVersion }
+  const match = String(preset).match(/^(.+)\.(v\d+)$/)
+  return {
+    presetId: match?.[1] ?? String(preset),
+    presetVersion: match?.[2] ?? 'custom',
+  }
+}
+
+function schemaVersionParts(request: StructuredOutputRequest, preset: StructuredOutputPreset): {
+  schemaId: string
+  schemaVersion: string
+} {
+  const contract = getStructuredOutputPresetContract(preset)
+  const fallback = versionPartsFromPreset(preset)
+  return {
+    schemaId: request.schemaId?.trim() || contract?.schemaId || fallback.presetId,
+    schemaVersion: request.schemaVersion?.trim() || contract?.schemaVersion || fallback.presetVersion,
+  }
+}
+
+function forcedLocale(request: StructuredOutputRequest): string | undefined {
+  const raw = request.forceLocale ?? request.force_locale
+  return typeof raw === 'string' && raw.trim() ? raw.trim() : undefined
+}
+
+function localeContractPrompt(locale: string | undefined): string | null {
+  if (!locale) return null
+  return [
+    `Locale contract: all user-facing display text MUST be written in ${locale}.`,
+    'Do not translate schema constants, IDs, URLs, file paths, or source references.',
+  ].join('\n')
+}
+
 function failedFallbackArtifact(args: {
   request: StructuredOutputRequest
   preset: StructuredOutputPreset
@@ -790,19 +1120,301 @@ function failedFallbackArtifact(args: {
   outputTokens: number
   repairCount: number
   salvageUsed: boolean
+  rawText?: string
+  rawThinkingText?: string
+  terminationKind?: StructuredOutputTerminationKind
 }): Record<string, unknown> {
   return {
     artifact: 'failed_fallback.v1',
     ok: false,
+    usable: false,
+    unusableReason: args.failureReason,
     failureReason: args.failureReason,
+    rawText: args.rawText ?? '',
+    ...(args.rawThinkingText ? { rawThinkingText: args.rawThinkingText } : {}),
+    terminationKind: args.terminationKind ?? 'unknown',
     model: args.request.model,
     preset: args.preset,
+    provider: providerFromModel(args.request.model),
     stopReason: args.stopReason,
     inputTokens: args.inputTokens,
     outputTokens: args.outputTokens,
     repairCount: args.repairCount,
+    repairUsed: args.repairCount > 0,
     salvageUsed: args.salvageUsed,
+    fallbackUsed: true,
     retryHint: 'rerun_role_artifact',
+    createdAt: new Date().toISOString(),
+  }
+}
+
+function providerFromModel(model: string): string {
+  if (/kimi|moonshot/i.test(model)) return 'kimi'
+  if (/deepseek/i.test(model)) return 'deepseek'
+  if (/gpt|openai/i.test(model)) return 'openai'
+  return 'unknown'
+}
+
+function modelResponseAttemptFields(
+  modelResponse: StructuredOutputModelResponse,
+): Pick<StructuredOutputAttempt, 'streamingMode' | 'streamDeltaSource'> {
+  return {
+    ...(modelResponse.streamingMode ? { streamingMode: modelResponse.streamingMode } : {}),
+    ...(modelResponse.streamDeltaSource ? { streamDeltaSource: modelResponse.streamDeltaSource } : {}),
+  }
+}
+
+interface DisplayStringValue {
+  path: string
+  value: string
+}
+
+function displayStringValues(value: unknown, path = ''): DisplayStringValue[] {
+  if (typeof value === 'string') {
+    if (isNonDisplayStringPath(path)) return []
+    if (/^[a-z0-9_.:/#-]+$/i.test(value.trim())) return []
+    return [{ path: path || '$', value }]
+  }
+  if (Array.isArray(value)) return value.flatMap((item, index) => displayStringValues(item, `${path}[${index}]`))
+  if (isPlainObject(value)) {
+    return Object.entries(value).flatMap(([key, child]) => displayStringValues(child, path ? `${path}.${key}` : key))
+  }
+  return []
+}
+
+function isNonDisplayStringPath(path: string): boolean {
+  const segments = path.split(/[[\].]+/).filter(Boolean)
+  return segments.some(segment =>
+    /^(artifact|id|ids|url|urls|path|paths|ref|refs|source_ref|source_refs|evidence_ref|evidence_refs|role|preset|model|provider|schema|schema_id|schema_version|preset_id|preset_version)$/i.test(segment),
+  )
+}
+
+function localeValidationErrors(artifact: Record<string, unknown>, locale: string | undefined): string[] {
+  if (!locale) return []
+  if (locale.toLowerCase() !== 'zh-cn') return []
+  const values = displayStringValues(artifact)
+  if (values.length === 0) return []
+  const mismatches = values
+    .filter(({ value }) => !/[\u3400-\u9fff]/u.test(value))
+    .map(({ path }) => `locale_mismatch:${locale}:${path}`)
+  return mismatches.length > 0 ? [`locale_mismatch:${locale}`, ...mismatches] : []
+}
+
+function buildArtifactCompleteness(args: {
+  schema: JsonSchema | undefined
+  artifact: Record<string, unknown>
+  okCandidate: boolean
+  validationErrors: string[]
+  repairCount: number
+  salvageUsed: boolean
+  fallbackUsed: boolean
+}): ArtifactCompletenessReceipt {
+  const expected = args.schema?.required ?? []
+  const produced = args.fallbackUsed
+    ? ['failed_fallback.v1']
+    : Object.keys(args.artifact).filter(key => args.artifact[key] !== undefined)
+  const missing = args.fallbackUsed
+    ? expected
+    : expected.filter(field => !Object.prototype.hasOwnProperty.call(args.artifact, field))
+  const fallbackStatus: ArtifactCompletenessFallbackStatus = args.fallbackUsed
+    ? 'failed_fallback'
+    : args.salvageUsed
+      ? 'salvage'
+      : args.repairCount > 0
+        ? 'repair'
+        : 'none'
+  const validationStatus: ArtifactCompletenessValidationStatus = args.okCandidate && missing.length === 0 && args.validationErrors.length === 0
+    ? 'pass'
+    : args.validationErrors.length > 0 || missing.length > 0 || args.fallbackUsed
+      ? 'fail'
+      : 'unknown'
+  return {
+    expected,
+    produced,
+    missing,
+    validationStatus,
+    fallbackStatus,
+    artifactRefs: [],
+  }
+}
+
+function buildSalvageReceipt(args: {
+  artifact: Record<string, unknown>
+  schema: JsonSchema | undefined
+  salvageUsed: boolean
+  fallbackUsed: boolean
+  failureReason?: string
+}): StructuredOutputSalvageReceipt {
+  const expected = args.schema?.required ?? []
+  const missingRequiredFields = expected.filter(field => !Object.prototype.hasOwnProperty.call(args.artifact, field))
+  return {
+    used: args.salvageUsed,
+    fields: args.salvageUsed && !args.fallbackUsed ? { ...args.artifact } : {},
+    missingRequiredFields,
+    confidence: args.salvageUsed && missingRequiredFields.length === 0 ? 'medium' : args.salvageUsed ? 'low' : 'high',
+    ...(args.failureReason ? { reason: args.failureReason } : {}),
+  }
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function buildConsumerReadiness(args: {
+  usable: boolean
+  fallbackUsed: boolean
+  schemaValid: boolean
+  missing: string[]
+  validationErrors: string[]
+  terminationKind: StructuredOutputTerminationKind
+  unusableReason?: string
+}): ConsumerReadinessGate {
+  const blockers: ConsumerReadinessGate['blockers'] = []
+  const warnings: ConsumerReadinessGate['warnings'] = []
+  if (args.fallbackUsed) blockers.push({ code: 'failed_fallback', message: 'Structured output fell back to failed_fallback artifact' })
+  if (!args.schemaValid) blockers.push({ code: 'schema_invalid', message: 'Structured output schema validation failed' })
+  if (args.missing.length > 0) {
+    blockers.push({
+      code: 'missing_required_artifact',
+      message: `Missing required artifact fields: ${args.missing.join(', ')}`,
+    })
+  }
+  if (args.terminationKind === 'silent_timeout') blockers.push({ code: 'silent_timeout', message: 'Structured output attempt was idle past timeout' })
+  if (args.terminationKind === 'hard_timeout') blockers.push({ code: 'hard_timeout', message: 'Structured output attempt reached hard timeout' })
+  if (args.unusableReason === 'locale_mismatch') blockers.push({ code: 'locale_mismatch', message: 'Structured output locale does not match requested forceLocale' })
+  if (args.validationErrors.some(error => error.startsWith('forbidden_phrase'))) {
+    blockers.push({ code: 'policy_violation', message: 'Structured output contains forbidden policy phrase' })
+  }
+  if (!args.usable && blockers.length === 0) {
+    blockers.push({ code: args.unusableReason ?? 'unusable', message: 'Structured output is not consumer ready' })
+  }
+  return {
+    consumerReady: args.usable && blockers.length === 0,
+    blockers,
+    warnings,
+    requiredArtifactsMissing: args.missing,
+    fallbackUsed: args.fallbackUsed,
+    usable: args.usable,
+  }
+}
+
+function finalizeStructuredOutputResponse(args: {
+  request: StructuredOutputRequest
+  preset: StructuredOutputPreset
+  artifact: Record<string, unknown>
+  rawText: string
+  rawThinkingText?: string
+  parsed: boolean
+  schemaValid: boolean
+  validationErrors: string[]
+  attempts: StructuredOutputAttempt[]
+  repairCount: number
+  salvageUsed: boolean
+  fallbackUsed: boolean
+  stopReason: string | null
+  inputTokens: number
+  outputTokens: number
+  durationMs: number
+  capabilityGatePayload: { capabilityGate?: StructuredOutputCapabilityGateResult }
+  failureReason?: string
+  terminationKind?: StructuredOutputTerminationKind
+  lastOutputAt?: string
+  idleMs?: number
+}): StructuredOutputResponse {
+  const terminationKind = args.terminationKind ?? 'completed'
+  const localeErrors = args.fallbackUsed ? [] : localeValidationErrors(args.artifact, forcedLocale(args.request))
+  const validationErrors = uniqueStrings([...args.validationErrors, ...localeErrors])
+  const localeMismatch = localeErrors.length > 0
+  const schemaValid = args.schemaValid && !localeMismatch
+  const completeness = buildArtifactCompleteness({
+    schema: args.request.schema,
+    artifact: args.artifact,
+    okCandidate: !args.fallbackUsed && schemaValid,
+    validationErrors,
+    repairCount: args.repairCount,
+    salvageUsed: args.salvageUsed,
+    fallbackUsed: args.fallbackUsed,
+  })
+  const unusableReason = args.failureReason
+    ?? (localeMismatch ? 'locale_mismatch' : undefined)
+    ?? (args.fallbackUsed ? optionalString(args.artifact['failureReason']) ?? 'failed_fallback' : undefined)
+    ?? (terminationKind === 'silent_timeout' || terminationKind === 'hard_timeout' ? terminationKind : undefined)
+    ?? (!schemaValid ? 'schema_validation_failed' : undefined)
+    ?? (completeness.missing.length > 0 ? 'missing_required_artifact' : undefined)
+  const usable = !args.fallbackUsed
+    && schemaValid
+    && completeness.missing.length === 0
+    && terminationKind !== 'silent_timeout'
+    && terminationKind !== 'hard_timeout'
+  const consumerReadiness = buildConsumerReadiness({
+    usable,
+    fallbackUsed: args.fallbackUsed,
+    schemaValid,
+    missing: completeness.missing,
+    validationErrors,
+    terminationKind,
+    unusableReason,
+  })
+  const presetParts = versionPartsFromPreset(args.preset)
+  const schemaParts = schemaVersionParts(args.request, args.preset)
+  const salvage = buildSalvageReceipt({
+    artifact: args.artifact,
+    schema: args.request.schema,
+    salvageUsed: args.salvageUsed,
+    fallbackUsed: args.fallbackUsed,
+    failureReason: unusableReason,
+  })
+  const attempts = args.attempts.map(item => ({
+    ...item,
+    terminationKind: item.terminationKind ?? terminationKind,
+    ...(args.lastOutputAt && !item.lastOutputAt ? { lastOutputAt: args.lastOutputAt } : {}),
+    ...(args.idleMs !== undefined && item.idleMs === undefined ? { idleMs: args.idleMs } : {}),
+    ...(args.rawText && item.partialText === undefined && (terminationKind === 'silent_timeout' || terminationKind === 'hard_timeout')
+      ? { partialText: args.rawText }
+      : {}),
+  }))
+  if (args.fallbackUsed) {
+    args.artifact['usable'] = false
+    args.artifact['unusableReason'] = unusableReason
+    args.artifact['rawText'] = args.rawText
+    if (args.rawThinkingText) args.artifact['rawThinkingText'] = args.rawThinkingText
+    args.artifact['attempts'] = attempts
+    args.artifact['terminationKind'] = terminationKind
+    args.artifact['repairUsed'] = args.repairCount > 0
+    args.artifact['fallbackUsed'] = true
+  }
+  return {
+    ok: usable,
+    artifact: args.artifact,
+    rawText: args.rawText,
+    ...(args.rawThinkingText ? { rawThinkingText: args.rawThinkingText } : {}),
+    usable,
+    ...(unusableReason && !usable ? { unusableReason } : {}),
+    salvage,
+    artifactCompleteness: completeness,
+    consumerReady: consumerReadiness.consumerReady,
+    consumerReadiness,
+    terminationKind,
+    ...(args.lastOutputAt ? { lastOutputAt: args.lastOutputAt } : {}),
+    ...(args.idleMs !== undefined ? { idleMs: args.idleMs } : {}),
+    presetId: args.request.presetId?.trim() || presetParts.presetId,
+    presetVersion: args.request.presetVersion?.trim() || presetParts.presetVersion,
+    schemaId: schemaParts.schemaId,
+    schemaVersion: schemaParts.schemaVersion,
+    repairPolicyVersion: 'repair-policy.v1',
+    providerMatrixVersion: PROVIDER_PRESET_MATRIX.version,
+    parsed: args.parsed,
+    schemaValid,
+    validationErrors,
+    attempts,
+    repairCount: args.repairCount,
+    salvageUsed: args.salvageUsed,
+    fallbackUsed: args.fallbackUsed,
+    stopReason: args.stopReason,
+    inputTokens: args.inputTokens,
+    outputTokens: args.outputTokens,
+    durationMs: args.durationMs,
+    ...args.capabilityGatePayload,
   }
 }
 
@@ -823,9 +1435,9 @@ function schemaContractPrompt(schema: JsonSchema | undefined): string | null {
   return lines.length > 1 ? lines.join('\n') : null
 }
 
-function joinSystemPrompt(system: string | undefined, preset: StructuredOutputPreset, schema: JsonSchema | undefined): string {
+function joinSystemPrompt(system: string | undefined, preset: StructuredOutputPreset, schema: JsonSchema | undefined, locale: string | undefined): string {
   const presetSystem = STRUCTURED_OUTPUT_PRESETS[preset as keyof typeof STRUCTURED_OUTPUT_PRESETS]?.system
-  return [presetSystem, schemaContractPrompt(schema), system].filter(Boolean).join('\n\n')
+  return [presetSystem, schemaContractPrompt(schema), localeContractPrompt(locale), system].filter(Boolean).join('\n\n')
 }
 
 export async function runModelOutputHarness(
@@ -856,6 +1468,8 @@ export async function runModelOutputHarness(
       outputTokens: 0,
       repairCount: 0,
       salvageUsed: false,
+      rawText: '',
+      terminationKind: 'unknown',
     })
     attempts.push(attempt({
       label: 'fallback',
@@ -865,10 +1479,12 @@ export async function runModelOutputHarness(
       schemaValid: false,
       durationMs,
       error: failureReason,
+      terminationKind: 'unknown',
       ...providerControls,
     }))
-    return {
-      ok: false,
+    return finalizeStructuredOutputResponse({
+      request: effectiveRequest,
+      preset,
       artifact: fallbackArtifact,
       rawText: '',
       parsed: false,
@@ -882,21 +1498,170 @@ export async function runModelOutputHarness(
       inputTokens: 0,
       outputTokens: 0,
       durationMs,
-      ...capabilityGatePayload,
-    }
+      capabilityGatePayload,
+      failureReason,
+      terminationKind: 'unknown',
+    })
   }
 
   let modelResponse: StructuredOutputModelResponse
+  let telemetry: GovernanceTelemetry | undefined
   try {
-    modelResponse = await executor({
-      ...effectiveRequest,
-      preset,
-      system: joinSystemPrompt(effectiveRequest.system, preset, effectiveRequest.schema),
-      maxTokens,
+    const governed = await runExecutorWithActivityGovernance({
+      request: effectiveRequest,
+      executor,
+      executorRequest: {
+        ...effectiveRequest,
+        preset,
+        system: joinSystemPrompt(effectiveRequest.system, preset, effectiveRequest.schema, forcedLocale(effectiveRequest)),
+        maxTokens,
+      },
     })
+    telemetry = governed.telemetry
+    if (governed.kind === 'timeout') {
+      const durationMs = Date.now() - start
+      const rawText = governed.telemetry.partialText
+      const rawThinkingText = governed.telemetry.partialThinkingText
+      const fallbackArtifact = failedFallbackArtifact({
+        request: effectiveRequest,
+        preset,
+        failureReason: governed.reason,
+        stopReason: governed.reason,
+        inputTokens: 0,
+        outputTokens: 0,
+        repairCount: 0,
+        salvageUsed: false,
+        rawText,
+        rawThinkingText,
+        terminationKind: governed.reason,
+      })
+      attempts.push(attempt({
+        label: 'primary',
+        model: effectiveRequest.model,
+        stopReason: governed.reason,
+        parsed: false,
+        schemaValid: false,
+        durationMs,
+        error: governed.reason,
+        terminationKind: governed.reason,
+        ...(governed.telemetry.lastOutputAt ? { lastOutputAt: governed.telemetry.lastOutputAt } : {}),
+        ...(governed.telemetry.idleMs !== undefined ? { idleMs: governed.telemetry.idleMs } : {}),
+        ...(rawText ? { partialText: rawText } : {}),
+        ...providerControls,
+      }))
+      attempts.push(attempt({
+        label: 'fallback',
+        model: effectiveRequest.model,
+        stopReason: governed.reason,
+        parsed: false,
+        schemaValid: false,
+        error: governed.reason,
+        terminationKind: governed.reason,
+        ...(governed.telemetry.lastOutputAt ? { lastOutputAt: governed.telemetry.lastOutputAt } : {}),
+        ...(governed.telemetry.idleMs !== undefined ? { idleMs: governed.telemetry.idleMs } : {}),
+        ...(rawText ? { partialText: rawText } : {}),
+        ...providerControls,
+      }))
+      return finalizeStructuredOutputResponse({
+        request: effectiveRequest,
+        preset,
+        artifact: fallbackArtifact,
+        rawText,
+        ...(rawThinkingText ? { rawThinkingText } : {}),
+        parsed: false,
+        schemaValid: false,
+        validationErrors: [governed.reason],
+        attempts,
+        repairCount: 0,
+        salvageUsed: false,
+        fallbackUsed: true,
+        stopReason: governed.reason,
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs,
+        capabilityGatePayload,
+        failureReason: governed.reason,
+        terminationKind: governed.reason,
+        lastOutputAt: governed.telemetry.lastOutputAt,
+        idleMs: governed.telemetry.idleMs,
+      })
+    }
+    if (governed.kind === 'error') {
+      const durationMs = Date.now() - start
+      const failureReason = 'model_call_failed'
+      const rawText = governed.telemetry.partialText
+      const rawThinkingText = governed.telemetry.partialThinkingText
+      const errorMessage = governed.error instanceof Error ? governed.error.message : String(governed.error)
+      const fallbackArtifact = failedFallbackArtifact({
+        request: effectiveRequest,
+        preset,
+        failureReason,
+        stopReason: null,
+        inputTokens: 0,
+        outputTokens: 0,
+        repairCount: 0,
+        salvageUsed: false,
+        rawText,
+        rawThinkingText,
+        terminationKind: 'provider_error',
+      })
+      attempts.push(attempt({
+        label: 'primary',
+        model: effectiveRequest.model,
+        stopReason: null,
+        parsed: false,
+        schemaValid: false,
+        durationMs,
+        error: errorMessage,
+        terminationKind: 'provider_error',
+        ...(governed.telemetry.lastOutputAt ? { lastOutputAt: governed.telemetry.lastOutputAt } : {}),
+        ...(governed.telemetry.idleMs !== undefined ? { idleMs: governed.telemetry.idleMs } : {}),
+        ...(rawText ? { partialText: rawText } : {}),
+        ...providerControls,
+      }))
+      attempts.push(attempt({
+        label: 'fallback',
+        model: effectiveRequest.model,
+        stopReason: null,
+        parsed: false,
+        schemaValid: false,
+        error: failureReason,
+        terminationKind: 'provider_error',
+        ...(governed.telemetry.lastOutputAt ? { lastOutputAt: governed.telemetry.lastOutputAt } : {}),
+        ...(governed.telemetry.idleMs !== undefined ? { idleMs: governed.telemetry.idleMs } : {}),
+        ...(rawText ? { partialText: rawText } : {}),
+        ...providerControls,
+      }))
+      return finalizeStructuredOutputResponse({
+        request: effectiveRequest,
+        preset,
+        artifact: fallbackArtifact,
+        rawText,
+        ...(rawThinkingText ? { rawThinkingText } : {}),
+        parsed: false,
+        schemaValid: false,
+        validationErrors: [failureReason],
+        attempts,
+        repairCount: 0,
+        salvageUsed: false,
+        fallbackUsed: true,
+        stopReason: null,
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs,
+        capabilityGatePayload,
+        failureReason,
+        terminationKind: 'provider_error',
+        lastOutputAt: governed.telemetry.lastOutputAt,
+        idleMs: governed.telemetry.idleMs,
+      })
+    }
+    modelResponse = governed.response
   } catch (err) {
     const durationMs = Date.now() - start
     const failureReason = 'model_call_failed'
+    const rawText = telemetry?.partialText ?? ''
+    const rawThinkingText = telemetry?.partialThinkingText
     const fallbackArtifact = failedFallbackArtifact({
       request: effectiveRequest,
       preset,
@@ -906,6 +1671,9 @@ export async function runModelOutputHarness(
       outputTokens: 0,
       repairCount: 0,
       salvageUsed: false,
+      rawText,
+      rawThinkingText,
+      terminationKind: 'provider_error',
     })
     attempts.push(attempt({
       label: 'primary',
@@ -915,6 +1683,10 @@ export async function runModelOutputHarness(
       schemaValid: false,
       durationMs,
       error: err instanceof Error ? err.message : String(err),
+      terminationKind: 'provider_error',
+      ...(telemetry?.lastOutputAt ? { lastOutputAt: telemetry.lastOutputAt } : {}),
+      ...(telemetry?.idleMs !== undefined ? { idleMs: telemetry.idleMs } : {}),
+      ...(rawText ? { partialText: rawText } : {}),
       ...providerControls,
     }))
     attempts.push(attempt({
@@ -924,12 +1696,18 @@ export async function runModelOutputHarness(
       parsed: false,
       schemaValid: false,
       error: failureReason,
+      terminationKind: 'provider_error',
+      ...(telemetry?.lastOutputAt ? { lastOutputAt: telemetry.lastOutputAt } : {}),
+      ...(telemetry?.idleMs !== undefined ? { idleMs: telemetry.idleMs } : {}),
+      ...(rawText ? { partialText: rawText } : {}),
       ...providerControls,
     }))
-    return {
-      ok: false,
+    return finalizeStructuredOutputResponse({
+      request: effectiveRequest,
+      preset,
       artifact: fallbackArtifact,
-      rawText: '',
+      rawText,
+      ...(rawThinkingText ? { rawThinkingText } : {}),
       parsed: false,
       schemaValid: false,
       validationErrors: [failureReason],
@@ -941,8 +1719,12 @@ export async function runModelOutputHarness(
       inputTokens: 0,
       outputTokens: 0,
       durationMs,
-      ...capabilityGatePayload,
-    }
+      capabilityGatePayload,
+      failureReason,
+      terminationKind: 'provider_error',
+      lastOutputAt: telemetry?.lastOutputAt,
+      idleMs: telemetry?.idleMs,
+    })
   }
 
   const rawText = modelResponse.text ?? ''
@@ -952,6 +1734,7 @@ export async function runModelOutputHarness(
   const outputTokens = modelResponse.outputTokens ?? 0
   const primaryDurationMs = modelResponse.durationMs ?? Math.max(0, Date.now() - start)
   const totalDurationMs = primaryDurationMs
+  const terminationKind = telemetry?.terminationKind ?? 'completed'
   attempts.push(attempt({
     label: 'primary',
     model: effectiveRequest.model,
@@ -962,6 +1745,10 @@ export async function runModelOutputHarness(
     parsed: false,
     schemaValid: false,
     ...(rawText.trim() ? {} : { error: rawThinkingText ? 'empty_text_with_thinking' : 'empty_text' }),
+    terminationKind,
+    ...(telemetry?.lastOutputAt ? { lastOutputAt: telemetry.lastOutputAt } : {}),
+    ...(telemetry?.idleMs !== undefined ? { idleMs: telemetry.idleMs } : {}),
+    ...modelResponseAttemptFields(modelResponse),
     ...providerControls,
   }))
 
@@ -978,6 +1765,9 @@ export async function runModelOutputHarness(
       outputTokens,
       repairCount,
       salvageUsed,
+      rawText,
+      rawThinkingText,
+      terminationKind,
     })
     attempts.push(attempt({
       label: 'fallback',
@@ -986,10 +1776,14 @@ export async function runModelOutputHarness(
       parsed: false,
       schemaValid: false,
       error: failureReason,
+      terminationKind,
+      ...(telemetry?.lastOutputAt ? { lastOutputAt: telemetry.lastOutputAt } : {}),
+      ...(telemetry?.idleMs !== undefined ? { idleMs: telemetry.idleMs } : {}),
       ...providerControls,
     }))
-    return {
-      ok: false,
+    return finalizeStructuredOutputResponse({
+      request: effectiveRequest,
+      preset,
       artifact,
       rawText,
       ...(rawThinkingText ? { rawThinkingText } : {}),
@@ -1004,8 +1798,12 @@ export async function runModelOutputHarness(
       inputTokens,
       outputTokens,
       durationMs: totalDurationMs,
-      ...capabilityGatePayload,
-    }
+      capabilityGatePayload,
+      failureReason,
+      terminationKind,
+      lastOutputAt: telemetry?.lastOutputAt,
+      idleMs: telemetry?.idleMs,
+    })
   }
 
   if (!rawText.trim()) {
@@ -1024,8 +1822,9 @@ export async function runModelOutputHarness(
         }))
         if (validation.schemaValid) {
           salvageUsed = true
-          return {
-            ok: true,
+          return finalizeStructuredOutputResponse({
+            request: effectiveRequest,
+            preset,
             artifact: validation.artifact,
             rawText,
             rawThinkingText,
@@ -1040,8 +1839,11 @@ export async function runModelOutputHarness(
             inputTokens,
             outputTokens,
             durationMs: totalDurationMs,
-            ...capabilityGatePayload,
-          }
+            capabilityGatePayload,
+            terminationKind,
+            lastOutputAt: telemetry?.lastOutputAt,
+            idleMs: telemetry?.idleMs,
+          })
         }
       }
     }
@@ -1060,8 +1862,9 @@ export async function runModelOutputHarness(
       ...(validation.schemaValid ? {} : { error: validation.validationErrors.join('; ') }),
     }))
     if (validation.schemaValid) {
-      return {
-        ok: true,
+      return finalizeStructuredOutputResponse({
+        request: effectiveRequest,
+        preset,
         artifact: validation.artifact,
         rawText,
         ...(rawThinkingText ? { rawThinkingText } : {}),
@@ -1076,8 +1879,11 @@ export async function runModelOutputHarness(
         inputTokens,
         outputTokens,
         durationMs: totalDurationMs,
-        ...capabilityGatePayload,
-      }
+        capabilityGatePayload,
+        terminationKind,
+        lastOutputAt: telemetry?.lastOutputAt,
+        idleMs: telemetry?.idleMs,
+      })
     }
     return fallback(validation.failureReason ?? 'schema_validation_failed', validation.validationErrors)
   }
@@ -1098,8 +1904,9 @@ export async function runModelOutputHarness(
         ...(validation.schemaValid ? {} : { error: validation.validationErrors.join('; ') }),
       }))
       if (validation.schemaValid) {
-        return {
-          ok: true,
+        return finalizeStructuredOutputResponse({
+          request: effectiveRequest,
+          preset,
           artifact: validation.artifact,
           rawText,
           ...(rawThinkingText ? { rawThinkingText } : {}),
@@ -1114,8 +1921,11 @@ export async function runModelOutputHarness(
           inputTokens,
           outputTokens,
           durationMs: totalDurationMs,
-          ...capabilityGatePayload,
-        }
+          capabilityGatePayload,
+          terminationKind,
+          lastOutputAt: telemetry?.lastOutputAt,
+          idleMs: telemetry?.idleMs,
+        })
       }
       return fallback(validation.failureReason ?? 'schema_validation_failed', validation.validationErrors)
     }
@@ -1139,8 +1949,9 @@ export async function runModelOutputHarness(
         ...(validation.schemaValid ? {} : { error: validation.validationErrors.join('; ') }),
       }))
       if (validation.schemaValid) {
-        return {
-          ok: true,
+        return finalizeStructuredOutputResponse({
+          request: effectiveRequest,
+          preset,
           artifact: validation.artifact,
           rawText,
           ...(rawThinkingText ? { rawThinkingText } : {}),
@@ -1155,8 +1966,11 @@ export async function runModelOutputHarness(
           inputTokens,
           outputTokens,
           durationMs: totalDurationMs,
-          ...capabilityGatePayload,
-        }
+          capabilityGatePayload,
+          terminationKind,
+          lastOutputAt: telemetry?.lastOutputAt,
+          idleMs: telemetry?.idleMs,
+        })
       }
       return fallback(validation.failureReason ?? 'schema_validation_failed', validation.validationErrors)
     }

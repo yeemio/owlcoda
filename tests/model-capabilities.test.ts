@@ -81,6 +81,28 @@ describe('model structured output capability', () => {
     })
   })
 
+  it('respects explicit provider streaming support without provider-name rules', () => {
+    const supported = resolveModelCapabilities({
+      id: 'streaming-json-model',
+      backendModel: 'streaming-json-model',
+      supportsStreaming: true,
+    })
+    expect(supported.structuredOutput.streaming).toMatchObject({
+      status: 'supported',
+      source: 'declared',
+    })
+
+    const disabled = resolveModelCapabilities({
+      id: 'non-streaming-json-model',
+      backendModel: 'non-streaming-json-model',
+      supportsStreaming: false,
+    })
+    expect(disabled.structuredOutput.streaming).toMatchObject({
+      status: 'unsupported',
+      source: 'declared',
+    })
+  })
+
   it('does not bake project-specific Kimi output budgets into global capabilities', () => {
     const capabilities = resolveModelCapabilities({
       id: 'kimi-code',

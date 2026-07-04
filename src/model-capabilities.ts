@@ -32,6 +32,7 @@ export type ModelIdentity = {
   contextWindowSource?: ContextWindowSource
   supportsImages?: boolean
   supportsStructuredOutput?: boolean
+  supportsStreaming?: boolean
   maxOutputTokens?: number
 }
 
@@ -403,11 +404,7 @@ export function resolveStructuredOutputCapability(
       source: contextCapabilitySource(context.source),
     },
     maxOutputTokens: resolveMaxOutputTokenCapability(identity),
-    streaming: {
-      status: 'unknown',
-      source: 'fallback',
-      reason: 'Structured output currently uses non-streaming prompt+parse unless a provider route proves otherwise.',
-    },
+    streaming: resolveStreamingCapability(identity),
     thinking: {
       behavior: 'unknown',
       source: 'fallback',
@@ -448,6 +445,28 @@ function resolveMaxOutputTokenCapability(identity: ModelIdentity): StructuredOut
   return {
     tokens: 4096,
     source: 'fallback',
+  }
+}
+
+function resolveStreamingCapability(identity: ModelIdentity): StructuredOutputModelCapabilities['streaming'] {
+  if (identity.supportsStreaming === true) {
+    return {
+      status: 'supported',
+      source: 'declared',
+      reason: 'Provider streaming is explicitly enabled for this configured model.',
+    }
+  }
+  if (identity.supportsStreaming === false) {
+    return {
+      status: 'unsupported',
+      source: 'declared',
+      reason: 'Provider streaming is explicitly disabled for this configured model.',
+    }
+  }
+  return {
+    status: 'unknown',
+    source: 'fallback',
+    reason: 'Structured output uses non-streaming prompt+parse unless provider streaming is declared.',
   }
 }
 

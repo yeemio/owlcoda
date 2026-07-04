@@ -45,6 +45,7 @@ export async function persistStructuredOutputResult(
   const parentArtifactId = request.previousArtifactId?.trim()
   const inputRef = request.inputRef?.trim()
   const artifactRef = request.artifactRef?.trim()
+  const rerunReceiptRef = request.artifactRef?.trim()
   const coveredIds = uniqueStrings([
     parentArtifactId,
     inputRef,
@@ -62,9 +63,21 @@ export async function persistStructuredOutputResult(
     coveredIds,
   })
   const hashes = requestHashes(request)
+  const rerunLineage = parentArtifactId
+    ? {
+        rerunId: `rerun-${randomUUID()}`,
+        role: request.role ?? null,
+        stepId: request.stepId ?? request.role ?? null,
+        parentArtifactId,
+        previousAttemptLedgerRef: `${parentArtifactId}-attempts`,
+        rerunReceiptRef: rerunReceiptRef ?? null,
+        reason: 'role_step_rerun',
+        createdAt: recordedAt,
+      }
+    : undefined
   const lineage = parentArtifactId
     ? {
-        rerun: true,
+        rerun: rerunLineage,
         parentArtifactId,
         rerunOf: parentArtifactId,
         inputRef: inputRef ?? null,
@@ -79,11 +92,26 @@ export async function persistStructuredOutputResult(
     role: request.role ?? null,
     model: request.model,
     preset,
+    presetId: response.presetId,
+    presetVersion: response.presetVersion,
+    schemaId: response.schemaId,
+    schemaVersion: response.schemaVersion,
+    repairPolicyVersion: response.repairPolicyVersion,
+    providerMatrixVersion: response.providerMatrixVersion,
     requestFingerprint: hashes.requestFingerprint,
     schemaHash: hashes.schemaHash,
     policyHash: hashes.policyHash,
     factRefs,
     ok: response.ok,
+    usable: response.usable,
+    unusableReason: response.unusableReason,
+    consumerReady: response.consumerReady,
+    consumerReadiness: response.consumerReadiness,
+    artifactCompleteness: response.artifactCompleteness,
+    salvage: response.salvage,
+    terminationKind: response.terminationKind,
+    lastOutputAt: response.lastOutputAt ?? null,
+    idleMs: response.idleMs ?? null,
     artifact: response.artifact,
     rawText: response.rawText,
     rawThinkingText: response.rawThinkingText ?? null,
@@ -110,11 +138,19 @@ export async function persistStructuredOutputResult(
     role: request.role ?? null,
     model: request.model,
     preset,
+    presetId: response.presetId,
+    presetVersion: response.presetVersion,
+    schemaId: response.schemaId,
+    schemaVersion: response.schemaVersion,
+    repairPolicyVersion: response.repairPolicyVersion,
+    providerMatrixVersion: response.providerMatrixVersion,
     requestFingerprint: hashes.requestFingerprint,
     schemaHash: hashes.schemaHash,
     policyHash: hashes.policyHash,
     factRefs,
     attempts: response.attempts,
+    artifactCompleteness: response.artifactCompleteness,
+    consumerReadiness: response.consumerReadiness,
     capabilityGate: response.capabilityGate ?? null,
     ...lineage,
   }
@@ -171,6 +207,11 @@ export async function persistStructuredOutputResult(
       model: request.model,
       preset,
       ok: response.ok,
+      usable: response.usable,
+      consumerReady: response.consumerReady,
+      artifactCompleteness: response.artifactCompleteness,
+      consumerReadiness: response.consumerReadiness,
+      terminationKind: response.terminationKind,
       schemaValid: response.schemaValid,
       validationErrors: response.validationErrors,
       repairCount: response.repairCount,

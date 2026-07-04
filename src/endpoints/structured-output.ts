@@ -10,6 +10,7 @@ import { translateRequest } from '../translate/request.js'
 import { translateResponse } from '../translate/response.js'
 import { computeAdaptiveTimeoutMs } from '../middleware/adaptive-timeout.js'
 import { readBody } from '../server.js'
+import { parseSSEStream } from '../utils/sse.js'
 import {
   applyStructuredOutputPresetDefaults,
   runModelOutputHarness,
@@ -74,19 +75,174 @@ function textFromAnthropicResponse(resp: AnthropicMessagesResponse): { text: str
   return { text: textParts.join(''), thinkingText: thinkingParts.join('') }
 }
 
+type StreamDeltaSource = 'provider_sse' | 'translated_sse'
+
+function shouldStreamStructuredOutput(request: StructuredOutputRequest): boolean {
+  return request.modelCapabilities?.streaming.status === 'supported'
+    && typeof request.idleTimeoutMs === 'number'
+    && request.idleTimeoutMs > 0
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null
+}
+
+function mapOpenAIStopReason(finishReason: unknown): string | null {
+  if (finishReason === null || finishReason === undefined) return null
+  if (finishReason === 'stop') return 'end_turn'
+  if (finishReason === 'length') return 'max_tokens'
+  if (finishReason === 'tool_calls' || finishReason === 'function_call') return 'tool_use'
+  return String(finishReason)
+}
+
+async function collectOpenAICompatibleStream(args: {
+  stream: ReadableStream<Uint8Array>
+  timeoutMs: number
+  signal: AbortSignal
+  request: Parameters<StructuredOutputExecutor>[0]
+}): Promise<Omit<StructuredOutputModelResponse, 'durationMs' | 'streamingMode' | 'streamDeltaSource'>> {
+  const textParts: string[] = []
+  const thinkingParts: string[] = []
+  let stopReason: string | null = null
+  let inputTokens = 0
+  let outputTokens = 0
+
+  for await (const data of parseSSEStream(args.stream, { timeoutMs: args.timeoutMs, signal: args.signal })) {
+    if (data === '[DONE]') continue
+    const event = objectRecord(JSON.parse(data))
+    if (!event) continue
+    const choices = Array.isArray(event.choices) ? event.choices : []
+    const choice = objectRecord(choices[0])
+    const delta = objectRecord(choice?.delta)
+    let emittedDelta = false
+
+    if (delta) {
+      const thinking = delta.reasoning_content
+      if (typeof thinking === 'string' && thinking.length > 0) {
+        thinkingParts.push(thinking)
+        args.request.onOutputDelta?.({ type: 'thinking', text: thinking })
+        emittedDelta = true
+      }
+
+      const content = delta.content
+      if (typeof content === 'string') {
+        if (content.length > 0) {
+          textParts.push(content)
+          args.request.onOutputDelta?.({ type: 'text', text: content })
+        } else {
+          args.request.onOutputDelta?.({ type: 'heartbeat' })
+        }
+        emittedDelta = true
+      }
+    }
+
+    if (choice?.finish_reason !== undefined && choice.finish_reason !== null) {
+      stopReason = mapOpenAIStopReason(choice.finish_reason)
+    }
+
+    const usage = objectRecord(event.usage)
+    if (usage) {
+      if (typeof usage.prompt_tokens === 'number') inputTokens = usage.prompt_tokens
+      if (typeof usage.completion_tokens === 'number') outputTokens = usage.completion_tokens
+    }
+
+    if (!emittedDelta && !usage && !stopReason) {
+      args.request.onOutputDelta?.({ type: 'heartbeat' })
+    }
+  }
+
+  return {
+    text: textParts.join(''),
+    ...(thinkingParts.length > 0 ? { thinkingText: thinkingParts.join('') } : {}),
+    stopReason,
+    inputTokens,
+    outputTokens,
+  }
+}
+
+async function collectAnthropicMessagesStream(args: {
+  stream: ReadableStream<Uint8Array>
+  timeoutMs: number
+  signal: AbortSignal
+  request: Parameters<StructuredOutputExecutor>[0]
+}): Promise<Omit<StructuredOutputModelResponse, 'durationMs' | 'streamingMode' | 'streamDeltaSource'>> {
+  const textParts: string[] = []
+  const thinkingParts: string[] = []
+  let stopReason: string | null = null
+  let inputTokens = 0
+  let outputTokens = 0
+
+  for await (const data of parseSSEStream(args.stream, { timeoutMs: args.timeoutMs, signal: args.signal })) {
+    const event = objectRecord(JSON.parse(data))
+    if (!event) continue
+    if (event.type === 'error') {
+      const error = objectRecord(event.error)
+      throw new Error(typeof error?.message === 'string' ? error.message : 'structured output provider stream error')
+    }
+
+    if (event.type === 'message_start') {
+      const message = objectRecord(event.message)
+      const usage = objectRecord(message?.usage)
+      if (typeof usage?.input_tokens === 'number') inputTokens = usage.input_tokens
+      args.request.onOutputDelta?.({ type: 'heartbeat' })
+      continue
+    }
+
+    if (event.type === 'content_block_delta') {
+      const delta = objectRecord(event.delta)
+      const text = delta?.text
+      const thinking = delta?.thinking
+      if (typeof text === 'string' && text.length > 0) {
+        textParts.push(text)
+        args.request.onOutputDelta?.({ type: 'text', text })
+      } else if (typeof thinking === 'string' && thinking.length > 0) {
+        thinkingParts.push(thinking)
+        args.request.onOutputDelta?.({ type: 'thinking', text: thinking })
+      } else {
+        args.request.onOutputDelta?.({ type: 'heartbeat' })
+      }
+      continue
+    }
+
+    if (event.type === 'message_delta') {
+      const delta = objectRecord(event.delta)
+      if (delta?.stop_reason !== undefined && delta.stop_reason !== null) {
+        stopReason = String(delta.stop_reason)
+      }
+      const usage = objectRecord(event.usage)
+      if (typeof usage?.output_tokens === 'number') outputTokens = usage.output_tokens
+      args.request.onOutputDelta?.({ type: 'heartbeat' })
+      continue
+    }
+
+    args.request.onOutputDelta?.({ type: 'heartbeat' })
+  }
+
+  return {
+    text: textParts.join(''),
+    ...(thinkingParts.length > 0 ? { thinkingText: thinkingParts.join('') } : {}),
+    stopReason,
+    inputTokens,
+    outputTokens,
+  }
+}
+
 export function createStructuredOutputModelExecutor(config: OwlCodaConfig): StructuredOutputExecutor {
   return async (request): Promise<StructuredOutputModelResponse> => {
     const route = resolveModelRoute(config, request.model)
+    const stream = shouldStreamStructuredOutput(request)
     const anthropicBody: AnthropicMessagesRequest = {
       model: request.model,
       system: request.system,
       max_tokens: request.maxTokens,
       messages: [{ role: 'user', content: request.user }],
-      stream: false,
+      stream,
       ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     }
     const upstreamBody = route.translate
-      ? translateRequest(anthropicBody, route.backendModel)
+      ? { ...translateRequest(anthropicBody, route.backendModel), stream }
       : {
           ...anthropicBody,
           model: route.backendModel,
@@ -101,21 +257,48 @@ export function createStructuredOutputModelExecutor(config: OwlCodaConfig): Stru
       body: anthropicBody,
       middleware: config.middleware,
     })
+    const signal = AbortSignal.timeout(adaptiveBudget.timeoutMs)
     const started = Date.now()
     const upstream = await fetch(route.endpointUrl, {
       method: 'POST',
       headers: route.headers,
       body: JSON.stringify(upstreamBody),
-      signal: AbortSignal.timeout(adaptiveBudget.timeoutMs),
+      signal,
     })
-    const durationMs = Date.now() - started
 
     if (!upstream.ok) {
       const detail = await upstream.text()
       throw new Error(`structured output upstream ${upstream.status}: ${detail.slice(0, 500)}`)
     }
 
+    if (stream) {
+      if (!upstream.body) {
+        throw new Error('structured output upstream stream body is unavailable')
+      }
+      const streamDeltaSource: StreamDeltaSource = route.translate ? 'translated_sse' : 'provider_sse'
+      const streamed = route.translate
+        ? await collectOpenAICompatibleStream({
+            stream: upstream.body,
+            timeoutMs: adaptiveBudget.timeoutMs,
+            signal,
+            request,
+          })
+        : await collectAnthropicMessagesStream({
+            stream: upstream.body,
+            timeoutMs: adaptiveBudget.timeoutMs,
+            signal,
+            request,
+          })
+      return {
+        ...streamed,
+        durationMs: Date.now() - started,
+        streamingMode: 'streaming',
+        streamDeltaSource,
+      }
+    }
+
     const json = await upstream.json() as unknown
+    const durationMs = Date.now() - started
     const anthropicResp = route.translate
       ? translateResponse(json as Parameters<typeof translateResponse>[0], request.model, config)
       : json as AnthropicMessagesResponse
@@ -128,6 +311,8 @@ export function createStructuredOutputModelExecutor(config: OwlCodaConfig): Stru
       inputTokens: anthropicResp.usage?.input_tokens ?? 0,
       outputTokens: anthropicResp.usage?.output_tokens ?? 0,
       durationMs,
+      streamingMode: 'non_streaming',
+      streamDeltaSource: 'none',
     }
   }
 }
