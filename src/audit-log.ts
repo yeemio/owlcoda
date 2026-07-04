@@ -80,22 +80,32 @@ export function queryAudit(filter: AuditFilter = {}): AuditEntry[] {
 /**
  * Get audit log summary statistics.
  */
-export function getAuditSummary(): {
+export interface AuditSummary {
   totalEntries: number
   uniqueModels: string[]
   uniquePaths: string[]
   errorCount: number
   avgDurationMs: number
-} {
+  statusCounts: Record<string, number>
+  authFailureCount: number
+  gatewaySuccessRate: number
+}
+
+export function getAuditSummary(): AuditSummary {
   const models = new Set<string>()
   const paths = new Set<string>()
   let errorCount = 0
+  let authFailureCount = 0
   let totalDuration = 0
+  const statusCounts: Record<string, number> = {}
 
   for (const e of entries) {
     models.add(e.model)
     paths.add(e.path)
     if (e.statusCode >= 400) errorCount++
+    if (e.statusCode === 401 || e.statusCode === 403) authFailureCount++
+    const statusKey = String(e.statusCode)
+    statusCounts[statusKey] = (statusCounts[statusKey] ?? 0) + 1
     totalDuration += e.durationMs
   }
 
@@ -105,6 +115,9 @@ export function getAuditSummary(): {
     uniquePaths: [...paths],
     errorCount,
     avgDurationMs: entries.length > 0 ? Math.round(totalDuration / entries.length) : 0,
+    statusCounts,
+    authFailureCount,
+    gatewaySuccessRate: entries.length > 0 ? Math.round(((entries.length - errorCount) / entries.length) * 1000) / 1000 : 1,
   }
 }
 

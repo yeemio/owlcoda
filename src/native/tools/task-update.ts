@@ -35,6 +35,8 @@ export interface TaskUpdateInput {
   stepId?: string
   /** New status for the step (Slice 1). */
   stepStatus?: TaskStepStatus
+  /** Complete the existing active step before moving this step to in_progress, if completion is legal. */
+  completePrevious?: boolean
   /** Paths touched during this step (Slice 1). Appended to existing touchedPaths. */
   touchedPaths?: string[]
   /** Verification checks for this step (Slice 1). Replaces existing checks and clears stale results unless verificationResults is also supplied. */
@@ -47,6 +49,26 @@ export interface TaskUpdateInput {
 
 const VALID_STATUSES = new Set(['pending', 'in_progress', 'completed', 'cancelled', 'blocked', 'deleted'])
 const VALID_STEP_STATUSES = new Set(['pending', 'in_progress', 'completed', 'failed', 'blocked', 'skipped', 'cancelled'])
+
+function formatStepUpdateFailure(result: Extract<ReturnType<typeof updateTaskStep>, { ok: false }>): ToolResult {
+  if (!result.repairHint) {
+    return { output: result.reason, isError: true }
+  }
+
+  return {
+    output: [
+      result.reason,
+      `repairHint=${JSON.stringify(result.repairHint)}`,
+      'To advance, first resolve the active step, then retry the requested step:',
+      ...result.repairHint.commands.map(command => `  ${command}`),
+    ].join('\n'),
+    isError: true,
+    metadata: {
+      code: result.code,
+      repairHint: result.repairHint,
+    },
+  }
+}
 
 export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
   return {
@@ -65,7 +87,7 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
     async execute(input: TaskUpdateInput): Promise<ToolResult> {
       const {
         taskId, subject, description, status, activeForm, addBlocks, removeBlocks,
-        stepId, stepStatus, touchedPaths, verification, verificationResults, failureReason,
+        stepId, stepStatus, completePrevious, touchedPaths, verification, verificationResults, failureReason,
       } = input
 
       if (!taskId) {
@@ -111,6 +133,7 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
 
         const result = updateTaskStep(taskId, stepId, {
           status: stepStatus,
+          completePrevious,
           touchedPaths,
           verification,
           verificationResults,
@@ -118,10 +141,11 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
         })
 
         if (!result.ok) {
-          return { output: result.reason, isError: true }
+          return formatStepUpdateFailure(result)
         }
 
         const changes: string[] = []
+        if (result.completedPreviousStepId) changes.push(`completedPrevious=${result.completedPreviousStepId}`)
         if (stepStatus) changes.push(`status=${stepStatus}`)
         if (touchedPaths?.length) changes.push(`touchedPaths +${touchedPaths.length}`)
         if (verification) changes.push(`verification spec ${verification.length} checks`)
@@ -144,7 +168,7 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
         return {
           output: `Updated task ${taskId} step ${stepId}: ${changes.join(', ') || 'no changes'}`,
           isError: false,
-          metadata: { task: result.task, step: result.step, stepUpdate: true },
+          metadata: { task: result.task, step: result.step, stepUpdate: true, ...(result.completedPreviousStepId ? { completedPreviousStepId: result.completedPreviousStepId } : {}) },
         }
       }
 

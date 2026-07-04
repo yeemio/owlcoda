@@ -46,6 +46,7 @@ export function createEnterPlanModeTool(
         const modeState = deps.ensureOperatingModeState?.()
         if (modeState) {
           if (modeState.mode === 'plan') {
+            state.inPlanMode = true
             return {
               output: 'Already in plan mode.',
               isError: false,

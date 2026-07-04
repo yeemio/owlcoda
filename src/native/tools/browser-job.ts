@@ -18,6 +18,7 @@ import {
 import { getRunWorkspacePathsFromRef, recordArtifact } from '../run-workspace.js'
 import { htmlToText } from './web-fetch.js'
 import type { NativeToolDef, ToolExecutionContext, ToolResult } from './types.js'
+import { getOwlcodaDir } from '../../paths.js'
 
 export interface BrowserJobInput {
   url: string
@@ -316,7 +317,7 @@ async function runChromeHeadlessJob(args: {
     return browserResult(args.jobId, true, `Browser job failed: ${message}`, { captureFailureReceipt })
   }
 
-  const artifactRoot = resolve(args.cwd, resolveBrowserArtifactDir(args.input, args.cwd)?.trim() || '.owlcoda-browser-jobs')
+  const artifactRoot = resolve(args.cwd, resolveBrowserArtifactDir(args.input, args.cwd))
   const dir = resolve(artifactRoot, sanitizePathSegment(args.jobId))
   const profileDir = resolve(dir, 'chrome-profile')
   const screenshotPath = resolve(dir, 'screenshot.png')
@@ -600,12 +601,12 @@ function isExecTimeoutError(err: unknown): boolean {
 
 async function writeBrowserArtifacts(args: {
   jobId: string
-  artifactDir?: string
+  artifactDir: string
   cwd: string
   html: string
   text: string
 }): Promise<Array<{ path: string; artifactType: string }>> {
-  const root = resolve(args.cwd, args.artifactDir?.trim() || '.owlcoda-browser-jobs')
+  const root = resolve(args.cwd, args.artifactDir)
   const dir = resolve(root, sanitizePathSegment(args.jobId))
   await mkdir(dir, { recursive: true })
   const htmlPath = resolve(dir, 'page.html')
@@ -618,11 +619,13 @@ async function writeBrowserArtifacts(args: {
   ]
 }
 
-function resolveBrowserArtifactDir(input: BrowserJobInput, cwd: string): string | undefined {
+function resolveBrowserArtifactDir(input: BrowserJobInput, cwd: string): string {
   if (input.artifactDir?.trim()) return input.artifactDir
-  if (!input.runRef?.trim()) return undefined
-  const paths = getRunWorkspacePathsFromRef(input.runRef, cwd)
-  return join(paths.evidenceDir, 'browser')
+  if (input.runRef?.trim()) {
+    const paths = getRunWorkspacePathsFromRef(input.runRef, cwd)
+    return join(paths.evidenceDir, 'browser')
+  }
+  return join(getOwlcodaDir(), 'browser-jobs')
 }
 
 async function recordBrowserArtifacts(args: {
@@ -690,7 +693,7 @@ async function preserveCaptureFailureReceipt(args: {
   }
 
   try {
-    const root = resolve(args.cwd, resolveBrowserArtifactDir(args.input, args.cwd)?.trim() || '.owlcoda-browser-jobs')
+    const root = resolve(args.cwd, resolveBrowserArtifactDir(args.input, args.cwd))
     const dir = resolve(root, sanitizePathSegment(args.jobId))
     await mkdir(dir, { recursive: true })
     const receiptPath = resolve(dir, 'capture-failure-receipt.json')

@@ -783,6 +783,8 @@ export async function doStop(force = false): Promise<void> {
   const activeClients = getActiveLiveClientsForRuntime(meta)
   if (activeClients.length > 0) {
     if (force) {
+      console.error(`owlcoda daemon has ${activeClients.length} active live REPL client${activeClients.length === 1 ? '' : 's'} at ${getMetaBaseUrl(meta)}; force-detaching before stop.`)
+      printActiveLiveClientDetails(activeClients)
       const detached = detachLiveReplClientsForRuntime({
         host: meta.host,
         port: meta.port,
@@ -791,10 +793,10 @@ export async function doStop(force = false): Promise<void> {
       }, { force: true })
       console.error(`Force-detached ${detached.removedClients.length} live REPL client${detached.removedClients.length === 1 ? '' : 's'} from ${getMetaBaseUrl(meta)} before stop.`)
     } else {
-    console.error(`owlcoda daemon has ${activeClients.length} active live REPL client${activeClients.length === 1 ? '' : 's'} at ${getMetaBaseUrl(meta)}`)
-    printActiveLiveClientDetails(activeClients)
-    console.error('Refusing to stop the daemon while interactive clients are active.')
-    process.exit(1)
+      console.error(`owlcoda daemon has ${activeClients.length} active live REPL client${activeClients.length === 1 ? '' : 's'} at ${getMetaBaseUrl(meta)}`)
+      printActiveLiveClientDetails(activeClients)
+      console.error('Refusing to stop the daemon while interactive clients are active.')
+      process.exit(1)
     }
   }
 

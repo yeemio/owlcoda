@@ -42,6 +42,52 @@ describe('semantic tool failure classifier', () => {
     })
   })
 
+  it('classifies recoverable WebFetch 403 blocks as non-terminal blocked sources', () => {
+	    const result = applyToolFailurePolicy('WebFetch', {
+	      url: 'https://www.npmjs.com/package/openclaw',
+	    }, {
+      output:
+        'Error: HTTP 403 Forbidden fetching https://www.npmjs.com/package/openclaw\n' +
+        'Recovery: recoverable fetch block; try BrowserJob with provider=chrome_headless, use a documented API endpoint, or record this URL as blocked evidence instead of repeatedly retrying WebFetch.\n' +
+        'Response snippet: Just a moment...',
+	      isError: true,
+	      metadata: {
+	        failureCategory: 'remote:blocked_source',
+	        httpStatus: 403,
+	        recoverable: true,
+	        blockedSource: true,
+	      },
+	    })
+
+	    expect(result.isError).toBe(true)
+	    expect(result.output).not.toContain('[Runtime failure-policy guard]')
+	    expect(result.metadata).toMatchObject({
+	      failurePolicyApplied: true,
+	      failureCategory: 'remote:blocked_source',
+	      failureTerminal: false,
+	      failureRetryable: false,
+	      recoverable: true,
+	    })
+	    expect(result.metadata?.['terminalToolFailure']).toBeUndefined()
+	  })
+
+  it('keeps API 401 JSON payloads as terminal authentication failures', () => {
+    const result = applyToolFailurePolicy('WebFetch', {
+      url: 'https://api.example.test/private',
+    }, {
+      output: 'URL: https://api.example.test/private\nContent-Type: application/json\nLength: 37 chars\n\n{"status":401,"error":"unauthorized"}',
+      isError: false,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('[Runtime failure-policy guard]')
+    expect(result.metadata).toMatchObject({
+      failureCategory: 'remote:auth_or_permission',
+      failureTerminal: true,
+      terminalToolFailure: true,
+    })
+  })
+
   it('does not fire on local echo text that merely mentions unauthorized', () => {
     const result = applyToolFailurePolicy('bash', {
       command: 'echo "docs mention Unauthorized status handling"',
@@ -65,6 +111,26 @@ describe('semantic tool failure classifier', () => {
     })
 
     expect(failure).toBeNull()
+  })
+
+  it('does not treat successful API discovery JSON that documents quota/rate-limit endpoints as a remote failure', () => {
+    const result = applyToolFailurePolicy('bash', {
+      command: 'curl -sS http://127.0.0.1:8019/v1/api-info',
+    }, {
+      output: '[stdout]\n' + JSON.stringify({
+        name: 'OwlCoda',
+        endpoints: [
+          { path: '/v1/perf', description: 'Per-model performance metrics including success rate' },
+          { path: '/v1/ratelimit', description: 'Rate-limit bucket status and quota diagnostics' },
+        ],
+      }) + '\n\n[exit code: 0]',
+      isError: false,
+      metadata: { exitCode: 0 },
+    })
+
+    expect(result.isError).toBe(false)
+    expect(result.output).not.toContain('[Runtime failure-policy guard]')
+    expect(result.metadata?.['terminalToolFailure']).toBeUndefined()
   })
 
   it('promotes remote rate-limit payloads to terminal but retryable failures', () => {

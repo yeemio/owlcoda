@@ -1593,6 +1593,16 @@ ${isModesEnabled() ? `    /mode [mode]      Approval mode (${OPERATING_MODES.joi
       lines.push(`    Total:  ${tokenUsage.totalTokens.toLocaleString()}`)
       lines.push('')
       lines.push(`  Recent errors: ${m.recentErrors ?? 0}`)
+      if (m.gatewayAudit) {
+        const gatewaySuccess = typeof m.gatewayAudit.gatewaySuccessRate === 'number'
+          ? `${(m.gatewayAudit.gatewaySuccessRate * 100).toFixed(1)}%`
+          : '-'
+        lines.push(`  Gateway audit: ${gatewaySuccess} success (${m.gatewayAudit.errorCount ?? 0} errors, ${m.gatewayAudit.authFailureCount ?? 0} auth failures)`)
+        const gatewayWarnings = Array.isArray(m.gatewayWarnings) ? m.gatewayWarnings : []
+        if (gatewayWarnings.length > 0) {
+          lines.push(`  Gateway warnings: ${gatewayWarnings.join(', ')}`)
+        }
+      }
 
       const budgets = m.errorBudgets ?? {}
       const budgetKeys = Object.keys(budgets)

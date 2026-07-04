@@ -209,6 +209,7 @@ function buildHeader(filePath: string, lineEndingKind: LineEndingKind): string {
 }
 
 const MAX_READ_BYTES = 2 * 1024 * 1024 // 2 MiB default limit
+const MAX_READ_OUTPUT_CHARS = 128 * 1024
 
 export function createReadTool(): NativeToolDef<ReadInput> {
   return {
@@ -343,10 +344,19 @@ async function readByteRange(
     // can associate this chunk with its source. Line-ending detection
     // is unreliable on a partial buffer, so we skip that label here.
     const header = `[file: ${filePath}] [byte range: offset=${offset}, length=${bytesRead}]`
+    const limited = limitReadOutput(`${header}\n${content}`, filePath)
     return {
-      output: `${header}\n${content}`,
+      output: limited.output,
       isError: false,
-      metadata: { bytesRead, offset, truncated: bytesRead === clampedLimit, path: filePath },
+      metadata: {
+        bytesRead,
+        offset,
+        truncated: bytesRead === clampedLimit,
+        path: filePath,
+        ...(limited.truncated
+          ? { outputTruncated: true, displayedChars: limited.displayedChars, omittedChars: limited.omittedChars }
+          : {}),
+      },
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -393,10 +403,18 @@ async function readLines(
     if (startLine === undefined && endLine === undefined) {
       const numbered = allLines.map((line, i) => `${i + 1}\t${line}`)
       const body = numbered.join('\n')
+      const limited = limitReadOutput(`${header}\n${body}`, filePath)
       return {
-        output: `${header}\n${body}`,
+        output: limited.output,
         isError: false,
-        metadata: { totalLines: allLines.length, lineEndingKind, path: filePath },
+        metadata: {
+          totalLines: allLines.length,
+          lineEndingKind,
+          path: filePath,
+          ...(limited.truncated
+            ? { outputTruncated: true, displayedChars: limited.displayedChars, omittedChars: limited.omittedChars }
+            : {}),
+        },
       }
     }
 
@@ -414,10 +432,20 @@ async function readLines(
     const slice = allLines.slice(start - 1, end)
     const numbered = slice.map((line, i) => `${start + i}\t${line}`)
     const body = numbered.join('\n')
+    const limited = limitReadOutput(`${header}\n${body}`, filePath)
     return {
-      output: `${header}\n${body}`,
+      output: limited.output,
       isError: false,
-      metadata: { totalLines: allLines.length, startLine: start, endLine: end, lineEndingKind, path: filePath },
+      metadata: {
+        totalLines: allLines.length,
+        startLine: start,
+        endLine: end,
+        lineEndingKind,
+        path: filePath,
+        ...(limited.truncated
+          ? { outputTruncated: true, displayedChars: limited.displayedChars, omittedChars: limited.omittedChars }
+          : {}),
+      },
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -431,6 +459,26 @@ async function readLines(
       const msg = err instanceof Error ? err.message : String(err)
       console.error(`[read] filehandle close failed: ${msg}`)
     })
+  }
+}
+
+function limitReadOutput(output: string, filePath: string): {
+  output: string
+  truncated: boolean
+  displayedChars: number
+  omittedChars: number
+} {
+  if (output.length <= MAX_READ_OUTPUT_CHARS) {
+    return { output, truncated: false, displayedChars: output.length, omittedChars: 0 }
+  }
+  const omittedChars = output.length - MAX_READ_OUTPUT_CHARS
+  return {
+    output:
+      `${output.slice(0, MAX_READ_OUTPUT_CHARS)}\n` +
+      `[read output truncated: ${omittedChars} chars omitted from ${filePath}. Use startLine/endLine or offset/limit to inspect the omitted section.]`,
+    truncated: true,
+    displayedChars: MAX_READ_OUTPUT_CHARS,
+    omittedChars,
   }
 }
 

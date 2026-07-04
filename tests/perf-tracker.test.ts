@@ -105,6 +105,20 @@ describe('getModelPerfSummary', () => {
     expect(s.successRate).toBeCloseTo(0.667, 2)
   })
 
+  it('separates HTTP success from usable output quality', () => {
+    recordRequestMetrics({ modelId: 'qwen-local', inputTokens: 100, outputTokens: 2, durationMs: 100, success: true })
+    recordRequestMetrics({ modelId: 'qwen-local', inputTokens: 100, outputTokens: 0, durationMs: 1000, success: true })
+    recordRequestMetrics({ modelId: 'qwen-local', inputTokens: 100, outputTokens: 20, durationMs: 30_000, success: true })
+
+    const s = getModelPerfSummary('qwen-local')!
+
+    expect(s.successRate).toBe(1)
+    expect(s.zeroOutputCount).toBe(1)
+    expect(s.thinOutputCount).toBe(1)
+    expect(s.slowOutputCount).toBe(1)
+    expect(s.usableOutputRate).toBe(0)
+  })
+
   it('computes p50 from single record', () => {
     recordRequestMetrics({ modelId: 'a', inputTokens: 50, outputTokens: 25, durationMs: 350, success: true })
 
@@ -135,6 +149,7 @@ describe('formatPerfSummary', () => {
     expect(text).toContain('Avg latency:')
     expect(text).toContain('Output TPS:')
     expect(text).toContain('Success:')
+    expect(text).toContain('Usable output:')
     expect(text).toContain('Tokens:')
   })
 

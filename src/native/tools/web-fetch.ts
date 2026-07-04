@@ -302,12 +302,14 @@ export function createWebFetchTool(): NativeToolDef<WebFetchInput> {
                 snippetLine,
               isError: true,
               metadata: {
-                failureCategory: 'web-fetch:http-403',
+                failureCategory: 'remote:blocked_source',
                 httpStatus: res.status,
                 statusText: res.statusText,
                 url,
                 contentType,
                 recoverable: true,
+                blockedSource: true,
+                blockedSourceKind: 'http_403',
                 ...(responseBodySnippet ? { responseBodySnippet } : {}),
               },
             }

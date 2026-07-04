@@ -418,6 +418,16 @@ describe('fs-policy.checkReadPathAllowed', () => {
     if (r.allowed) expect(r.resolvedPath).toBe(realpathSync(target))
   })
 
+  it('does not misclassify macOS /home data-volume paths as /System reads', () => {
+    const r = checkReadPathAllowed('/home/sieracclaw/.openclaw/agents/main/agent/models.json', {
+      workspaceRoot,
+      platformName: 'darwin',
+    })
+
+    expect(r.allowed).toBe(true)
+    if (r.allowed) expect(r.resolvedPath).toMatch(/\/home\/sieracclaw|\/System\/Volumes\/Data\/home\/sieracclaw/)
+  })
+
   it('rejects sensitive home paths even when the home dir is otherwise readable', () => {
     const fakeHome = mkdtempSync(join(tmpdir(), 'owlcoda-fs-policy-read-home-'))
     try {

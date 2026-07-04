@@ -152,6 +152,7 @@ import { createExitPlanModeTool } from './tools/exit-plan-mode.js'
 import { createProbePlanTool } from './tools/probe-plan.js'
 import { ensureOperatingModeState, initializeOperatingModeState, isModesEnabled, MODE_SUMMARIES, resolveInitialAutoApprove, resolveModeCycleKey } from './modes.js'
 import {
+  ToolDisplayLifecycle,
   ToolResultCollector,
   formatFooterOnlyToolEnd,
   formatFooterOnlyToolStart,
@@ -882,7 +883,7 @@ function NativeReplApp({
   const hasShownAssistantHeaderRef = useRef(false)
   // Tool input stashed at onToolStart so the merged action+result group can
   // render the command summary on completion (chrome spec S2).
-  const pendingToolInputRef = useRef(new Map<string, Record<string, unknown>>())
+  const toolDisplayLifecycleRef = useRef(new ToolDisplayLifecycle())
   const toolCollectorRef = useRef(new ToolResultCollector())
   const mdRendererRef = useRef(new StreamingMarkdownRenderer())
   const lastExitAttemptRef = useRef(0)
@@ -1340,7 +1341,7 @@ function NativeReplApp({
         const prefixed = prefixResponse(rendered)
         if (prefixed) appendTranscript(prefixed, { overflowAnchor: 'tail' })
       },
-      onToolStart(name, input) {
+      onToolStart(name, input, runtime) {
         bumpProgress()
         lastToolProgressSigRef.current = ''
         // A tool call is a logical boundary in the assistant stream. Drain the
@@ -1358,10 +1359,10 @@ function NativeReplApp({
         // Chrome spec S2: the action row commits MERGED with its result on
         // completion (formatToolGroup in onToolEnd). While running, the live
         // region's spinner carries the tool identity — no premature commit.
-        pendingToolInputRef.current.set(name, input)
+        toolDisplayLifecycleRef.current.start(name, input, runtime)
         setSpinnerState({ mode: 'tool', toolName: name, message: 'Running…' })
       },
-      onToolEnd(name, result, isError, durationMs, metadata) {
+      onToolEnd(name, result, isError, durationMs, metadata, runtime) {
         bumpProgress()
         setSpinnerState(null)
         // Chrome spec S1: record the full output before any collapse so
@@ -1369,6 +1370,7 @@ function NativeReplApp({
         if (result.length > 0) recordFullToolOutput(name, result, isError)
         const changeBlock = !isError ? buildChangeBlockFromMetadata(name, durationMs, metadata) : null
         if (changeBlock) {
+          toolDisplayLifecycleRef.current.complete(name, runtime)
           appendTranscript(changeBlock)
           return
         }
@@ -1376,8 +1378,7 @@ function NativeReplApp({
           setFooterNotice(formatFooterOnlyToolEnd(name, durationMs))
           return
         }
-        const pendingInput = pendingToolInputRef.current.get(name) ?? {}
-        pendingToolInputRef.current.delete(name)
+        const pendingInput = toolDisplayLifecycleRef.current.complete(name, runtime)
         if (toolCollectorRef.current.isCollapsible(name) && !isError) {
           toolCollectorRef.current.add({ name, input: pendingInput, output: result, isError, durationMs })
           return
@@ -1506,24 +1507,24 @@ function NativeReplApp({
         base.onText?.(text)
         setUiVersion((value) => value + 1)
       },
-      onToolStart(toolName, input) {
+      onToolStart(toolName, input, runtimeItem) {
         if (!canWrite()) return
         setReplTaskPhase(runtime, task, 'tool_execution', toolName)
-        base.onToolStart?.(toolName, input)
+        base.onToolStart?.(toolName, input, runtimeItem)
         setUiVersion((value) => value + 1)
       },
-      onToolEnd(toolName, result, isError, durationMs, metadata) {
+      onToolEnd(toolName, result, isError, durationMs, metadata, runtimeItem) {
         if (!canWrite()) return
-        base.onToolEnd?.(toolName, result, isError, durationMs, metadata)
+        base.onToolEnd?.(toolName, result, isError, durationMs, metadata, runtimeItem)
         if (!task.aborted) {
           setReplTaskPhase(runtime, task, 'awaiting_model')
         }
         setUiVersion((value) => value + 1)
       },
-      onToolProgress(toolName, event) {
+      onToolProgress(toolName, event, runtimeItem) {
         if (!canWrite()) return
         setReplTaskPhase(runtime, task, 'tool_execution', toolName)
-        base.onToolProgress?.(toolName, event)
+        base.onToolProgress?.(toolName, event, runtimeItem)
       },
       onResponse(response) {
         if (!canWrite()) return
@@ -1823,6 +1824,7 @@ function NativeReplApp({
       }
 
       if (turnClearEpoch !== clearEpochRef.current) {
+        toolDisplayLifecycleRef.current.clear()
         toolCollectorRef.current = new ToolResultCollector()
         mdRendererRef.current.reset()
         loopNoiseStateRef.current = { ...EMPTY_LOOP_NOISE_STATE }

@@ -47,6 +47,20 @@ describe('Native Read tool', () => {
     expect(result.output).toContain('1\t')
   })
 
+  it('caps large full-file reads before returning them to context', async () => {
+    const path = join(dir, 'large-source.txt')
+    const content = Array.from({ length: 20_000 }, (_, i) => `line-${i}-${'x'.repeat(80)}`).join('\n')
+    await writeFile(path, content)
+
+    const result = await read.execute({ path })
+
+    expect(result.isError).toBe(false)
+    expect(result.output.length).toBeLessThan(140_000)
+    expect(result.output).toContain('[read output truncated')
+    expect(result.metadata?.outputTruncated).toBe(true)
+    expect(result.metadata?.path).toBeTruthy()
+  })
+
   // ── Line range ──
 
   it('reads specific line range', async () => {

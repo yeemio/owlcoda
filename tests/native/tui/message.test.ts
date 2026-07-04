@@ -11,6 +11,7 @@ import {
   renderStatusBar,
   renderComposerRail,
   PersistentStatusBar,
+  ToolDisplayLifecycle,
   ToolResultCollector,
   shouldRouteToolEndFooterOnly,
   shouldRouteToolStartFooterOnly,
@@ -741,6 +742,63 @@ describe('ToolResultCollector', () => {
     const output = collector.flush()
     // Should use error icon ✗
     expect(output).toContain('✗')
+  })
+})
+
+describe('ToolDisplayLifecycle', () => {
+  it('renders a completed tool call as one merged group without a running row', () => {
+    const lifecycle = new ToolDisplayLifecycle()
+    lifecycle.start('bash', { command: 'npm test' }, {
+      toolUseId: 'tool-1',
+      itemId: 'tool-1',
+      runtimeTurnId: 'turn-1',
+    })
+
+    const output = lifecycle.formatCompleted(
+      'bash',
+      '[stdout]\nline\n\n[exit code: 0]',
+      false,
+      120,
+      { toolUseId: 'tool-1', itemId: 'tool-1', runtimeTurnId: 'turn-1' },
+    )
+    const plain = stripAnsi(output)
+
+    expect(plain).toContain('Bash')
+    expect(plain).toContain('npm test')
+    expect(plain).toContain('line')
+    expect(plain.match(/Bash/g)).toHaveLength(1)
+    expect(plain).not.toContain('Running')
+  })
+
+  it('uses runtime identity instead of tool name when same-name calls overlap', () => {
+    const lifecycle = new ToolDisplayLifecycle()
+    const first = { toolUseId: 'tool-1', itemId: 'tool-1', runtimeTurnId: 'turn-1' }
+    const second = { toolUseId: 'tool-2', itemId: 'tool-2', runtimeTurnId: 'turn-1' }
+
+    lifecycle.start('bash', { command: 'first command' }, first)
+    lifecycle.start('bash', { command: 'second command' }, second)
+
+    const secondOutput = stripAnsi(lifecycle.formatCompleted('bash', 'ok', false, 10, second))
+    const firstOutput = stripAnsi(lifecycle.formatCompleted('bash', 'ok', false, 10, first))
+
+    expect(secondOutput).toContain('second command')
+    expect(secondOutput).not.toContain('first command')
+    expect(firstOutput).toContain('first command')
+    expect(firstOutput).not.toContain('second command')
+  })
+
+  it('falls back to FIFO by tool name when runtime identity is unavailable', () => {
+    const lifecycle = new ToolDisplayLifecycle()
+    lifecycle.start('bash', { command: 'first command' })
+    lifecycle.start('bash', { command: 'second command' })
+
+    const firstOutput = stripAnsi(lifecycle.formatCompleted('bash', 'ok', false, 10))
+    const secondOutput = stripAnsi(lifecycle.formatCompleted('bash', 'ok', false, 10))
+
+    expect(firstOutput).toContain('first command')
+    expect(firstOutput).not.toContain('second command')
+    expect(secondOutput).toContain('second command')
+    expect(secondOutput).not.toContain('first command')
   })
 })
 

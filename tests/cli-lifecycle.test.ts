@@ -627,6 +627,8 @@ describe('CLI lifecycle integration', { timeout: CLI_SUBPROCESS_TEST_TIMEOUT_MS 
     const stopResult = await runCli(['stop', '--force'], runtimeDir)
     expect(stopResult.code).toBe(0)
     expect(stopResult.stderr).toContain('Force-detached 1 live REPL client')
+    expect(stopResult.stderr).toContain('matching-runtime')
+    expect(stopResult.stderr).toContain('session-a')
     await waitForHealthzGone(port)
 
     const persisted = JSON.parse(readFileSync(leasePath, 'utf-8')) as { clients: Array<{ clientId: string }> }

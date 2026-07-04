@@ -65,6 +65,12 @@ describe('NATIVE_TOOL_SCHEMAS', () => {
     expect(schema.properties.failureReason.description).toContain('skipped')
   })
 
+  it('TaskUpdate schema exposes atomic active-step handoff', () => {
+    const schema = NATIVE_TOOL_SCHEMAS['TaskUpdate'] as Record<string, any>
+    expect(schema.properties.completePrevious.type).toBe('boolean')
+    expect(schema.properties.completePrevious.description).toContain('existing active step')
+  })
+
   it('TaskCreate schema exposes run verdict verification gates', () => {
     const schema = NATIVE_TOOL_SCHEMAS['TaskCreate'] as Record<string, any>
     const kindEnum = schema.properties.steps.items.properties.verification.items.properties.kind.enum

@@ -148,10 +148,18 @@ export interface TaskStep {
   failureReason?: string
 }
 
+export interface TaskStepUpdateRepairHint {
+  kind: 'active_step_conflict'
+  taskId: string
+  activeStepId: string
+  requestedStepId: string
+  commands: string[]
+}
+
 /** Result of a step update operation — allows callers to surface errors via ToolResult. */
 export type TaskStepUpdateResult =
-  | { ok: true; task: Task; step: TaskStep }
-  | { ok: false; reason: string }
+  | { ok: true; task: Task; step: TaskStep; completedPreviousStepId?: string }
+  | { ok: false; reason: string; code?: string; repairHint?: TaskStepUpdateRepairHint }
 
 export interface Task {
   id: string
@@ -296,6 +304,7 @@ export function updateTaskStep(
   stepId: string,
   updates: Partial<Pick<TaskStep, 'status' | 'touchedPaths' | 'verification' | 'verificationResults' | 'failureReason'>> & {
     stepStatus?: TaskStepStatus
+    completePrevious?: boolean
   },
 ): TaskStepUpdateResult {
   const task = tasks.get(taskId)
@@ -341,9 +350,36 @@ export function updateTaskStep(
     if (newStatus === 'in_progress') {
       const alreadyInProgress = task.steps.find(s => s.id !== stepId && s.status === 'in_progress')
       if (alreadyInProgress) {
-        return {
-          ok: false,
-          reason: `Cannot set step "${stepId}" to in_progress: step "${alreadyInProgress.id}" is already in_progress. Complete or block it first.`,
+        if (updates.completePrevious === true) {
+          const previousCompletionBlocker = verificationCompletionBlocker(
+            alreadyInProgress.id,
+            alreadyInProgress.verification,
+            alreadyInProgress.verificationResults,
+          )
+          if (previousCompletionBlocker) {
+            return {
+              ok: false,
+              code: 'active_step_conflict',
+              reason: `Cannot complete previous active step "${alreadyInProgress.id}" before starting "${stepId}": ${previousCompletionBlocker}`,
+            }
+          }
+	        } else {
+          return {
+            ok: false,
+            code: 'active_step_conflict',
+            reason: `Cannot set step "${stepId}" to in_progress: step "${alreadyInProgress.id}" is already in_progress. Complete or block it first.`,
+            repairHint: {
+              kind: 'active_step_conflict',
+            taskId,
+            activeStepId: alreadyInProgress.id,
+            requestedStepId: stepId,
+	              commands: [
+	                `TaskUpdate({ taskId: "${taskId}", stepId: "${alreadyInProgress.id}", stepStatus: "completed" })`,
+              `TaskUpdate({ taskId: "${taskId}", stepId: "${alreadyInProgress.id}", stepStatus: "blocked", failureReason: "..." })`,
+              `TaskUpdate({ taskId: "${taskId}", stepId: "${stepId}", stepStatus: "in_progress" })`,
+            ],
+	            },
+	          }
         }
       }
     }
@@ -365,6 +401,17 @@ export function updateTaskStep(
         ok: false,
         reason: `Cannot mark step "${stepId}" as ${newStatus} without a failureReason.`,
       }
+    }
+  }
+
+  const completedPreviousStepId = newStatus === 'in_progress' && updates.completePrevious === true
+    ? task.steps.find(s => s.id !== stepId && s.status === 'in_progress')?.id
+    : undefined
+  if (completedPreviousStepId) {
+    const previous = task.steps.find(s => s.id === completedPreviousStepId)
+    if (previous) {
+      previous.status = 'completed'
+      previous.completedAt = new Date().toISOString()
     }
   }
 
@@ -404,7 +451,7 @@ export function updateTaskStep(
   }
 
   task.updatedAt = new Date().toISOString()
-  return { ok: true, task, step }
+  return { ok: true, task, step, completedPreviousStepId }
 }
 
 function verificationCompletionBlocker(

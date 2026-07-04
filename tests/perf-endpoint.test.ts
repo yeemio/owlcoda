@@ -7,6 +7,7 @@ import { IncomingMessage, ServerResponse } from 'node:http'
 import { Socket } from 'node:net'
 import { handlePerf } from '../src/endpoints/perf.js'
 import { recordRequestMetrics, resetModelMetrics } from '../src/perf-tracker.js'
+import { auditRequest, resetAudit } from '../src/audit-log.js'
 
 function createMockReqRes(): { req: IncomingMessage; res: ServerResponse & { _body: string; _statusCode: number } } {
   const socket = new Socket()
@@ -30,7 +31,10 @@ function createMockReqRes(): { req: IncomingMessage; res: ServerResponse & { _bo
   return { req, res }
 }
 
-beforeEach(() => resetModelMetrics())
+beforeEach(() => {
+  resetModelMetrics()
+  resetAudit()
+})
 
 describe('GET /v1/perf', () => {
   it('returns empty data when no metrics recorded', () => {
@@ -101,5 +105,45 @@ describe('GET /v1/perf', () => {
     const body = JSON.parse(res._body)
 
     expect(body.data[0].success_rate).toBe(0.5)
+  })
+
+  it('exposes usable output quality separately from HTTP success', () => {
+    recordRequestMetrics({ modelId: 'qwen-local', inputTokens: 100, outputTokens: 2, durationMs: 100, success: true })
+    recordRequestMetrics({ modelId: 'qwen-local', inputTokens: 100, outputTokens: 0, durationMs: 1000, success: true })
+    recordRequestMetrics({ modelId: 'qwen-local', inputTokens: 100, outputTokens: 20, durationMs: 30_000, success: true })
+
+    const { req, res } = createMockReqRes()
+    handlePerf(req, res)
+    const body = JSON.parse(res._body)
+
+    expect(body.data[0]).toMatchObject({
+      model_id: 'qwen-local',
+      success_rate: 1,
+      usable_output_rate: 0,
+      zero_output_count: 1,
+      thin_output_count: 1,
+      slow_output_count: 1,
+    })
+    expect(body.warnings).toContain('model_output_quality_degraded')
+  })
+
+  it('exposes gateway audit health so auth failures cannot hide behind model success rate', () => {
+    recordRequestMetrics({ modelId: 'model-a', inputTokens: 100, outputTokens: 50, durationMs: 200, success: true })
+    auditRequest({ method: 'POST', path: '/v1/messages', model: '/v1/messages', statusCode: 200, durationMs: 20 })
+    auditRequest({ method: 'POST', path: '/v1/messages', model: '/v1/messages', statusCode: 401, durationMs: 10 })
+
+    const { req, res } = createMockReqRes()
+    handlePerf(req, res)
+    const body = JSON.parse(res._body)
+
+    expect(body.data[0].success_rate).toBe(1)
+    expect(body.gateway).toMatchObject({
+      total_entries: 2,
+      error_count: 1,
+      auth_failure_count: 1,
+      gateway_success_rate: 0.5,
+      status_counts: { '200': 1, '401': 1 },
+    })
+    expect(body.warnings).toContain('gateway_auth_failures_present')
   })
 })

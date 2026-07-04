@@ -5,7 +5,7 @@ import { translateRequest } from '../translate/request.js'
 import { translateResponse } from '../translate/response.js'
 import { StreamTranslator } from '../translate/stream.js'
 import { parseSSEStream, readStreamChunkWithDeadline } from '../utils/sse.js'
-import { LocalRuntimeProtocolUnresolvedError, resolveModelRoute } from '../config.js'
+import { isModelExplicitlyConfigured, LocalRuntimeProtocolUnresolvedError, resolveModelRoute } from '../config.js'
 import { detailLooksLikeToolPairingError, summarizeMessagesShape } from '../native/protocol/tool-pairing.js'
 import { readBody } from '../server.js'
 import { makeAnthropicError } from '../utils/errors.js'
@@ -421,6 +421,12 @@ async function handleMessagesNonStream(
 
   // 4a. Model routing (local or cloud)
   let route
+  if (!isModelExplicitlyConfigured(config, effectiveModel)) {
+    const mapped = makeAnthropicError(404, 'not_found_error', `Model not found: ${effectiveModel}`)
+    res.writeHead(mapped.httpStatus, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(mapped.body))
+    return
+  }
   try {
     route = resolveModelRoute(config, effectiveModel)
   } catch (err) {
@@ -734,6 +740,12 @@ async function handleMessagesStream(
   recordRoutingShadow(config, body, effectiveStreamModel)
 
   let route
+  if (!isModelExplicitlyConfigured(config, effectiveStreamModel)) {
+    const mapped = makeAnthropicError(404, 'not_found_error', `Model not found: ${effectiveStreamModel}`)
+    res.writeHead(mapped.httpStatus, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(mapped.body))
+    return
+  }
   try {
     route = resolveModelRoute(config, effectiveStreamModel)
   } catch (err) {

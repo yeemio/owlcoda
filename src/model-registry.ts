@@ -296,19 +296,15 @@ export function resolveConfiguredModel(config: ModelRegistryConfig, requestModel
 }
 
 /**
- * Strict membership check: does `requestModel` resolve to an explicitly
- * configured model, or would {@link resolveConfiguredModel} silently fall back
- * to the default?
+ * Membership check: does `requestModel` resolve to an explicitly configured
+ * model, or would {@link resolveConfiguredModel} silently fall back to the
+ * default?
  *
- * The lenient fallback is correct for the gateway (a cloud model name like
- * `claude-sonnet-4` routes to the local default), but a benchmark/lab runner
- * that means to drive one *specific* model needs to fail fast when that model
- * is not configured rather than silently testing the default — the Open Coding
- * Lab dogfood asked for `gpt-4o`, which was silently served by the local
- * default. Returns true iff a configured model matches by
- * id / alias / backendModel / date-stripped id / substring (the same match the
- * router resolves on), excluding the default fallback. Does NOT change the
- * lenient default — it is an opt-in check callers run first.
+ * Gateways and benchmark/lab runners should call this before routing a
+ * user-requested model. Otherwise a typo like `gpt-4o` can be silently served by
+ * the local default and poison A/B or provider verification. Returns true iff a
+ * configured model matches by id / alias / backendModel / date-stripped id /
+ * substring, excluding the default fallback used by the lower-level resolver.
  */
 export function isModelExplicitlyConfigured(config: ModelRegistryConfig, requestModel: string): boolean {
   return findConfiguredModel(config, requestModel) !== null

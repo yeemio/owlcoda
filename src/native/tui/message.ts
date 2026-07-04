@@ -408,6 +408,73 @@ export function formatToolGroup(
   return [header, ...body].join('\n')
 }
 
+export interface ToolDisplayRuntimeIdentity {
+  toolUseId?: string
+  itemId?: string
+  runtimeTurnId?: string
+}
+
+interface PendingToolDisplay {
+  name: string
+  input: Record<string, unknown>
+}
+
+function toolDisplayIdentity(runtime?: ToolDisplayRuntimeIdentity): string | null {
+  const itemId = runtime?.itemId || runtime?.toolUseId
+  if (!itemId) return null
+  return `${runtime?.runtimeTurnId ?? ''}:${itemId}`
+}
+
+export class ToolDisplayLifecycle {
+  private byIdentity = new Map<string, PendingToolDisplay>()
+  private byName = new Map<string, PendingToolDisplay[]>()
+
+  start(name: string, input: Record<string, unknown>, runtime?: ToolDisplayRuntimeIdentity): void {
+    const identity = toolDisplayIdentity(runtime)
+    const pending = { name, input }
+    if (identity) {
+      this.byIdentity.set(identity, pending)
+      return
+    }
+    const queue = this.byName.get(name) ?? []
+    queue.push(pending)
+    this.byName.set(name, queue)
+  }
+
+  complete(name: string, runtime?: ToolDisplayRuntimeIdentity): Record<string, unknown> {
+    const identity = toolDisplayIdentity(runtime)
+    if (identity) {
+      const pending = this.byIdentity.get(identity)
+      if (pending) {
+        this.byIdentity.delete(identity)
+        return pending.input
+      }
+    }
+
+    const queue = this.byName.get(name)
+    const pending = queue?.shift()
+    if (queue && queue.length === 0) {
+      this.byName.delete(name)
+    }
+    return pending?.input ?? {}
+  }
+
+  formatCompleted(
+    name: string,
+    output: string,
+    isError: boolean,
+    durationMs: number,
+    runtime?: ToolDisplayRuntimeIdentity,
+  ): string {
+    return formatToolGroup(name, this.complete(name, runtime), output, isError, durationMs)
+  }
+
+  clear(): void {
+    this.byIdentity.clear()
+    this.byName.clear()
+  }
+}
+
 /**
  * Todo block — terminal port of the design's `oc-todo` card.
  *

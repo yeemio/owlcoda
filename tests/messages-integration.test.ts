@@ -184,6 +184,22 @@ describe('messages endpoint — non-streaming', () => {
     expect(lastRouterRequest!.url).toBe('/v1/chat/completions')
   })
 
+  it('rejects unknown requested models instead of silently serving the default', async () => {
+    mockRouterHandler = undefined as any
+    lastRouterRequest = null
+
+    const res = await post('/v1/messages', {
+      model: 'completely-unknown-model',
+      messages: [{ role: 'user', content: 'test' }],
+      max_tokens: 100,
+    })
+
+    expect(res.status).toBe(404)
+    expect(res.body.error.type).toBe('not_found_error')
+    expect(res.body.error.message).toContain('completely-unknown-model')
+    expect(lastRouterRequest).toBeNull()
+  })
+
   it('returns usage stats in response', async () => {
     mockRouterHandler = undefined as any
     const res = await post('/v1/messages', {

@@ -109,8 +109,48 @@ describe('TaskUpdate — step updates (Slice 1)', () => {
     expect(r.output).toMatch(/already in_progress/)
   })
 
-  it('updates step touchedPaths', async () => {
+	  it('returns a structured repair hint when another step is already in_progress', async () => {
+	    makeTask()
+	    await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-2', stepStatus: 'in_progress' })
+
+    expect(r.isError).toBe(true)
+    expect(r.output).toContain('repairHint')
+    expect(r.output).toContain('TaskUpdate({ taskId: "task-1", stepId: "step-1", stepStatus: "completed" })')
+    expect(r.output).toContain('TaskUpdate({ taskId: "task-1", stepId: "step-1", stepStatus: "blocked", failureReason: "..." })')
+    expect(r.metadata).toMatchObject({
+      repairHint: {
+        kind: 'active_step_conflict',
+        taskId: 'task-1',
+        activeStepId: 'step-1',
+        requestedStepId: 'step-2',
+      },
+	    })
+	  })
+
+  it('atomically completes the previous active step when moving another step in_progress', async () => {
     makeTask()
+    await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
+
+    const r = await tool.execute({
+      taskId: 'task-1',
+      stepId: 'step-2',
+      stepStatus: 'in_progress',
+      completePrevious: true,
+    })
+
+    expect(r.isError).toBe(false)
+    expect(r.output).toContain('completedPrevious=step-1')
+    expect(getTaskStep('task-1', 'step-1')?.status).toBe('completed')
+    expect(getTaskStep('task-1', 'step-2')?.status).toBe('in_progress')
+    expect(r.metadata).toMatchObject({
+      stepUpdate: true,
+      completedPreviousStepId: 'step-1',
+    })
+  })
+
+	  it('updates step touchedPaths', async () => {
+	    makeTask()
     await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
     const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1', touchedPaths: ['/tmp/out.html'] })
     expect(r.isError).toBe(false)

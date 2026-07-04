@@ -29,6 +29,14 @@ export interface ModelMetrics {
   maxDurationMs: number
   /** Number of failed requests (5xx or connection errors) */
   failureCount: number
+  /** Number of successful HTTP requests that returned zero output tokens. */
+  zeroOutputCount: number
+  /** Number of successful HTTP requests that returned only a tiny answer. */
+  thinOutputCount: number
+  /** Number of successful HTTP requests whose output throughput was effectively unusable. */
+  slowOutputCount: number
+  /** Number of successful HTTP requests with enough output and throughput to be counted as usable. */
+  usableOutputCount: number
   /** Last request timestamp */
   lastRequestAt: string
   /** First request timestamp */
@@ -41,6 +49,10 @@ export interface ModelPerfSummary {
   avgDurationMs: number
   avgOutputTps: number
   successRate: number
+  usableOutputRate: number
+  zeroOutputCount: number
+  thinOutputCount: number
+  slowOutputCount: number
   totalInputTokens: number
   totalOutputTokens: number
   p50DurationMs: number
@@ -52,6 +64,8 @@ const metricsStore = new Map<string, ModelMetrics>()
 const durationHistory = new Map<string, number[]>() // for percentile calculations
 
 const MAX_HISTORY_PER_MODEL = 100 // Keep last 100 durations for percentiles
+const THIN_OUTPUT_TOKEN_THRESHOLD = 8
+const SLOW_OUTPUT_TPS_THRESHOLD = 1
 
 // ─── Recording ───
 
@@ -76,6 +90,11 @@ export function recordRequestMetrics(record: RequestRecord): void {
 
   const cacheRead = record.cacheReadTokens ?? 0
   const cacheWrite = record.cacheWriteTokens ?? 0
+  const outputTps = record.durationMs > 0 ? record.outputTokens / (record.durationMs / 1000) : 0
+  const zeroOutput = record.success && record.outputTokens === 0
+  const thinOutput = record.success && record.outputTokens > 0 && record.outputTokens < THIN_OUTPUT_TOKEN_THRESHOLD
+  const slowOutput = record.success && record.outputTokens > 0 && outputTps < SLOW_OUTPUT_TPS_THRESHOLD
+  const usableOutput = record.success && !zeroOutput && !thinOutput && !slowOutput
 
   if (!existing) {
     metricsStore.set(record.modelId, {
@@ -89,6 +108,10 @@ export function recordRequestMetrics(record: RequestRecord): void {
       minDurationMs: record.durationMs,
       maxDurationMs: record.durationMs,
       failureCount: record.success ? 0 : 1,
+      zeroOutputCount: zeroOutput ? 1 : 0,
+      thinOutputCount: thinOutput ? 1 : 0,
+      slowOutputCount: slowOutput ? 1 : 0,
+      usableOutputCount: usableOutput ? 1 : 0,
       lastRequestAt: now,
       firstRequestAt: now,
     })
@@ -102,6 +125,10 @@ export function recordRequestMetrics(record: RequestRecord): void {
     existing.minDurationMs = Math.min(existing.minDurationMs, record.durationMs)
     existing.maxDurationMs = Math.max(existing.maxDurationMs, record.durationMs)
     if (!record.success) existing.failureCount += 1
+    if (zeroOutput) existing.zeroOutputCount += 1
+    if (thinOutput) existing.thinOutputCount += 1
+    if (slowOutput) existing.slowOutputCount += 1
+    if (usableOutput) existing.usableOutputCount += 1
     existing.lastRequestAt = now
   }
 
@@ -147,6 +174,10 @@ export function getModelPerfSummary(modelId: string): ModelPerfSummary | null {
   const successRate = m.requestCount > 0
     ? (m.requestCount - m.failureCount) / m.requestCount
     : 1
+  const successfulRequests = m.requestCount - m.failureCount
+  const usableOutputRate = successfulRequests > 0
+    ? m.usableOutputCount / successfulRequests
+    : 0
 
   // P50 from history
   const history = durationHistory.get(modelId) ?? []
@@ -159,6 +190,10 @@ export function getModelPerfSummary(modelId: string): ModelPerfSummary | null {
     avgDurationMs: Math.round(avgDurationMs),
     avgOutputTps: Math.round(avgOutputTps * 10) / 10,
     successRate: Math.round(successRate * 1000) / 1000,
+    usableOutputRate: Math.round(usableOutputRate * 1000) / 1000,
+    zeroOutputCount: m.zeroOutputCount,
+    thinOutputCount: m.thinOutputCount,
+    slowOutputCount: m.slowOutputCount,
     totalInputTokens: m.totalInputTokens,
     totalOutputTokens: m.totalOutputTokens,
     p50DurationMs: Math.round(p50),
@@ -175,8 +210,12 @@ export function formatPerfSummary(summary: ModelPerfSummary): string {
     `  Avg latency: ${summary.avgDurationMs}ms (p50: ${summary.p50DurationMs}ms)`,
     `  Output TPS:  ${summary.avgOutputTps} tok/s`,
     `  Success:     ${(summary.successRate * 100).toFixed(1)}%`,
+    `  Usable output: ${(summary.usableOutputRate * 100).toFixed(1)}%`,
     `  Tokens:      ${summary.totalInputTokens.toLocaleString()} in / ${summary.totalOutputTokens.toLocaleString()} out`,
   ]
+  if (summary.zeroOutputCount > 0 || summary.thinOutputCount > 0 || summary.slowOutputCount > 0) {
+    lines.push(`  Output quality: ${summary.zeroOutputCount} zero / ${summary.thinOutputCount} thin / ${summary.slowOutputCount} slow`)
+  }
   return lines.join('\n')
 }
 

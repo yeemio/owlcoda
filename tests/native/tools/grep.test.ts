@@ -99,6 +99,40 @@ describe('Native Grep tool', () => {
     expect(lines.length).toBeLessThanOrEqual(2)
   })
 
+  it('truncates very long match lines before returning them to context', async () => {
+    const path = join(dir, 'bundle.min.js')
+    const longLine = `const bundle="${'x'.repeat(100_000)}target${'y'.repeat(100_000)}";`
+    await writeFile(path, longLine)
+
+    const result = await grep.execute({
+      pattern: 'target',
+      path,
+    })
+
+    expect(result.isError).toBe(false)
+    expect(result.output.length).toBeLessThan(10_000)
+    expect(result.output).toContain('[line truncated')
+    expect(result.metadata?.lineTruncatedCount).toBe(1)
+  })
+
+  it('caps total grep output even when many lines match', async () => {
+    const path = join(dir, 'many-long-lines.txt')
+    const content = Array.from({ length: 100 }, (_, i) => `match-${i}-${'z'.repeat(2000)}`).join('\n')
+    await writeFile(path, content)
+
+    const result = await grep.execute({
+      pattern: 'match-',
+      path,
+      maxResults: 100,
+    })
+
+    expect(result.isError).toBe(false)
+    expect(result.output.length).toBeLessThan(70_000)
+    expect(result.output).toContain('[grep output truncated')
+    expect(result.metadata?.outputTruncated).toBe(true)
+    expect(result.metadata?.displayedMatchLines).toBeLessThan(result.metadata?.matchLines as number)
+  })
+
   it('errors on invalid regex', async () => {
     const result = await grep.execute({
       pattern: '[invalid',

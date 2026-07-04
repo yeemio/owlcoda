@@ -281,7 +281,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
       provider: { type: 'string', enum: ['fetch_html', 'chrome_headless'], description: 'Browser provider. fetch_html uses HTTP fetch; chrome_headless shells out to a local Chrome/Chromium executable when configured.' },
       chromeExecutablePath: { type: 'string', description: 'Optional Chrome/Chromium executable path for provider=chrome_headless. When omitted, OwlCoda probes common local install paths.' },
       waitForSelector: { type: 'string', description: 'Optional simple selector to require before the job is considered complete. Supports #id, .class, tag, and simple [attr=value] checks in the fetch_html provider.' },
-      artifactDir: { type: 'string', description: 'Optional directory for captured browser artifacts. Defaults to .owlcoda-browser-jobs under cwd.' },
+      artifactDir: { type: 'string', description: 'Optional directory for captured browser artifacts. Defaults to ~/.owlcoda/browser-jobs unless runRef is provided.' },
       cwd: { type: 'string', description: 'Working directory used to resolve artifactDir. Defaults to the current process cwd.' },
       deadlineMs: { type: 'number', description: 'Total deadline in milliseconds. Defaults to 30000 and is capped by the runtime.' },
       runRef: { type: 'string', description: 'Optional RunWorkspace output root, .owlcoda-run directory, or manifest path. When provided, artifacts are recorded in the run artifact registry.' },
@@ -565,6 +565,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
       removeBlocks: { type: 'array', items: { type: 'string' }, description: 'Task IDs to unblock' },
       stepId: { type: 'string', description: 'Step ID to update (triggers step-level update when present)' },
       stepStatus: { type: 'string', enum: ['pending', 'in_progress', 'completed', 'failed', 'blocked', 'skipped', 'cancelled'], description: 'New status for the step' },
+      completePrevious: { type: 'boolean', description: 'When setting a step to in_progress, complete the existing active step first if it can legally be completed.' },
       touchedPaths: { type: 'array', items: { type: 'string' }, description: 'Paths touched during this step (appended to existing)' },
       verification: {
         type: 'array',

@@ -364,7 +364,24 @@ function handleRequest(
     for (const [model, b] of getAllBudgets()) {
       budgets[model] = b
     }
-    sendJson(res, 200, { ...metrics, errorBudgets: budgets, sloTarget: getSloTarget(), recentTraces: getRecentTraces(10) })
+    const audit = getAuditSummary()
+    sendJson(res, 200, {
+      ...metrics,
+      errorBudgets: budgets,
+      sloTarget: getSloTarget(),
+      recentTraces: getRecentTraces(10),
+      gatewayAudit: {
+        totalEntries: audit.totalEntries,
+        errorCount: audit.errorCount,
+        authFailureCount: audit.authFailureCount,
+        gatewaySuccessRate: audit.gatewaySuccessRate,
+        statusCounts: audit.statusCounts,
+      },
+      gatewayWarnings: [
+        ...(audit.authFailureCount > 0 ? ['gateway_auth_failures_present'] : []),
+        ...(audit.errorCount > 0 && audit.authFailureCount === 0 ? ['gateway_errors_present'] : []),
+      ],
+    })
     return
   }
 

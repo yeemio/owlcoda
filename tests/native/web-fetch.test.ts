@@ -201,9 +201,11 @@ describe('createWebFetchTool', () => {
     expect(result.output).toContain('BrowserJob')
     expect(result.output).toContain('Cloudflare says no')
     expect(result.metadata).toMatchObject({
-      failureCategory: 'web-fetch:http-403',
+      failureCategory: 'remote:blocked_source',
       httpStatus: 403,
       recoverable: true,
+      blockedSource: true,
+      blockedSourceKind: 'http_403',
       responseBodySnippet: 'Cloudflare says no',
     })
   })

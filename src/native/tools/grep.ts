@@ -15,6 +15,8 @@ import type { TaskExecutionState } from '../protocol/types.js'
 
 const MAX_RESULTS = 500
 const MAX_FILE_SIZE = 1024 * 1024 // Skip files > 1 MiB
+const MAX_MATCH_LINE_CHARS = 2_000
+const MAX_GREP_OUTPUT_CHARS = 64 * 1024
 const DEFAULT_TIMEOUT_MS = 60_000
 const HEARTBEAT_MS = 500
 
@@ -464,10 +466,18 @@ function successResult(
       metadata: { matchLines: 0, engine, zeroMatches: true },
     }
   }
+  const formatted = formatGrepMatchesForOutput(matches)
   return {
-    output: matches.slice(0, MAX_RESULTS).join('\n'),
+    output: formatted.output,
     isError: false,
-    metadata: { matchLines: Math.min(matches.length, MAX_RESULTS), engine },
+    metadata: {
+      matchLines: Math.min(matches.length, MAX_RESULTS),
+      displayedMatchLines: formatted.displayedMatchLines,
+      lineTruncatedCount: formatted.lineTruncatedCount,
+      outputTruncated: formatted.outputTruncated,
+      omittedMatchLines: formatted.omittedMatchLines,
+      engine,
+    },
   }
 }
 
@@ -481,17 +491,73 @@ function partialResult(
     ? `timed out after ${Math.max(1, Math.round(elapsedMs / 1000))}s`
     : 'was aborted'
   const prefix = `[partial ${reason}] Returned ${matches.length} match line${matches.length === 1 ? '' : 's'} before grep ${reasonText}. Narrow the pattern or path to continue.`
-  const body = matches.length > 0 ? matches.slice(0, MAX_RESULTS).join('\n') : 'No matches found before the run stopped.'
+  const formatted = formatGrepMatchesForOutput(matches)
+  const body = matches.length > 0 ? formatted.output : 'No matches found before the run stopped.'
   return {
     output: `${prefix}\n${body}`,
     isError: false,
     metadata: {
       matchLines: Math.min(matches.length, MAX_RESULTS),
+      displayedMatchLines: formatted.displayedMatchLines,
+      lineTruncatedCount: formatted.lineTruncatedCount,
+      outputTruncated: formatted.outputTruncated,
+      omittedMatchLines: formatted.omittedMatchLines,
       engine,
       partial: true,
       reason,
       narrowedNeeded: true,
     },
+  }
+}
+
+interface FormattedGrepMatches {
+  output: string
+  displayedMatchLines: number
+  lineTruncatedCount: number
+  outputTruncated: boolean
+  omittedMatchLines: number
+}
+
+function formatGrepMatchesForOutput(matches: string[]): FormattedGrepMatches {
+  const limited = matches.slice(0, MAX_RESULTS)
+  const lines: string[] = []
+  let lineTruncatedCount = 0
+  let outputChars = 0
+  let outputTruncated = false
+  let omittedMatchLines = 0
+
+  for (let index = 0; index < limited.length; index += 1) {
+    const compact = compactGrepMatchLine(limited[index]!)
+    if (compact.truncated) lineTruncatedCount += 1
+    const extraChars = compact.text.length + (lines.length > 0 ? 1 : 0)
+    if (outputChars + extraChars > MAX_GREP_OUTPUT_CHARS) {
+      outputTruncated = true
+      omittedMatchLines = limited.length - index
+      break
+    }
+    lines.push(compact.text)
+    outputChars += extraChars
+  }
+
+  if (outputTruncated) {
+    lines.push(`[grep output truncated: ${omittedMatchLines} match line${omittedMatchLines === 1 ? '' : 's'} omitted. Narrow pattern/path or set a smaller maxResults to inspect more precisely.]`)
+  }
+
+  return {
+    output: lines.join('\n'),
+    displayedMatchLines: lines.length - (outputTruncated ? 1 : 0),
+    lineTruncatedCount,
+    outputTruncated,
+    omittedMatchLines,
+  }
+}
+
+function compactGrepMatchLine(line: string): { text: string; truncated: boolean } {
+  if (line.length <= MAX_MATCH_LINE_CHARS) return { text: line, truncated: false }
+  const omitted = line.length - MAX_MATCH_LINE_CHARS
+  return {
+    text: `${line.slice(0, MAX_MATCH_LINE_CHARS)}...[line truncated, ${omitted} chars omitted]`,
+    truncated: true,
   }
 }
 

@@ -394,6 +394,91 @@ describe('runConversationLoop', () => {
     expect(toolResult.content).toContain('[Runtime failure-policy guard]')
   })
 
+  it('continues after a recoverable WebFetch 403 when same turn has successful fallback evidence', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Check the latest OpenClaw version.')
+
+    const dispatcher = new ToolDispatcher()
+    const ranTools: string[] = []
+    dispatcher.register({
+      name: 'WebFetch',
+      description: 'fake web fetch',
+      async execute() {
+        ranTools.push('WebFetch')
+        return {
+          output:
+            'Error: HTTP 403 Forbidden fetching https://www.npmjs.com/package/openclaw\n' +
+            'Recovery: recoverable fetch block; try BrowserJob with provider=chrome_headless, use a documented API endpoint, or record this URL as blocked evidence instead of repeatedly retrying WebFetch.\n' +
+            'Response snippet: Just a moment...',
+          isError: true,
+          metadata: {
+            failureCategory: 'remote:blocked_source',
+            httpStatus: 403,
+            recoverable: true,
+            blockedSource: true,
+          },
+        }
+      },
+    })
+    dispatcher.register({
+      name: 'WebSearch',
+      description: 'fake web search',
+      async execute() {
+        ranTools.push('WebSearch')
+        return {
+          output: 'Search results: OpenClaw 2026.4.9 release notes found.',
+          isError: false,
+        }
+      },
+    })
+
+    let callCount = 0
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      callCount++
+      if (callCount === 1) {
+        return new Response(JSON.stringify({
+          type: 'message',
+          role: 'assistant',
+          model: 'test-model',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'tool-fetch',
+              name: 'WebFetch',
+              input: { url: 'https://www.npmjs.com/package/openclaw' },
+            },
+            {
+              type: 'tool_use',
+              id: 'tool-search',
+              name: 'WebSearch',
+              input: { query: 'OpenClaw latest version release 2026 npm github' },
+            },
+          ],
+          stop_reason: 'tool_use',
+          usage: { input_tokens: 12, output_tokens: 5 },
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        type: 'message',
+        role: 'assistant',
+        model: 'test-model',
+        content: [{ type: 'text', text: 'Recovered via search; npm page fetch was blocked.' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 20, output_tokens: 8 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test-key',
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(ranTools).toEqual(['WebFetch', 'WebSearch'])
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('Recovered via search')
+  })
+
   it('2026-05-28: auto-retries on 400 + rate-limit detail (mimo cluster rate-limit shape) and reaches end_turn', async () => {
     // End-to-end pin for a66383e (provider-error rate-limit detection).
     // Chain: messages endpoint detects 400 + "Cluster rate limit exceeded"

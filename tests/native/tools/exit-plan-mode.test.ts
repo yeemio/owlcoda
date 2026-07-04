@@ -84,4 +84,34 @@ describe('ExitPlanMode tool', () => {
       exitRequested: true,
     })
   })
+
+  it('under OWLCODA_MODES syncs legacy state from shared plan mode before exit request', async () => {
+    process.env['OWLCODA_MODES'] = '1'
+    const state: PlanModeState = { inPlanMode: false }
+    const operatingModeState: OperatingModeState = { mode: 'plan' }
+    const tool = createExitPlanModeTool(state, {
+      getOperatingModeState: () => operatingModeState,
+    })
+
+    const result = await tool.execute({})
+
+    expect(result.isError).toBe(false)
+    expect(result.metadata).toMatchObject({ mode: 'plan', exitRequested: true })
+    expect(state.inPlanMode).toBe(true)
+  })
+
+  it('under OWLCODA_MODES clears stale legacy state when shared mode is no longer plan', async () => {
+    process.env['OWLCODA_MODES'] = '1'
+    const state: PlanModeState = { inPlanMode: true }
+    const operatingModeState: OperatingModeState = { mode: 'normal' }
+    const tool = createExitPlanModeTool(state, {
+      getOperatingModeState: () => operatingModeState,
+    })
+
+    const result = await tool.execute({})
+
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('Not currently in plan mode')
+    expect(state.inPlanMode).toBe(false)
+  })
 })

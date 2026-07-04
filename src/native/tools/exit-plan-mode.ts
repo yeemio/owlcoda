@@ -29,12 +29,14 @@ export function createExitPlanModeTool(
         const modeState = deps.getOperatingModeState?.()
         if (modeState) {
           if (modeState.mode !== 'plan') {
+            state.inPlanMode = false
             return {
               output: 'Not currently in plan mode. Use /mode plan first.',
               isError: true,
             }
           }
 
+          state.inPlanMode = true
           state.planText = summarizeAllowedPrompts(input.allowedPrompts ?? [])
           const prompts = input.allowedPrompts ?? []
           const promptsSummary = formatPromptsSummary(prompts)

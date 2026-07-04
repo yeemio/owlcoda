@@ -71,6 +71,18 @@ describe('audit-log', () => {
     expect(summary.avgDurationMs).toBe(150)
   })
 
+  it('summarizes gateway auth failures and status counts for observability surfaces', () => {
+    auditRequest({ method: 'POST', path: '/v1/messages', model: '/v1/messages', statusCode: 200, durationMs: 10 })
+    auditRequest({ method: 'POST', path: '/v1/messages', model: '/v1/messages', statusCode: 401, durationMs: 20 })
+    auditRequest({ method: 'POST', path: '/v1/messages', model: '/v1/messages', statusCode: 403, durationMs: 30 })
+
+    const summary = getAuditSummary()
+
+    expect(summary.statusCounts).toEqual({ '200': 1, '401': 1, '403': 1 })
+    expect(summary.authFailureCount).toBe(2)
+    expect(summary.gatewaySuccessRate).toBeCloseTo(1 / 3, 3)
+  })
+
   it('formatAuditEntries produces readable output', () => {
     auditRequest({ method: 'POST', path: '/v1/messages', model: 'test', statusCode: 200, durationMs: 42 })
     const output = formatAuditEntries(queryAudit())

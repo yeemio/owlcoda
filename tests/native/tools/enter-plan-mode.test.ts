@@ -71,4 +71,19 @@ describe('EnterPlanMode tool', () => {
     expect(operatingModeState.mode).toBe('plan')
     expect(result.metadata).toEqual({ mode: 'plan' })
   })
+
+  it('under OWLCODA_MODES syncs legacy state when shared mode is already plan', async () => {
+    process.env['OWLCODA_MODES'] = '1'
+    const state: PlanModeState = { inPlanMode: false }
+    const operatingModeState: OperatingModeState = { mode: 'plan' }
+    const tool = createEnterPlanModeTool(state, {
+      ensureOperatingModeState: () => operatingModeState,
+    })
+
+    const result = await tool.execute({})
+
+    expect(result.isError).toBe(false)
+    expect(result.output).toContain('Already in plan mode')
+    expect(state.inPlanMode).toBe(true)
+  })
 })

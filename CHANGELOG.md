@@ -2,6 +2,57 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.22] — 2026-07-04
+
+Runtime reliability and observability repair release.
+
+### Added
+
+- Added gateway audit data to `/v1/perf`, including auth failure counts, status
+  counts, gateway success rate, usable output rate, and zero/thin/slow output
+  counters.
+- Added dashboard and `/dashboard` slash command warnings for gateway and
+  usable-output health problems.
+- Added `ToolDisplayLifecycle` so TUI tool start/end rendering pairs by runtime
+  tool IDs, with same-name FIFO fallback when IDs are unavailable.
+- Added structured `active_step_conflict` repair hints for recoverable
+  `TaskUpdate` step-state conflicts.
+
+### Changed
+
+- `POST /v1/messages` now fails fast with `404 not_found_error` when a request
+  names an explicit unknown model, instead of silently falling back to another
+  configured model.
+- BrowserJob default artifacts now live under `~/.owlcoda/browser-jobs` instead
+  of the project root `.owlcoda-browser-jobs` directory.
+- `owlcoda stop --force` now prints the live REPL client and session details it
+  is about to detach.
+- Plan mode tools now keep the shared `operatingModeState.mode` and legacy
+  `PlanModeState.inPlanMode` synchronized under `OWLCODA_MODES`.
+
+### Fixed
+
+- Redacted Bash stdout, stderr, progress lines, provider thinking fields,
+  bearer/API tokens, URL tokens, long hex tokens, and common cloud/provider
+  secret shapes before tool output reaches the transcript.
+- Stored long Bash output as a redacted artifact and returned an `artifactRef`
+  instead of flooding context.
+- Truncated oversized Grep lines and total Grep output with metadata, and capped
+  full-file Read output for large files with guidance to continue by range.
+- Kept recoverable `web-fetch:http-403` failures from escalating into terminal
+  semantic failures, and avoided treating successful JSON quota wording as a
+  terminal failure.
+- Rejected `owlcoda serve --port ... &` launched from REPL Bash with guidance to
+  use lifecycle commands instead.
+- Avoided misclassifying macOS `/home/...` paths mapped through the data volume
+  as sensitive `/System` paths.
+
+### Notes
+
+- This release is a CLI/runtime reliability fix. It does not include
+  RunKit/Desktop, Mem, demo-lab, OwlFootball business logic, or private
+  execution prompts in the npm package.
+
 ## [0.15.21] — 2026-07-04
 
 Auditable instruction chain loading release.

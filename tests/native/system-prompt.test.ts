@@ -52,6 +52,17 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toContain('# Output')
   })
 
+  it('includes OwlCoda daemon and live-client lifecycle facts', () => {
+    const prompt = buildSystemPrompt()
+    expect(prompt).toContain('<owlcoda_runtime_facts>')
+    expect(prompt).toContain('owlcoda start')
+    expect(prompt).toContain('owlcoda status')
+    expect(prompt).toContain('owlcoda stop [--force]')
+    expect(prompt).toContain('owlcoda clients detach <id> [--force]')
+    expect(prompt).toContain('owlcoda service install')
+    expect(prompt).toMatch(/Do not present systemd, Docker, nohup/)
+  })
+
   // 0.13.58: investigate-before-asking discipline. The mionyee
   // long-context dogfood showed deepseek-v4-pro reflexively bouncing
   // clarifying questions back at the user instead of grepping the

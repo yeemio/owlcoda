@@ -2,6 +2,7 @@ import type { ToolResult } from './types.js'
 
 export type KnownToolFailureCategory =
   | 'remote:auth_or_permission'
+  | 'remote:blocked_source'
   | 'remote:rate_limit'
   | 'remote:api_error'
   | 'tool:fs_policy_denied'
@@ -39,6 +40,7 @@ export function classifyToolFailurePolicy(
   result: ToolResult,
 ): ToolFailurePolicy | null {
   const metadataPolicy = classifyToolMetadataFailure(result)
+  if (isRecoverableToolFailure(toolName, result)) return metadataPolicy
   const remotePolicy = classifyRemoteToolOutputFailure(toolName, input, result)
   if (remotePolicy) return remotePolicy
   return metadataPolicy
@@ -113,8 +115,12 @@ function classifyRemoteToolOutputFailure(
   if (!compact) return null
 
   const parsed = parseJsonishPayload(compact)
-  const searchable = parsed ? JSON.stringify(parsed) : compact.slice(0, 4000)
-  const machineErrorText = parsed || looksLikeShortRemoteErrorText(compact)
+  if (parsed) {
+    return classifyFatalRemoteErrorObject(parsed)
+  }
+
+  const searchable = compact.slice(0, 4000)
+  const machineErrorText = looksLikeShortRemoteErrorText(compact)
 
   if (machineErrorText && AUTH_OR_PERMISSION_RE.test(searchable)) {
     return {
@@ -136,11 +142,6 @@ function classifyRemoteToolOutputFailure(
       evidence: firstEvidence(searchable),
       source: 'remote-output',
     }
-  }
-
-  const fatalObject = parsed ? classifyFatalRemoteErrorObject(parsed) : null
-  if (fatalObject) {
-    return fatalObject
   }
 
   return null
@@ -185,6 +186,17 @@ function classifyToolMetadataFailure(result: ToolResult): ToolFailurePolicy | nu
     }
   }
 
+  if (metadata['failureCategory'] === 'remote:blocked_source' || metadata['blockedSource'] === true) {
+    return {
+      category: 'remote:blocked_source',
+      reason: `Remote source blocked direct fetch; preserve the URL as blocked evidence or use an alternate capture route (${evidence}).`,
+      terminal: false,
+      retryable: false,
+      evidence,
+      source: 'tool-metadata',
+    }
+  }
+
   if (metadata['aborted'] === true) {
     return {
       category: 'tool:aborted',
@@ -208,6 +220,13 @@ function classifyToolMetadataFailure(result: ToolResult): ToolFailurePolicy | nu
   }
 
   return null
+}
+
+function isRecoverableToolFailure(toolName: string, result: ToolResult): boolean {
+  const metadata = result.metadata ?? {}
+  return toolName === 'WebFetch'
+    && metadata['recoverable'] === true
+    && (metadata['failureCategory'] === 'remote:blocked_source' || metadata['failureCategory'] === 'web-fetch:http-403')
 }
 
 function classifyFatalRemoteErrorObject(value: unknown): ToolFailurePolicy | null {

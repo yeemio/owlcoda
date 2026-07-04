@@ -579,12 +579,9 @@ describe('getDefaultConfiguredModel', () => {
 
 describe('isModelExplicitlyConfigured', () => {
   // Open Coding Lab dogfood: the model asked for `gpt-4o`, which is not
-  // configured locally. resolveConfiguredModel silently falls back to the
-  // default (the gateway behavior cloud-name → local routing depends on), so
-  // the caller had no way to know it was NOT actually running gpt-4o. This
-  // predicate is the opt-in strict check a benchmark/lab runner uses to fail
-  // fast instead of silently testing the wrong model. It deliberately does NOT
-  // change the lenient default.
+  // configured locally. The lower-level resolver can still return the default,
+  // so gateway and benchmark callers use this predicate to fail fast before
+  // silently testing or serving the wrong model.
   it('returns true for an exactly configured model id', () => {
     const config = makeRegistryConfig([makeModel({ id: 'qwen2.5-coder' })])
     expect(isModelExplicitlyConfigured(config, 'qwen2.5-coder')).toBe(true)

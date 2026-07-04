@@ -362,6 +362,13 @@ function sensitiveDeny(absPath: string, ctx: SensitiveContext): string | null {
     // chain like /etc → /private/etc is matched no matter which side the
     // resolved write target landed on.
     const normalizedRoot = normalizeRoot(path)
+    if (
+      ctx.plat === 'darwin' &&
+      path === '/System' &&
+      isMacOSDataVolumeUserPath(absPath)
+    ) {
+      continue
+    }
     if (isWithin(absPath, normalizedRoot)) {
       return `Refusing to write to sensitive location: ${label}`
     }
@@ -370,4 +377,9 @@ function sensitiveDeny(absPath: string, ctx: SensitiveContext): string | null {
     }
   }
   return null
+}
+
+function isMacOSDataVolumeUserPath(absPath: string): boolean {
+  return isWithin(absPath, '/System/Volumes/Data/home')
+    || isWithin(absPath, '/System/Volumes/Data/Users')
 }

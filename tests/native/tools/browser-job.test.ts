@@ -43,11 +43,13 @@ describe('BrowserJob platform tool', () => {
     await rm(artifactDir, { recursive: true, force: true })
   })
 
-  it('exposes fetch_html and chrome_headless provider schema', () => {
-    const schema = NATIVE_TOOL_SCHEMAS['BrowserJob'] as Record<string, any>
-    expect(schema.properties.provider.enum).toEqual(['fetch_html', 'chrome_headless'])
-    expect(schema.properties.chromeExecutablePath.description).toContain('Chrome/Chromium')
-  })
+	  it('exposes fetch_html and chrome_headless provider schema', () => {
+	    const schema = NATIVE_TOOL_SCHEMAS['BrowserJob'] as Record<string, any>
+	    expect(schema.properties.provider.enum).toEqual(['fetch_html', 'chrome_headless'])
+	    expect(schema.properties.chromeExecutablePath.description).toContain('Chrome/Chromium')
+	    expect(schema.properties.artifactDir.description).toContain('~/.owlcoda/browser-jobs')
+	    expect(schema.properties.artifactDir.description).not.toContain('.owlcoda-browser-jobs under cwd')
+	  })
 
   it('captures a URL as a browser job with queryable artifacts', async () => {
     const tool = createBrowserJobTool()
@@ -96,6 +98,32 @@ describe('BrowserJob platform tool', () => {
     expect(got.output).toContain('Type: browser')
     expect(got.output).toContain(htmlPath)
     expect(got.output).toContain('Provider: fetch_html')
+  })
+
+  it('stores default browser artifacts under OWLCODA_HOME instead of polluting the project cwd', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'owlcoda-browser-job-cwd-'))
+    const home = await mkdtemp(join(tmpdir(), 'owlcoda-browser-job-home-'))
+    const previousHome = process.env['OWLCODA_HOME']
+    const tool = createBrowserJobTool()
+    try {
+      process.env['OWLCODA_HOME'] = home
+      const result = await tool.execute({
+        url: `${baseUrl}/page`,
+        cwd,
+        deadlineMs: 1000,
+      })
+
+      expect(result.isError).toBe(false)
+      const job = (result.metadata as any).job
+      const htmlPath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_html').path
+      expect(htmlPath).toContain(join(home, 'browser-jobs'))
+      expect(existsSync(join(cwd, '.owlcoda-browser-jobs'))).toBe(false)
+    } finally {
+      if (previousHome === undefined) delete process.env['OWLCODA_HOME']
+      else process.env['OWLCODA_HOME'] = previousHome
+      await rm(cwd, { recursive: true, force: true })
+      await rm(home, { recursive: true, force: true })
+    }
   })
 
   it('captures a URL through a chrome_headless provider with screenshot and DOM artifacts', async () => {
