@@ -6,8 +6,8 @@
  */
 
 import { createHash } from 'node:crypto'
-import { realpathSync } from 'node:fs'
-import { basename as pathBasename, dirname as pathDirname, isAbsolute as pathIsAbsolute, normalize as pathNormalize, resolve as pathResolve } from 'node:path'
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { basename as pathBasename, dirname as pathDirname, isAbsolute as pathIsAbsolute, join as pathJoin, normalize as pathNormalize, resolve as pathResolve } from 'node:path'
 import * as v8 from 'node:v8'
 import type {
   AnthropicContentBlock,
@@ -20,6 +20,7 @@ import type {
 } from './protocol/types.js'
 import type { AnthropicMessagesRequest } from './protocol/types.js'
 import { computeAdaptiveTimeoutMs } from '../middleware/adaptive-timeout.js'
+import { getOwlcodaDir } from '../paths.js'
 import { buildAnthropicMessagesUrl } from '../url-normalize.js'
 import type { AskUserQuestionOpts, ToolProgressEvent } from './tools/types.js'
 import { buildRequest, sanitizeConversationTurns } from './protocol/request.js'
@@ -559,6 +560,7 @@ function shouldSuppressProductionGateForStructuredStep(conversationId?: string):
 const CROSS_TURN_FAILURE_CLASS_LIMIT = 5
 const TOOL_OUTPUT_MAX_CHARS = 20_000 // truncate individual tool outputs beyond this
 const TOOL_DISPLAY_OUTPUT_MAX_CHARS = 8_000 // callback/display copy should be smaller than model retention
+const DEFAULT_PER_TURN_INPUT_TOKEN_BUDGET = 500_000
 const TOOL_ONLY_NUDGE_THRESHOLD = 3
 // How many consecutive summary-gate violations we tolerate before hard-stopping.
 // A single violation used to break the loop immediately — too aggressive for
@@ -588,6 +590,7 @@ const EXPLORATORY_TOOL_FANOUT_LIMIT = 4
 const EXPLORATORY_TOOL_FANOUT_LIMIT_MAX = 8
 const TARGETED_CHECK_TOOL_LIMIT = 1
 const CONVERGENCE_ENTRY_SIGNAL_THRESHOLD = 3
+let toolOutputArtifactCounter = 0
 const CONVERGENCE_ENTRY_TARGET_THRESHOLD = 4
 const CONVERGENCE_ENTRY_BATCH_THRESHOLD = 2
 const CONVERGENCE_ENTRY_REQUEST_THRESHOLD = 3
@@ -943,6 +946,8 @@ export interface ConversationLoopOptions {
   /** 0.13.98 Batch B: bounded compactor input cap in tokens (default
    *  8000). Resolved by REPL from `middleware.compactionInputMaxTokens`. */
   compactionInputMaxTokens?: number
+  /** Warn when one provider request reports input tokens above this budget. */
+  perTurnInputTokenBudget?: number
   /**
    * Working directory for the task execution state. When provided, this is
    * passed to `ensureTaskExecutionState` as the `cwd` so that write-scope
@@ -1921,6 +1926,7 @@ export async function runConversationLoop(
 
     if (opts.signal?.aborted) break
     recordResponseUsage(totalUsage, convergence, response)
+    maybeWarnPerTurnInputBudget(response, opts)
     recordTurnResponseObserved(turnResponseSummary, response)
 
     if (turnPlan.mode === 'synthesis') {
@@ -2312,6 +2318,29 @@ export async function runConversationLoop(
       }
       if (toolPlan.summaryGateTriggered) {
         convergence.summaryGatePending = true
+      }
+    }
+    if (shouldDropFinalBookkeepingToolUse(response)) {
+      appendRuntimeEvent(conversation, {
+        kind: 'runtime_intervention',
+        turnId: runtimeTurnId,
+        payload: {
+          intervention_kind: 'final_text_bookkeeping_tool_drop',
+          action: 'dropped_bookkeeping_tool_use_preserved_text',
+          ignored_tool_count: response.toolUseBlocks.length,
+          ignored_tools: response.toolUseBlocks.map(summarizeIgnoredRuntimeTruthResumeTool),
+        },
+      })
+      opts.callbacks?.onNotice?.(
+        `Final response gate: ignored ${response.toolUseBlocks.length} bookkeeping tool request(s) and preserved the final text.`,
+      )
+      response = normalizeFinalAnswerResponse(response, response.text)
+      toolPlan = {
+        executeBlocks: [],
+        runtimeBlocks: [],
+        notices: [],
+        summaryGateTriggered: false,
+        targetedCheckConsumed: false,
       }
     }
 
@@ -3900,6 +3929,20 @@ function hasMeaningfulAssistantText(text: string): boolean {
   return normalizeWhitespace(text).length > 0
 }
 
+function shouldDropFinalBookkeepingToolUse(response: AssistantResponse): boolean {
+  if (response.toolUseBlocks.length === 0) return false
+  if (!response.toolUseBlocks.every(block => block.name === 'TodoWrite')) return false
+  return looksLikeSubstantialFinalReport(response.text)
+}
+
+function looksLikeSubstantialFinalReport(text: string): boolean {
+  const normalized = normalizeWhitespace(text)
+  if (normalized.length < 120) return false
+  const nonEmptyLines = text.split('\n').filter(line => normalizeWhitespace(line).length > 0).length
+  if (nonEmptyLines >= 3) return true
+  return /(?:验收|结论|完成|交付|报告|证据|阻塞|PASS|FAIL|Conclusion|Evidence|Result|Summary)/i.test(normalized)
+}
+
 function shouldEnforceRuntimeTruthResumeReportGate(conversation: Conversation): { checkpointId: string } | null {
   const state = conversation.options?.runtimeTruthResume
   if (!state || state.reportGate !== 'pending') return null
@@ -4260,6 +4303,23 @@ function recordResponseUsage(
   convergence.requestCount += 1
 }
 
+function maybeWarnPerTurnInputBudget(response: AssistantResponse, opts: ConversationLoopOptions): void {
+  const budget = resolvePerTurnInputTokenBudget(opts.perTurnInputTokenBudget)
+  if (budget <= 0) return
+  const inputTokens = response.usage.inputTokens
+  if (inputTokens <= budget) return
+  opts.callbacks?.onNotice?.(
+    `Input budget warning: this request used ${inputTokens.toLocaleString()} input tokens, above the per-turn budget ${budget.toLocaleString()}. ` +
+      'Saved tool-output artifacts are available for oversized tool results; consider compacting or starting a fresh session before continuing.',
+  )
+}
+
+function resolvePerTurnInputTokenBudget(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_PER_TURN_INPUT_TOKEN_BUDGET
+  if (!Number.isFinite(value) || value <= 0) return 0
+  return Math.floor(value)
+}
+
 async function settleSynthesisResponse(
   response: AssistantResponse,
   conversation: Conversation,
@@ -4296,6 +4356,7 @@ async function settleSynthesisResponse(
   }
 
   recordResponseUsage(totalUsage, convergence, fallbackResponse)
+  maybeWarnPerTurnInputBudget(fallbackResponse, opts)
   recordTurnResponseObserved(turnResponseSummary, fallbackResponse)
   const fallbackValidation = validateFinalAnswerContract(fallbackResponse)
   if (fallbackValidation.ok) {
@@ -6149,12 +6210,12 @@ function truncateToolResultBlocks<T>(
 
     const content = b.content
     if (typeof content === 'string' && content.length > maxChars) {
-      return { ...b, content: truncateText(content, maxChars, toolName) } as T
+      return { ...b, content: truncateText(content, maxChars, toolName, { persistRaw: true }) } as T
     }
     if (Array.isArray(content)) {
       return { ...b, content: content.map((item: any) => {
         if (item?.type === 'text' && typeof item.text === 'string' && item.text.length > maxChars) {
-          return { ...item, text: truncateText(item.text, maxChars, toolName) }
+          return { ...item, text: truncateText(item.text, maxChars, toolName, { persistRaw: true }) }
         }
         return item
       })} as T
@@ -6176,19 +6237,58 @@ function retainToolOutput(
   toolName: string,
   limits: Record<string, number>,
   defaultMaxChars: number,
+  opts: { persistRaw?: boolean } = {},
 ): string {
   const maxChars = getToolRetentionLimit(toolName, limits, defaultMaxChars)
   if (output.length <= maxChars) {
     return output
   }
-  return truncateText(output, maxChars, toolName)
+  return truncateText(output, maxChars, toolName, opts)
 }
 
-function truncateText(text: string, maxChars: number, toolName: string): string {
+function truncateText(text: string, maxChars: number, toolName: string, opts: { persistRaw?: boolean } = {}): string {
   const head = text.slice(0, Math.floor(maxChars * 0.6))
   const tail = text.slice(-Math.floor(maxChars * 0.2))
   const omitted = text.length - head.length - tail.length
-  return `${head}\n\n[… ${omitted} chars from ${toolName || 'tool'} output truncated — kept ${maxChars} of ${text.length} …]\n\n${tail}`
+  const artifact = opts.persistRaw ? persistToolOutputArtifact(toolName || 'tool', text) : null
+  const artifactSuffix = artifact
+    ? `; raw saved artifactRef=${artifact.artifactRef} path=${artifact.path} sha256=${artifact.sha256}`
+    : ''
+  return `${head}\n\n[… ${omitted} chars from ${toolName || 'tool'} output truncated — kept ${maxChars} of ${text.length}${artifactSuffix} …]\n\n${tail}`
+}
+
+interface ToolOutputArtifactRecord {
+  artifactRef: string
+  path: string
+  sha256: string
+}
+
+function persistToolOutputArtifact(toolName: string, output: string): ToolOutputArtifactRecord | null {
+  try {
+    const sha256 = createHash('sha256').update(output).digest('hex')
+    const artifactDir = pathJoin(getOwlcodaDir(), 'tool-output-artifacts')
+    mkdirSync(artifactDir, { recursive: true })
+    const safeTool = toolName.replace(/[^a-z0-9._-]+/gi, '-').replace(/^-+|-+$/g, '') || 'tool'
+    const filename = `${new Date().toISOString().replace(/[:.]/g, '-')}-${++toolOutputArtifactCounter}-${safeTool}-${sha256.slice(0, 12)}.json`
+    const artifactPath = pathJoin(artifactDir, filename)
+    const payload = {
+      schema: 'owlcoda.tool_output.v1',
+      toolName,
+      createdAt: new Date().toISOString(),
+      chars: output.length,
+      bytes: Buffer.byteLength(output, 'utf8'),
+      sha256,
+      output,
+    }
+    writeFileSync(artifactPath, JSON.stringify(payload, null, 2) + '\n', 'utf8')
+    return {
+      artifactRef: `owlcoda://tool-output-artifacts/${filename}`,
+      path: artifactPath,
+      sha256,
+    }
+  } catch {
+    return null
+  }
 }
 
 function createToolOnlyNudgeBlock(): AnthropicTextBlock {
@@ -8321,6 +8421,7 @@ async function executeTools(
       block.name,
       TOOL_RETENTION_LIMITS,
       TOOL_OUTPUT_MAX_CHARS,
+      { persistRaw: true },
     )
     const displayOutput = retainToolOutput(
       result.result.output,

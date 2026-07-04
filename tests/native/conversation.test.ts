@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -1829,6 +1829,9 @@ describe('runConversationLoop', () => {
   }, 8000)
 
   it('caps large tool outputs before callback display and conversation retention', async () => {
+    const previousHome = process.env['OWLCODA_HOME']
+    const toolOutputHome = await mkdtemp(join(tmpdir(), 'owlcoda-tool-output-artifact-'))
+    process.env['OWLCODA_HOME'] = toolOutputHome
     const conv = createConversation({ system: 'test', model: 'test-model' })
     addUserMessage(conv, 'Read the SQL file')
 
@@ -1878,29 +1881,82 @@ describe('runConversationLoop', () => {
       durationMs: 12,
     })
 
-    const result = await runConversationLoop(conv, dispatcher, {
+    try {
+      const result = await runConversationLoop(conv, dispatcher, {
+        apiBaseUrl: 'http://localhost:0',
+        apiKey: 'test-key',
+        callbacks: { onToolEnd },
+      })
+
+      expect(result.finalText).toBe('Done')
+      expect(onToolEnd).toHaveBeenCalledTimes(1)
+
+      const callbackOutput = onToolEnd.mock.calls[0]![1] as string
+      expect(callbackOutput).toContain('read output truncated')
+      expect(callbackOutput.length).toBeLessThanOrEqual(8_300)
+
+      const toolResultTurn = result.conversation.turns.findLast(
+        turn => turn.role === 'user' && turn.content.some(block => block.type === 'tool_result'),
+      )
+      const toolResultBlock = toolResultTurn?.content.find(
+        block => block.type === 'tool_result',
+      ) as { type: 'tool_result'; content: string } | undefined
+
+      expect(toolResultBlock?.content).toContain('read output truncated')
+      expect(toolResultBlock?.content).toContain('artifactRef=owlcoda://tool-output-artifacts/')
+      expect(toolResultBlock?.content).toContain('sha256=')
+      expect(toolResultBlock?.content.length ?? 0).toBeLessThanOrEqual(15_800)
+      expect((toolResultBlock?.content.length ?? 0)).toBeGreaterThan(callbackOutput.length)
+
+      const artifactPath = toolResultBlock?.content.match(/path=(\/[^\s]+)/)?.[1]
+      expect(artifactPath).toContain(join(toolOutputHome, 'tool-output-artifacts'))
+      const artifact = JSON.parse(await readFile(artifactPath!, 'utf8')) as {
+        schema: string
+        toolName: string
+        output: string
+        sha256: string
+      }
+      expect(artifact.schema).toBe('owlcoda.tool_output.v1')
+      expect(artifact.toolName).toBe('read')
+      expect(artifact.output).toBe(hugeOutput)
+      expect(artifact.sha256).toMatch(/^[0-9a-f]{64}$/)
+    } finally {
+      if (previousHome === undefined) delete process.env['OWLCODA_HOME']
+      else process.env['OWLCODA_HOME'] = previousHome
+      await rm(toolOutputHome, { recursive: true, force: true })
+    }
+  })
+
+  it('warns when a single request exceeds the per-turn input token budget', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Summarize the current workspace')
+    const onNotice = vi.fn()
+    const dispatcher = new ToolDispatcher()
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        type: 'message',
+        role: 'assistant',
+        model: 'test-model',
+        content: [{ type: 'text', text: 'Summary' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 250, output_tokens: 5 },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+
+    await runConversationLoop(conv, dispatcher, {
       apiBaseUrl: 'http://localhost:0',
       apiKey: 'test-key',
-      callbacks: { onToolEnd },
+      perTurnInputTokenBudget: 100,
+      callbacks: { onNotice },
     })
 
-    expect(result.finalText).toBe('Done')
-    expect(onToolEnd).toHaveBeenCalledTimes(1)
-
-    const callbackOutput = onToolEnd.mock.calls[0]![1] as string
-    expect(callbackOutput).toContain('read output truncated')
-    expect(callbackOutput.length).toBeLessThanOrEqual(8_300)
-
-    const toolResultTurn = result.conversation.turns.findLast(
-      turn => turn.role === 'user' && turn.content.some(block => block.type === 'tool_result'),
-    )
-    const toolResultBlock = toolResultTurn?.content.find(
-      block => block.type === 'tool_result',
-    ) as { type: 'tool_result'; content: string } | undefined
-
-    expect(toolResultBlock?.content).toContain('read output truncated')
-    expect(toolResultBlock?.content.length ?? 0).toBeLessThanOrEqual(15_300)
-    expect((toolResultBlock?.content.length ?? 0)).toBeGreaterThan(callbackOutput.length)
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('Input budget warning'))
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('250'))
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('100'))
   })
 
   // ── P0 cancel-chain regression guard ──

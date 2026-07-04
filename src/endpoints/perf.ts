@@ -52,6 +52,7 @@ export function handlePerf(_req: IncomingMessage, res: ServerResponse): void {
       total_entries: audit.totalEntries,
       error_count: audit.errorCount,
       auth_failure_count: audit.authFailureCount,
+      auth_failure_sources: audit.authFailureSources,
       gateway_success_rate: audit.gatewaySuccessRate,
       status_counts: audit.statusCounts,
       avg_duration_ms: audit.avgDurationMs,

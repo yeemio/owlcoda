@@ -20,6 +20,7 @@ describe('app-server loop config resolver', () => {
       middleware: {
         compactionModel: 'compact-model',
         compactionInputMaxTokens: 4567,
+        perTurnInputTokenBudget: 123456,
         requestTimeoutMs: 9876,
       },
     })
@@ -35,6 +36,7 @@ describe('app-server loop config resolver', () => {
         contextWindow: 123456,
         compactionModel: 'compact-model',
         compactionInputMaxTokens: 4567,
+        perTurnInputTokenBudget: 123456,
         requestTimeoutMs: 9876,
       },
     })

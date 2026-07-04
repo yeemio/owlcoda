@@ -428,11 +428,13 @@ function toolDisplayIdentity(runtime?: ToolDisplayRuntimeIdentity): string | nul
 export class ToolDisplayLifecycle {
   private byIdentity = new Map<string, PendingToolDisplay>()
   private byName = new Map<string, PendingToolDisplay[]>()
+  private completedIdentities = new Set<string>()
 
   start(name: string, input: Record<string, unknown>, runtime?: ToolDisplayRuntimeIdentity): void {
     const identity = toolDisplayIdentity(runtime)
     const pending = { name, input }
     if (identity) {
+      this.completedIdentities.delete(identity)
       this.byIdentity.set(identity, pending)
       return
     }
@@ -447,6 +449,7 @@ export class ToolDisplayLifecycle {
       const pending = this.byIdentity.get(identity)
       if (pending) {
         this.byIdentity.delete(identity)
+        this.completedIdentities.add(identity)
         return pending.input
       }
     }
@@ -466,12 +469,15 @@ export class ToolDisplayLifecycle {
     durationMs: number,
     runtime?: ToolDisplayRuntimeIdentity,
   ): string {
+    const identity = toolDisplayIdentity(runtime)
+    if (identity && this.completedIdentities.has(identity)) return ''
     return formatToolGroup(name, this.complete(name, runtime), output, isError, durationMs)
   }
 
   clear(): void {
     this.byIdentity.clear()
     this.byName.clear()
+    this.completedIdentities.clear()
   }
 }
 

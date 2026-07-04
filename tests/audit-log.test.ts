@@ -83,6 +83,52 @@ describe('audit-log', () => {
     expect(summary.gatewaySuccessRate).toBeCloseTo(1 / 3, 3)
   })
 
+  it('groups auth failures by client source so paired 401s can be attributed', () => {
+    auditRequest({
+      method: 'POST',
+      path: '/v1/messages',
+      model: '/v1/messages',
+      statusCode: 401,
+      durationMs: 20,
+      remoteAddress: '127.0.0.1',
+      userAgent: 'bad-client/1.0',
+      apiKeyFingerprint: 'sha256:badkey',
+    })
+    auditRequest({
+      method: 'POST',
+      path: '/v1/messages',
+      model: '/v1/messages',
+      statusCode: 401,
+      durationMs: 22,
+      remoteAddress: '127.0.0.1',
+      userAgent: 'bad-client/1.0',
+      apiKeyFingerprint: 'sha256:badkey',
+    })
+    auditRequest({
+      method: 'POST',
+      path: '/v1/messages',
+      model: '/v1/messages',
+      statusCode: 200,
+      durationMs: 10,
+      remoteAddress: '127.0.0.1',
+      userAgent: 'good-client/1.0',
+      apiKeyFingerprint: 'sha256:goodkey',
+    })
+
+    const summary = getAuditSummary()
+
+    expect(summary.authFailureSources).toEqual([
+      expect.objectContaining({
+        sourceKey: 'key=sha256:badkey ua=bad-client/1.0 remote=127.0.0.1',
+        authFailureCount: 2,
+        statusCounts: { '401': 2 },
+        apiKeyFingerprint: 'sha256:badkey',
+        userAgent: 'bad-client/1.0',
+        remoteAddress: '127.0.0.1',
+      }),
+    ])
+  })
+
   it('formatAuditEntries produces readable output', () => {
     auditRequest({ method: 'POST', path: '/v1/messages', model: 'test', statusCode: 200, durationMs: 42 })
     const output = formatAuditEntries(queryAudit())

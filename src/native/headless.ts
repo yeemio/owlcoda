@@ -453,6 +453,7 @@ export async function runHeadless(opts: HeadlessOptions): Promise<HeadlessResult
     contextWindow: resolveModelContextWindow(headlessConfig, conversation.model),
     compactionModel: headlessConfig.middleware?.compactionModel,
     compactionInputMaxTokens: headlessConfig.middleware?.compactionInputMaxTokens,
+    perTurnInputTokenBudget: headlessConfig.middleware?.perTurnInputTokenBudget,
   }
 
   try {

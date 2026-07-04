@@ -114,6 +114,7 @@ export function validateConfig(raw: unknown): ValidationResult {
         checkBoolean(mw, 'nonStreamFallbackToStreamingEnabled'),
         checkString(mw, 'compactionModel'),
         checkNumber(mw, 'compactionInputMaxTokens', 1000),
+        checkNumber(mw, 'perTurnInputTokenBudget', 0),
         checkNumber(mw, 'maxRequestBodyBytes', 1024),
       ]
       for (const err of mwChecks) {

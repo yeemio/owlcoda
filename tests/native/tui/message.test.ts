@@ -787,6 +787,20 @@ describe('ToolDisplayLifecycle', () => {
     expect(firstOutput).not.toContain('second command')
   })
 
+  it('ignores duplicate completion events for the same runtime identity', () => {
+    const lifecycle = new ToolDisplayLifecycle()
+    const runtime = { toolUseId: 'tool-1', itemId: 'tool-1', runtimeTurnId: 'turn-1' }
+
+    lifecycle.start('bash', { command: 'npm test' }, runtime)
+
+    const first = stripAnsi(lifecycle.formatCompleted('bash', 'line\nline2', false, 10, runtime))
+    const duplicate = stripAnsi(lifecycle.formatCompleted('bash', 'line\nline2', false, 10, runtime))
+
+    expect(first).toContain('npm test')
+    expect(first).toContain('line')
+    expect(duplicate).toBe('')
+  })
+
   it('falls back to FIFO by tool name when runtime identity is unavailable', () => {
     const lifecycle = new ToolDisplayLifecycle()
     lifecycle.start('bash', { command: 'first command' })

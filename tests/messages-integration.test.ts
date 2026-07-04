@@ -184,6 +184,26 @@ describe('messages endpoint — non-streaming', () => {
     expect(lastRouterRequest!.url).toBe('/v1/chat/completions')
   })
 
+  it('records the requested model in request audit entries instead of the path', async () => {
+    mockRouterHandler = undefined as any
+
+    const res = await post('/v1/messages', {
+      model: 'default',
+      messages: [{ role: 'user', content: 'audit model field' }],
+      max_tokens: 100,
+    })
+    expect(res.status).toBe(200)
+
+    const auditRes = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/audit?path=/v1/messages&limit=1`)
+    const audit = await auditRes.json() as { entries: Array<{ path: string; model: string; statusCode: number }> }
+
+    expect(audit.entries[0]).toMatchObject({
+      path: '/v1/messages',
+      model: 'default',
+      statusCode: 200,
+    })
+  })
+
   it('rejects unknown requested models instead of silently serving the default', async () => {
     mockRouterHandler = undefined as any
     lastRouterRequest = null

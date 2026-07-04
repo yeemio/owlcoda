@@ -163,6 +163,9 @@ async function handleMessagesInner(
     res.end(JSON.stringify(err.body))
     return
   }
+  if (typeof body.model === 'string' && body.model.trim().length > 0) {
+    ;(res as ServerResponse & { __owlcodaAuditModel?: string }).__owlcodaAuditModel = body.model.trim()
+  }
 
   // 2. Validation (structured)
   const validation = validateMessagesBody(body)

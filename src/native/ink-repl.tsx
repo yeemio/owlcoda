@@ -1685,6 +1685,7 @@ function NativeReplApp({
           // → DEFAULT_COMPACTION_INPUT_MAX_TOKENS (8000) inside the helper.
           compactionModel: configRef.current.middleware?.compactionModel,
           compactionInputMaxTokens: configRef.current.middleware?.compactionInputMaxTokens,
+          perTurnInputTokenBudget: configRef.current.middleware?.perTurnInputTokenBudget,
         } satisfies ConversationLoopOptions,
       )
       taskFailed = !task.aborted && runtimeFailure !== null

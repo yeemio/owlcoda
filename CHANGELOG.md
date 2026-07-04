@@ -2,6 +2,50 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.23] — 2026-07-04
+
+Runtime defect follow-up candidate for real workload regressions found in the
+sieracMes-AI test environment.
+
+### Added
+
+- Added `TaskUpdate({ completePrevious: true })` for atomic active-step handoff:
+  when moving a new step to `in_progress`, OwlCoda can complete the previous
+  active step first if that previous step is legally completable.
+- Added raw tool-output artifact preservation for oversized retained tool
+  results, with `artifactRef`, local artifact path, and `sha256` in the
+  truncated transcript marker.
+- Added per-turn input token budget warnings for oversized provider requests;
+  `middleware.perTurnInputTokenBudget` can tune the threshold or disable it.
+- Added gateway auth failure source attribution, grouping 401/403 records by
+  API-key fingerprint, user-agent, remote address, and optional client id.
+- Added `/v1/messages` audit attribution for the requested model, so
+  `/v1/audit` no longer records the endpoint path as the model name.
+
+### Changed
+
+- Standardized recoverable public WebFetch `403` blocks as
+  `remote:blocked_source`, keeping them non-terminal and preserving guidance to
+  use BrowserJob, documented APIs, or blocked-source evidence instead of
+  treating anti-bot pages as credential failures.
+- Aligned BrowserJob tool schema with runtime behavior: default browser
+  artifacts live under `~/.owlcoda/browser-jobs` unless a `runRef` or explicit
+  `artifactDir` is provided.
+- Updated model-routing comments/tests to match the current gateway contract:
+  explicit unknown model requests fail fast instead of silently serving the
+  configured default.
+- Suppressed duplicate TUI tool completion render events when the same runtime
+  tool identity is completed more than once.
+- Preserved substantial final-answer text when the model appends redundant
+  `TodoWrite` bookkeeping; OwlCoda now drops the redundant bookkeeping tool
+  request instead of turning an already-rendered answer into a `tool_loop`.
+
+### Notes
+
+- This candidate still does not add a full history-level rehydration system for
+  saved tool-output artifacts; it preserves raw evidence and exposes budget
+  pressure so long sessions no longer have to rely only on transcript text.
+
 ## [0.15.22] — 2026-07-04
 
 Runtime reliability and observability repair release.

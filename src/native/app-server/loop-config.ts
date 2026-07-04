@@ -40,6 +40,7 @@ export function resolveAppServerLoopConfig(config: OwlCodaConfig, modelId?: stri
       contextWindow: resolveModelContextWindow(config, model.id),
       compactionModel: config.middleware?.compactionModel,
       compactionInputMaxTokens: config.middleware?.compactionInputMaxTokens,
+      perTurnInputTokenBudget: config.middleware?.perTurnInputTokenBudget,
       requestTimeoutMs: config.middleware?.requestTimeoutMs,
     },
   }

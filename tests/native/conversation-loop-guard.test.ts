@@ -5321,6 +5321,53 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
     expect(errors.some((e) => /tool loop/.test(e))).toBe(true)
   })
 
+  it('preserves substantial final text when duplicate TodoWrite bookkeeping would re-trigger the loop guard', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Run the acceptance checklist and report the result')
+
+    const todoInput = {
+      todos: [{
+        content: '撰写交付报告',
+        status: 'completed',
+        activeForm: '撰写交付报告',
+      }],
+    }
+    const finalReport = [
+      '验收结论：本轮测试已完成，4 PASS / 1 FAIL。',
+      '',
+      '证据：中间件健康检查、全量门禁、pytest 套件、插件桥完整性均已记录命令与关键输出。',
+      '阻塞项：WeCom 自然语言路径仍然返回 agent-harness-runtime module not found。',
+      '成本行：本轮输入输出 token 已记录，未执行破坏性操作。',
+    ].join('\n')
+
+    const responses = [
+      ...Array.from({ length: 6 }, (_, index) =>
+        toolUseResponse('TodoWrite', `todo-${index + 1}`, todoInput)
+      ),
+      textAndToolUseResponse(finalReport, 'TodoWrite', 'todo-final', todoInput),
+    ]
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+    const errors: string[] = []
+    const notices: string[] = []
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      callbacks: {
+        onError(e) { errors.push(e) },
+        onNotice(n) { notices.push(n) },
+      },
+    })
+
+    expect(notices.some((n) => /Loop intercept \(soft\)/.test(n))).toBe(true)
+    expect(result.stopReason).toBe('end_turn')
+    expect(result.finalText).toContain('验收结论')
+    expect(errors.filter((e) => /tool loop/.test(e))).toEqual([])
+
+    const lastAssistant = result.conversation.turns.findLast(turn => turn.role === 'assistant')
+    expect(lastAssistant?.content.some((block: any) => block.type === 'tool_use')).toBe(false)
+  })
+
   it('OWLCODA_LOOP_INTERCEPT=hard preserves the legacy immediate-terminate behavior', async () => {
     // 0.14.10: switched offending tool from bash → Skill (bash is now
     // exempt from signature-based detection).

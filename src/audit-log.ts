@@ -11,6 +11,10 @@ export interface AuditEntry {
   model: string
   statusCode: number
   durationMs: number
+  remoteAddress?: string
+  userAgent?: string
+  apiKeyFingerprint?: string
+  clientId?: string
   inputTokens?: number
   outputTokens?: number
   error?: string
@@ -89,6 +93,18 @@ export interface AuditSummary {
   statusCounts: Record<string, number>
   authFailureCount: number
   gatewaySuccessRate: number
+  authFailureSources: AuditAuthFailureSource[]
+}
+
+export interface AuditAuthFailureSource {
+  sourceKey: string
+  authFailureCount: number
+  statusCounts: Record<string, number>
+  remoteAddress?: string
+  userAgent?: string
+  apiKeyFingerprint?: string
+  clientId?: string
+  latestAt: string
 }
 
 export function getAuditSummary(): AuditSummary {
@@ -98,12 +114,30 @@ export function getAuditSummary(): AuditSummary {
   let authFailureCount = 0
   let totalDuration = 0
   const statusCounts: Record<string, number> = {}
+  const authSources = new Map<string, AuditAuthFailureSource>()
 
   for (const e of entries) {
     models.add(e.model)
     paths.add(e.path)
     if (e.statusCode >= 400) errorCount++
-    if (e.statusCode === 401 || e.statusCode === 403) authFailureCount++
+    if (e.statusCode === 401 || e.statusCode === 403) {
+      authFailureCount++
+      const sourceKey = auditSourceKey(e)
+      const source = authSources.get(sourceKey) ?? {
+        sourceKey,
+        authFailureCount: 0,
+        statusCounts: {},
+        ...(e.remoteAddress ? { remoteAddress: e.remoteAddress } : {}),
+        ...(e.userAgent ? { userAgent: e.userAgent } : {}),
+        ...(e.apiKeyFingerprint ? { apiKeyFingerprint: e.apiKeyFingerprint } : {}),
+        ...(e.clientId ? { clientId: e.clientId } : {}),
+        latestAt: e.timestamp,
+      }
+      source.authFailureCount += 1
+      source.statusCounts[String(e.statusCode)] = (source.statusCounts[String(e.statusCode)] ?? 0) + 1
+      if (e.timestamp > source.latestAt) source.latestAt = e.timestamp
+      authSources.set(sourceKey, source)
+    }
     const statusKey = String(e.statusCode)
     statusCounts[statusKey] = (statusCounts[statusKey] ?? 0) + 1
     totalDuration += e.durationMs
@@ -118,7 +152,20 @@ export function getAuditSummary(): AuditSummary {
     statusCounts,
     authFailureCount,
     gatewaySuccessRate: entries.length > 0 ? Math.round(((entries.length - errorCount) / entries.length) * 1000) / 1000 : 1,
+    authFailureSources: [...authSources.values()]
+      .sort((a, b) => b.authFailureCount - a.authFailureCount || b.latestAt.localeCompare(a.latestAt))
+      .slice(0, 10),
   }
+}
+
+function auditSourceKey(entry: Pick<AuditEntry, 'apiKeyFingerprint' | 'userAgent' | 'remoteAddress' | 'clientId'>): string {
+  const parts = [
+    `key=${entry.apiKeyFingerprint ?? 'unknown'}`,
+    `ua=${entry.userAgent ?? 'unknown'}`,
+    `remote=${entry.remoteAddress ?? 'unknown'}`,
+  ]
+  if (entry.clientId) parts.push(`client=${entry.clientId}`)
+  return parts.join(' ')
 }
 
 /**
@@ -131,7 +178,10 @@ export function formatAuditEntries(auditEntries: AuditEntry[], maxLines = 20): s
   for (const e of auditEntries.slice(0, maxLines)) {
     const ts = e.timestamp.slice(11, 19)
     const status = e.statusCode >= 400 ? `❌ ${e.statusCode}` : `✓ ${e.statusCode}`
-    lines.push(`  ${ts} ${e.method} ${e.path} → ${status} (${e.durationMs}ms) [${e.model}]`)
+    const source = e.statusCode === 401 || e.statusCode === 403
+      ? ` ${auditSourceKey(e)}`
+      : ''
+    lines.push(`  ${ts} ${e.method} ${e.path} → ${status} (${e.durationMs}ms) [${e.model}]${source}`)
   }
   if (auditEntries.length > maxLines) {
     lines.push(`  ... and ${auditEntries.length - maxLines} more`)

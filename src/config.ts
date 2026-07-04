@@ -80,6 +80,9 @@ export interface MiddlewareConfig {
    *  latest_user_goal are load-bearing and are NEVER dropped — only
    *  truncated with a hash marker. */
   compactionInputMaxTokens?: number
+  /** Warn operators when one agent turn sends an oversized provider request.
+   *  Default is 500000 input tokens; set 0 to disable the notice. */
+  perTurnInputTokenBudget?: number
   maxRequestBodyBytes?: number
   intentRouting?: boolean
   /** 0.14.1: input-size-aware timeout extension. When true (default),

@@ -1,4 +1,5 @@
 import * as http from 'node:http'
+import { createHash } from 'node:crypto'
 import type { OwlCodaConfig } from './config.js'
 import { configureCircuitBreaker, resetCircuitBreaker, getAllCircuitStates } from './middleware/circuit-breaker.js'
 import { createLogger } from './utils/logger.js'
@@ -177,6 +178,37 @@ function sendError(res: http.ServerResponse, statusCode: number, errorType: stri
   })
 }
 
+function buildAuditClientSource(req: http.IncomingMessage): {
+  remoteAddress?: string
+  userAgent?: string
+  apiKeyFingerprint?: string
+  clientId?: string
+} {
+  const forwardedFor = headerString(req.headers['x-forwarded-for'])
+    ?.split(',')
+    .map(part => part.trim())
+    .find(Boolean)
+  const remoteAddress = forwardedFor ?? req.socket.remoteAddress
+  const userAgent = headerString(req.headers['user-agent'])
+  const clientId = headerString(req.headers['x-owlcoda-client-id'])
+    ?? headerString(req.headers['x-client-id'])
+  const authorization = headerString(req.headers['authorization'])
+  const bearer = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim()
+  const apiKey = bearer || headerString(req.headers['x-api-key'])
+  return {
+    ...(remoteAddress ? { remoteAddress } : {}),
+    ...(userAgent ? { userAgent } : {}),
+    ...(apiKey ? { apiKeyFingerprint: `sha256:${createHash('sha256').update(apiKey).digest('hex').slice(0, 12)}` } : {}),
+    ...(clientId ? { clientId } : {}),
+  }
+}
+
+function headerString(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) return value.find(item => item.trim().length > 0)?.trim()
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : undefined
+}
+
 export function readBody(req: http.IncomingMessage, maxBytes: number = 10_485_760): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
@@ -257,7 +289,15 @@ function handleRequest(
       const duration = Date.now() - startTime
       recordRequestEnd(url, res.statusCode ?? 0, duration)
       recordLatency(url, duration)
-      auditRequest({ method, path: url, model: url, statusCode: res.statusCode ?? 0, durationMs: duration })
+      const auditModel = (res as { __owlcodaAuditModel?: string }).__owlcodaAuditModel ?? url
+      auditRequest({
+        method,
+        path: url,
+        model: auditModel,
+        statusCode: res.statusCode ?? 0,
+        durationMs: duration,
+        ...buildAuditClientSource(req),
+      })
       logInfo('http', `${method} ${rawUrl} → ${res.statusCode}`, { requestId: requestId.slice(0, 8), durationMs: duration })
     } catch (err) {
       console.error(`[owlcoda] request-finish telemetry failed (ignored): ${(err as Error)?.message ?? String(err)}`)
