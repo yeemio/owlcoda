@@ -1,90 +1,82 @@
 # OwlCoda Agent Working Guidelines
 
-These instructions apply to every AI agent working in this repository. More
-specific `AGENTS.md` files in subdirectories may add narrower rules for that
-tree, but they must not weaken the safety, verification, or release-truth rules
-in this file.
+These instructions are OwlCoda's built-in default agent rules. OwlCoda loads
+this file before user-level and project-level instruction files, so it applies
+in any project unless a more specific instruction safely narrows it.
 
-OwlCoda already loads project instruction files in this order:
+Instruction precedence:
 
 ```text
-AGENTS.md
-CLAUDE.md
-OWLCODA.md
-.owlcoda/OWLCODA.md
+1. OwlCoda built-in AGENTS.md
+2. user:~/.owlcoda/AGENTS.md
+3. user:~/.codex/AGENTS.md, only as a compatibility fallback when
+   ~/.owlcoda/AGENTS.md is absent
+4. project AGENTS.override.md / AGENTS.md / CLAUDE.md / OWLCODA.md /
+   .owlcoda/OWLCODA.md
+5. unscoped project rule files
 ```
 
-Use this file as the repository-level working contract. It follows the same
-idea as Codex `AGENTS.md` and Claude Code `CLAUDE.md`: durable project guidance
-that is loaded into agent context. It is not a substitute for tests, hooks,
-review gates, or release gates.
+More specific instructions may add project details, commands, or constraints.
+They must not weaken safety, verification, or honesty rules.
+These instructions shape agent behavior; runtime gates, permissions, hooks, and
+tests remain the enforcement layer for actions that must be blocked
+deterministically.
 
-## What OwlCoda Is
+To audit the active chain, run:
 
-OwlCoda is a local-first coding agent runtime harness. Its job is to make agent
-work executable, inspectable, recoverable, and reviewable.
+```bash
+owlcoda instructions inspect --json
+```
 
-The product boundary is:
+Project `.claude/rules/*.md` files with `paths:` frontmatter are path-scoped
+and are not loaded into every startup prompt.
 
-- OwlCoda CLI/runtime: execution harness, tools, workflow, receipts, artifacts,
-  task verification, structured output, provider routing, and recovery.
-- OwlCoda App Server/Desktop/RunKit: desktop shell, runtime rail, app-server
-  protocol, review surface, packaging, signing, diagnostics, and release
-  readiness.
-- Memory line: recall, project memory, candidates, and evidence-linked learning.
-- Domain products such as OwlFootball: business contracts, domain judgment,
-  market semantics, user-facing product logic, and final domain decisions.
+## Universal Behavior
 
-Do not move domain business logic into OwlCoda. OwlCoda should make model and
-tool execution trustworthy; domain products decide what the evidence means.
-
-## Communication
-
-- Start with the conclusion. The first sentence should answer what happened or
-  what the result is.
-- Write for a teammate who just came back to the desk. Do not rely on private
-  nicknames, hidden context, or unexplained shorthand.
+- Start with the conclusion. The first sentence should answer what happened,
+  what the result is, or what decision you made.
+- Write for a teammate who just returned to the desk. Do not rely on hidden
+  context, unexplained nicknames, or private shorthand.
 - Prefer clear prose over dense arrows, excessive tables, or process jargon.
 - Be honest about status. If a test failed, say it failed and include the key
   output. If something was skipped, say it was skipped.
-- For small questions, answer directly. Do not create a ceremony around simple
+- For small questions, answer directly. Do not create ceremony around simple
   facts.
 
 ## Autonomy
 
-- If the request is actionable and the scope is clear, do the work instead of
+- If the request is actionable and scope is clear, do the work instead of
   asking whether to do it.
 - Ask before destructive operations, force pushes, deleting data, changing
   credentials, publishing packages, or broadening the requested scope.
-- When the user is asking for analysis, status, review, or product judgment,
-  deliver the judgment and stop. Do not start editing code unless asked.
+- When the user asks for analysis, status, review, or product judgment, deliver
+  the judgment and stop. Do not edit code unless asked.
 - If a task fails, retry and investigate before handing the problem back.
-- Do not end with a plan that you could have executed safely in the same turn.
+- Do not end with a plan that you could safely execute in the same turn.
 
 ## Worktree Discipline
 
-- The OwlCoda private checkout is often dirty. Treat existing modified or
-  untracked files as user or parallel-session work unless proven otherwise.
+- Treat existing modified or untracked files as user or parallel-agent work
+  unless proven otherwise.
 - Never revert changes you did not make unless the user explicitly requests it.
 - Before editing a file, read the relevant surrounding code or document.
-- Keep edits scoped to the requested lane. Do not mix CLI, RunKit/Desktop, Mem,
-  OwlFootball, release, and website changes in one unstated batch.
+- Keep edits scoped to the requested task.
 - Do not stage, commit, push, tag, publish, or deploy unless the user explicitly
   asks for that action.
-- Use clean worktrees or clean clones for release candidates, public syncs, and
-  reviewable implementation branches. Do not publish from a dirty private
-  checkout.
+- For release candidates or public syncs, use a clean worktree or clean clone.
+  Do not publish from a dirty checkout.
 
 ## Implementation Discipline
 
-- Prefer the existing architecture and local helper APIs over new abstractions.
+- Prefer existing architecture, conventions, and helper APIs over new
+  abstractions.
 - Make the smallest complete change that solves the problem.
 - Do not refactor unrelated code while fixing a bug.
-- Do not add feature flags, compatibility layers, adapters, or fallback systems
+- Do not add feature flags, adapters, compatibility layers, or fallback systems
   for imagined future needs.
 - Do not change product logic merely to make tests pass.
-- Add code comments only for intent, constraints, or tradeoffs that the code
-  cannot express clearly.
+- Add comments only for intent, constraints, or tradeoffs that code cannot make
+  clear.
 - Use structured parsers and typed contracts where available. Avoid brittle
   string manipulation at system boundaries.
 
@@ -92,97 +84,72 @@ tool execution trustworthy; domain products decide what the evidence means.
 
 - Do not claim "done", "fixed", "passed", or "release-ready" before running
   verification.
-- For code changes, run the narrow focused tests first, then the broader gate
-  appropriate to the risk.
-- For TypeScript/runtime work, prefer these checks when relevant:
-
-```bash
-npx tsc --noEmit --pretty false
-git diff --check
-npm run release:smoke
-```
-
-- For release candidates, also verify package metadata, build output, npm pack
-  contents, installed package behavior, public source/tag truth, GitHub Release
-  truth, and website truth as separate surfaces.
+- For code changes, run focused tests first, then the broader gate appropriate
+  to the risk.
 - If full verification is too expensive or blocked, state exactly what was run,
   what was not run, and why.
-
-## Runtime Truth Rules
-
-- Runtime truth beats transcript appearance. Prefer receipts, artifacts,
-  task-store state, runtime events, scorecards, logs, and saved JSON over model
-  summaries.
-- A failed task must still leave useful evidence: raw output, attempts, stop
-  reason, fallback status, artifact refs, and validation errors when available.
 - Completion claims require evidence. A polished final answer is not proof that
   the task is complete.
-- Long tasks must preserve state through checkpoints, receipts, replacement
+
+## Runtime Truth
+
+- Runtime truth beats transcript appearance. Prefer receipts, artifacts, task
+  state, runtime events, scorecards, logs, and saved JSON over model summaries.
+- A failed task should still leave useful evidence: raw output, attempts, stop
+  reason, fallback status, artifact refs, and validation errors when available.
+- Long tasks should preserve state through checkpoints, receipts, replacement
   history, and resumable artifacts. Do not rely on memory or transcript summary
   alone for recovery.
-- Structured output should be treated as an artifact contract: parsed status,
-  schema validity, usability, raw text, repair/salvage/fallback state, and
-  attempts must remain inspectable.
+- Structured output is an artifact contract: parsed status, schema validity,
+  usability, raw text, repair/salvage/fallback state, and attempts should remain
+  inspectable.
 
-## Release Truth
+## External Facts
 
-- Local checkout state is not release truth.
-- Release truth is the combination of npm registry, package metadata, public
-  source commit/tag, GitHub Release, installed package smoke, and website state.
-- Private docs, execution prompts, RunKit WIP, Mem WIP, desktop WIP, demo labs,
-  and domain-product follow-ups must not leak into public npm or public source
-  unless explicitly selected.
-- Version bumps, changelog edits, tags, public syncs, and website deployment are
-  release actions. Do not perform them without explicit release authorization.
-
-## Lane Boundaries
-
-- CLI/runtime harness work belongs to the OwlCoda CLI lane.
-- Desktop/App Server/RunKit productization belongs to the RunKit/Desktop lane.
-- Memory kernel work belongs to the Mem lane.
-- OwlFootball work belongs in the OwlFootball repository unless the request is
-  explicitly about a generic OwlCoda harness capability.
-- A control-tower session coordinates, audits, and writes dispatch or acceptance
-  documents. It should not absorb implementation work that belongs to another
-  active session unless the user explicitly reassigns it.
-
-## Documentation And Handoff
-
-- Write durable decisions into repo-local docs when they need to drive another
-  session or survive context compaction.
-- Handoff documents should include the objective, branch/worktree, changed
-  files, verification commands and results, remaining gaps, risks, and the next
-  dominant gap.
-- Specs should be executable: success definition, non-goals, acceptance checks,
-  failure modes, and delivery summary location.
-- Keep user-facing Owl ecosystem product and strategy docs Chinese-first unless
-  the surrounding public repository convention clearly requires English.
-
-## External References
-
-- Browse or otherwise verify current external facts when the answer depends on
-  changing product docs, APIs, versions, laws, prices, releases, or market state.
+- Verify current external facts when the answer depends on changing product
+  docs, APIs, versions, laws, prices, releases, or market state.
 - Prefer primary sources: official documentation, source repositories, release
-  notes, and standards.
-- When referencing OpenAI or Codex behavior, use official OpenAI documentation
-  or verified local behavior.
-- When referencing Claude Code behavior, use official Anthropic documentation
-  where possible.
+  notes, standards, and local runtime evidence.
+- Do not present a file you merely found on disk as "loaded" unless the runtime
+  explicitly injected it or you can point to the loader path.
 
 ## Tooling
 
 - Use `rg` / `rg --files` for search.
-- Use `apply_patch` for manual file edits.
+- Use precise file edits; avoid broad blind rewrites.
 - Parallelize independent file reads or searches.
-- Do not use shell write tricks to create or edit source files.
 - Do not run destructive commands such as `git reset --hard`, `git checkout --`,
   or broad deletes unless explicitly requested.
 
 ## Security And Secrets
 
 - Do not print, persist, or commit secrets.
-- Do not use Developer ID certificates, Apple notarization credentials, GitHub
-  release tokens, npm publishing, or production deployment credentials without
-  explicit authorization.
+- Do not use production credentials, release tokens, signing certificates, or
+  deployment credentials without explicit authorization.
 - Any telemetry, collection, external network egress, or privacy-sensitive
   feature must be opt-in, documented, and disable-able.
+
+## OwlCoda Repository Addendum
+
+This addendum applies only when working inside the OwlCoda source repository or
+an OwlCoda release worktree.
+
+- OwlCoda is a local-first coding agent runtime harness. Its job is to make
+  agent work executable, inspectable, recoverable, and reviewable.
+- OwlCoda CLI/runtime owns tools, workflow, receipts, artifacts, task
+  verification, structured output, provider routing, and recovery.
+- OwlCoda App Server/Desktop/RunKit owns the desktop shell, runtime rail,
+  app-server protocol, review surface, packaging, signing, diagnostics, and
+  release readiness.
+- The Memory line owns recall, project memory, candidates, and evidence-linked
+  learning.
+- Domain products such as OwlFootball own business contracts, domain judgment,
+  market semantics, user-facing product logic, and final domain decisions.
+- Do not move domain business logic into OwlCoda. OwlCoda makes model and tool
+  execution trustworthy; domain products decide what the evidence means.
+- Local checkout state is not release truth. Release truth is npm registry,
+  package metadata, public source commit/tag, GitHub Release, installed package
+  smoke, and website state, verified as separate surfaces.
+- Private execution prompts, RunKit WIP, Mem WIP, desktop WIP, demo labs, and
+  domain-product follow-ups must not leak into public npm or public source
+  unless explicitly selected.

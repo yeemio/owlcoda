@@ -32,6 +32,7 @@ async function runCli(
       cwd: REPO_ROOT,
       env: {
         ...process.env,
+        HOME: join(runtimeDir, 'home'),
         OWLCODA_HOME: runtimeDir,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -390,6 +391,94 @@ describe('CLI commands integration', { timeout: CLI_COMMANDS_TEST_TIMEOUT_MS }, 
         runId: 'missing-run',
       },
     })
+  })
+
+  it('instructions inspect exposes the runtime instruction chain as JSON', async () => {
+    const runtimeDir = makeRuntimeDir()
+    const projectDir = join(runtimeDir, 'project')
+    const rulesDir = join(projectDir, '.claude', 'rules')
+    mkdirSync(join(projectDir, '.git'), { recursive: true })
+    mkdirSync(rulesDir, { recursive: true })
+    writeFileSync(join(projectDir, 'AGENTS.override.md'), 'Project override rules', 'utf-8')
+    writeFileSync(join(projectDir, 'AGENTS.md'), 'Project runtime rules', 'utf-8')
+    writeFileSync(join(rulesDir, 'api.md'), [
+      '---',
+      'paths:',
+      '  - "src/api/**/*.ts"',
+      '---',
+      'api-only rule',
+    ].join('\n'), 'utf-8')
+
+    const result = await runCli([
+      'instructions',
+      'inspect',
+      '--cwd',
+      projectDir,
+      '--json',
+    ], runtimeDir)
+
+    expect(result.code).toBe(0)
+    expect(result.stderr.trim()).toBe('')
+    const body = JSON.parse(result.stdout)
+    expect(body).toMatchObject({
+      schemaVersion: 1,
+      kind: 'owlcoda_instruction_chain',
+      cwd: projectDir,
+      count: 2,
+      limits: {
+        maxBytesPerFile: 16 * 1024,
+        maxSearchDepth: 6,
+        maxRuleFiles: 32,
+      },
+    })
+    expect(body.sources.map((source: { name: string; scope: string; kind: string }) => [
+      source.name,
+      source.scope,
+      source.kind,
+    ])).toEqual([
+      ['builtin:AGENTS.md', 'builtin', 'builtin'],
+      ['AGENTS.override.md', 'project', 'AGENTS.override.md'],
+    ])
+    expect(body.sources[0].contentPreview).toContain('OwlCoda Agent Working Guidelines')
+    expect(body.sources[1].contentPreview).toContain('Project override rules')
+    expect(body.skipped.map((source: { reason: string; name: string }) => [
+      source.reason,
+      source.name,
+    ])).toEqual([
+      ['shadowed-by-override', 'AGENTS.md'],
+      ['path-scoped-rule', '.claude/rules/api.md'],
+    ])
+  })
+
+  it('instructions inspect prints skipped sources in human-readable output', async () => {
+    const runtimeDir = makeRuntimeDir()
+    const projectDir = join(runtimeDir, 'project')
+    const rulesDir = join(projectDir, '.claude', 'rules')
+    mkdirSync(join(projectDir, '.git'), { recursive: true })
+    mkdirSync(rulesDir, { recursive: true })
+    writeFileSync(join(projectDir, 'AGENTS.override.md'), 'Project override rules', 'utf-8')
+    writeFileSync(join(projectDir, 'AGENTS.md'), 'Project runtime rules', 'utf-8')
+    writeFileSync(join(rulesDir, 'api.md'), [
+      '---',
+      'paths:',
+      '  - "src/api/**/*.ts"',
+      '---',
+      'api-only rule',
+    ].join('\n'), 'utf-8')
+
+    const result = await runCli([
+      'instructions',
+      'inspect',
+      '--cwd',
+      projectDir,
+    ], runtimeDir)
+
+    expect(result.code).toBe(0)
+    expect(result.stdout.trim()).toBe('')
+    expect(result.stderr).toContain('Instruction chain (2 sources)')
+    expect(result.stderr).toContain('Skipped (2)')
+    expect(result.stderr).toContain('shadowed-by-override AGENTS.md')
+    expect(result.stderr).toContain('path-scoped-rule .claude/rules/api.md')
   })
 
   it('doctor runs all checks', async () => {

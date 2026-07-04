@@ -391,6 +391,9 @@ export function parseArgs(argv: string[]): {
       case 'workflow':
         command = 'workflow'
         break
+      case 'instructions':
+        command = 'instructions'
+        break
       case 'resume':
         command = 'resume'
         break
@@ -498,6 +501,8 @@ Setup & diagnostics:
   owlcoda workflow resume --run-id <workflow-run-id> [--cwd <dir>]
   owlcoda resume --run-id <workflow-run-id> [--cwd <dir>]
                                 Execute native workflow/API plan or OwlFootball harness contract
+  owlcoda instructions inspect [--cwd <dir>] [--json]
+                                Inspect runtime-loaded instruction sources
 
 Daemon & live clients:
   owlcoda start                 Start proxy in background (daemon only)
@@ -1217,6 +1222,36 @@ export async function doWorkflow(passthroughArgs: string[], jsonOutput = false):
   }
 }
 
+export async function doInstructions(passthroughArgs: string[], jsonOutput = false): Promise<void> {
+  const action = passthroughArgs[0]
+  if (action !== 'inspect') {
+    console.error('Usage: owlcoda instructions inspect [--cwd <dir>] [--json]')
+    process.exit(1)
+  }
+
+  const args = passthroughArgs.slice(1)
+  const cwd = getFlagValue(args, '--cwd') ?? process.cwd()
+  const cliJson = jsonOutput || args.includes('--json')
+  const { inspectInstructionChain } = await import('./native/project-instructions.js')
+  const inspection = inspectInstructionChain(cwd)
+
+  if (cliJson) {
+    process.stdout.write(`${JSON.stringify(inspection, null, 2)}\n`)
+    return
+  }
+
+  console.error(`Instruction chain (${inspection.count} source${inspection.count === 1 ? '' : 's'})`)
+  for (const source of inspection.sources) {
+    console.error(`  - ${source.name} [${source.scope}/${source.kind}] ${source.path}`)
+  }
+  if (inspection.skipped.length > 0) {
+    console.error(`Skipped (${inspection.skipped.length})`)
+    for (const source of inspection.skipped) {
+      console.error(`  - ${source.reason} ${source.name} [${source.scope}/${source.kind}] ${source.path}`)
+    }
+  }
+}
+
 export interface UiLaunchResult {
   url: string
   bundleAvailable: boolean
@@ -1652,6 +1687,10 @@ export async function main(): Promise<void> {
     }
     case 'workflow': {
       await doWorkflow(passthroughArgs, jsonOutput)
+      break
+    }
+    case 'instructions': {
+      await doInstructions(passthroughArgs, jsonOutput)
       break
     }
     case 'resume': {

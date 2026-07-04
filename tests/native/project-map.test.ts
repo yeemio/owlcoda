@@ -171,7 +171,7 @@ describe('ProjectMapSnapshot builder', () => {
     expect(JSON.stringify(first, null, 2)).toBe(JSON.stringify(second, null, 2))
   })
 
-  it('searches upward from nested cwd and caps bytes read per source file', () => {
+  it('searches upward from nested cwd, renders ancestors first, and caps bytes read per source file', () => {
     initGit(tmpDir, 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')
     fs.writeFileSync(path.join(tmpDir, 'AGENTS.md'), 'abcdef')
     const nested = path.join(tmpDir, 'packages', 'app')
@@ -186,8 +186,8 @@ describe('ProjectMapSnapshot builder', () => {
     expect(snapshot.cwd).toBe(nested)
     expect(snapshot.gitRoot).toBe(tmpDir)
     expect(snapshot.sourceFiles.map((source) => [source.kind, source.path, source.bytesRead])).toEqual([
-      ['CLAUDE.md', path.join(nested, 'CLAUDE.md'), 3],
       ['AGENTS.md', path.join(tmpDir, 'AGENTS.md'), 3],
+      ['CLAUDE.md', path.join(nested, 'CLAUDE.md'), 3],
     ])
     expect(snapshot.sourceFiles.map((source) => snapshot.freshness.sourceHashes[source.path])).toEqual(
       snapshot.sourceFiles.map((source) => source.sha256),

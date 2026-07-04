@@ -74,7 +74,7 @@ describe('parseArgs', () => {
     'server', 'start', 'stop', 'status', 'clients', 'run', 'serve',
     'doctor', 'ui', 'sessions', 'init', 'config', 'logs', 'completions',
     'models', 'benchmark', 'export', 'inspect', 'validate',
-    'health', 'audit', 'cache', 'skills', 'training', 'workflow', 'resume', 'cutover-status', 'shadow-status',
+    'health', 'audit', 'cache', 'skills', 'training', 'workflow', 'instructions', 'resume', 'cutover-status', 'shadow-status',
   ]
 
   for (const cmd of commands) {
@@ -208,6 +208,13 @@ describe('parseArgs', () => {
     const inspected = parse(['workflow', 'inspect', '--run-id', 'workflow-run-1', '--cwd', '/tmp/run'])
     expect(inspected.command).toBe('workflow')
     expect(inspected.passthroughArgs).toEqual(['inspect', '--run-id', 'workflow-run-1', '--cwd', '/tmp/run'])
+  })
+
+  it('passes instructions inspect subcommand args', () => {
+    const result = parse(['instructions', 'inspect', '--cwd', '/tmp/project', '--json'])
+    expect(result.command).toBe('instructions')
+    expect(result.jsonOutput).toBe(true)
+    expect(result.passthroughArgs).toEqual(['inspect', '--cwd', '/tmp/project'])
   })
 
   it('passes top-level workflow resume args', () => {

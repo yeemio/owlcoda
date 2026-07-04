@@ -2,6 +2,35 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.21] — 2026-07-04
+
+Auditable instruction chain loading release.
+
+### Added
+
+- Added layered built-in, user, and project instruction loading with an
+  auditable source chain.
+- Added `owlcoda instructions inspect --json` and human-readable instruction
+  inspection output for release and runtime audits.
+- Added `sources`, `skipped`, and `limits` audit surfaces so operators can see
+  which instruction files were read, skipped, capped, or failed.
+- Added package coverage for root `AGENTS.md` and
+  `docs/INSTRUCTION_CHAIN.md`.
+
+### Fixed
+
+- Empty `~/.owlcoda/AGENTS.md` now explicitly blocks Codex fallback instead of
+  silently reviving built-in defaults.
+- Broken instruction symlinks are reported as `read-error` rather than being
+  invisible.
+- `AGENTS.override.md` and path-scoped `.claude/rules` files now record skip
+  reasons in the audit chain.
+
+### Notes
+
+- This release does not include RunKit, Mem, OwlFootball business logic, or
+  private execution prompts in the npm package.
+
 ## [0.15.20] — 2026-07-04
 
 Provider streaming delta and agent working guidelines release.

@@ -680,7 +680,8 @@ function listShallowMarkdownFiles(dir: string, maxFiles: number): string[] {
 }
 
 function isInstructionSourceKind(kind: ProjectMapSourceFile['kind']): boolean {
-  return kind === 'AGENTS.md'
+  return kind === 'AGENTS.override.md'
+    || kind === 'AGENTS.md'
     || kind === 'CLAUDE.md'
     || kind === 'OWLCODA.md'
     || kind === '.owlcoda/OWLCODA.md'

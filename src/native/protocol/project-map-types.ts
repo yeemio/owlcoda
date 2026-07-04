@@ -1,4 +1,5 @@
 export type ProjectMapSourceKind =
+  | 'AGENTS.override.md'
   | 'AGENTS.md'
   | 'CLAUDE.md'
   | 'OWLCODA.md'

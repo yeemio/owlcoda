@@ -182,17 +182,28 @@ describe('mode flags in system prompt', () => {
 
 describe('project memory file loading', () => {
   const tmpDir = path.join(process.cwd(), '.test-memory-tmp')
+  const originalHome = process.env.HOME
 
   beforeEach(() => {
     const fs = require('node:fs')
     fs.mkdirSync(tmpDir, { recursive: true })
+    process.env.HOME = path.join(tmpDir, '.home')
     // Create a fake .git so it acts as git root
     fs.mkdirSync(path.join(tmpDir, '.git'), { recursive: true })
   })
 
   afterEach(() => {
     const fs = require('node:fs')
+    process.env.HOME = originalHome
     fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('loads OwlCoda built-in AGENTS.md even when the project has no instruction files', () => {
+    const prompt = buildSystemPrompt({ cwd: tmpDir })
+
+    expect(prompt).toContain('<project_instructions source="builtin:AGENTS.md">')
+    expect(prompt).toContain('OwlCoda Agent Working Guidelines')
+    expect(prompt).not.toContain('<project_instructions source="AGENTS.md">')
   })
 
   it('loads OWLCODA.md into system prompt', () => {
@@ -217,8 +228,19 @@ describe('project memory file loading', () => {
     expect(prompt.indexOf('Claude rules')).toBeLessThan(prompt.indexOf('OwlCoda rules'))
   })
 
-  it('omits project_instructions when no memory files', () => {
+  it('loads user global instructions before project instructions', () => {
+    const fs = require('node:fs')
+    const userDir = path.join(process.env.HOME!, '.owlcoda')
+    fs.mkdirSync(userDir, { recursive: true })
+    fs.writeFileSync(path.join(userDir, 'AGENTS.md'), 'User global OwlCoda rules')
+    fs.writeFileSync(path.join(tmpDir, 'AGENTS.md'), 'Project agent rules')
+
     const prompt = buildSystemPrompt({ cwd: tmpDir })
-    expect(prompt).not.toContain('project_instructions')
+
+    expect(prompt).toContain('<project_instructions source="builtin:AGENTS.md">')
+    expect(prompt).toContain('<project_instructions source="user:~/.owlcoda/AGENTS.md">')
+    expect(prompt).toContain('<project_instructions source="AGENTS.md">')
+    expect(prompt.indexOf('OwlCoda Agent Working Guidelines')).toBeLessThan(prompt.indexOf('User global OwlCoda rules'))
+    expect(prompt.indexOf('User global OwlCoda rules')).toBeLessThan(prompt.indexOf('Project agent rules'))
   })
 })

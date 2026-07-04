@@ -8,7 +8,7 @@
 import * as os from 'node:os'
 import * as path from 'node:path'
 import * as fs from 'node:fs'
-import { renderProjectInstructions } from './project-instructions.js'
+import { renderEffectiveInstructions } from './project-instructions.js'
 
 export interface SystemPromptOptions {
   /** Override working directory (default: process.cwd()) */
@@ -41,8 +41,8 @@ export function buildSystemPrompt(opts?: SystemPromptOptions): string {
 
   sections.push(BEHAVIORAL_RULES)
 
-  // Load project instruction files (AGENTS.md / CLAUDE.md / OWLCODA.md).
-  const memoryContent = renderProjectInstructions(cwd)
+  // Load built-in, user-level, and project instruction files.
+  const memoryContent = renderEffectiveInstructions(cwd)
   if (memoryContent) {
     sections.push(memoryContent)
   }
