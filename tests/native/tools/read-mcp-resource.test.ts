@@ -103,6 +103,32 @@ describe('ReadMcpResource tool', () => {
     expect(result.isError).toBe(true)
   })
 
+  it('rejects placeholder server and uri values before checking connectivity', async () => {
+    const tool = createReadMcpResourceTool({
+      isConnected: () => true,
+      readResource: async () => ({ content: 'should not be called' }),
+    })
+
+    const result = await tool.execute({ server_name: 'server_name', uri: 'uri' })
+
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('placeholder')
+    expect(result.metadata?.['failureCategory']).toBe('mcp:placeholder-params')
+  })
+
+  it('rejects ellipsis placeholder values before checking connectivity', async () => {
+    const tool = createReadMcpResourceTool({
+      isConnected: () => true,
+      readResource: async () => ({ content: 'should not be called' }),
+    })
+
+    const result = await tool.execute({ server: '...', uri: '...' } as never)
+
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('placeholder')
+    expect(result.metadata?.['failureCategory']).toBe('mcp:placeholder-params')
+  })
+
   it('uses custom provider', async () => {
     const tool = createReadMcpResourceTool({
       isConnected: () => true,

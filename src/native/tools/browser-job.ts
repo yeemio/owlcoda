@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { constants, existsSync } from 'node:fs'
 import { access, mkdir, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
@@ -18,7 +18,6 @@ import {
 import { getRunWorkspacePathsFromRef, recordArtifact } from '../run-workspace.js'
 import { htmlToText } from './web-fetch.js'
 import type { NativeToolDef, ToolExecutionContext, ToolResult } from './types.js'
-import { getOwlcodaDir } from '../../paths.js'
 
 export interface BrowserJobInput {
   url: string
@@ -34,32 +33,6 @@ export interface BrowserJobInput {
   origin?: string
   stepId?: string
   participatesInFinal?: boolean
-}
-
-export type CaptureFailureStage =
-  | 'page_load'
-  | 'selector'
-  | 'dom'
-  | 'network'
-  | 'screenshot'
-  | 'parse'
-  | 'permission'
-  | 'timeout'
-  | 'unknown'
-
-export interface CaptureFailureReceipt {
-  kind: 'capture_failure_receipt'
-  captureFailureStage: CaptureFailureStage
-  provider: string
-  url: string
-  attempts: number
-  durationMs: number
-  recoverable: boolean
-  selector?: string
-  networkError?: string
-  screenshotRef?: string
-  htmlSummaryRef?: string
-  artifactRefs: JobArtifactRef[]
 }
 
 const DEFAULT_DEADLINE_MS = 30_000
@@ -135,19 +108,8 @@ export function createBrowserJobTool(): NativeToolDef<BrowserJobInput> {
             error: message,
             terminationReason: 'http_error',
           })
-          const captureFailureReceipt = await preserveCaptureFailureReceipt({
-            input,
-            jobId,
-            cwd,
-            provider,
-            url: parsed.href,
-            startedAt: created.startedAt ?? created.createdAt,
-            stage: 'network',
-            networkError: message,
-            recoverable: true,
-          })
           recordFetchCleanup(jobId)
-          return browserResult(jobId, true, `Browser job failed: ${message}`, { captureFailureReceipt })
+          return browserResult(jobId, true, `Browser job failed: ${message}`)
         }
 
         const html = await res.text()
@@ -179,19 +141,8 @@ export function createBrowserJobTool(): NativeToolDef<BrowserJobInput> {
             error: message,
             terminationReason: 'selector_missing',
           })
-          const captureFailureReceipt = await preserveCaptureFailureReceipt({
-            input,
-            jobId,
-            cwd,
-            provider,
-            url: parsed.href,
-            startedAt: created.startedAt ?? created.createdAt,
-            stage: 'selector',
-            selector: input.waitForSelector,
-            recoverable: true,
-          })
           recordFetchCleanup(jobId)
-          return browserResult(jobId, true, `Browser job failed: ${message}\n${hint}`, { captureFailureReceipt })
+          return browserResult(jobId, true, `Browser job failed: ${message}\n${hint}`)
         }
 
         finishJob(jobId, 'done', { stage: 'completed' })
@@ -211,17 +162,6 @@ export function createBrowserJobTool(): NativeToolDef<BrowserJobInput> {
           error: timedOut ? `request timed out after ${deadlineMs}ms` : message,
           terminationReason: timedOut ? 'deadline_exceeded' : 'execution_error',
         })
-        const captureFailureReceipt = await preserveCaptureFailureReceipt({
-          input,
-          jobId,
-          cwd,
-          provider,
-          url: parsed.href,
-          startedAt: created.startedAt ?? created.createdAt,
-          stage: timedOut ? 'timeout' : 'network',
-          networkError: timedOut ? undefined : message,
-          recoverable: true,
-        })
         recordFetchCleanup(jobId)
         const failureHint = !timedOut ? browserFetchFailureHint(parsed) : ''
         return browserResult(
@@ -234,9 +174,8 @@ export function createBrowserJobTool(): NativeToolDef<BrowserJobInput> {
             ? {
                 failureCategory: 'browser-job:fetch-failed',
                 recoverable: true,
-                captureFailureReceipt,
               }
-            : { captureFailureReceipt },
+            : undefined,
         )
       } finally {
         unregisterJobAbortAdapter(jobId)
@@ -303,21 +242,10 @@ async function runChromeHeadlessJob(args: {
       succeeded: false,
       remainingPids: [],
     })
-    const captureFailureReceipt = await preserveCaptureFailureReceipt({
-      input: args.input,
-      jobId: args.jobId,
-      cwd: args.cwd,
-      provider: CHROME_HEADLESS_PROVIDER,
-      url: args.parsed.href,
-      startedAt: getJob(args.jobId)?.startedAt ?? getJob(args.jobId)?.createdAt,
-      stage: 'permission',
-      networkError: message,
-      recoverable: true,
-    })
-    return browserResult(args.jobId, true, `Browser job failed: ${message}`, { captureFailureReceipt })
+    return browserResult(args.jobId, true, `Browser job failed: ${message}`)
   }
 
-  const artifactRoot = resolve(args.cwd, resolveBrowserArtifactDir(args.input, args.cwd))
+  const artifactRoot = resolve(args.cwd, resolveBrowserArtifactDir(args.input, args.cwd)?.trim() || '.owlcoda-browser-jobs')
   const dir = resolve(artifactRoot, sanitizePathSegment(args.jobId))
   const profileDir = resolve(dir, 'chrome-profile')
   const screenshotPath = resolve(dir, 'screenshot.png')
@@ -328,7 +256,7 @@ async function runChromeHeadlessJob(args: {
 
   try {
     startJob(args.jobId, { stage: 'capturing', externalHandle: executable })
-    const signal = composeExternalAbortSignal(args.context?.signal, args.liveCancelSignal)
+    const signal = composeCancelSignal(args.context?.signal, args.liveCancelSignal)
     const { stdout, stderr } = await execFileText(executable, [
       '--headless=new',
       '--disable-gpu',
@@ -371,19 +299,8 @@ async function runChromeHeadlessJob(args: {
         error: message,
         terminationReason: 'selector_missing',
       })
-      const captureFailureReceipt = await preserveCaptureFailureReceipt({
-        input: args.input,
-        jobId: args.jobId,
-        cwd: args.cwd,
-        provider: CHROME_HEADLESS_PROVIDER,
-        url: args.parsed.href,
-        startedAt: getJob(args.jobId)?.startedAt ?? getJob(args.jobId)?.createdAt,
-        stage: 'selector',
-        selector: args.input.waitForSelector,
-        recoverable: true,
-      })
       await cleanupChromeProfile(args.jobId, profileDir)
-      return browserResult(args.jobId, true, `Browser job failed: ${message}`, { captureFailureReceipt })
+      return browserResult(args.jobId, true, `Browser job failed: ${message}`)
     }
 
     finishJob(args.jobId, 'done', { stage: 'completed' })
@@ -416,17 +333,6 @@ async function runChromeHeadlessJob(args: {
       error: timedOut ? `chrome_headless timed out after ${args.deadlineMs}ms` : message,
       terminationReason: timedOut ? 'deadline_exceeded' : 'execution_error',
     })
-    const captureFailureReceipt = await preserveCaptureFailureReceipt({
-      input: args.input,
-      jobId: args.jobId,
-      cwd: args.cwd,
-      provider: CHROME_HEADLESS_PROVIDER,
-      url: args.parsed.href,
-      startedAt: getJob(args.jobId)?.startedAt ?? getJob(args.jobId)?.createdAt,
-      stage: timedOut ? 'timeout' : 'unknown',
-      networkError: timedOut ? undefined : message,
-      recoverable: true,
-    })
     await cleanupChromeProfile(args.jobId, profileDir)
     return browserResult(
       args.jobId,
@@ -434,7 +340,6 @@ async function runChromeHeadlessJob(args: {
       timedOut
         ? `Browser job timed out after ${args.deadlineMs}ms: ${args.jobId}`
         : `Browser job failed: ${message}`,
-      { captureFailureReceipt },
     )
   }
 }
@@ -445,19 +350,92 @@ function execFileText(
   options: { timeoutMs: number; signal?: AbortSignal },
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolvePromise, reject) => {
-    execFile(file, args, {
-      encoding: 'utf8',
-      timeout: options.timeoutMs,
-      maxBuffer: 10 * 1024 * 1024,
-      ...(options.signal ? { signal: options.signal } : {}),
-    }, (error, stdout, stderr) => {
-      if (error) {
-        reject(Object.assign(error, {
-          stdout: String(stdout ?? ''),
-          stderr: String(stderr ?? ''),
-        }))
+    let settled = false
+    let timedOut = false
+    let aborted = false
+    let stdout = ''
+    let stderr = ''
+    let killEscalation: ReturnType<typeof setTimeout> | undefined
+    const child = spawn(file, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    const finish = (error: Error | null, signal?: NodeJS.Signals | null, code?: number | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (killEscalation) clearTimeout(killEscalation)
+      options.signal?.removeEventListener('abort', abortHandler)
+      if (!error) {
+        resolvePromise({ stdout, stderr })
+        return
       }
-      else resolvePromise({ stdout: String(stdout ?? ''), stderr: String(stderr ?? '') })
+      reject(Object.assign(error, {
+        stdout,
+        stderr,
+        killed: timedOut || aborted,
+        code: timedOut ? 'ETIMEDOUT' : code ?? undefined,
+        signal,
+      }))
+    }
+
+    const killChild = (): void => {
+      try {
+        child.kill('SIGTERM')
+      } catch {
+        // already gone
+      }
+      killEscalation = setTimeout(() => {
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          // already gone
+        }
+      }, 500)
+    }
+
+    const abortHandler = (): void => {
+      if (settled) return
+      aborted = true
+      killChild()
+    }
+
+    const timer = setTimeout(() => {
+      if (settled) return
+      timedOut = true
+      killChild()
+    }, options.timeoutMs)
+
+    options.signal?.addEventListener('abort', abortHandler, { once: true })
+    if (options.signal?.aborted) abortHandler()
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8')
+      if (stdout.length > 10 * 1024 * 1024) stdout = stdout.slice(-10 * 1024 * 1024)
+    })
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8')
+      if (stderr.length > 10 * 1024 * 1024) stderr = stderr.slice(-10 * 1024 * 1024)
+    })
+    child.once('error', (error) => {
+      finish(error)
+    })
+    child.once('close', (code, signal) => {
+      if (timedOut) {
+        finish(new Error(`Command timed out after ${options.timeoutMs}ms`), signal, code)
+        return
+      }
+      if (aborted) {
+        const error = new Error('The operation was aborted')
+        error.name = 'AbortError'
+        finish(error, signal, code)
+        return
+      }
+      if (code === 0) {
+        finish(null, signal, code)
+        return
+      }
+      finish(new Error(`Command failed with exit code ${code ?? 'unknown'}`), signal, code)
     })
   })
 }
@@ -580,10 +558,11 @@ function composeAbortSignal(deadlineMs: number, ...signals: Array<AbortSignal | 
   return activeSignals.length === 1 ? timeout : AbortSignal.any(activeSignals)
 }
 
-function composeExternalAbortSignal(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+function composeCancelSignal(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
   const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal))
   if (activeSignals.length === 0) return undefined
-  return activeSignals.length === 1 ? activeSignals[0] : AbortSignal.any(activeSignals)
+  if (activeSignals.length === 1) return activeSignals[0]
+  return AbortSignal.any(activeSignals)
 }
 
 function isAbortLikeError(err: unknown): boolean {
@@ -601,12 +580,12 @@ function isExecTimeoutError(err: unknown): boolean {
 
 async function writeBrowserArtifacts(args: {
   jobId: string
-  artifactDir: string
+  artifactDir?: string
   cwd: string
   html: string
   text: string
 }): Promise<Array<{ path: string; artifactType: string }>> {
-  const root = resolve(args.cwd, args.artifactDir)
+  const root = resolve(args.cwd, args.artifactDir?.trim() || '.owlcoda-browser-jobs')
   const dir = resolve(root, sanitizePathSegment(args.jobId))
   await mkdir(dir, { recursive: true })
   const htmlPath = resolve(dir, 'page.html')
@@ -619,13 +598,11 @@ async function writeBrowserArtifacts(args: {
   ]
 }
 
-function resolveBrowserArtifactDir(input: BrowserJobInput, cwd: string): string {
+function resolveBrowserArtifactDir(input: BrowserJobInput, cwd: string): string | undefined {
   if (input.artifactDir?.trim()) return input.artifactDir
-  if (input.runRef?.trim()) {
-    const paths = getRunWorkspacePathsFromRef(input.runRef, cwd)
-    return join(paths.evidenceDir, 'browser')
-  }
-  return join(getOwlcodaDir(), 'browser-jobs')
+  if (!input.runRef?.trim()) return undefined
+  const paths = getRunWorkspacePathsFromRef(input.runRef, cwd)
+  return join(paths.evidenceDir, 'browser')
 }
 
 async function recordBrowserArtifacts(args: {
@@ -655,62 +632,6 @@ async function recordBrowserArtifacts(args: {
     })
   }
   return recorded
-}
-
-async function preserveCaptureFailureReceipt(args: {
-  input: BrowserJobInput
-  jobId: string
-  cwd: string
-  provider: string
-  url: string
-  startedAt?: string
-  stage: CaptureFailureStage
-  selector?: string
-  networkError?: string
-  recoverable: boolean
-}): Promise<CaptureFailureReceipt> {
-  const job = getJob(args.jobId)
-  const started = args.startedAt ? Date.parse(args.startedAt) : Number.NaN
-  const durationMs = Number.isFinite(started) ? Math.max(0, Date.now() - started) : 0
-  const existingArtifacts = job?.artifacts ?? []
-  const screenshot = existingArtifacts.find(artifact => artifact.artifactType === 'browser_screenshot')
-  const htmlSummary = existingArtifacts.find(artifact =>
-    artifact.artifactType === 'browser_html' || artifact.artifactType === 'browser_dom' || artifact.artifactType === 'browser_text',
-  )
-  const receipt: CaptureFailureReceipt = {
-    kind: 'capture_failure_receipt',
-    captureFailureStage: args.stage,
-    provider: args.provider,
-    url: args.url,
-    attempts: 1,
-    durationMs,
-    recoverable: args.recoverable,
-    ...(args.selector ? { selector: args.selector } : {}),
-    ...(args.networkError ? { networkError: args.networkError } : {}),
-    ...(screenshot?.path ? { screenshotRef: screenshot.path } : {}),
-    ...(htmlSummary?.path ? { htmlSummaryRef: htmlSummary.path } : {}),
-    artifactRefs: existingArtifacts,
-  }
-
-  try {
-    const root = resolve(args.cwd, resolveBrowserArtifactDir(args.input, args.cwd))
-    const dir = resolve(root, sanitizePathSegment(args.jobId))
-    await mkdir(dir, { recursive: true })
-    const receiptPath = resolve(dir, 'capture-failure-receipt.json')
-    await writeFile(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, 'utf-8')
-    const recordedArtifacts = await recordBrowserArtifacts({
-      artifacts: [{ path: receiptPath, artifactType: 'browser_capture_failure_receipt' }],
-      input: args.input,
-      jobId: args.jobId,
-      cwd: args.cwd,
-    })
-    addJobArtifacts(args.jobId, recordedArtifacts)
-    receipt.artifactRefs = [...existingArtifacts, ...recordedArtifacts]
-  } catch (err) {
-    appendJobOutput(args.jobId, `Failed to save capture failure receipt: ${err instanceof Error ? err.message : String(err)}\n`)
-  }
-
-  return receipt
 }
 
 function sanitizePathSegment(value: string): string {

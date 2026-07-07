@@ -433,6 +433,64 @@ describe('TaskVerify tool', () => {
     expect(r.output).toContain('✓')
   })
 
+  it('resolves relative file_exists paths against the task cwd and records path evidence', async () => {
+    const repoDir = path.join(tmpDir, 'repo')
+    fs.mkdirSync(path.join(repoDir, 'reports'), { recursive: true })
+    fs.writeFileSync(path.join(repoDir, 'reports', 'quality.md'), '# ok\n')
+    createTask({
+      subject: 'Relative verification task',
+      description: 'verify artifact relative to task cwd',
+      cwd: repoDir,
+      steps: [{
+        title: 'Verify report',
+        description: 'check report',
+        verification: [{ id: 'report-exists', kind: 'file_exists', path: 'reports/quality.md' }],
+      }],
+    })
+
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+    expect(r.isError).toBe(false)
+    expect(r.output).toContain('1/1 passed')
+    const results = r.metadata?.['results'] as Array<Record<string, any>>
+    expect(results[0]?.metadata?.path).toMatchObject({
+      input: 'reports/quality.md',
+      cwd: fs.realpathSync(repoDir),
+      resolvedPath: fs.realpathSync(path.join(repoDir, 'reports', 'quality.md')),
+      exists: true,
+      kind: 'file',
+    })
+  })
+
+  it('records cwd, resolvedPath, and statError when file_exists cannot find a relative path', async () => {
+    const repoDir = path.join(tmpDir, 'repo-missing')
+    fs.mkdirSync(repoDir, { recursive: true })
+    createTask({
+      subject: 'Missing relative verification task',
+      description: 'verify missing artifact relative to task cwd',
+      cwd: repoDir,
+      steps: [{
+        title: 'Verify report',
+        description: 'check report',
+        verification: [{ id: 'report-exists', kind: 'file_exists', path: 'reports/missing.md' }],
+      }],
+    })
+
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+    expect(r.isError).toBe(false)
+    expect(r.output).toContain('0/1 passed')
+    expect(r.output).toContain('resolved=')
+    const results = r.metadata?.['results'] as Array<Record<string, any>>
+    expect(results[0]?.metadata?.path).toMatchObject({
+      input: 'reports/missing.md',
+      cwd: fs.realpathSync(repoDir),
+      resolvedPath: path.join(fs.realpathSync(repoDir), 'reports', 'missing.md'),
+      exists: false,
+    })
+    expect(results[0]?.metadata?.path?.statError).toMatch(/ENOENT|no such file/i)
+  })
+
   it('file_exists fail', async () => {
     const filePath = path.join(tmpDir, 'missing.html')
     makeTaskWithVerification([{ id: 'v1', kind: 'file_exists', path: filePath }])
@@ -496,6 +554,38 @@ describe('TaskVerify tool', () => {
     const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
     expect(r.isError).toBe(false)
     expect(r.output).toContain('1/1 passed')
+  })
+
+  it('allows read-only node -e verification checks', async () => {
+    const artifactPath = path.join(tmpDir, 'artifact.json')
+    fs.writeFileSync(artifactPath, '{"ok":true}\n')
+    makeTaskWithVerification([{
+      id: 'node-e-check',
+      kind: 'command',
+      command: `node -e "const fs=require('fs'); const p=process.argv[1]; process.exit(fs.existsSync(p) ? 0 : 2)" ${artifactPath}`,
+      expectedExitCode: 0,
+    }])
+
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+    expect(r.isError).toBe(false)
+    expect(r.output).toContain('1/1 passed')
+    expect(r.output).not.toContain('command refused by risk classifier')
+  })
+
+  it('allows common npx read-only verification commands', async () => {
+    makeTaskWithVerification([{
+      id: 'npx-tsc-version',
+      kind: 'command',
+      command: 'npx tsc --version',
+      expectedExitCode: 0,
+    }])
+
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+    expect(r.isError).toBe(false)
+    expect(r.output).toContain('1/1 passed')
+    expect(r.output).not.toContain('command refused by risk classifier')
   })
 
   it('command dangerous refused', async () => {
@@ -619,7 +709,7 @@ describe('TaskVerify tool', () => {
     expect(step!.verificationResults.find(result => result.checkId === 'deck-pack.section_count')!.metadata).toMatchObject({
       packId: 'html_deck',
       packStatus: 'passed',
-      artifactPath: deckPath,
+      artifactPath: fs.realpathSync(deckPath),
       packCheckId: 'section_count',
       severity: 'error',
     })

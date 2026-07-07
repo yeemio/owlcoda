@@ -162,7 +162,7 @@ describe('formatWelcomeMarker', () => {
       branch: 'main',
       pendingChanges: 0,
     }))
-    expect(untrack(marker)).toBe('—  CWD /USERS/TEST/CODE/OWLCODA · BRANCH MAIN · NO PENDING CHANGES')
+    expect(untrack(marker)).toBe('—  CWD /Users/test/code/owlcoda · BRANCH MAIN · NO PENDING CHANGES')
   })
 
   it('shortens the home directory and shows pending change count', () => {
@@ -174,7 +174,7 @@ describe('formatWelcomeMarker', () => {
         branch: 'feature/ui',
         pendingChanges: 2,
       }))
-      expect(untrack(marker)).toBe('—  CWD ~/CODE/OWLCODA · BRANCH FEATURE/UI · 2 PENDING CHANGES')
+      expect(untrack(marker)).toBe('—  CWD ~/code/owlcoda · BRANCH FEATURE/UI · 2 PENDING CHANGES')
     } finally {
       if (originalHome === undefined) {
         delete process.env['HOME']

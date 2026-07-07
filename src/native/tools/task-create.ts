@@ -4,8 +4,9 @@
  * Creates a new task in the session task list. With an optional
  * `command` and no structured `steps`, the task ALSO spawns a bash child
  * and tracks its lifecycle — but ONLY after the command clears the shared
- * bash risk classifier. With `steps`, command is stored as plan metadata
- * and classifier-gated, but step execution remains model/tool driven.
+ * bash risk classifier or the narrower read-only verification profile.
+ * With `steps`, command is stored as plan metadata and classifier-gated,
+ * but step execution remains model/tool driven.
  *
  * Security model (the reason an earlier `command` implementation was
  * pulled): TaskCreate must NOT become a backdoor around the headless
@@ -20,7 +21,8 @@
  *      `renderBashPermission` so the user sees the same "⚠ rm -rf"
  *      verdict before approving.
  *   3. Direct execute — this function ALSO calls `classifyBashCommand`
- *      and refuses to spawn anything except `safe_readonly`. Even if a
+ *      and refuses to spawn anything except `safe_readonly` or a command
+ *      that matches the explicit read-only verification profile. Even if a
  *      caller bypasses gates 1+2 (e.g. a bug in the conversation loop,
  *      or a future plugin entry point), we still fail closed here.
  *
@@ -42,7 +44,7 @@ import {
   type TaskVerificationCheck,
   type TaskVerificationKind,
 } from './task-store.js'
-import { findUnsafeVerificationCommand } from './task-verification-policy.js'
+import { classifyTaskVerifyCommand, findUnsafeVerificationCommand } from './task-verification-policy.js'
 import { classifyBashCommand, primaryBashRiskReason } from '../bash-risk.js'
 
 /** Input shape for a single step when creating a structured task plan. */
@@ -99,7 +101,8 @@ export function createTaskCreateTool(): NativeToolDef<TaskCreateInput> {
       'completed, cancelled, blocked) but do NOT auto-execute. Status only ' +
       'advances when explicitly changed via TaskUpdate. ' +
       'When `command` is given, the task ALSO spawns a bash child running ' +
-      'that command — but only if the command classifies as safe_readonly. ' +
+      'that command — but only if the command classifies as safe_readonly ' +
+      'or matches a read-only verification command profile. ' +
       'needs_approval / dangerous / unknown commands are refused: use the ' +
       '`bash` tool for those so the operator can approve them explicitly. ' +
       'For parallel execution of independent work units, use the Agent ' +
@@ -146,9 +149,10 @@ export function createTaskCreateTool(): NativeToolDef<TaskCreateInput> {
       }
 
       const commandToRun = command === undefined || command === null || command === '' ? undefined : command
-      const bashRisk = commandToRun === undefined ? undefined : classifyBashCommand(commandToRun)
-      if (bashRisk !== undefined && bashRisk.level !== 'safe_readonly') {
-        return refuseCommandByRisk(bashRisk)
+      const commandPolicy = commandToRun === undefined ? undefined : classifyTaskCreateCommand(commandToRun)
+      const bashRisk = commandPolicy?.risk
+      if (commandPolicy !== undefined && !commandPolicy.allowed) {
+        return refuseCommandByRisk(commandPolicy.risk)
       }
 
       // Steps mode — create structured executable plan. A supplied command
@@ -253,10 +257,23 @@ export function createTaskCreateTool(): NativeToolDef<TaskCreateInput> {
             level: safeBashRisk.level,
             reasons: safeBashRisk.reasons,
           },
+          commandPolicy: commandPolicy?.policy,
         },
       }
     },
   }
+}
+
+function classifyTaskCreateCommand(command: string) {
+  const bashRisk = classifyBashCommand(command)
+  if (bashRisk.level === 'safe_readonly') {
+    return { allowed: true, risk: bashRisk, policy: 'bash-risk' as const }
+  }
+  const verificationPolicy = classifyTaskVerifyCommand(command)
+  if (verificationPolicy.allowed) {
+    return { allowed: true, risk: bashRisk, policy: verificationPolicy.policy }
+  }
+  return { allowed: false, risk: bashRisk, policy: 'bash-risk' as const }
 }
 
 type ProjectMapVerificationExpansion =

@@ -33,7 +33,7 @@ async function runDetection(): Promise<RipgrepBinary | null> {
   if (viaPath) return { bin: 'rg' }
 
   // 2. Fixed, well-known install locations.
-  for (const candidate of FIXED_PATHS) {
+  for (const candidate of RIPGREP_FIXED_PATHS) {
     if (await isExecutable(candidate)) return { bin: candidate }
   }
 
@@ -44,7 +44,8 @@ async function runDetection(): Promise<RipgrepBinary | null> {
   return null
 }
 
-const FIXED_PATHS = [
+export const RIPGREP_FIXED_PATHS = [
+  '/Applications/Codex.app/Contents/Resources/rg',
   '/opt/homebrew/bin/rg',
   '/usr/local/bin/rg',
   '/usr/bin/rg',

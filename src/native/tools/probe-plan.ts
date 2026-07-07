@@ -207,7 +207,7 @@ export function findMatchingUnsatisfiedProbe(
       // 0.13.56: only positive probes can use probe-consent override.
       const expected = probe.expectedOutcome ?? 'success'
       if (expected !== 'success') continue
-      if (!inputContainsString(toolInput, probe.mustContain)) continue
+      if (!probeInputContainsString(toolName, toolInput, probe.mustContain)) continue
       return { groupId: plan.groupId, probe }
     }
   }
@@ -255,7 +255,7 @@ export function markProbesSatisfied(
     for (const probe of plan.probes) {
       if (probe.satisfiedAt !== null) continue
       if (probe.tool !== toolName) continue
-      if (!inputContainsString(toolInput, probe.mustContain)) continue
+      if (!probeInputContainsString(toolName, toolInput, probe.mustContain)) continue
       if (!outcomeMatches(probe.expectedOutcome ?? 'success', outcome)) continue
       probe.satisfiedAt = now
       newlySatisfied.push(`${plan.groupId}:${probe.id}`)
@@ -348,6 +348,78 @@ function outcomeMatches(
     return meta['intentGuardBlocked'] === true
   }
   return false
+}
+
+function probeInputContainsString(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  needle: string,
+): boolean {
+  if (toolName !== 'bash') return inputContainsString(toolInput, needle)
+
+  const command = typeof toolInput['command'] === 'string'
+    ? toolInput['command']
+    : ''
+  if (!command) return inputContainsString(toolInput, needle)
+  if (!command.includes(needle)) return false
+  return bashCommandContainsArtifactBoundNeedle(command, needle)
+}
+
+function bashCommandContainsArtifactBoundNeedle(command: string, needle: string): boolean {
+  const chunks = splitShellCommandForProbe(command)
+  for (const chunk of chunks) {
+    if (!chunk.includes(needle)) continue
+    if (isStdoutOnlyEchoProbeChunk(chunk)) continue
+    return true
+  }
+  return false
+}
+
+function isStdoutOnlyEchoProbeChunk(chunk: string): boolean {
+  const trimmed = chunk.trim()
+  if (!/^(?:echo|printf)\b/.test(trimmed)) return false
+  return !hasArtifactWriteSink(trimmed)
+}
+
+function hasArtifactWriteSink(chunk: string): boolean {
+  return /\btee\b/.test(chunk)
+    || /(?:^|\s)\d?>{1,2}\s*(?!&)(?!\/dev\/null\b)\S+/.test(chunk)
+}
+
+function splitShellCommandForProbe(input: string): string[] {
+  const out: string[] = []
+  let buf = ''
+  let inSingle = false
+  let inDouble = false
+  let parenDepth = 0
+  let backtickDepth = 0
+  let i = 0
+
+  while (i < input.length) {
+    const ch = input[i]!
+    const next = input[i + 1]
+    if (!inSingle && !inDouble && parenDepth === 0 && backtickDepth === 0) {
+      if (ch === ';') { flush(); i++; continue }
+      if (ch === '|' && next !== '|') { flush(); i++; continue }
+      if (ch === '|' && next === '|') { flush(); i += 2; continue }
+      if (ch === '&' && next === '&') { flush(); i += 2; continue }
+    }
+    if (ch === "'" && !inDouble) inSingle = !inSingle
+    else if (ch === '"' && !inSingle) inDouble = !inDouble
+    else if (ch === '`' && !inSingle && !inDouble) backtickDepth = backtickDepth === 0 ? 1 : 0
+    else if (ch === '$' && next === '(' && !inSingle) { parenDepth++; buf += ch; i++; continue }
+    else if (ch === ')' && !inSingle && parenDepth > 0) parenDepth--
+    buf += ch
+    i++
+  }
+  flush()
+  return out.filter(s => s.length > 0)
+
+  function flush() {
+    const s = buf.trim()
+    buf = ''
+    if (s) out.push(s)
+  }
 }
 
 /**

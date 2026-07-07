@@ -2,6 +2,44 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.25] — 2026-07-07
+
+Harness reliability patch for local tool availability, task verification, MCP
+argument safety, probe evidence, and runtime replay diagnostics.
+
+### Added
+
+- Added Codex bundled `rg` discovery for Bash execution environments, including
+  `/Applications/Codex.app/Contents/Resources/rg`, so local harness checks can
+  use ripgrep even when the shell path is sparse.
+- Added TaskVerify path diagnostics for relative-path checks, including task
+  cwd, resolved path, existence, and stat errors when verification fails.
+- Added runtime transcript replay metadata derived from persisted runtime
+  events, exposing timeline, associations, reconnect strategy, and incomplete
+  replay diagnostics.
+
+### Changed
+
+- Reused the read-only verification command profile in TaskCreate, allowing
+  local validation commands such as `npx --no-install tsc --version` without
+  falling back to ad-hoc Bash usage.
+- Broadened TaskVerify safe read-only validation for common local commands such
+  as `node -e`, `npx tsc --noEmit`, and `npx vitest run`, while still rejecting
+  mutating flags such as `--fix` and dangerous commands.
+- Updated the TUI welcome marker so `CWD` / `BRANCH` labels stay uppercase
+  without uppercasing the actual filesystem path; existing cwd paths are
+  resolved through `realpath` when possible.
+
+### Fixed
+
+- Rejected placeholder MCP arguments such as `server_name`, `uri`, `...`, and
+  `…` before `ReadMcpResource` dispatches to an MCP server.
+- Prevented ProbePlan `mustContain` checks from being satisfied by ordinary
+  echoed stdout; content probes now need file or artifact-backed evidence.
+- Preserved partial BrowserJob artifacts on timeout, keeping recovery evidence
+  available instead of losing the incomplete run state.
+- Cleaned temporary desktop preview compile directories after smoke runs.
+
 ## [0.15.24] — 2026-07-07
 
 Runtime rate-limit and task-boundary reliability release.

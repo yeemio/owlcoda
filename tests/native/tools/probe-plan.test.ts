@@ -327,6 +327,56 @@ describe('probe matcher: literal-quote handling (0.13.53 regression)', () => {
     })
     expect(m).toBeNull()
   })
+
+  it('does not let a plain echo satisfy a bash mustContain probe', () => {
+    const conv = createConversation({ system: 'test', model: 'm' })
+    if (!conv.options) conv.options = {}
+    conv.options.probePlans = [{
+      groupId: 'QA',
+      probes: [
+        {
+          id: 'artifact-marker',
+          tool: 'bash',
+          mustContain: 'low_line_low_goal_expectation low_line_over_space',
+          description: 'marker must be proven from an artifact, not stdout echo',
+          satisfiedAt: null,
+        },
+      ],
+      registeredAt: new Date().toISOString(),
+    }]
+
+    const newly = markProbesSatisfied(conv, 'bash', {
+      command: 'echo "low_line_low_goal_expectation low_line_over_space" && npm run typecheck',
+    }, { isError: false, metadata: { exitCode: 0 } })
+
+    expect(newly).toEqual([])
+    expect(conv.options.probePlans[0]!.probes[0]!.satisfiedAt).toBeNull()
+  })
+
+  it('still allows artifact-bound bash probes when the matching command writes a file', () => {
+    const conv = createConversation({ system: 'test', model: 'm' })
+    if (!conv.options) conv.options = {}
+    conv.options.probePlans = [{
+      groupId: 'QA',
+      probes: [
+        {
+          id: 'artifact-write',
+          tool: 'bash',
+          mustContain: 'low_line_low_goal_expectation',
+          description: 'marker written to artifact',
+          satisfiedAt: null,
+        },
+      ],
+      registeredAt: new Date().toISOString(),
+    }]
+
+    const newly = markProbesSatisfied(conv, 'bash', {
+      command: 'printf "%s\\n" "low_line_low_goal_expectation" > docs/reports/lens.md',
+    }, { isError: false, metadata: { exitCode: 0 } })
+
+    expect(newly).toEqual(['QA:artifact-write'])
+    expect(conv.options.probePlans[0]!.probes[0]!.satisfiedAt).not.toBeNull()
+  })
 })
 
 // 0.13.54: negative probes with expectedOutcome='intentGuardBlocked'.

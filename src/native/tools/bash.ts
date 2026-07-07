@@ -22,20 +22,53 @@
  */
 
 import { spawn } from 'node:child_process'
-import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { basename, join } from 'node:path'
+import { existsSync, realpathSync, statSync } from 'node:fs'
+import { readFile, stat } from 'node:fs/promises'
+import { delimiter, resolve as resolvePath } from 'node:path'
 import type { BashInput, NativeToolDef, ToolExecutionContext, ToolResult } from './types.js'
 import { extractWriteTargets } from '../write-provenance.js'
 import type { ExtractedWriteTarget } from '../protocol/write-provenance-types.js'
-import { redactToolOutput } from '../tool-output-redaction.js'
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_OUTPUT_BYTES = 1024 * 1024 // 1 MiB cap per stream
 const PROGRESS_TAIL_LINES = 5 // Number of recent lines to include in progress events
 const MAX_SOURCE_CAPTURE_BYTES = 1024 * 1024
-const BASH_TOOL_ARTIFACT_DIR = 'tool-artifacts'
+const DEFAULT_BUNDLED_TOOL_DIRS = [
+  '/Applications/Codex.app/Contents/Resources',
+]
+
+export function buildBashExecutionEnv(
+  baseEnv: NodeJS.ProcessEnv = process.env,
+  bundledToolDirs: string[] = DEFAULT_BUNDLED_TOOL_DIRS,
+): NodeJS.ProcessEnv {
+  const env = { ...baseEnv }
+  const pathEntries = splitPath(env.PATH)
+  for (const dir of bundledToolDirs) {
+    if (!dir || !existsSync(dir)) continue
+    try {
+      if (!statSync(dir).isDirectory()) continue
+    } catch {
+      continue
+    }
+    if (!pathEntries.includes(dir)) pathEntries.push(dir)
+  }
+  env.PATH = pathEntries.join(delimiter)
+  return env
+}
+
+function splitPath(value: string | undefined): string[] {
+  if (!value) return []
+  return value.split(delimiter).filter(Boolean)
+}
+
+function canonicalizeCwd(cwd: string): string {
+  const resolved = resolvePath(process.cwd(), cwd)
+  try {
+    return realpathSync(resolved)
+  } catch {
+    return resolved
+  }
+}
 
 /**
  * Grace windows on the cancellation path (user Ctrl+C).
@@ -73,33 +106,19 @@ export function createBashTool(): NativeToolDef<BashInput> {
         return { output: 'Error: empty command', isError: true }
       }
 
-      const lifecycleRisk = detectLifecycleCommandRisk(command)
-      if (lifecycleRisk) {
-        return {
-          output:
-            `Refusing to start a nested OwlCoda server from inside the OwlCoda REPL.\n` +
-            `Use the runtime-owned lifecycle commands instead: owlcoda status, owlcoda start, owlcoda stop, owlcoda logs, owlcoda clients.\n` +
-            `Nested serve commands make port ownership and live-client shutdown ambiguous.`,
-          isError: true,
-          metadata: { lifecycleRisk },
-        }
-      }
-
       // Resolve + sanity-check cwd. Spawn will throw or run with a stale
       // cwd if the path doesn't exist / isn't a directory; surfacing that
       // explicitly is kinder than an opaque ENOENT mid-execution. path is
       // resolved against process.cwd() so a relative `cwd: '../other-repo'`
       // still works the way users expect.
-      let effectiveCwd = process.cwd()
+      let effectiveCwd = canonicalizeCwd(process.cwd())
       if (typeof cwd === 'string' && cwd.length > 0) {
-        const { resolve: resolvePath } = await import('node:path')
-        const { statSync } = await import('node:fs')
         const resolved = resolvePath(process.cwd(), cwd)
         try {
           if (!statSync(resolved).isDirectory()) {
             return { output: `Error: cwd is not a directory: ${resolved}`, isError: true }
           }
-          effectiveCwd = resolved
+          effectiveCwd = realpathSync(resolved)
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
           return { output: `Error: cwd does not exist or is inaccessible: ${resolved} (${msg})`, isError: true }
@@ -109,14 +128,6 @@ export function createBashTool(): NativeToolDef<BashInput> {
       const captureSeeds = await prepareBashWriteCaptures(command, effectiveCwd)
       const result = await runCommand(command, effectiveCwd, timeoutMs, context)
       const writeCaptures = await completeBashWriteCaptures(captureSeeds)
-      const sensitiveReadRisk = detectSensitiveReadRisk(command)
-      if (sensitiveReadRisk) {
-        result.output = `[sensitive-read-risk] Bash command read sensitive-looking path(s): ${sensitiveReadRisk.paths.join(', ')}. Output was redacted before display.\n\n${result.output}`
-        result.metadata = {
-          ...(result.metadata ?? {}),
-          sensitiveReadRisk,
-        }
-      }
       if (writeCaptures.length > 0) {
         result.metadata = {
           ...(result.metadata ?? {}),
@@ -214,10 +225,11 @@ function runCommand(
     let abortHardDeadline: ReturnType<typeof setTimeout> | null = null
     let timeoutEscalation: ReturnType<typeof setTimeout> | null = null
     let timeoutHardDeadline: ReturnType<typeof setTimeout> | null = null
+    const executionEnv = buildBashExecutionEnv()
 
     const child = spawn('bash', ['-c', command], {
       cwd,
-      env: { ...process.env },
+      env: executionEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
       // detached: the spawned bash becomes the leader of a new process
       // group. Lets us kill the whole group on abort so backgrounded
@@ -284,6 +296,7 @@ function runCommand(
           signal: 'SIGKILL',
           aborted: reason === 'aborted',
           forcedRelease: true,
+          cwd,
         },
       })
     }
@@ -345,7 +358,7 @@ function runCommand(
       }
       // Track recent lines for progress display
       if (context?.onProgress) {
-        const text = redactToolOutput(chunk.toString('utf-8'))
+        const text = chunk.toString('utf-8')
         const lines = text.split('\n')
         for (const line of lines) {
           if (line.length > 0) {
@@ -376,7 +389,7 @@ function runCommand(
       })
     })
 
-    child.on('close', async (code, signal) => {
+    child.on('close', (code, signal) => {
       if (settled) return
       settled = true
       clearAllTimers()
@@ -400,7 +413,7 @@ function runCommand(
       // long stdout could push stderr + exit code out of the tail
       // window. Pre-formatting at the bash layer keeps the
       // load-bearing parts intact.
-      let formatted = aborted
+      const formatted = aborted
         ? '[aborted] Process cancelled by user'
         : formatBashOutput({
             stdout,
@@ -411,35 +424,16 @@ function runCommand(
             timeoutExceeded,
             backgroundLikely,
           })
-      let outputArtifact: BashOutputArtifact | null = null
-      let outputArtifactError: string | undefined
-      if (!aborted) {
-        try {
-          outputArtifact = await maybePersistBashOutputArtifact({
-            stdout,
-            stderr,
-            cwd,
-            exitCode,
-            signal,
-            killed: killedForResult,
-            timeoutExceeded,
-            backgroundLikely,
-          })
-        } catch (err) {
-          outputArtifactError = redactToolOutput(err instanceof Error ? err.message : String(err))
-        }
-      }
-      if (outputArtifact) {
-        formatted += `\n\n[artifact] Full redacted bash output saved: artifactRef=${outputArtifact.artifactRef} path=${outputArtifact.path}`
-      } else if (outputArtifactError) {
-        formatted += `\n\n[artifact-warning] Full redacted bash output could not be saved: ${outputArtifactError}`
-      }
-      if (missingCommand) {
-        formatted += `\n\n[command not found] Missing executable "${missingCommand}". Use an installed fallback or install the command; do not treat this as missing project data.`
-      }
+      const output = missingCommand
+        ? [
+            formatted,
+            '',
+            `[command not found] Missing executable "${missingCommand}". Use an installed fallback or install the command; do not treat this as missing project data.`,
+          ].join('\n')
+        : formatted
 
       resolve({
-        output: formatted,
+        output,
         isError: aborted ? true : exitCode !== 0,
         metadata: {
           exitCode,
@@ -449,105 +443,13 @@ function runCommand(
           forcedRelease,
           ...(timeoutExceeded ? { timeoutExceeded: true } : {}),
           ...(backgroundLikely ? { backgroundLikely: true } : {}),
-          ...(outputArtifact ? { outputArtifact } : {}),
-          ...(outputArtifactError ? { outputArtifactError } : {}),
           ...(missingCommand ? { commandNotFound: true, missingCommand } : {}),
+          cwd,
+          path: executionEnv.PATH ?? '',
         },
       })
     })
   })
-}
-
-interface SensitiveReadRisk {
-  kind: 'sensitive_read'
-  paths: string[]
-}
-
-interface LifecycleCommandRisk {
-  kind: 'nested_owlcoda_serve'
-  command: string
-}
-
-const OWLCODA_SERVE_SEGMENT_RE = /(?:^|[;&|]\s*)(?:env\s+(?:[A-Za-z_][A-Za-z0-9_]*=[^\s;&|]+\s+)*|)(?:npx\s+)?owlcoda\s+serve\b(?!\s+(?:--help|-h)\b)/
-
-function detectLifecycleCommandRisk(command: string): LifecycleCommandRisk | null {
-  const normalized = command.trim()
-  if (!OWLCODA_SERVE_SEGMENT_RE.test(normalized)) return null
-  return { kind: 'nested_owlcoda_serve', command: normalized }
-}
-
-const READ_COMMAND_RE = /\b(?:cat|head|tail|less|more|sed|awk|grep|rg)\b/
-const SENSITIVE_READ_PATH_RE = /(?:^|[\s"'`])((?:~\/)?\.ssh\/(?:config|[^;&|<>\s"'`]+)|(?:\.\/)?\.env(?:\.[^;&|<>\s"'`]+)?|[^;&|<>\s"'`]*\/(?:env|secrets?|credentials?)\/[^;&|<>\s"'`]+|[^;&|<>\s"'`]*(?:secret|token|credential|password)[^;&|<>\s"'`]*)(?=$|[\s"'`;&|<>])/gi
-
-function detectSensitiveReadRisk(command: string): SensitiveReadRisk | null {
-  if (!READ_COMMAND_RE.test(command)) return null
-  const paths = uniqueStrings([...command.matchAll(SENSITIVE_READ_PATH_RE)].map(match => match[1]).filter(Boolean))
-  return paths.length > 0 ? { kind: 'sensitive_read', paths } : null
-}
-
-interface BashOutputArtifactInput {
-  stdout: string
-  stderr: string
-  cwd: string
-  exitCode: number
-  signal: NodeJS.Signals | null
-  killed: boolean
-  timeoutExceeded: boolean
-  backgroundLikely: boolean
-}
-
-interface BashOutputArtifact {
-  artifactRef: string
-  path: string
-  bytes: number
-  redacted: true
-}
-
-async function maybePersistBashOutputArtifact(input: BashOutputArtifactInput): Promise<BashOutputArtifact | null> {
-  if (!bashOutputNeedsArtifact(input.stdout, input.stderr)) return null
-  const filename = `bash-output-${Date.now()}-${randomUUID()}.txt`
-  const cwdKey = createHash('sha256').update(input.cwd).digest('hex').slice(0, 12)
-  const artifactDir = join(getOwlCodaHome(), BASH_TOOL_ARTIFACT_DIR, cwdKey)
-  const artifactPath = join(artifactDir, filename)
-  const body = [
-    '# OwlCoda Bash Output Artifact',
-    `createdAt=${new Date().toISOString()}`,
-    'redacted=true',
-    `exitCode=${input.exitCode}`,
-    `signal=${input.signal ?? ''}`,
-    `killed=${input.killed}`,
-    `timeoutExceeded=${input.timeoutExceeded}`,
-    `backgroundLikely=${input.backgroundLikely}`,
-    '',
-    '[stdout]',
-    input.stdout,
-    '',
-    '[stderr]',
-    input.stderr,
-    '',
-  ].join('\n')
-  await mkdir(artifactDir, { recursive: true })
-  await writeFile(artifactPath, body, 'utf8')
-  return {
-    artifactRef: `owlcoda://tool-artifacts/${cwdKey}/${basename(artifactPath)}`,
-    path: artifactPath,
-    bytes: Buffer.byteLength(body),
-    redacted: true,
-  }
-}
-
-function getOwlCodaHome(): string {
-  return process.env['OWLCODA_HOME']?.trim() || join(homedir(), '.owlcoda')
-}
-
-function bashOutputNeedsArtifact(stdout: string, stderr: string): boolean {
-  return stdout.length > MAX_BASH_OUTPUT_CHARS
-    || stderr.length > STDERR_BUDGET
-    || stdout.length + stderr.length > MAX_BASH_OUTPUT_CHARS
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values)]
 }
 
 function detectMissingCommand(stderr: string, exitCode: number): string | null {
@@ -609,7 +511,7 @@ function sanitizeBashOutput(text: string): string {
   out = out.replace(/\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x6c\x6e-\x7e]/g, '')
   // OSC: ESC ] <body> (BEL | ESC \). Strip — title-set, hyperlinks, etc.
   out = out.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
-  return redactToolOutput(out)
+  return out
 }
 
 function formatBashOutput(input: BashFormatInput): string {

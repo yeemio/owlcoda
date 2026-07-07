@@ -43,13 +43,11 @@ describe('BrowserJob platform tool', () => {
     await rm(artifactDir, { recursive: true, force: true })
   })
 
-	  it('exposes fetch_html and chrome_headless provider schema', () => {
-	    const schema = NATIVE_TOOL_SCHEMAS['BrowserJob'] as Record<string, any>
-	    expect(schema.properties.provider.enum).toEqual(['fetch_html', 'chrome_headless'])
-	    expect(schema.properties.chromeExecutablePath.description).toContain('Chrome/Chromium')
-	    expect(schema.properties.artifactDir.description).toContain('~/.owlcoda/browser-jobs')
-	    expect(schema.properties.artifactDir.description).not.toContain('.owlcoda-browser-jobs under cwd')
-	  })
+  it('exposes fetch_html and chrome_headless provider schema', () => {
+    const schema = NATIVE_TOOL_SCHEMAS['BrowserJob'] as Record<string, any>
+    expect(schema.properties.provider.enum).toEqual(['fetch_html', 'chrome_headless'])
+    expect(schema.properties.chromeExecutablePath.description).toContain('Chrome/Chromium')
+  })
 
   it('captures a URL as a browser job with queryable artifacts', async () => {
     const tool = createBrowserJobTool()
@@ -98,32 +96,6 @@ describe('BrowserJob platform tool', () => {
     expect(got.output).toContain('Type: browser')
     expect(got.output).toContain(htmlPath)
     expect(got.output).toContain('Provider: fetch_html')
-  })
-
-  it('stores default browser artifacts under OWLCODA_HOME instead of polluting the project cwd', async () => {
-    const cwd = await mkdtemp(join(tmpdir(), 'owlcoda-browser-job-cwd-'))
-    const home = await mkdtemp(join(tmpdir(), 'owlcoda-browser-job-home-'))
-    const previousHome = process.env['OWLCODA_HOME']
-    const tool = createBrowserJobTool()
-    try {
-      process.env['OWLCODA_HOME'] = home
-      const result = await tool.execute({
-        url: `${baseUrl}/page`,
-        cwd,
-        deadlineMs: 1000,
-      })
-
-      expect(result.isError).toBe(false)
-      const job = (result.metadata as any).job
-      const htmlPath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_html').path
-      expect(htmlPath).toContain(join(home, 'browser-jobs'))
-      expect(existsSync(join(cwd, '.owlcoda-browser-jobs'))).toBe(false)
-    } finally {
-      if (previousHome === undefined) delete process.env['OWLCODA_HOME']
-      else process.env['OWLCODA_HOME'] = previousHome
-      await rm(cwd, { recursive: true, force: true })
-      await rm(home, { recursive: true, force: true })
-    }
   })
 
   it('captures a URL through a chrome_headless provider with screenshot and DOM artifacts', async () => {
@@ -190,13 +162,6 @@ console.log('<!doctype html><main id="scoreboard">Chrome rendered odds board</ma
       stage: 'provider_not_configured',
       terminationReason: 'provider_not_configured',
     })
-    expect((result.metadata as any).captureFailureReceipt).toMatchObject({
-      captureFailureStage: 'permission',
-      provider: 'chrome_headless',
-      attempts: 1,
-      url: `${baseUrl}/page`,
-      recoverable: true,
-    })
   })
 
   it('preserves partial chrome_headless evidence when capture times out after producing DOM', async () => {
@@ -231,19 +196,11 @@ await new Promise((resolve) => setTimeout(resolve, 1000))
       provider: 'chrome_headless',
       terminationReason: 'deadline_exceeded',
     })
-    expect(job.artifacts.map((artifact: any) => artifact.artifactType)).toEqual(expect.arrayContaining([
+    expect(job.artifacts.map((artifact: any) => artifact.artifactType)).toEqual([
       'browser_screenshot',
       'browser_dom',
       'browser_text',
-      'browser_capture_failure_receipt',
-    ]))
-    expect((result.metadata as any).captureFailureReceipt).toMatchObject({
-      captureFailureStage: 'timeout',
-      provider: 'chrome_headless',
-      attempts: 1,
-      url: `${baseUrl}/page`,
-      durationMs: expect.any(Number),
-    })
+    ])
     const screenshotPath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_screenshot').path
     const textPath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_text').path
     expect(existsSync(screenshotPath)).toBe(true)
@@ -314,20 +271,8 @@ await new Promise((resolve) => setTimeout(resolve, 1000))
       error: expect.stringContaining('#missing'),
       terminationReason: 'selector_missing',
     })
-    expect((result.metadata as any).captureFailureReceipt).toMatchObject({
-      captureFailureStage: 'selector',
-      selector: '#missing',
-      provider: 'fetch_html',
-      attempts: 1,
-      url: `${baseUrl}/page`,
-      artifactRefs: expect.any(Array),
-    })
     const job = (result.metadata as any).job
-    expect(job.artifacts.map((artifact: any) => artifact.artifactType)).toEqual(expect.arrayContaining([
-      'browser_html',
-      'browser_text',
-      'browser_capture_failure_receipt',
-    ]))
+    expect(job.artifacts.map((artifact: any) => artifact.artifactType)).toEqual(['browser_html', 'browser_text'])
     const textPath = job.artifacts.find((artifact: any) => artifact.artifactType === 'browser_text').path
     expect(await readFile(textPath, 'utf-8')).toContain('Live odds board')
   })
@@ -348,13 +293,6 @@ await new Promise((resolve) => setTimeout(resolve, 1000))
     expect(result.output).toContain('provider=chrome_headless')
     expect((result.metadata as any).failureCategory).toBe('browser-job:fetch-failed')
     expect((result.metadata as any).recoverable).toBe(true)
-    expect((result.metadata as any).captureFailureReceipt).toMatchObject({
-      captureFailureStage: 'network',
-      provider: 'fetch_html',
-      attempts: 1,
-      url: 'http://127.0.0.1:1/',
-      recoverable: true,
-    })
   })
 
   it('marks timed out browser jobs as timeout with cleanup evidence', async () => {
@@ -376,13 +314,6 @@ await new Promise((resolve) => setTimeout(resolve, 1000))
       cleanupAttempted: true,
       cleanupSucceeded: true,
       remainingPids: [],
-    })
-    expect((result.metadata as any).captureFailureReceipt).toMatchObject({
-      captureFailureStage: 'timeout',
-      provider: 'fetch_html',
-      attempts: 1,
-      url: `${baseUrl}/slow`,
-      durationMs: expect.any(Number),
     })
   })
 

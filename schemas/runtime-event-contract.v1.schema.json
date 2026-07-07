@@ -1,0 +1,398 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runtime-event-contract.v1.schema.json",
+  "title": "OwlCoda Runtime Event Contract v1",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["id", "seq", "kind", "at", "conversationId", "contract"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "seq": { "type": "number" },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "turn_started",
+        "item_started",
+        "item_completed",
+        "checkpoint_installed",
+        "checkpoint_disposition_changed",
+        "checkpoint_resolved",
+        "runtime_intervention",
+        "runtime_truth_report_recorded",
+        "runtime_recovery_report_recorded",
+        "turn_completed"
+      ]
+    },
+    "at": { "type": "string", "minLength": 1 },
+    "conversationId": { "type": "string", "minLength": 1 },
+    "turnId": { "type": "string", "minLength": 1 },
+    "itemId": { "type": "string", "minLength": 1 },
+    "checkpointId": { "type": "string", "minLength": 1 },
+    "checkpointKind": { "type": "string", "minLength": 1 },
+    "payload": { "type": "object" },
+    "contract": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["schema_version", "kind", "event_kind", "payload_schema", "validation_status"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "runtime_event_contract" },
+        "event_kind": {
+          "type": "string",
+          "enum": [
+            "turn_started",
+            "item_started",
+            "item_completed",
+            "checkpoint_installed",
+            "checkpoint_disposition_changed",
+            "checkpoint_resolved",
+            "runtime_intervention",
+            "runtime_truth_report_recorded",
+            "runtime_recovery_report_recorded",
+            "turn_completed"
+          ]
+        },
+        "payload_schema": {
+          "type": "string",
+          "enum": [
+            "turn_started.v1",
+            "item_started.v1",
+            "item_completed.v1",
+            "checkpoint_installed.v1",
+            "checkpoint_disposition_changed.v1",
+            "checkpoint_resolved.v1",
+            "runtime_intervention.v1",
+            "runtime_truth_report_recorded.v1",
+            "runtime_recovery_report_recorded.v1",
+            "turn_completed.v1"
+          ]
+        },
+        "validation_status": { "const": "valid" }
+      }
+    }
+  },
+  "$defs": {
+    "non_empty_string": { "type": "string", "minLength": 1 },
+    "checkpoint_payload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["checkpoint_id", "checkpoint_kind"],
+      "properties": {
+        "checkpoint_id": { "$ref": "#/$defs/non_empty_string" },
+        "checkpoint_kind": { "$ref": "#/$defs/non_empty_string" },
+        "disposition": { "$ref": "#/$defs/non_empty_string" },
+        "previous_disposition": { "$ref": "#/$defs/non_empty_string" },
+        "reason": { "type": "string" },
+        "inspect_commands": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "context_replacement_event_metadata": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "input_history_digest",
+        "reason",
+        "window_id",
+        "source_turn_id",
+        "ledger_status",
+        "replacement_history_turns"
+      ],
+      "properties": {
+        "input_history_digest": { "$ref": "#/$defs/non_empty_string" },
+        "reason": { "$ref": "#/$defs/non_empty_string" },
+        "window_id": { "$ref": "#/$defs/non_empty_string" },
+        "source_turn_id": { "$ref": "#/$defs/non_empty_string" },
+        "ledger_status": { "$ref": "#/$defs/non_empty_string" },
+        "replacement_history_turns": { "type": "number" }
+      }
+    },
+    "runtime_report_source": {
+      "type": "string",
+      "enum": ["assistant_text", "runtime_synthetic", "assistant_text_fallback"]
+    },
+    "normalized_runtime_recovery_report": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "kind",
+        "checkpoint_id",
+        "checkpoint_kind",
+        "report_kind",
+        "report_source",
+        "confidence",
+        "covered_ids"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "normalized_runtime_recovery_report" },
+        "checkpoint_id": { "$ref": "#/$defs/non_empty_string" },
+        "checkpoint_kind": { "$ref": "#/$defs/non_empty_string" },
+        "report_kind": { "$ref": "#/$defs/non_empty_string" },
+        "report_source": { "$ref": "#/$defs/runtime_report_source" },
+        "confidence": {
+          "type": "string",
+          "enum": ["high", "low"]
+        },
+        "covered_ids": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "recovery_command": { "type": "string" },
+        "inspect_commands": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "kind": { "const": "turn_started" } } },
+      "then": {
+        "required": ["turnId"],
+        "properties": {
+          "contract": {
+            "properties": {
+              "event_kind": { "const": "turn_started" },
+              "payload_schema": { "const": "turn_started.v1" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "turn_completed" } } },
+      "then": {
+        "required": ["turnId", "payload"],
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": [
+              "iterations",
+              "request_count",
+              "input_tokens",
+              "output_tokens",
+              "assistant_response_count",
+              "assistant_text_chars",
+              "final_text_chars",
+              "tool_use_count",
+              "executed_tool_count",
+              "empty_response_count"
+            ],
+            "properties": {
+              "iterations": { "type": "number" },
+              "request_count": { "type": "number" },
+              "input_tokens": { "type": "number" },
+              "output_tokens": { "type": "number" },
+              "assistant_response_count": { "type": "number" },
+              "assistant_text_chars": { "type": "number" },
+              "final_text_chars": { "type": "number" },
+              "tool_use_count": { "type": "number" },
+              "executed_tool_count": { "type": "number" },
+              "empty_response_count": { "type": "number" },
+              "runtime_failure_kind": { "type": "string" },
+              "runtime_failure_phase": { "type": "string" }
+            }
+          },
+          "contract": {
+            "properties": {
+              "event_kind": { "const": "turn_completed" },
+              "payload_schema": { "const": "turn_completed.v1" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "item_started" } } },
+      "then": {
+        "required": ["turnId", "itemId", "payload"],
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["tool_name"],
+            "properties": {
+              "tool_name": { "$ref": "#/$defs/non_empty_string" }
+            }
+          },
+          "contract": {
+            "properties": {
+              "event_kind": { "const": "item_started" },
+              "payload_schema": { "const": "item_started.v1" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "item_completed" } } },
+      "then": {
+        "required": ["turnId", "itemId", "payload"],
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["tool_name", "is_error"],
+            "properties": {
+              "tool_name": { "$ref": "#/$defs/non_empty_string" },
+              "is_error": { "type": "boolean" }
+            }
+          },
+          "contract": {
+            "properties": {
+              "event_kind": { "const": "item_completed" },
+              "payload_schema": { "const": "item_completed.v1" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "checkpoint_installed" } } },
+      "then": {
+        "required": ["checkpointId", "checkpointKind", "payload"],
+        "properties": {
+          "payload": {
+            "allOf": [{ "$ref": "#/$defs/checkpoint_payload" }],
+            "required": ["checkpoint_id", "checkpoint_kind", "disposition"]
+          },
+          "contract": {
+            "properties": {
+              "event_kind": { "const": "checkpoint_installed" },
+              "payload_schema": { "const": "checkpoint_installed.v1" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": { "const": "checkpoint_installed" },
+          "checkpointKind": { "const": "context_replacement_checkpoint" }
+        }
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["context_replacement"],
+            "properties": {
+              "context_replacement": { "$ref": "#/$defs/context_replacement_event_metadata" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "checkpoint_disposition_changed" } } },
+      "then": {
+        "required": ["checkpointId", "checkpointKind", "payload"],
+        "properties": {
+          "payload": {
+            "allOf": [{ "$ref": "#/$defs/checkpoint_payload" }],
+            "required": ["checkpoint_id", "checkpoint_kind", "previous_disposition", "disposition"]
+          },
+          "contract": {
+            "properties": {
+              "event_kind": { "const": "checkpoint_disposition_changed" },
+              "payload_schema": { "const": "checkpoint_disposition_changed.v1" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "checkpoint_resolved" } } },
+      "then": {
+        "required": ["checkpointId", "checkpointKind", "payload"],
+        "properties": {
+          "payload": {
+            "allOf": [{ "$ref": "#/$defs/checkpoint_payload" }],
+            "required": ["checkpoint_id", "checkpoint_kind", "disposition"]
+          },
+          "contract": {
+            "properties": {
+              "event_kind": { "const": "checkpoint_resolved" },
+              "payload_schema": { "const": "checkpoint_resolved.v1" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "runtime_intervention" } } },
+      "then": {
+        "required": ["payload"],
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["intervention_kind"],
+            "properties": {
+              "intervention_kind": { "$ref": "#/$defs/non_empty_string" }
+            }
+          },
+          "contract": {
+            "properties": {
+              "event_kind": { "const": "runtime_intervention" },
+              "payload_schema": { "const": "runtime_intervention.v1" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "runtime_truth_report_recorded" } } },
+      "then": {
+        "required": ["checkpointId", "checkpointKind", "payload"],
+        "properties": {
+          "checkpointKind": { "const": "context_replacement_checkpoint" },
+          "payload": {
+            "type": "object",
+            "required": ["report_kind", "report_source", "report"],
+            "properties": {
+              "report_kind": { "$ref": "#/$defs/non_empty_string" },
+              "report_source": {
+                "type": "string",
+                "enum": ["assistant_text", "runtime_synthetic"]
+              },
+              "report": { "type": "object" }
+            }
+          },
+          "contract": {
+            "properties": {
+              "event_kind": { "const": "runtime_truth_report_recorded" },
+              "payload_schema": { "const": "runtime_truth_report_recorded.v1" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "kind": { "const": "runtime_recovery_report_recorded" } } },
+      "then": {
+        "required": ["checkpointId", "checkpointKind", "payload"],
+        "properties": {
+          "payload": {
+            "type": "object",
+            "required": ["report_kind", "report_source", "report", "normalized_report"],
+            "properties": {
+              "report_kind": { "$ref": "#/$defs/non_empty_string" },
+              "report_source": { "$ref": "#/$defs/runtime_report_source" },
+              "report": { "type": "object" },
+              "normalized_report": { "$ref": "#/$defs/normalized_runtime_recovery_report" }
+            }
+          },
+          "contract": {
+            "properties": {
+              "event_kind": { "const": "runtime_recovery_report_recorded" },
+              "payload_schema": { "const": "runtime_recovery_report_recorded.v1" }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

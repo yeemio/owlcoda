@@ -10,7 +10,7 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -335,15 +335,16 @@ export function getWelcomeTitleIconPlacement(opts: WelcomeOptions): WelcomeTitle
 }
 
 export function readWelcomeMarkerOptions(cwd: string = process.cwd()): WelcomeMarkerOptions {
+  const canonicalCwd = canonicalizeCwdForDisplay(cwd)
   return {
-    cwd,
-    branch: readGitBranch(cwd),
-    pendingChanges: readGitPendingChangeCount(cwd),
+    cwd: canonicalCwd,
+    branch: readGitBranch(canonicalCwd),
+    pendingChanges: readGitPendingChangeCount(canonicalCwd),
   }
 }
 
 export function formatWelcomeMarker(opts: WelcomeMarkerOptions): string {
-  const parts = [`CWD ${formatCwd(opts.cwd).toUpperCase()}`]
+  const parts = [`CWD ${formatCwd(canonicalizeCwdForDisplay(opts.cwd))}`]
   if (opts.branch) {
     parts.push(`BRANCH ${opts.branch.toUpperCase()}`)
   }
@@ -432,6 +433,14 @@ function formatCwd(cwd: string): string {
     return `~${cwd.slice(home.length)}`
   }
   return cwd
+}
+
+function canonicalizeCwdForDisplay(cwd: string): string {
+  try {
+    return realpathSync(path.resolve(cwd))
+  } catch {
+    return cwd
+  }
 }
 
 function readGitBranch(cwd: string): string | null {

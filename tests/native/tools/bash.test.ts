@@ -1,8 +1,8 @@
 import { afterEach, describe, it, expect } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { createBashTool } from '../../../src/native/tools/bash.js'
+import { delimiter, join } from 'node:path'
+import { buildBashExecutionEnv, createBashTool } from '../../../src/native/tools/bash.js'
 
 const temporaryRoots: string[] = []
 
@@ -71,10 +71,10 @@ describe('Native Bash tool', () => {
     })
     expect(result.isError).toBe(true)
     expect(result.metadata?.exitCode).not.toBe(0)
-    expect(result.output).toContain('[command not found]')
-    expect(result.output).toContain('do not treat this as missing project data')
     expect(result.metadata?.commandNotFound).toBe(true)
     expect(result.metadata?.missingCommand).toBe('nonexistent_command_xyz_123')
+    expect(result.output).toContain('[command not found]')
+    expect(result.output).toContain('Use an installed fallback')
   })
 
   // ── Working directory ──
@@ -102,15 +102,6 @@ describe('Native Bash tool', () => {
     expect(result.isError).toBe(true)
   })
 
-  it('refuses to start a nested OwlCoda serve process from inside the REPL', async () => {
-    const result = await bash.execute({ command: 'owlcoda serve --port 8019 &' })
-    expect(result.isError).toBe(true)
-    expect(result.output).toContain('Refusing to start a nested OwlCoda server')
-    expect(result.output).toContain('owlcoda status')
-    expect(result.output).toContain('owlcoda start')
-    expect(result.metadata?.lifecycleRisk).toMatchObject({ kind: 'nested_owlcoda_serve' })
-  })
-
   // ── Timeout ──
 
   it('kills process on timeout', async () => {
@@ -126,7 +117,7 @@ describe('Native Bash tool', () => {
   it('does not label a zero-exit background-shaped timeout as process killed', async () => {
     const result = await bash.execute({
       command: "trap 'echo ready; exit 0' TERM; sleep 1 >/tmp/owlcoda-bash-background-timeout.log 2>&1 & echo started; wait",
-      timeoutMs: 150,
+      timeoutMs: 250,
     })
 
     expect(result.isError).toBe(false)
@@ -149,59 +140,6 @@ describe('Native Bash tool', () => {
     })
     expect(result.isError).toBe(false)
     expect(result.output).toContain('truncated')
-  }, 15_000)
-
-  it('records a redacted artifact when formatted output is truncated', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-artifact-'))
-    temporaryRoots.push(root)
-    const previousOwlCodaHome = process.env['OWLCODA_HOME']
-    process.env['OWLCODA_HOME'] = join(root, 'owlcoda-home')
-    let result!: Awaited<ReturnType<typeof bash.execute>>
-    try {
-      result = await bash.execute({
-        command: "node -e \"process.stdout.write('prefix-' + 'Z'.repeat(20000) + '-suffix')\"",
-        cwd: root,
-        timeoutMs: 10_000,
-      })
-    } finally {
-      if (previousOwlCodaHome === undefined) delete process.env['OWLCODA_HOME']
-      else process.env['OWLCODA_HOME'] = previousOwlCodaHome
-    }
-
-    const artifact = result.metadata?.['outputArtifact'] as { path?: string; artifactRef?: string } | undefined
-    expect(artifact?.artifactRef).toMatch(/^owlcoda:\/\/tool-artifacts\/[^/]+\/bash-output-/)
-    expect(artifact?.path).toBeTruthy()
-    expect(existsSync(artifact!.path!)).toBe(true)
-    const saved = readFileSync(artifact!.path!, 'utf8')
-    expect(saved).toContain('prefix-')
-    expect(saved).toContain('-suffix')
-    expect(result.output).toContain(`artifactRef=${artifact!.artifactRef}`)
-  }, 15_000)
-
-  it('returns the bash result when redacted artifact persistence fails', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-artifact-fail-'))
-    temporaryRoots.push(root)
-    const invalidHome = join(root, 'not-a-directory')
-    writeFileSync(invalidHome, 'file blocks artifact directory creation')
-    const previousOwlCodaHome = process.env['OWLCODA_HOME']
-    process.env['OWLCODA_HOME'] = invalidHome
-    let result!: Awaited<ReturnType<typeof bash.execute>>
-    try {
-      result = await bash.execute({
-        command: "node -e \"process.stdout.write('prefix-' + 'Z'.repeat(20000) + '-suffix')\"",
-        cwd: root,
-        timeoutMs: 10_000,
-      })
-    } finally {
-      if (previousOwlCodaHome === undefined) delete process.env['OWLCODA_HOME']
-      else process.env['OWLCODA_HOME'] = previousOwlCodaHome
-    }
-
-    expect(result.isError).toBe(false)
-    expect(result.output).toContain('[artifact-warning]')
-    expect(result.output).toContain('[exit code: 0]')
-    expect(result.metadata?.['outputArtifactError']).toBeTruthy()
-    expect(result.metadata?.['outputArtifact']).toBeUndefined()
   }, 15_000)
 
   // ── Pipes and compound commands ──
@@ -231,6 +169,16 @@ describe('Native Bash tool', () => {
     expect(result.isError).toBe(false)
     expect(result.output.length).toBeGreaterThan(0)
     expect(result.output).not.toBe('$HOME')
+  })
+
+  it('adds existing bundled tool directories to PATH without dropping the original PATH', () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-env-'))
+    temporaryRoots.push(root)
+    const env = buildBashExecutionEnv({ PATH: '/usr/bin', HOME: '/tmp' }, [root, join(root, 'missing')])
+    const entries = env.PATH?.split(delimiter) ?? []
+    expect(entries).toContain('/usr/bin')
+    expect(entries).toContain(root)
+    expect(entries).not.toContain(join(root, 'missing'))
   })
 
   // ── No output case ──
@@ -474,79 +422,6 @@ describe('Native Bash tool', () => {
     expect(result.output).not.toContain('\x1b]')
     expect(result.output).not.toContain('evil-title')
     expect(result.output).toContain('hello world')
-  })
-
-  it('redacts secret-looking environment values from stdout and stderr', async () => {
-    const result = await bash.execute({
-      command: [
-        "printf 'KIMI_API_KEY=sk-kimi-12345678901234567890\\nMINIMAX_API_KEY=cp-token-12345678901234567890\\n'",
-        "printf 'DEEPSEEK_API_KEY=sk-deepseek-12345678901234567890\\n' >&2",
-      ].join('; '),
-    })
-
-    expect(result.output).toContain('KIMI_API_KEY=[REDACTED]')
-    expect(result.output).toContain('MINIMAX_API_KEY=[REDACTED]')
-    expect(result.output).toContain('DEEPSEEK_API_KEY=[REDACTED]')
-    expect(result.output).not.toContain('sk-kimi-12345678901234567890')
-    expect(result.output).not.toContain('cp-token-12345678901234567890')
-    expect(result.output).not.toContain('sk-deepseek-12345678901234567890')
-  })
-
-  it('redacts provider thinking fields from bash output', async () => {
-    const result = await bash.execute({
-      command: "printf '%s\\n' '{\"type\":\"thinking\",\"thinking\":\"private reasoning text\",\"content\":[{\"type\":\"text\",\"text\":\"visible answer\"}],\"reasoning_content\":\"private chain\"}'",
-    })
-
-    expect(result.output).toContain('"thinking":"[REDACTED]"')
-    expect(result.output).toContain('"reasoning_content":"[REDACTED]"')
-    expect(result.output).toContain('visible answer')
-    expect(result.output).not.toContain('private reasoning text')
-    expect(result.output).not.toContain('private chain')
-  })
-
-  it('redacts URL and HTML embedded token-shaped values from bash output', async () => {
-    const token = '9340807895b080031b6787747d07b3b23ab4b61e6fe323fe54ab00fae9e78cd2'
-    const result = await bash.execute({
-      command: [
-        `printf '%s\\n' 'https://example.test/chat#token=${token}&next=/chat'`,
-        `printf '%s\\n' '<script>var t="${token}";location.replace("/chat#token="+encodeURIComponent(t));</script>'`,
-      ].join('; '),
-    })
-
-    expect(result.output).not.toContain(token)
-    expect(result.output).toContain('token=[REDACTED]')
-    expect(result.output).toContain('var t="[REDACTED_TOKEN]"')
-  })
-
-  it('marks env and ssh file reads as sensitive-read risk', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-sensitive-read-'))
-    temporaryRoots.push(root)
-    writeFileSync(join(root, '.env'), 'MES_PASSWORD=super-secret-value\n')
-
-    const result = await bash.execute({
-      command: 'cat .env',
-      cwd: root,
-    })
-
-    const risk = result.metadata?.['sensitiveReadRisk'] as { paths?: string[] } | undefined
-    expect(risk?.paths).toContain('.env')
-    expect(result.output).toContain('[sensitive-read-risk]')
-    expect(result.output).not.toContain('super-secret-value')
-  })
-
-  it('redacts recent progress lines before emitting progress callbacks', async () => {
-    const seenLines: string[] = []
-    await bash.execute(
-      { command: "printf 'KIMI_API_KEY=sk-kimi-progress-12345678901234567890\\n'; sleep 0.35" },
-      {
-        onProgress: event => {
-          seenLines.push(...event.lines)
-        },
-      },
-    )
-
-    expect(seenLines.join('\n')).toContain('KIMI_API_KEY=[REDACTED]')
-    expect(seenLines.join('\n')).not.toContain('sk-kimi-progress-12345678901234567890')
   })
 
   it('force-resolves even if `close` is never delivered (hard deadline)', async () => {

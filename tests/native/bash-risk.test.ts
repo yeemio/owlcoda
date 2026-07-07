@@ -43,7 +43,7 @@ const SAFE_READ_CASES: Case[] = [
   // TaskVerify command checks (`cd <repo> && <check>`) and headless gating
   // refuse the most trivially safe command. The worst-chunk splitter still
   // catches `cd X && rm -rf` via the rm chunk (covered in DANGEROUS_CASES).
-  { input: 'cd /Users/publicuser/AI/gitrep/owlrunkit', level: 'safe_readonly' },
+  { input: 'cd /Users/yeemio/AI/gitrep/owlrunkit', level: 'safe_readonly' },
   { input: 'cd', level: 'safe_readonly' },
   { input: 'cd ..', level: 'safe_readonly' },
   { input: 'whoami', level: 'safe_readonly' },
@@ -221,7 +221,7 @@ describe('classifyBashCommand — taxonomy', () => {
   })
 
   it('reports the load-bearing non-safe reason before harmless cd chunks', () => {
-    const v = classifyBashCommand('cd /Users/publicuser/AI/gitrep/owlfootball && npx tsc --noEmit')
+    const v = classifyBashCommand('cd /Users/yeemio/AI/gitrep/owlfootball && npx tsc --noEmit')
     expect(v.level).toBe('needs_approval')
     expect(v.reasons[0]).toContain('cd')
     expect(primaryBashRiskReason(v)).toContain('npx')

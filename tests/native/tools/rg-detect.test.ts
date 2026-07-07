@@ -1,5 +1,9 @@
 import { describe, expect, it, beforeEach } from 'vitest'
-import { _resetRipgrepCacheForTests, detectRipgrep } from '../../../src/native/tools/rg-detect.js'
+import {
+  _resetRipgrepCacheForTests,
+  detectRipgrep,
+  RIPGREP_FIXED_PATHS,
+} from '../../../src/native/tools/rg-detect.js'
 
 describe('detectRipgrep', () => {
   beforeEach(() => {
@@ -37,5 +41,9 @@ describe('detectRipgrep', () => {
     } else {
       expect(second).toBeNull()
     }
+  })
+
+  it('checks the Codex.app bundled rg path as a fixed fallback', () => {
+    expect(RIPGREP_FIXED_PATHS).toContain('/Applications/Codex.app/Contents/Resources/rg')
   })
 })

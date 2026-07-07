@@ -60,6 +60,22 @@ export function createReadMcpResourceTool(
       }
       if (!uri) return { output: 'Error: uri is required.', isError: true, metadata: { failureCategory: 'mcp:bad-params' } }
 
+      const placeholder = findPlaceholderParam(server_name, uri)
+      if (placeholder) {
+        return {
+          output:
+            `Error: placeholder ${placeholder.field} value "${placeholder.value}" was passed to ReadMcpResource. ` +
+            'Replace the template value with a real connected MCP server name and resource URI.',
+          isError: true,
+          metadata: {
+            failureCategory: 'mcp:placeholder-params',
+            placeholderParam: placeholder.field,
+            server_name,
+            uri,
+          },
+        }
+      }
+
       if (/^file:\/\//i.test(uri)) {
         return await readLocalFileUri(uri, context)
       }
@@ -140,4 +156,28 @@ async function readLocalPath(
 
 function isLocalAbsolutePath(value: string): boolean {
   return isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value)
+}
+
+function findPlaceholderParam(serverName: string, uri: string): { field: 'server_name' | 'uri'; value: string } | null {
+  if (isPlaceholderValue(serverName, ['server_name', 'server', 'servername', 'mcp_server', 'server-name'])) {
+    return { field: 'server_name', value: serverName }
+  }
+  if (isPlaceholderValue(uri, ['uri', 'url', 'resource', 'resource_uri', 'resource-uri'])) {
+    return { field: 'uri', value: uri }
+  }
+  return null
+}
+
+function isPlaceholderValue(value: string, tokens: string[]): boolean {
+  const normalized = value.trim().toLowerCase()
+  if (!normalized) return false
+  if (normalized === '...' || normalized === '…') return true
+  const stripped = normalized.replace(/^<+|>+$/g, '')
+  if (stripped === '...' || stripped === '…') return true
+  if (tokens.includes(stripped)) return true
+  if (/^(?:your|example|sample)[_-]/.test(stripped)) {
+    const suffix = stripped.replace(/^(?:your|example|sample)[_-]/, '')
+    return tokens.includes(suffix)
+  }
+  return false
 }

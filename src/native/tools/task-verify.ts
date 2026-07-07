@@ -25,7 +25,9 @@ import {
   type TaskVerificationCheck,
   type TaskVerificationResult,
 } from './task-store.js'
-import { classifyBashCommand, primaryBashRiskReason } from '../bash-risk.js'
+import { primaryBashRiskReason } from '../bash-risk.js'
+import { buildBashExecutionEnv } from './bash.js'
+import { classifyTaskVerifyCommand } from './task-verification-policy.js'
 import { verifyHtmlDeck } from '../verification-packs/html-deck.js'
 import { evaluateRunVerdictGate, formatRunVerdictGateResult } from '../run-verdict-gate.js'
 
@@ -33,6 +35,19 @@ const execFileAsync = promisify(execFile)
 
 const VERIFY_COMMAND_TIMEOUT_MS = 30_000
 const VERIFY_HTTP_TIMEOUT_MS = 10_000
+
+interface VerificationRuntimeContext {
+  cwd: string
+}
+
+interface VerificationPathEvidence {
+  input: string
+  cwd: string
+  resolvedPath: string
+  exists: boolean
+  kind?: 'file' | 'directory' | 'other'
+  statError?: string
+}
 
 export interface TaskVerifyInput {
   taskId: string
@@ -57,11 +72,53 @@ function placeholderReason(p: string): string | null {
     : null
 }
 
+function canonicalizeCwd(cwd: string): string {
+  const resolved = path.resolve(cwd)
+  try {
+    return fs.realpathSync(resolved)
+  } catch {
+    return resolved
+  }
+}
+
+function resolveVerificationPath(inputPath: string, ctx: VerificationRuntimeContext): string {
+  const resolved = path.isAbsolute(inputPath)
+    ? path.resolve(inputPath)
+    : path.resolve(ctx.cwd, inputPath)
+  try {
+    return fs.realpathSync(resolved)
+  } catch {
+    return resolved
+  }
+}
+
+function inspectVerificationPath(inputPath: string, ctx: VerificationRuntimeContext): VerificationPathEvidence {
+  const resolvedPath = resolveVerificationPath(inputPath, ctx)
+  try {
+    const stat = fs.statSync(resolvedPath)
+    return {
+      input: inputPath,
+      cwd: ctx.cwd,
+      resolvedPath,
+      exists: true,
+      kind: stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : 'other',
+    }
+  } catch (err) {
+    return {
+      input: inputPath,
+      cwd: ctx.cwd,
+      resolvedPath,
+      exists: false,
+      statError: err instanceof Error ? err.message : String(err),
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Individual check runners
 // ---------------------------------------------------------------------------
 
-async function runFileExists(check: TaskVerificationCheck, now: string): Promise<TaskVerificationResult> {
+async function runFileExists(check: TaskVerificationCheck, now: string, ctx: VerificationRuntimeContext): Promise<TaskVerificationResult> {
   const p = check.path ?? ''
   if (!p) {
     return { checkId: check.id, passed: false, unsatisfiable: true, detail: 'check.path is required for file_exists', checkedAt: now }
@@ -70,15 +127,26 @@ async function runFileExists(check: TaskVerificationCheck, now: string): Promise
   if (placeholder) {
     return { checkId: check.id, passed: false, unsatisfiable: true, detail: placeholder, checkedAt: now }
   }
-  try {
-    const stat = fs.statSync(path.resolve(p))
-    return { checkId: check.id, passed: true, detail: `exists (${stat.isDirectory() ? 'directory' : 'file'})`, checkedAt: now }
-  } catch {
-    return { checkId: check.id, passed: false, detail: `not found: ${p}`, checkedAt: now }
+  const evidence = inspectVerificationPath(p, ctx)
+  if (evidence.exists) {
+    return {
+      checkId: check.id,
+      passed: true,
+      detail: `exists (${evidence.kind ?? 'other'})`,
+      checkedAt: now,
+      metadata: { path: evidence },
+    }
+  }
+  return {
+    checkId: check.id,
+    passed: false,
+    detail: `not found: ${p} (cwd=${ctx.cwd}, resolved=${evidence.resolvedPath})`,
+    checkedAt: now,
+    metadata: { path: evidence },
   }
 }
 
-async function runFileContains(check: TaskVerificationCheck, now: string): Promise<TaskVerificationResult> {
+async function runFileContains(check: TaskVerificationCheck, now: string, ctx: VerificationRuntimeContext): Promise<TaskVerificationResult> {
   const p = check.path ?? ''
   const pattern = check.pattern ?? ''
   if (!p || !pattern) {
@@ -94,21 +162,30 @@ async function runFileContains(check: TaskVerificationCheck, now: string): Promi
   } catch (err) {
     return { checkId: check.id, passed: false, unsatisfiable: true, detail: `invalid regex pattern: ${String(err)}`, checkedAt: now }
   }
+  const evidence = inspectVerificationPath(p, ctx)
   try {
-    const content = fs.readFileSync(path.resolve(p), 'utf-8')
+    const content = fs.readFileSync(evidence.resolvedPath, 'utf-8')
     const matched = re.test(content)
     return {
       checkId: check.id,
       passed: matched,
       detail: matched ? `pattern /${pattern}/ found` : `pattern /${pattern}/ not found in ${p}`,
       checkedAt: now,
+      metadata: { path: evidence },
     }
-  } catch {
-    return { checkId: check.id, passed: false, detail: `cannot read file: ${p}`, checkedAt: now }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return {
+      checkId: check.id,
+      passed: false,
+      detail: `cannot read file: ${p} (cwd=${ctx.cwd}, resolved=${evidence.resolvedPath}): ${message}`,
+      checkedAt: now,
+      metadata: { path: evidence },
+    }
   }
 }
 
-async function runArtifactCount(check: TaskVerificationCheck, now: string): Promise<TaskVerificationResult> {
+async function runArtifactCount(check: TaskVerificationCheck, now: string, ctx: VerificationRuntimeContext): Promise<TaskVerificationResult> {
   const root = check.root ?? ''
   const globPattern = check.glob ?? ''
   const min = check.min ?? 1
@@ -119,11 +196,17 @@ async function runArtifactCount(check: TaskVerificationCheck, now: string): Prom
   // Simple glob matching: support basic patterns like *.html or **/*.ts
   // We use fs.readdirSync with recursive (Node 18.17+) or walk manually
   let count = 0
+  const rootEvidence = inspectVerificationPath(root, ctx)
   try {
-    const absRoot = path.resolve(root)
-    count = countMatchingFiles(absRoot, globPattern)
+    count = countMatchingFiles(rootEvidence.resolvedPath, globPattern)
   } catch {
-    return { checkId: check.id, passed: false, detail: `cannot list directory: ${root}`, checkedAt: now }
+    return {
+      checkId: check.id,
+      passed: false,
+      detail: `cannot list directory: ${root} (cwd=${ctx.cwd}, resolved=${rootEvidence.resolvedPath})`,
+      checkedAt: now,
+      metadata: { root: rootEvidence },
+    }
   }
 
   const passed = count >= min
@@ -132,6 +215,7 @@ async function runArtifactCount(check: TaskVerificationCheck, now: string): Prom
     passed,
     detail: passed ? `found ${count} matching files (min=${min})` : `expected >=${min}, got ${count}`,
     checkedAt: now,
+    metadata: { root: rootEvidence },
   }
 }
 
@@ -171,7 +255,7 @@ function countMatchingFiles(root: string, globPattern: string): number {
   return count
 }
 
-async function runCommand(check: TaskVerificationCheck, now: string): Promise<TaskVerificationResult> {
+async function runCommand(check: TaskVerificationCheck, now: string, ctx: VerificationRuntimeContext): Promise<TaskVerificationResult> {
   const cmd = check.command ?? ''
   if (!cmd) {
     return { checkId: check.id, passed: false, unsatisfiable: true, detail: 'check.command is required for command check', checkedAt: now }
@@ -179,14 +263,15 @@ async function runCommand(check: TaskVerificationCheck, now: string): Promise<Ta
 
   // Gate: must be safe_readonly. A refused command is unsatisfiable — it will
   // be refused on every re-run; only an edit to the verification spec helps.
-  const risk = classifyBashCommand(cmd)
-  if (risk.level !== 'safe_readonly') {
+  const policy = classifyTaskVerifyCommand(cmd)
+  if (!policy.allowed) {
     return {
       checkId: check.id,
       passed: false,
       unsatisfiable: true,
-      detail: `command refused by risk classifier: ${risk.level} (${primaryBashRiskReason(risk)}). Only safe_readonly commands are allowed for TaskVerify.`,
+      detail: `command refused by risk classifier: ${policy.risk.level} (${primaryBashRiskReason(policy.risk)}). Only safe_readonly commands are allowed for TaskVerify.`,
       checkedAt: now,
+      metadata: { commandPolicy: policy },
     }
   }
 
@@ -196,9 +281,17 @@ async function runCommand(check: TaskVerificationCheck, now: string): Promise<Ta
     const { stdout, stderr } = await execFileAsync('bash', ['-c', cmd], {
       timeout: VERIFY_COMMAND_TIMEOUT_MS,
       encoding: 'utf-8',
+      cwd: ctx.cwd,
+      env: buildBashExecutionEnv(),
     })
     const detail = stdout.trim().slice(0, 500) || stderr.trim().slice(0, 500) || '(no output)'
-    return { checkId: check.id, passed: true, detail: `exit 0: ${detail}`, checkedAt: now }
+    return {
+      checkId: check.id,
+      passed: true,
+      detail: `exit 0: ${detail}`,
+      checkedAt: now,
+      metadata: { cwd: ctx.cwd, commandPolicy: policy },
+    }
   } catch (err: unknown) {
     const anyErr = err as { code?: number; killed?: boolean; stdout?: string; stderr?: string }
     const exitCode = anyErr.code ?? -1
@@ -206,7 +299,13 @@ async function runCommand(check: TaskVerificationCheck, now: string): Promise<Ta
       return { checkId: check.id, passed: false, detail: `command timed out after ${VERIFY_COMMAND_TIMEOUT_MS}ms`, checkedAt: now }
     }
     if (exitCode === expectedCode) {
-      return { checkId: check.id, passed: true, detail: `exit ${exitCode} (expected)`, checkedAt: now }
+      return {
+        checkId: check.id,
+        passed: true,
+        detail: `exit ${exitCode} (expected)`,
+        checkedAt: now,
+        metadata: { cwd: ctx.cwd, commandPolicy: policy },
+      }
     }
     const output = (anyErr.stdout ?? '').trim().slice(0, 300) || (anyErr.stderr ?? '').trim().slice(0, 300)
     return {
@@ -214,11 +313,12 @@ async function runCommand(check: TaskVerificationCheck, now: string): Promise<Ta
       passed: false,
       detail: `exit ${exitCode} (expected ${expectedCode})${output ? ': ' + output : ''}`,
       checkedAt: now,
+      metadata: { cwd: ctx.cwd, commandPolicy: policy },
     }
   }
 }
 
-async function runRunVerdictGate(check: TaskVerificationCheck, now: string): Promise<TaskVerificationResult> {
+async function runRunVerdictGate(check: TaskVerificationCheck, now: string, ctx: VerificationRuntimeContext): Promise<TaskVerificationResult> {
   const p = check.path ?? ''
   if (!p) {
     return { checkId: check.id, passed: false, unsatisfiable: true, detail: 'check.path is required for run_verdict_gate', checkedAt: now }
@@ -227,24 +327,26 @@ async function runRunVerdictGate(check: TaskVerificationCheck, now: string): Pro
   if (placeholder) {
     return { checkId: check.id, passed: false, unsatisfiable: true, detail: placeholder, checkedAt: now }
   }
+  const evidence = inspectVerificationPath(p, ctx)
   try {
-    const raw = fs.readFileSync(path.resolve(p), 'utf-8')
+    const raw = fs.readFileSync(evidence.resolvedPath, 'utf-8')
     const parsed = JSON.parse(raw) as unknown
-    const gate = evaluateRunVerdictGate(parsed, { scorePath: path.resolve(p) })
+    const gate = evaluateRunVerdictGate(parsed, { scorePath: evidence.resolvedPath })
     return {
       checkId: check.id,
       passed: gate.status === 'pass',
       detail: formatRunVerdictGateResult(gate),
       checkedAt: now,
-      metadata: { runVerdictGate: gate },
+      metadata: { runVerdictGate: gate, path: evidence },
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return {
       checkId: check.id,
       passed: false,
-      detail: `cannot read or parse run verdict artifact ${p}: ${message}`,
+      detail: `cannot read or parse run verdict artifact ${p} (cwd=${ctx.cwd}, resolved=${evidence.resolvedPath}): ${message}`,
       checkedAt: now,
+      metadata: { path: evidence },
     }
   }
 }
@@ -357,7 +459,7 @@ function packCheckId(check: TaskVerificationCheck, packCheckId: string): string 
   return `${check.id}.${packCheckId}`
 }
 
-async function runVerificationPack(check: TaskVerificationCheck, now: string): Promise<TaskVerificationResult[]> {
+async function runVerificationPack(check: TaskVerificationCheck, now: string, ctx: VerificationRuntimeContext): Promise<TaskVerificationResult[]> {
   if (check.packId !== 'html_deck') {
     return [{
       checkId: check.id,
@@ -393,10 +495,10 @@ async function runVerificationPack(check: TaskVerificationCheck, now: string): P
   }
 
   const packResult = verifyHtmlDeck({
-    deckPath: check.deckPath,
+    deckPath: resolveVerificationPath(check.deckPath, ctx),
     expectedSections: check.expectedSections,
     ...(typeof check.buildNotesPath === 'string' && check.buildNotesPath.trim()
-      ? { buildNotesPath: check.buildNotesPath }
+      ? { buildNotesPath: resolveVerificationPath(check.buildNotesPath, ctx) }
       : {}),
     ...(Array.isArray(check.requiredMarkers) ? { requiredMarkers: check.requiredMarkers } : {}),
     ...(typeof check.minFileSizeBytes === 'number' ? { minFileSizeBytes: check.minFileSizeBytes } : {}),
@@ -420,15 +522,15 @@ async function runVerificationPack(check: TaskVerificationCheck, now: string): P
   }))
 }
 
-async function runCheck(check: TaskVerificationCheck, now: string): Promise<TaskVerificationResult[]> {
+async function runCheck(check: TaskVerificationCheck, now: string, ctx: VerificationRuntimeContext): Promise<TaskVerificationResult[]> {
   switch (check.kind) {
-    case 'file_exists': return [await runFileExists(check, now)]
-    case 'file_contains': return [await runFileContains(check, now)]
-    case 'artifact_count': return [await runArtifactCount(check, now)]
-    case 'verification_pack': return runVerificationPack(check, now)
-    case 'run_verdict_gate': return [await runRunVerdictGate(check, now)]
+    case 'file_exists': return [await runFileExists(check, now, ctx)]
+    case 'file_contains': return [await runFileContains(check, now, ctx)]
+    case 'artifact_count': return [await runArtifactCount(check, now, ctx)]
+    case 'verification_pack': return runVerificationPack(check, now, ctx)
+    case 'run_verdict_gate': return [await runRunVerdictGate(check, now, ctx)]
     case 'http_get': return [await runHttpGet(check, now)]
-    case 'command': return [await runCommand(check, now)]
+    case 'command': return [await runCommand(check, now, ctx)]
     case 'none': return [runNone(check, now)]
     default:
       return [{
@@ -535,10 +637,13 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
       }
 
       const now = new Date().toISOString()
+      const verificationContext: VerificationRuntimeContext = {
+        cwd: canonicalizeCwd(task.cwd ?? process.cwd()),
+      }
       const results: TaskVerificationResult[] = []
 
       for (const check of step.verification) {
-        results.push(...await runCheck(check, now))
+        results.push(...await runCheck(check, now, verificationContext))
       }
 
       const passedCount = results.filter(r => r.passed).length
@@ -576,6 +681,7 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
         passed: overallPassed,
         results,
         writeBack,
+        cwd: verificationContext.cwd,
         ...(repairCheckpoint ? { repairCheckpoint } : {}),
       }
       if (runVerdictBlocked.length > 0) {

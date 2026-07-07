@@ -116,7 +116,7 @@ describe('TaskCreate tool', () => {
     const r = await tool.execute({
       subject: 'typecheck',
       description: 'run project typecheck',
-      command: 'cd /Users/publicuser/AI/gitrep/owlfootball && npx tsc --noEmit',
+      command: 'cd /Users/yeemio/AI/gitrep/owlfootball && npx tsc --noEmit',
     })
 
     expect(r.isError).toBe(true)
@@ -125,6 +125,23 @@ describe('TaskCreate tool', () => {
     expect(r.output).not.toContain('(cd (read-only))')
     expect(listTasks()).toHaveLength(0)
   })
+
+  it('allows local npx read-only verification commands without falling back to Bash', async () => {
+    const r = await tool.execute({
+      subject: 'typecheck',
+      description: 'run local TypeScript version check',
+      command: 'npx --no-install tsc --version',
+      cwd: process.cwd(),
+    })
+
+    expect(r.isError).toBe(false)
+    expect(r.output).toMatch(/running:/)
+    const taskId = (r.metadata as any).task.id
+    const out = await outputTool.execute({ task_id: taskId, block: true, timeout: 5000 })
+    expect(out.isError).toBe(false)
+    expect(out.output).toMatch(/completed/)
+    expect(out.output).toMatch(/Version \d+\.\d+\.\d+/)
+  }, 10000)
 
   it('refuses ADR-008 destructive deny-list commands without spawning', async () => {
     for (const command of ADR008_DESTRUCTIVE_COMMANDS_SAFE_IF_MISRUN) {
@@ -501,21 +518,21 @@ describe('TaskCreate tool', () => {
 
   it('rejects Project Map command checks that TaskVerify would refuse', async () => {
     const snapshot = projectMapSnapshotWithProfiles([
-      { id: 'tsc-profile', commands: ['npx tsc --noEmit'] },
+      { id: 'eslint-fix-profile', commands: ['npx eslint --fix src/index.ts'] },
     ])
     const r = await tool.execute({
       subject: 'Unsafe Project Map verification',
-      description: 'profile command should not create a doomed verification spec',
+      description: 'profile command should not create a mutating verification spec',
       steps: [{
         title: 'Implement change',
         description: 'make the change',
-        projectMapVerificationProfileIds: ['tsc-profile'],
+        projectMapVerificationProfileIds: ['eslint-fix-profile'],
       }],
     }, { projectMapSnapshot: snapshot } as any)
 
     expect(r.isError).toBe(true)
     expect(r.output).toContain('Unsafe TaskVerify command check')
-    expect(r.output).toContain('project-map-tsc-profile-1')
+    expect(r.output).toContain('project-map-eslint-fix-profile-1')
     expect(r.output).toContain('npx (executes arbitrary package)')
     expect(getTask('task-1')).toBeUndefined()
   })

@@ -29,6 +29,43 @@ export interface RuntimeTranscriptResult {
   itemCount: number
   runtimeEventCount: number
   items: RuntimeTranscriptItem[]
+  replay?: RuntimeTranscriptReplay
+}
+
+export interface RuntimeTranscriptReplay {
+  schemaVersion: 1
+  source: 'runtime_event_log'
+  threadId: string
+  status: 'complete' | 'incomplete'
+  reconnectStrategy: 'replay_from_persisted_session'
+  eventCount: number
+  itemCount: number
+  timeline: RuntimeTranscriptReplayEvent[]
+  associations: RuntimeTranscriptReplayAssociations
+  diagnostics: string[]
+}
+
+export interface RuntimeTranscriptReplayEvent {
+  id: string
+  seq: number
+  kind: RuntimeEventRecord['kind']
+  at: string
+  source: 'runtime_event_log'
+  threadId: string
+  turnId?: string
+  itemId?: string
+  toolUseId?: string
+  diffId?: string
+  interactionId?: string
+}
+
+export interface RuntimeTranscriptReplayAssociations {
+  threadId: string
+  turnIds: string[]
+  itemIds: string[]
+  toolUseIds: string[]
+  diffIds: string[]
+  interactionIds: string[]
 }
 
 export type RuntimeTranscriptItem =
@@ -195,7 +232,76 @@ export function readRuntimeTranscript(input: RuntimeTranscriptReadInput): Runtim
     itemCount: items.length,
     runtimeEventCount: session.runtimeEventLog?.events.length ?? 0,
     items,
+    ...(session.runtimeEventLog?.events.length
+      ? { replay: buildRuntimeTranscriptReplay(session.id, session.runtimeEventLog.events) }
+      : {}),
   }
+}
+
+function buildRuntimeTranscriptReplay(threadId: string, events: RuntimeEventRecord[]): RuntimeTranscriptReplay {
+  const associations: RuntimeTranscriptReplayAssociations = {
+    threadId,
+    turnIds: [],
+    itemIds: [],
+    toolUseIds: [],
+    diffIds: [],
+    interactionIds: [],
+  }
+  const openTurns = new Set<string>()
+  const openItems = new Set<string>()
+  const timeline: RuntimeTranscriptReplayEvent[] = events.map(event => {
+    const toolUseId = stringField(event.payload, 'tool_use_id') ?? stringField(event.payload, 'toolUseId')
+    const diffId = stringField(event.payload, 'diff_id') ?? stringField(event.payload, 'diffId')
+    const interactionId = stringField(event.payload, 'interaction_id') ?? stringField(event.payload, 'interactionId')
+
+    addUnique(associations.turnIds, event.turnId)
+    addUnique(associations.itemIds, event.itemId)
+    addUnique(associations.toolUseIds, toolUseId)
+    addUnique(associations.diffIds, diffId)
+    addUnique(associations.interactionIds, interactionId)
+
+    if (event.kind === 'turn_started' && event.turnId) openTurns.add(event.turnId)
+    if (event.kind === 'turn_completed' && event.turnId) openTurns.delete(event.turnId)
+    if (event.kind === 'item_started' && event.itemId) openItems.add(event.itemId)
+    if (event.kind === 'item_completed' && event.itemId) openItems.delete(event.itemId)
+
+    return {
+      id: event.id,
+      seq: event.seq,
+      kind: event.kind,
+      at: event.at,
+      source: 'runtime_event_log',
+      threadId,
+      ...(event.turnId ? { turnId: event.turnId } : {}),
+      ...(event.itemId ? { itemId: event.itemId } : {}),
+      ...(toolUseId ? { toolUseId } : {}),
+      ...(diffId ? { diffId } : {}),
+      ...(interactionId ? { interactionId } : {}),
+    }
+  })
+
+  const diagnostics = [
+    ...[...openTurns].map(turnId => `unclosed runtime turn: ${turnId}`),
+    ...[...openItems].map(itemId => `unclosed runtime item: ${itemId}`),
+  ]
+
+  return {
+    schemaVersion: 1,
+    source: 'runtime_event_log',
+    threadId,
+    status: diagnostics.length === 0 ? 'complete' : 'incomplete',
+    reconnectStrategy: 'replay_from_persisted_session',
+    eventCount: events.length,
+    itemCount: timeline.length,
+    timeline,
+    associations,
+    diagnostics,
+  }
+}
+
+function addUnique(target: string[], value: string | null | undefined): void {
+  if (!value || target.includes(value)) return
+  target.push(value)
 }
 
 function loadTranscriptSession(input: RuntimeTranscriptReadInput): SessionFile | null {
