@@ -419,6 +419,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
     type: 'object',
     properties: {
       name: { type: 'string', description: 'Optional name slug for the worktree branch' },
+      allow_untracked: { type: 'boolean', description: 'Set true to create the worktree even when untracked dependency/source files are present.' },
     },
     description: 'Create an isolated git worktree and switch into it.',
   },

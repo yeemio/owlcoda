@@ -133,6 +133,27 @@ describe('semantic tool failure classifier', () => {
     expect(result.metadata?.['terminalToolFailure']).toBeUndefined()
   })
 
+  it('classifies local command-not-found as a tooling failure, not a remote semantic failure', () => {
+    const result = applyToolFailurePolicy('bash', {
+      command: 'rg --files docs/reports',
+    }, {
+      output: '[stderr]\nbash: rg: command not found\n\n[exit code: 127]\n\n[command not found] Missing executable "rg". Use an installed fallback.',
+      isError: true,
+      metadata: { exitCode: 127, commandNotFound: true, missingCommand: 'rg' },
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.output).not.toContain('[Runtime failure-policy guard]')
+    expect(result.metadata).toMatchObject({
+      failurePolicyApplied: true,
+      semanticFailure: false,
+      failureCategory: 'tool:command_not_found',
+      failureRetryable: false,
+      failureTerminal: false,
+      missingCommand: 'rg',
+    })
+  })
+
   it('promotes remote rate-limit payloads to terminal but retryable failures', () => {
     const result = applyToolFailurePolicy('bash', {
       command: 'curl -sS https://example.test/search',

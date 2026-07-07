@@ -65,6 +65,7 @@ describe('model output harness', () => {
     expect(result.schemaValid).toBe(true)
     expect(result.fallbackUsed).toBe(false)
     expect(result.artifact.summary).toBe('Short digest.')
+    expect(result.data).toBe(result.artifact)
     expect(result.attempts.map(a => a.label)).toEqual(['primary', 'parse'])
   })
 
@@ -115,6 +116,7 @@ describe('model output harness', () => {
       artifact: 'failed_fallback.v1',
       failureReason: 'schema_validation_failed',
     })
+    expect(result.data).toBe(result.artifact)
   })
 
   it('rejects structured output before executor call when model capability declares JSON unsupported', async () => {

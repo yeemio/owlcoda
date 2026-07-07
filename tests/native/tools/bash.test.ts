@@ -71,6 +71,10 @@ describe('Native Bash tool', () => {
     })
     expect(result.isError).toBe(true)
     expect(result.metadata?.exitCode).not.toBe(0)
+    expect(result.output).toContain('[command not found]')
+    expect(result.output).toContain('do not treat this as missing project data')
+    expect(result.metadata?.commandNotFound).toBe(true)
+    expect(result.metadata?.missingCommand).toBe('nonexistent_command_xyz_123')
   })
 
   // ── Working directory ──

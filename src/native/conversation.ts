@@ -87,6 +87,7 @@ import {
 } from './abandoned-grant-predicate.js'
 import {
   classifyProviderRequestError,
+  createProviderHttpDiagnostic,
   formatContinuationFailure,
   formatProviderDiagnostic,
   parseProviderDiagnosticFromPayload,
@@ -5292,6 +5293,7 @@ function retryDelay(attempt: number, status?: number, detail?: string, retryAfte
 }
 
 function requestAutoRetryLimitForDiagnostic(diagnostic: ProviderRequestDiagnostic): number {
+  if (diagnostic.status === 429) return 0
   return requestAutoRetryLimit(diagnostic.retryable, diagnostic.kind)
 }
 
@@ -5420,12 +5422,10 @@ function buildRequestDiagnosticFromResponse(
   }
 
   if (res.status >= 500 || res.status === 429) {
-    return classifyProviderRequestError(new Error(`HTTP ${res.status}: ${bodyText}`), {
+    return createProviderHttpDiagnostic(res.status, bodyText, {
       model,
       requestId: res.headers.get('x-request-id') ?? undefined,
-      status: res.status,
-      detail: bodyText,
-      retryable: isAdaptiveAgentConcurrencyEnabled(),
+      retryable: res.status === 429 ? true : isAdaptiveAgentConcurrencyEnabled(),
     })
   }
 

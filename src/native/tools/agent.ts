@@ -36,6 +36,7 @@ import {
 import { detectCompletionClaim } from '../task-state.js'
 import {
   adaptiveConcurrencyKeyFromApiBaseUrl,
+  diagnosticLooksLikeRateLimit,
   resolveAdaptiveAgentLimit,
   resolveAgentConcurrencyCap,
 } from '../adaptive-concurrency.js'
@@ -919,6 +920,7 @@ type IsolatedFailureReason =
   | 'no_deliverable'
   | 'artifact_contract'
   | 'watchdog_timeout'
+  | 'provider_rate_limit'
   | 'provider_error'
   | 'unknown'
 
@@ -993,6 +995,21 @@ const AUTO_RETRIED_ROUTING_OPTIONS = [
   '     (the previous attempt already exhausted the auto-retry budget).',
   '  3. Abort the whole parent task ONLY if this deliverable is a hard',
   '     prerequisite for the rest.',
+].join('\n')
+
+const RATE_LIMIT_ROUTING_OPTIONS = [
+  '== How the parent should handle this failure ==',
+  '',
+  'This sub-agent hit provider rate limits. The parent task continues,',
+  'but dispatching the same prompt again on the same model is likely to',
+  'burn time and tokens. Choose ONE of:',
+  '',
+  '  1. Switch model or wait for provider cooldown before retrying.',
+  '  2. Retry only a narrower, role-specific prompt after cooldown.',
+  '  3. Skip this deliverable and flag the provider rate limit in the',
+  '     final summary if it is not a hard prerequisite.',
+  '',
+  'Do NOT launch additional sibling Agents on the same throttled model.',
 ].join('\n')
 
 // ---------------------------------------------------------------------------
@@ -1101,6 +1118,8 @@ export function formatIsolatedFailureOutput(opts: IsolatedFailureOutputOptions):
   const header = `[Sub-agent failed in isolation — status: ${opts.status}, reason: ${opts.reason}]`
   const guidance = opts.status === 'inferred'
     ? INFERRED_ROUTING_OPTIONS
+    : opts.reason === 'provider_rate_limit'
+      ? RATE_LIMIT_ROUTING_OPTIONS
     : opts.alreadyAutoRetried
       ? AUTO_RETRIED_ROUTING_OPTIONS
       : STANDARD_ROUTING_OPTIONS
@@ -1501,7 +1520,14 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
           }
 
           const isTimeoutKind = failure.kind === 'timeout' || failure.kind === 'stream_idle_timeout'
-          const reason: IsolatedFailureReason = isTimeoutKind ? 'watchdog_timeout' : 'provider_error'
+          const isRateLimit = diagnosticLooksLikeRateLimit(failure.diagnostic)
+            || /\b429\b/i.test(failure.message)
+            || /\brate[\s_-]?limit/i.test(failure.message)
+          const reason: IsolatedFailureReason = isTimeoutKind
+            ? 'watchdog_timeout'
+            : isRateLimit
+              ? 'provider_rate_limit'
+              : 'provider_error'
           const failureCategory = `agent:${reason}`
 
           emitAgentInvocation({
@@ -1543,6 +1569,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
               completion_status: 'failed',
               failureCategory,
               failureMessage: failure.message,
+              ...(isRateLimit ? { providerRateLimited: true } : {}),
             },
           }
           recordAgentRunSettled({ agentId, status: 'failed', input, subConv, result: toolResult })
@@ -1831,11 +1858,14 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
         // Structured provider errors pass through their formatted form so the
         // headline/provider/request-id stays visible.
         if (err instanceof ProviderRequestError) {
+          const isRateLimit = diagnosticLooksLikeRateLimit(err.diagnostic)
+          const failureCategory = isRateLimit ? 'agent:provider_rate_limit' : 'agent:provider_error'
+          const reason: IsolatedFailureReason = isRateLimit ? 'provider_rate_limit' : 'provider_error'
           emitAgentInvocation({
             agentId,
             agentType,
             status: 'failed',
-            failureCategory: 'agent:provider_error',
+            failureCategory,
             stopReason: `provider:${err.diagnostic.kind}`,
             touchedPathCount: getAgentTouchedPaths(subConv).length,
             touchedPaths: getAgentTouchedPaths(subConv),
@@ -1847,7 +1877,7 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
           })
           const toolResult: ToolResult = {
             output: formatIsolatedFailureOutput({
-              reason: 'provider_error',
+              reason,
               status: 'failed',
               detail: `Agent error: ${formatProviderDiagnostic(err.diagnostic, { includeRequestId: true })}`,
               alreadyAutoRetried: err.diagnostic.retryable === true,
@@ -1859,8 +1889,9 @@ export function createAgentTool(deps: AgentToolDeps): NativeToolDef<AgentInput> 
               diagnostic: err.diagnostic,
               subAgentIsolatedFailure: true,
               completion_status: 'failed',
-              failureCategory: 'agent:provider_error',
+              failureCategory,
               providerRetryable: err.diagnostic.retryable,
+              ...(isRateLimit ? { providerRateLimited: true } : {}),
             },
           }
           recordAgentRunSettled({ agentId, status: 'failed', input, subConv, result: toolResult })

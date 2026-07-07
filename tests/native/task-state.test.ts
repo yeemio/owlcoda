@@ -387,6 +387,108 @@ describe('native task state', () => {
     }
   })
 
+  it('does not import historical tool edit transcript lines as allowed write targets', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'owlcoda-task-state-transcript-edit-'))
+    try {
+      await mkdir(join(cwd, 'docs', 'reports'), { recursive: true })
+      await mkdir(join(cwd, 'server', 'review'), { recursive: true })
+      const canonicalCwd = await realpath(cwd)
+      const serverFile = join(canonicalCwd, 'server', 'review', 'kimi-g3-evidence-structure-cli.ts')
+      const reportFile = join(canonicalCwd, 'docs', 'reports', 'kimi-g3-evidence-structure-packet-20260706.json')
+      const conversation = createConversation({ system: 'test', model: 'm' })
+      addUserMessage(conversation, [
+        '本轮只生成 G3 证据结构化报告。',
+        '必须输出：',
+        '- docs/reports/kimi-g3-evidence-structure-packet-YYYYMMDD.json',
+        '- docs/reports/kimi-g3-evidence-structure-packet-YYYYMMDD.md',
+        '- docs/reports/owlcoda-kimi-g3-execution-bugs-YYYYMMDD.md',
+        '不要修改 server 源码。',
+        '',
+        '历史终端片段：',
+        `Update ${serverFile} · +69 -34`,
+      ].join('\n'))
+
+      const taskState = ensureTaskExecutionState(conversation, canonicalCwd)
+
+      expect(taskState.contract.scopeMode).toBe('explicit_paths')
+      expect(taskState.contract.allowedWritePaths.some(
+        (scope) => scope.path === serverFile || scope.path === join(canonicalCwd, 'server', 'review'),
+      )).toBe(false)
+      expect(taskState.contract.allowedWritePaths.some(
+        (scope) => scope.path === join(canonicalCwd, 'docs', 'reports'),
+      )).toBe(true)
+
+      const serverViolation = evaluateWriteGuard('edit', {
+        path: serverFile,
+        old_string: 'before',
+        new_string: 'after',
+      }, taskState)
+      expect(serverViolation?.message).toContain('Task contract blocked write')
+
+      const reportViolation = evaluateWriteGuard('write', {
+        path: reportFile,
+        content: '{}',
+      }, taskState)
+      expect(reportViolation).toBeNull()
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('does not import cwd banners or tool output file listings as allowed write targets', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'owlcoda-task-state-transcript-output-'))
+    try {
+      await mkdir(join(cwd, 'docs', 'reports'), { recursive: true })
+      await mkdir(join(cwd, 'server', 'review'), { recursive: true })
+      const canonicalCwd = await realpath(cwd)
+      const serverFile = join(canonicalCwd, 'server', 'review', 'kimi-g3-evidence-structure-cli.ts')
+      const reportFile = join(canonicalCwd, 'docs', 'reports', 'kimi-g3-evidence-structure-packet-20260706.json')
+      const conversation = createConversation({ system: 'test', model: 'm' })
+      addUserMessage(conversation, [
+        `—  CWD ${canonicalCwd} · BRANCH MAIN · 101 PENDING CHANGES`,
+        `▎  你在 ${canonicalCwd} 工作。`,
+        '▎  本任务属于数据线 + OwlCoda 能力验证，不改功能线。',
+        '▎  G3 Codex/GPT5.5 Judge 小样本结果只作为背景。',
+        '▎  必须输出：',
+        '▎  - docs/reports/kimi-g3-evidence-structure-packet-20260706.json',
+        '▎  - docs/reports/kimi-g3-evidence-structure-packet-20260706.md',
+        '▎  - docs/reports/owlcoda-kimi-g3-execution-bugs-20260706.md',
+        '▎  禁止做：',
+        '▎  - 不改 `/match` 页面；',
+        '▎  允许做：',
+        '▎  - 生成只读研究 packet；',
+        '▸ Bash find . -type f -name \'*.ts\' | grep -i kimi | head -20  1.1s ✓',
+        '  ⎿ ./server/kimi-evidence-boundary.ts',
+        '    ./server/kimi-evidence-boundary.test.ts',
+        `  ⎿  ✓ Create ${serverFile} · +703 (9ms)`,
+      ].join('\n'))
+
+      const taskState = ensureTaskExecutionState(conversation, canonicalCwd)
+
+      expect(taskState.contract.scopeMode).toBe('explicit_paths')
+      expect(taskState.contract.allowedWritePaths.some(
+        (scope) => scope.path === canonicalCwd || scope.path === join(canonicalCwd, 'server') || scope.path === join(canonicalCwd, 'Codex'),
+      )).toBe(false)
+      expect(taskState.contract.allowedWritePaths.some(
+        (scope) => scope.path === join(canonicalCwd, 'docs', 'reports'),
+      )).toBe(true)
+
+      const serverViolation = evaluateWriteGuard('write', {
+        path: serverFile,
+        content: '',
+      }, taskState)
+      expect(serverViolation?.message).toContain('Task contract blocked write')
+
+      const reportViolation = evaluateWriteGuard('write', {
+        path: reportFile,
+        content: '{}',
+      }, taskState)
+      expect(reportViolation).toBeNull()
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
   it('does not import paths listed under a forbidden write section', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'owlcoda-task-state-forbid-section-'))
     try {
@@ -1204,7 +1306,7 @@ describe('native task state', () => {
     it('recognizes "输出到 <abs path>" as user-external origin', () => {
       const cwd = join(tmpdir(), 'owlcoda-ext-zh-output')
       const conversation = createConversation({ system: 'test', model: 'm' })
-      addUserMessage(conversation, '请输出到 /Users/publicuser/work/ppt/output/foo.html')
+      addUserMessage(conversation, '请输出到 /Users/yeemio/work/ppt/output/foo.html')
       const taskState = ensureTaskExecutionState(conversation, cwd)
 
       expect(taskState.contract.scopeMode).toBe('explicit_paths')
@@ -1270,7 +1372,7 @@ describe('native task state', () => {
     it('does NOT collect forbidden external paths (禁止写到 <abs path>)', () => {
       const cwd = join(tmpdir(), 'owlcoda-ext-forbidden')
       const conversation = createConversation({ system: 'test', model: 'm' })
-      addUserMessage(conversation, '禁止写到 /Users/publicuser/secret.txt，输出到 /tmp/safe/out.html')
+      addUserMessage(conversation, '禁止写到 /Users/yeemio/secret.txt，输出到 /tmp/safe/out.html')
       const taskState = ensureTaskExecutionState(conversation, cwd)
 
       const forbidden = taskState.contract.allowedWritePaths.find(
@@ -1289,7 +1391,7 @@ describe('native task state', () => {
       const conversation = createConversation({ system: 'test', model: 'm' })
       addUserMessage(
         conversation,
-        'Edit `src/foo.ts` and output to /Users/publicuser/out/deck.html',
+        'Edit `src/foo.ts` and output to /Users/yeemio/out/deck.html',
       )
       const taskState = ensureTaskExecutionState(conversation, cwd)
 
@@ -1309,7 +1411,7 @@ describe('native task state', () => {
     it('extractUserDeclaredExternalRoots preserves kind=file for single-file external target', () => {
       const cwd = join(tmpdir(), 'owlcoda-ext-kind-file')
       const conversation = createConversation({ system: 'test', model: 'm' })
-      addUserMessage(conversation, '输出到 /Users/publicuser/work/ppt/out.html')
+      addUserMessage(conversation, '输出到 /Users/yeemio/work/ppt/out.html')
       const taskState = ensureTaskExecutionState(conversation, cwd)
 
       const scopes = extractUserDeclaredExternalRoots(taskState)
@@ -2077,9 +2179,9 @@ describe('contract.confidence derivation (0.14.18)', () => {
     const conversation = createConversation({ system: 'test', model: 'm' })
     addUserMessage(
       conversation,
-      'Use `/Users/publicuser/work/ppt/deck-stage.js` as the source file',
+      'Use `/Users/yeemio/work/ppt/deck-stage.js` as the source file',
     )
-    const taskState = ensureTaskExecutionState(conversation, '/Users/publicuser/AI/OwlManage')
+    const taskState = ensureTaskExecutionState(conversation, '/Users/yeemio/AI/OwlManage')
     expect(taskState.contract.confidence).toBe('medium')
   })
 
@@ -2124,12 +2226,12 @@ describe('extractPathCandidates bug 2 — absolute path preferred over same-base
     const conversation = createConversation({ system: 'test', model: 'm' })
     addUserMessage(
       conversation,
-      'Use `/Users/publicuser/work/ppt/deck-stage.js` and `deck-stage.js`',
+      'Use `/Users/yeemio/work/ppt/deck-stage.js` and `deck-stage.js`',
     )
     const taskState = ensureTaskExecutionState(conversation, '/X')
     const allPaths = taskState.contract.allowedWritePaths.map(s => s.path)
     // macOS may canonicalize case (ppt → PPT etc), use basename match
-    expect(allPaths.some(p => p.endsWith('/deck-stage.js') && p.startsWith('/Users/publicuser/work/'))).toBe(true)
+    expect(allPaths.some(p => p.endsWith('/deck-stage.js') && p.startsWith('/Users/yeemio/work/'))).toBe(true)
     // cwd-relative form must NOT appear
     expect(allPaths.some(p => p === '/X/deck-stage.js')).toBe(false)
   })
@@ -2183,7 +2285,7 @@ describe('suggested artifact filenames are not write scopes', () => {
         conversation,
         [
           '文件在这里：',
-          '- [v1.4 新执行者完整重构提示词](/Users/publicuser/AI/OwlManage/docs/prompts/industrial-ai-agent-ppt-v1.4-new-executor-full-',
+          '- [v1.4 新执行者完整重构提示词](/Users/yeemio/AI/OwlManage/docs/prompts/industrial-ai-agent-ppt-v1.4-new-executor-full-',
           '  rebuild-prompt-20260514.md)',
           '',
           '交付：',
@@ -2208,11 +2310,11 @@ describe('suggested artifact filenames are not write scopes', () => {
 describe('external_reference origin — P1 regression (0.14.18)', () => {
   // Test 1: backticked external path without ALLOW phrase → external_reference, no parent_directory
   it('backticked external absolute path without ALLOW phrase → origin=external_reference, no parent_directory derived', () => {
-    const cwd = '/Users/publicuser/AI/OwlManage'
+    const cwd = '/Users/yeemio/AI/OwlManage'
     const conversation = createConversation({ system: 'test', model: 'm' })
     addUserMessage(
       conversation,
-      'Write the slide deck referencing `/Users/publicuser/work/ppt/deck-stage.js`',
+      'Write the slide deck referencing `/Users/yeemio/work/ppt/deck-stage.js`',
     )
     const taskState = ensureTaskExecutionState(conversation, cwd)
 
@@ -2239,8 +2341,8 @@ describe('external_reference origin — P1 regression (0.14.18)', () => {
   // Test 2: ALLOW phrase → user-external origin (regression guard)
   it('ALLOW phrase external path → origin=user-external (not external_reference)', () => {
     const conversation = createConversation({ system: 'test', model: 'm' })
-    addUserMessage(conversation, '请输出到 /Users/publicuser/work/ppt/output/foo.html')
-    const taskState = ensureTaskExecutionState(conversation, '/Users/publicuser/AI/OwlManage')
+    addUserMessage(conversation, '请输出到 /Users/yeemio/work/ppt/output/foo.html')
+    const taskState = ensureTaskExecutionState(conversation, '/Users/yeemio/AI/OwlManage')
 
     const extScope = taskState.contract.allowedWritePaths.find(
       (s) => s.path.endsWith('/foo.html'),
@@ -2251,16 +2353,16 @@ describe('external_reference origin — P1 regression (0.14.18)', () => {
 
   it('English and Chinese generated-to phrasing external path → origin=user-external', () => {
     for (const prompt of [
-      'Write the deck to /Users/publicuser/work/ppt/output/owlcoda/deck.html',
-      '生成 46 页 PPT 到 /Users/publicuser/work/ppt/output/owlcoda/',
-      '生成到 /Users/publicuser/work/ppt/output/owlcoda/ 46 页 PPT',
+      'Write the deck to /Users/yeemio/work/ppt/output/owlcoda/deck.html',
+      '生成 46 页 PPT 到 /Users/yeemio/work/ppt/output/owlcoda/',
+      '生成到 /Users/yeemio/work/ppt/output/owlcoda/ 46 页 PPT',
     ]) {
       const conversation = createConversation({ system: 'test', model: 'm' })
       addUserMessage(conversation, prompt)
-      const taskState = ensureTaskExecutionState(conversation, '/Users/publicuser/AI/OwlManage')
+      const taskState = ensureTaskExecutionState(conversation, '/Users/yeemio/AI/OwlManage')
 
       expect(taskState.contract.allowedWritePaths.some(
-        (s) => s.origin === 'user-external' && s.path.includes('/work/ppt/output/owlcoda'),
+        (s) => s.origin === 'user-external' && s.path.includes('/work/PPT/output/owlcoda'),
       )).toBe(true)
     }
   })
@@ -2293,9 +2395,9 @@ describe('external_reference origin — P1 regression (0.14.18)', () => {
     const conversation = createConversation({ system: 'test', model: 'm' })
     addUserMessage(
       conversation,
-      'Write the slide deck referencing `/Users/publicuser/work/ppt/deck-stage.js`',
+      'Write the slide deck referencing `/Users/yeemio/work/ppt/deck-stage.js`',
     )
-    const taskState = ensureTaskExecutionState(conversation, '/Users/publicuser/AI/OwlManage')
+    const taskState = ensureTaskExecutionState(conversation, '/Users/yeemio/AI/OwlManage')
     expect(taskState.contract.confidence).toBe('medium')
   })
 
@@ -2304,9 +2406,9 @@ describe('external_reference origin — P1 regression (0.14.18)', () => {
     const conversation = createConversation({ system: 'test', model: 'm' })
     addUserMessage(
       conversation,
-      'Write the slide deck referencing `/Users/publicuser/work/ppt/deck-stage.js`',
+      'Write the slide deck referencing `/Users/yeemio/work/ppt/deck-stage.js`',
     )
-    const taskState = ensureTaskExecutionState(conversation, '/Users/publicuser/AI/OwlManage')
+    const taskState = ensureTaskExecutionState(conversation, '/Users/yeemio/AI/OwlManage')
     // Sanity: only external_reference scope exists for ppt paths
     expect(taskState.contract.allowedWritePaths.some(s => s.origin === 'external_reference')).toBe(true)
     expect(taskState.contract.allowedWritePaths.some(s => s.origin === 'user-external')).toBe(false)
@@ -2314,7 +2416,7 @@ describe('external_reference origin — P1 regression (0.14.18)', () => {
 
     // Attempt: bash writes to exact external reference path → must BLOCK
     const violation = evaluateWriteGuard('bash', {
-      command: "cat > '/Users/publicuser/work/ppt/deck-stage.js' << 'EOF'\nevil\nEOF",
+      command: "cat > '/Users/yeemio/work/ppt/deck-stage.js' << 'EOF'\nevil\nEOF",
     }, taskState)
     expect(violation).not.toBeNull()
   })
@@ -2323,13 +2425,13 @@ describe('external_reference origin — P1 regression (0.14.18)', () => {
     const conversation = createConversation({ system: 'test', model: 'm' })
     addUserMessage(
       conversation,
-      'Write the slide deck referencing `/Users/publicuser/work/ppt/deck-stage.js`',
+      'Write the slide deck referencing `/Users/yeemio/work/ppt/deck-stage.js`',
     )
-    const taskState = ensureTaskExecutionState(conversation, '/Users/publicuser/AI/OwlManage')
+    const taskState = ensureTaskExecutionState(conversation, '/Users/yeemio/AI/OwlManage')
 
     // Attempt: bash writes to sibling path in same directory → must BLOCK (no parent_directory scope)
     const violation = evaluateWriteGuard('bash', {
-      command: "cat > '/Users/publicuser/work/ppt/evil.html' << 'EOF'\nevil\nEOF",
+      command: "cat > '/Users/yeemio/work/ppt/evil.html' << 'EOF'\nevil\nEOF",
     }, taskState)
     expect(violation).not.toBeNull()
   })
@@ -2338,7 +2440,7 @@ describe('external_reference origin — P1 regression (0.14.18)', () => {
   it('evaluateWriteGuard allows bash write to user-external declared path', () => {
     const conversation = createConversation({ system: 'test', model: 'm' })
     addUserMessage(conversation, '输出到 /tmp/external-out/slide.html')
-    const taskState = ensureTaskExecutionState(conversation, '/Users/publicuser/AI/OwlManage')
+    const taskState = ensureTaskExecutionState(conversation, '/Users/yeemio/AI/OwlManage')
 
     const violation = evaluateWriteGuard('bash', {
       command: "cat > '/tmp/external-out/slide.html' << 'EOF'\n<html/>\nEOF",

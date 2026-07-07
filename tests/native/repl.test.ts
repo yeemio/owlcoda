@@ -1262,6 +1262,35 @@ describe('failed continuation submit handling', () => {
     })).toBe(true)
   })
 
+  it('does not schedule runtime auto-retry for provider rate-limit failures', () => {
+    const rateLimitFailure = {
+      kind: 'http_error' as const,
+      phase: 'request' as const,
+      message: 'z-ai/glm-5.2 request failed: upstream 429 from provider',
+      retryable: true,
+      diagnostic: {
+        provider: 'z-ai',
+        model: 'z-ai/glm-5.2',
+        kind: 'http_4xx' as const,
+        message: 'z-ai/glm-5.2 request failed: upstream 429 from provider',
+        status: 429,
+        retryable: true,
+        detail: 'rate limit exceeded',
+      },
+    }
+
+    expect(shouldScheduleRuntimeAutoRetry({
+      runtimeFailure: rateLimitFailure,
+      taskAborted: false,
+      clearEpochUnchanged: true,
+      currentRetryCount: 0,
+      retryLimit: 8,
+      hasQueuedInput: false,
+    })).toBe(false)
+    expect(formatExpensiveFailureGuidance(rateLimitFailure)).toContain('rate limit')
+    expect(formatExpensiveFailureGuidance(rateLimitFailure)).toContain('/model')
+  })
+
   // 0.13.63 (C): consecutive same-kind 3-strike. Two prior auto-
   // retries hit the same kind → refuse a third. Timeout failures are
   // suppressed earlier; this window still applies to cheaper transport

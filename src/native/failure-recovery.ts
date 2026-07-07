@@ -1,4 +1,5 @@
 import type { ConversationRuntimeFailure } from './conversation.js'
+import { diagnosticLooksLikeRateLimit } from './adaptive-concurrency.js'
 
 // Local input-shape detection. Mirrors repl-shared's regexes verbatim so that
 // existing semantics are preserved. Inlined here to break the import cycle:
@@ -89,6 +90,9 @@ export function classifyFailureRecoveryAction(options: {
 // reached the user.
 export function buildLocalRecoveryGuidance(failure: ConversationRuntimeFailure): string {
   const partial = failure.diagnostic?.partialOutputSeen === true
+  if (diagnosticLooksLikeRateLimit(failure.diagnostic) || /\b429\b/i.test(failure.message) || /\brate[\s_-]?limit/i.test(failure.message)) {
+    return 'Last request hit provider rate limits. Wait for the provider cooldown, use /model to switch to a non-throttled route, or use /retry only if you intentionally want to force one resend.'
+  }
   switch (failure.kind) {
     case 'timeout':
       // Non-streaming wall-clock budget exhausted. By construction no SSE,

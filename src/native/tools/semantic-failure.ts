@@ -8,6 +8,7 @@ export type KnownToolFailureCategory =
   | 'tool:fs_policy_denied'
   | 'tool:intent_guard_blocked'
   | 'tool:task_guard_blocked'
+  | 'tool:command_not_found'
   | 'tool:timeout'
   | 'tool:aborted'
 
@@ -182,6 +183,20 @@ function classifyToolMetadataFailure(result: ToolResult): ToolFailurePolicy | nu
       terminal: false,
       retryable: false,
       evidence,
+      source: 'tool-metadata',
+    }
+  }
+
+  if (metadata['commandNotFound'] === true) {
+    const missing = typeof metadata['missingCommand'] === 'string'
+      ? metadata['missingCommand']
+      : evidence
+    return {
+      category: 'tool:command_not_found',
+      reason: `Local command was not found (${missing}).`,
+      terminal: false,
+      retryable: false,
+      evidence: missing,
       source: 'tool-metadata',
     }
   }

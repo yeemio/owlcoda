@@ -28,6 +28,7 @@ import {
 import {
   __resetAdaptiveConcurrencyForTesting,
 } from '../../../src/native/adaptive-concurrency.js'
+import { createProviderHttpDiagnostic } from '../../../src/provider-error.js'
 import { getJob, listJobs, resetJobSupervisor } from '../../../src/native/job-supervisor.js'
 import { createJobCancelTool, createJobGetTool } from '../../../src/native/tools/job.js'
 
@@ -362,6 +363,46 @@ describe('Agent Tool', () => {
       cleanupAttempted: true,
       cleanupSucceeded: true,
     })
+  })
+
+  it('classifies provider rate-limit runtime failures separately from generic provider errors', async () => {
+    runConversationLoopMock.mockResolvedValue({
+      finalText: '',
+      iterations: 1,
+      stopReason: null,
+      usage: { inputTokens: 3, outputTokens: 0 },
+      runtimeFailure: {
+        kind: 'http_error',
+        phase: 'request',
+        message: 'z-ai/glm-5.2 request failed: upstream 429 from provider (request req-429)',
+        retryable: true,
+        diagnostic: createProviderHttpDiagnostic(429, '{"error":{"message":"rate limit exceeded"}}', {
+          provider: 'z-ai',
+          model: 'z-ai/glm-5.2',
+          requestId: 'req-429',
+        }),
+      },
+    })
+
+    const tool = createAgentTool({
+      apiBaseUrl: 'http://127.0.0.1:9999',
+      apiKey: 'test-key',
+      model: 'z-ai/glm-5.2',
+      maxTokens: 2048,
+    })
+
+    const result = await tool.execute({
+      description: 'Collect evidence',
+      prompt: 'Collect evidence in a sub-agent',
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('reason: provider_rate_limit')
+    expect(result.output).toMatch(/switch model/i)
+    expect(result.output).not.toContain('Retry once with a narrower prompt')
+    expect(result.metadata?.['failureCategory']).toBe('agent:provider_rate_limit')
+    expect(result.metadata?.['providerRateLimited']).toBe(true)
+    expect(result.metadata?.['subAgentIsolatedFailure']).toBe(true)
   })
 
   it('classifies cooperative watchdog-abort normal return as watchdog_timeout before no_deliverable', async () => {

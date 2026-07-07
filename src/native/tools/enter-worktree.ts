@@ -10,7 +10,7 @@
  * - Our version: straightforward `git worktree add` + process.chdir
  */
 
-import { execSync } from 'node:child_process'
+import { execFileSync, execSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import type { EnterWorktreeInput, NativeToolDef, ToolResult } from './types.js'
@@ -48,6 +48,69 @@ function findGitRoot(): string | null {
   } catch {
     return null
   }
+}
+
+const HIGH_RISK_UNTRACKED_FILES = new Set([
+  'package.json',
+  'package-lock.json',
+  'npm-shrinkwrap.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'bun.lock',
+  'bun.lockb',
+  'deno.lock',
+  'requirements.txt',
+  'pyproject.toml',
+  'uv.lock',
+  'poetry.lock',
+  'Cargo.toml',
+  'Cargo.lock',
+  'go.mod',
+  'go.sum',
+  'Gemfile',
+  'Gemfile.lock',
+])
+
+const HIGH_RISK_UNTRACKED_PREFIXES = [
+  'src/',
+  'lib/',
+  'app/',
+  'packages/',
+]
+
+function listUntrackedFiles(gitRoot: string): string[] {
+  try {
+    const out = execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], {
+      cwd: gitRoot,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    return out
+      .split(/\r?\n/)
+      .map((line) => line.trimEnd())
+      .filter((line) => line.startsWith('?? '))
+      .map((line) => line.slice(3).replace(/\\/g, '/'))
+      .filter(Boolean)
+      .sort()
+  } catch {
+    return []
+  }
+}
+
+function isHighRiskUntrackedFile(path: string): boolean {
+  if (HIGH_RISK_UNTRACKED_FILES.has(path)) return true
+  return HIGH_RISK_UNTRACKED_PREFIXES.some((prefix) => path.startsWith(prefix))
+}
+
+function formatUntrackedPreflightOutput(files: string[]): string {
+  const shown = files.slice(0, 12)
+  const more = files.length > shown.length ? `\n  ... and ${files.length - shown.length} more` : ''
+  return [
+    `EnterWorktree blocked: ${files.length} untracked dependency/source file${files.length === 1 ? '' : 's'} would be missing from the new worktree.`,
+    'Add or intentionally ignore these files before creating a worktree, or set allow_untracked=true if you explicitly want to bypass this preflight:',
+    ...shown.map((file) => `  - ${file}`),
+    more,
+  ].filter(Boolean).join('\n')
 }
 
 export function createEnterWorktreeTool(state: WorktreeState): NativeToolDef<EnterWorktreeInput> {
@@ -92,6 +155,18 @@ export function createEnterWorktreeTool(state: WorktreeState): NativeToolDef<Ent
         }
       }
 
+      const riskyUntrackedFiles = listUntrackedFiles(gitRoot).filter(isHighRiskUntrackedFile)
+      if (riskyUntrackedFiles.length > 0 && input.allow_untracked !== true) {
+        return {
+          output: formatUntrackedPreflightOutput(riskyUntrackedFiles),
+          isError: true,
+          metadata: {
+            preflightFailure: 'untracked_dependency_or_source_files',
+            untrackedFiles: riskyUntrackedFiles,
+          },
+        }
+      }
+
       // Create the worktree
       try {
         execSync(`git worktree add -b "${branchName}" "${worktreePath}"`, {
@@ -126,6 +201,9 @@ export function createEnterWorktreeTool(state: WorktreeState): NativeToolDef<Ent
           worktreePath,
           worktreeBranch: branchName,
           originalCwd,
+          ...(riskyUntrackedFiles.length > 0
+            ? { untrackedPreflightBypassed: true, untrackedFiles: riskyUntrackedFiles }
+            : {}),
         },
       }
     },

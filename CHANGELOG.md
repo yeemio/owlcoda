@@ -2,6 +2,39 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.24] — 2026-07-07
+
+Runtime rate-limit and task-boundary reliability release.
+
+### Added
+
+- Added provider rate-limit handling that stops automatic short-interval
+  retries on direct upstream `429` responses while keeping explicit `/retry`
+  available for user-confirmed retries.
+- Added agent provider-rate-limit classification with
+  `providerRateLimited=true`, so throttled sub-agent failures stay isolated and
+  do not become parent-task terminal failures.
+- Added `EnterWorktree` preflight checks for high-risk untracked dependency and
+  source files, with an explicit `allow_untracked=true` override.
+- Added a structured-output `data` alias that points to the same payload as
+  `artifact`, making HTTP consumers that expect `data` easier to integrate.
+
+### Fixed
+
+- Stopped REPL auto-continue from resending immediately after provider
+  rate-limit failures; the prompt now guides users toward `/model`, cooldown,
+  or explicit `/retry`.
+- Avoided treating CWD banners, terminal transcript snippets, tool-output file
+  listings, edit-history lines, or model labels as task-approved write paths.
+- Resolved short `TaskUpdate` IDs such as `t-1` to canonical `task-1`, and
+  returned `TaskList` / `TaskCreate` recovery guidance for genuinely missing
+  tasks.
+- Classified local `command not found` failures such as missing `rg` as
+  `tool:command_not_found`, rather than confusing them with remote semantic
+  failures or missing project data.
+- Preserved Bash background-timeout metadata without mislabeling detached work
+  as killed.
+
 ## [0.15.23] — 2026-07-04
 
 Runtime defect follow-up candidate for real workload regressions found in the

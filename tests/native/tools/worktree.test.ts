@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execSync } from 'node:child_process'
-import { mkdirSync, rmSync, existsSync, realpathSync } from 'node:fs'
+import { mkdirSync, rmSync, existsSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createEnterWorktreeTool, type WorktreeState } from '../../../src/native/tools/enter-worktree.js'
@@ -61,6 +61,43 @@ describe('EnterWorktree tool', () => {
   // contention with parallel test workers the chain can exceed 5s. 20s
   // matches the conservative tier already used by other slow integration
   // tests in this repo.
+
+  it('preflights untracked dependency/source files before creating a worktree', async () => {
+    writeFileSync(join(tmpRepo, 'package-lock.json'), '{}\n')
+    mkdirSync(join(tmpRepo, 'src'), { recursive: true })
+    writeFileSync(join(tmpRepo, 'src', 'new-helper.ts'), 'export const answer = 42\n')
+
+    const state: WorktreeState = { inWorktree: false }
+    const tool = createEnterWorktreeTool(state)
+    const result = await tool.execute({ name: 'dirty-preflight' })
+
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('untracked dependency/source files')
+    expect(result.output).toContain('package-lock.json')
+    expect(result.output).toContain('src/new-helper.ts')
+    expect(result.metadata).toMatchObject({
+      preflightFailure: 'untracked_dependency_or_source_files',
+      untrackedFiles: ['package-lock.json', 'src/new-helper.ts'],
+    })
+    expect(state.inWorktree).toBe(false)
+    expect(existsSync(join(tmpRepo, '..', '.owlcoda-worktrees', 'dirty-preflight'))).toBe(false)
+  })
+
+  it('allows explicit override of untracked worktree preflight', async () => {
+    writeFileSync(join(tmpRepo, 'package-lock.json'), '{}\n')
+
+    const state: WorktreeState = { inWorktree: false }
+    const tool = createEnterWorktreeTool(state)
+    const result = await tool.execute({ name: 'dirty-override', allow_untracked: true } as any)
+
+    expect(result.isError).toBe(false)
+    expect(result.output).toContain('Created worktree')
+    expect(result.metadata).toMatchObject({
+      untrackedPreflightBypassed: true,
+      untrackedFiles: ['package-lock.json'],
+    })
+    process.chdir(savedCwd)
+  }, 20_000)
 
   it('rejects if already in worktree', async () => {
     const state: WorktreeState = { inWorktree: true, worktreePath: '/tmp/x', originalCwd: savedCwd }

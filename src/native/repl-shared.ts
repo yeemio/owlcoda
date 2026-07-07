@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { probeRuntimeSurface } from '../runtime-probe.js'
 import { SLASH_COMMANDS } from './slash-commands.js'
 import type { ConversationRuntimeFailure } from './conversation.js'
+import { diagnosticLooksLikeRateLimit } from './adaptive-concurrency.js'
 import { classifyRecoveryInput, classifyFailureRecoveryAction } from './failure-recovery.js'
 import wrapText from '../ink/wrap-text.js'
 import { stringWidth, isAmbiguousWidthWide } from '../ink/stringWidth.js'
@@ -138,6 +139,11 @@ export function formatRepeatedContinuationRetryGuidance(
   return `Request is still failing after ${attempts} attempts. Use /model to switch, or /retry to force another resend.`
 }
 
+function runtimeFailureLooksLikeRateLimit(failure: ConversationRuntimeFailure): boolean {
+  if (diagnosticLooksLikeRateLimit(failure.diagnostic)) return true
+  return /\b429\b/i.test(failure.message) || /\brate[\s_-]?limit/i.test(failure.message)
+}
+
 export function formatExpensiveFailureGuidance(
   failure: ConversationRuntimeFailure,
 ): string {
@@ -149,6 +155,9 @@ export function formatExpensiveFailureGuidance(
   // like recovery). 0.13.97 updated buildLocalRecoveryGuidance but this
   // function was missed — user-visible mismatch was the result.
   const partial = failure.diagnostic?.partialOutputSeen === true
+  if (runtimeFailureLooksLikeRateLimit(failure)) {
+    return 'Last request hit provider rate limits. Wait for the provider cooldown, use /model to switch to a non-throttled route, or use /retry only if you intentionally want to force one resend.'
+  }
   switch (failure.kind) {
     case 'timeout':
       // Non-streaming wall-clock budget; partial structurally false.
@@ -231,6 +240,7 @@ export function shouldScheduleRuntimeAutoRetry(options: {
   if (options.runtimeFailure.kind === 'timeout') return false
   if (options.runtimeFailure.kind === 'pre_first_token_stream_close') return false
   if (options.runtimeFailure.kind === 'empty_provider_response') return false
+  if (runtimeFailureLooksLikeRateLimit(options.runtimeFailure)) return false
   if (options.taskAborted) return false
   if (!options.clearEpochUnchanged) return false
   if (options.currentRetryCount >= options.retryLimit) return false

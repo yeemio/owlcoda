@@ -562,6 +562,47 @@ describe('runConversationLoop', () => {
     expect(errors).toEqual([])
   }, 15_000)
 
+  it('does not blind auto-retry direct upstream 429 rate-limit responses', async () => {
+    const conv = createConversation({ system: 'test', model: 'z-ai/glm-5.2' })
+    addUserMessage(conv, 'Run the task once.')
+
+    const dispatcher = new ToolDispatcher()
+    const retryEvents: Array<{ attempt: number; delayMs: number }> = []
+    const errors: string[] = []
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        error: {
+          type: 'rate_limit_error',
+          message: 'upstream 429: rate limit exceeded',
+        },
+      }), {
+        status: 429,
+        headers: { 'content-type': 'application/json', 'x-request-id': 'req-429' },
+      }),
+    )
+
+    const result = await runConversationLoop(conv, dispatcher, {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test-key',
+      callbacks: {
+        onError: (m) => { errors.push(m) },
+        onRetry: (info) => { retryEvents.push({ attempt: info.attempt, delayMs: info.delayMs }) },
+      },
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(retryEvents).toEqual([])
+    expect(result.runtimeFailure).toMatchObject({
+      kind: 'http_error',
+      retryable: true,
+      diagnostic: { status: 429 },
+    })
+    expect(result.runtimeFailure?.message).toContain('rate limit')
+    expect(result.runtimeFailure?.message).toContain('req-429')
+    expect(errors).toEqual([result.runtimeFailure?.message])
+  })
+
   it('adaptive concurrency mode raises request auto-retry budget from 1 to 3', async () => {
     process.env['OWLCODA_AGENT_ADAPTIVE_CONCURRENCY'] = '1'
     const conv = createConversation({ system: 'test', model: 'test-model' })

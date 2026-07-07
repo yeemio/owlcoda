@@ -1640,9 +1640,19 @@ function collectExplicitWriteTargets(source: SubstantiveUserInput[], cwd: string
   for (const entry of source) {
     let inForbiddenWriteSection = false
     let inAllowWriteSection = false
+    let inHistoricalToolOutputBlock = false
     for (const line of entry.rawText.split(/\r?\n/)) {
       const trimmed = line.trim()
       if (!trimmed) continue
+      if (inHistoricalToolOutputBlock) {
+        if (isHistoricalToolOutputContinuation(line)) continue
+        inHistoricalToolOutputBlock = false
+      }
+      if (isHistoricalToolTranscriptLine(trimmed)) {
+        inHistoricalToolOutputBlock = startsHistoricalToolOutputBlock(trimmed)
+        continue
+      }
+      if (isContextOnlyPathLine(trimmed)) continue
       if (isInlineForbiddenWriteSectionHeading(trimmed)) {
         inForbiddenWriteSection = true
         inAllowWriteSection = false
@@ -1693,6 +1703,46 @@ function collectExplicitWriteTargets(source: SubstantiveUserInput[], cwd: string
     candidates.add(candidate)
   }
   return { allTargets: [...candidates], userExternalTargets: userExternalPaths }
+}
+
+function isHistoricalToolTranscriptLine(line: string): boolean {
+  const hasTranscriptPrefix = /^[▸⎿●]\s*/.test(line)
+  const normalized = line.replace(/^[▸⎿●]\s*/, '').trim()
+  if (/^⎿\s*/.test(line)) return true
+  if (/^\[file:\s*(?:\/|~\/|\.{1,2}\/)[^\]]+\]$/i.test(normalized)) return true
+  if (/^(?:Read|Update|Edit|Write)\s+(?:\/|~\/|\.{1,2}\/).*\s·\s(?:[+-]\d+|\d+\s*ms)/i.test(normalized)) {
+    return true
+  }
+  if (
+    hasTranscriptPrefix
+    && /^(?:TaskCreate|TaskUpdate|TaskVerify|TaskStop|TaskOutput|Bash|Read|Write|Edit)\b/.test(normalized)
+  ) {
+    return true
+  }
+  return false
+}
+
+function startsHistoricalToolOutputBlock(line: string): boolean {
+  return /^[▸⎿]\s*/.test(line)
+}
+
+function isHistoricalToolOutputContinuation(line: string): boolean {
+  const trimmed = line.trim()
+  if (!trimmed) return true
+  if (/^⎿/.test(trimmed)) return true
+  if (/^[▸●▎—ⓘ╭╰]/.test(trimmed)) return false
+  return /^\s+/.test(line)
+}
+
+function isContextOnlyPathLine(line: string): boolean {
+  const normalized = line
+    .replace(/^[▎>\s]+/, '')
+    .trim()
+  if (/^—\s*CWD\b/i.test(normalized)) return true
+  if (/^(?:CWD|cwd|工作区|当前目录|当前工作目录)\b/i.test(normalized) && lineHasConcretePath(normalized)) return true
+  if (/^(?:你在|在)\s+`?(?:\/|~\/|\.{1,2}\/)[^`。！？\n]+`?\s*(?:工作|目录|仓库|项目)/.test(normalized)) return true
+  if (/^(?:work|working|run)\s+in\s+`?(?:\/|~\/|\.{1,2}\/)[^`\n]+`?/i.test(normalized)) return true
+  return false
 }
 
 function cleanCandidatePath(candidate: string): string {
@@ -1913,13 +1963,14 @@ function extractPathCandidates(text: string): string[] {
 }
 
 function isLikelyPathCandidate(candidate: string): boolean {
+  const extension = extname(candidate)
   return candidate.startsWith('/')
     || candidate.startsWith('./')
     || candidate.startsWith('../')
     || candidate.startsWith('~/')
     || candidate.endsWith('/')
     || PROJECT_PATH_PREFIX_RE.test(candidate)
-    || extname(candidate) !== ''
+    || (extension !== '' && /[A-Za-z]/.test(extension))
 }
 
 function resolveCandidatePath(candidate: string, cwd: string): string | null {

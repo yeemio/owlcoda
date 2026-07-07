@@ -250,6 +250,8 @@ export interface NotebookEditInput {
 export interface EnterWorktreeInput {
   /** Optional name slug for the worktree branch */
   name?: string
+  /** Explicitly bypass the untracked dependency/source file preflight */
+  allow_untracked?: boolean
 }
 
 /** ExitWorktree tool input */

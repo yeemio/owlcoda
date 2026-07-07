@@ -93,17 +93,19 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
       if (!taskId) {
         return { output: 'taskId is required.', isError: true }
       }
+      const requestedTaskId = taskId
+      const resolvedTaskId = normalizeTaskUpdateTaskId(taskId)
 
       // Handle deletion
       if (status === 'deleted') {
-        const deleted = deleteTask(taskId)
+        const deleted = deleteTask(resolvedTaskId)
         if (!deleted) {
-          return { output: `Task "${taskId}" not found.`, isError: true }
+          return missingTaskResult(requestedTaskId, resolvedTaskId)
         }
         return {
-          output: `Deleted task ${taskId}.`,
+          output: prependTaskIdAlias(`Deleted task ${resolvedTaskId}.`, requestedTaskId, resolvedTaskId),
           isError: false,
-          metadata: { taskId, action: 'deleted' },
+          metadata: { taskId: resolvedTaskId, action: 'deleted', ...taskIdAliasMetadata(requestedTaskId, resolvedTaskId) },
         }
       }
 
@@ -131,7 +133,7 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
           }
         }
 
-        const result = updateTaskStep(taskId, stepId, {
+        const result = updateTaskStep(resolvedTaskId, stepId, {
           status: stepStatus,
           completePrevious,
           touchedPaths,
@@ -141,6 +143,9 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
         })
 
         if (!result.ok) {
+          if (result.reason === `Task "${resolvedTaskId}" not found.`) {
+            return missingTaskResult(requestedTaskId, resolvedTaskId)
+          }
           return formatStepUpdateFailure(result)
         }
 
@@ -157,7 +162,7 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
 
         // Also apply task-level changes if any were requested alongside step update
         if (subject || description || status || activeForm) {
-          updateTask(taskId, {
+          updateTask(resolvedTaskId, {
             subject,
             description,
             status: status as TaskStatus | undefined,
@@ -166,14 +171,24 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
         }
 
         return {
-          output: `Updated task ${taskId} step ${stepId}: ${changes.join(', ') || 'no changes'}`,
+          output: prependTaskIdAlias(
+            `Updated task ${resolvedTaskId} step ${stepId}: ${changes.join(', ') || 'no changes'}`,
+            requestedTaskId,
+            resolvedTaskId,
+          ),
           isError: false,
-          metadata: { task: result.task, step: result.step, stepUpdate: true, ...(result.completedPreviousStepId ? { completedPreviousStepId: result.completedPreviousStepId } : {}) },
+          metadata: {
+            task: result.task,
+            step: result.step,
+            stepUpdate: true,
+            ...(result.completedPreviousStepId ? { completedPreviousStepId: result.completedPreviousStepId } : {}),
+            ...taskIdAliasMetadata(requestedTaskId, resolvedTaskId),
+          },
         }
       }
 
       // Task-level update path (original behavior)
-      const task = updateTask(taskId, {
+      const task = updateTask(resolvedTaskId, {
         subject,
         description,
         status: status as TaskStatus | undefined,
@@ -181,23 +196,23 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
       })
 
       if (!task) {
-        return { output: `Task "${taskId}" not found.`, isError: true }
+        return missingTaskResult(requestedTaskId, resolvedTaskId)
       }
 
       // Handle blocking changes
       if (addBlocks) {
         for (const blockedId of addBlocks) {
-          blockTask(taskId, blockedId)
+          blockTask(resolvedTaskId, blockedId)
         }
       }
       if (removeBlocks) {
-        const t = getTask(taskId)
+        const t = getTask(resolvedTaskId)
         if (t) {
           for (const blockedId of removeBlocks) {
             t.blocks = t.blocks.filter(b => b !== blockedId)
             const blocked = getTask(blockedId)
             if (blocked) {
-              blocked.blockedBy = blocked.blockedBy.filter(b => b !== taskId)
+              blocked.blockedBy = blocked.blockedBy.filter(b => b !== resolvedTaskId)
             }
           }
         }
@@ -212,10 +227,54 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
       if (removeBlocks?.length) changes.push(`blocks -${removeBlocks.join(',')}`)
 
       return {
-        output: `Updated task ${taskId}: ${changes.join(', ') || 'no changes'}`,
+        output: prependTaskIdAlias(
+          `Updated task ${resolvedTaskId}: ${changes.join(', ') || 'no changes'}`,
+          requestedTaskId,
+          resolvedTaskId,
+        ),
         isError: false,
-        metadata: { task },
+        metadata: { task, ...taskIdAliasMetadata(requestedTaskId, resolvedTaskId) },
       }
+    },
+  }
+}
+
+function normalizeTaskUpdateTaskId(value: string): string {
+  if (value.startsWith('task:')) return value.slice('task:'.length)
+  const short = /^t-(\d+)$/.exec(value)
+  if (short) return `task-${short[1]}`
+  return value
+}
+
+function prependTaskIdAlias(output: string, requestedTaskId: string, resolvedTaskId: string): string {
+  if (requestedTaskId === resolvedTaskId) return output
+  return [
+    `Resolved taskId alias: ${requestedTaskId} -> ${resolvedTaskId}`,
+    output,
+  ].join('\n')
+}
+
+function taskIdAliasMetadata(requestedTaskId: string, resolvedTaskId: string): Record<string, unknown> {
+  if (requestedTaskId === resolvedTaskId) return {}
+  return {
+    requested_task_id: requestedTaskId,
+    resolved_task_id: resolvedTaskId,
+  }
+}
+
+function missingTaskResult(requestedTaskId: string, resolvedTaskId: string): ToolResult {
+  return {
+    output: prependTaskIdAlias(
+      `Task "${resolvedTaskId}" not found. Call TaskList to inspect existing task IDs or TaskCreate to create a new task; do not retry TaskUpdate with guessed IDs.`,
+      requestedTaskId,
+      resolvedTaskId,
+    ),
+    isError: true,
+    metadata: {
+      missingTask: true,
+      recoveryAction: 'inspect_or_create_task',
+      suggestedTools: ['TaskList', 'TaskCreate'],
+      ...taskIdAliasMetadata(requestedTaskId, resolvedTaskId),
     },
   }
 }

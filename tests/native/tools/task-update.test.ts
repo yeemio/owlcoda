@@ -20,10 +20,23 @@ describe('TaskUpdate tool', () => {
     expect(getTask('task-1')!.subject).toBe('New')
   })
 
+  it('accepts short task id aliases like t-1 for task-level updates', async () => {
+    createTask({ subject: 'Old', description: 'desc' })
+    const r = await tool.execute({ taskId: 't-1', status: 'in_progress' })
+    expect(r.isError).toBe(false)
+    expect(r.output).toContain('Resolved taskId alias: t-1 -> task-1')
+    expect(getTask('task-1')!.status).toBe('in_progress')
+  })
+
   it('returns error for missing task', async () => {
     const r = await tool.execute({ taskId: 'task-999', subject: 'x' })
     expect(r.isError).toBe(true)
     expect(r.output).toContain('not found')
+    expect(r.output).toContain('Call TaskList')
+    expect(r.metadata).toMatchObject({
+      missingTask: true,
+      recoveryAction: 'inspect_or_create_task',
+    })
   })
 
   it('returns error for empty taskId', async () => {

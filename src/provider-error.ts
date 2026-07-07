@@ -153,11 +153,12 @@ export function createProviderHttpDiagnostic(
   const inferredRateLimit = status < 500 && status !== 429 && detailLooksLikeRateLimit(rawDetail)
   const retryable = context.retryable ?? (status === 429 || status >= 500 || inferredRateLimit)
 
+  const reason = status === 429 ? 'upstream 429 rate limit from provider' : `upstream ${status} from provider`
   return {
     provider,
     model,
     kind,
-    message: `${model} request failed: upstream ${status} from provider`,
+    message: `${model} request failed: ${reason}`,
     status,
     requestId,
     retryable,

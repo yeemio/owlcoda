@@ -240,6 +240,8 @@ export interface StructuredOutputSalvageReceipt {
 export interface StructuredOutputResponse {
   ok: boolean
   artifact: Record<string, unknown>
+  /** Compatibility alias for HTTP consumers that expect a data payload. */
+  data: Record<string, unknown>
   rawText: string
   rawThinkingText?: string
   usable: boolean
@@ -1386,6 +1388,7 @@ function finalizeStructuredOutputResponse(args: {
   return {
     ok: usable,
     artifact: args.artifact,
+    data: args.artifact,
     rawText: args.rawText,
     ...(args.rawThinkingText ? { rawThinkingText: args.rawThinkingText } : {}),
     usable,

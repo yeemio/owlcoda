@@ -385,6 +385,7 @@ function runCommand(
       const stdout = sanitizeBashOutput(truncateBuffer(stdoutChunks, stdoutTotal))
       const stderr = sanitizeBashOutput(truncateBuffer(stderrChunks, stderrTotal))
       const exitCode = code ?? (signal ? 128 : 1)
+      const missingCommand = detectMissingCommand(stderr, exitCode)
       const backgroundLikely = timeoutExceeded
         && !aborted
         && exitCode === 0
@@ -433,6 +434,9 @@ function runCommand(
       } else if (outputArtifactError) {
         formatted += `\n\n[artifact-warning] Full redacted bash output could not be saved: ${outputArtifactError}`
       }
+      if (missingCommand) {
+        formatted += `\n\n[command not found] Missing executable "${missingCommand}". Use an installed fallback or install the command; do not treat this as missing project data.`
+      }
 
       resolve({
         output: formatted,
@@ -447,6 +451,7 @@ function runCommand(
           ...(backgroundLikely ? { backgroundLikely: true } : {}),
           ...(outputArtifact ? { outputArtifact } : {}),
           ...(outputArtifactError ? { outputArtifactError } : {}),
+          ...(missingCommand ? { commandNotFound: true, missingCommand } : {}),
         },
       })
     })
@@ -543,6 +548,12 @@ function bashOutputNeedsArtifact(stdout: string, stderr: string): boolean {
 
 function uniqueStrings(values: string[]): string[] {
   return [...new Set(values)]
+}
+
+function detectMissingCommand(stderr: string, exitCode: number): string | null {
+  if (exitCode !== 127 || !stderr) return null
+  const match = stderr.match(/(?:^|\n)(?:bash:\s*)?(?:line\s+\d+:\s*)?([A-Za-z0-9._+-]+):\s+command not found\b/i)
+  return match?.[1] ?? null
 }
 
 /**
