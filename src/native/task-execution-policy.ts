@@ -297,7 +297,7 @@ function buildMissingCreatePlanPrompt(mode: string, projectMapCommands: string[]
     `This ${mode} task needs a structured execution plan before more broad investigation.`,
     'Call TaskCreate with concrete steps and verification checks for the required artifact(s).',
     'Then begin the first step with TaskUpdate(stepStatus="in_progress").',
-    'After writing files, use TaskVerify before calling TaskUpdate(stepStatus="completed").',
+    'After writing files, use TaskVerify; a passing verification atomically completes the step.',
   ]
   appendProjectMapVerificationLine(lines, projectMapCommands)
   return lines.join('\n')
@@ -309,7 +309,7 @@ function buildCreatePlanPrompt(taskId: string, subject: string, stepId: string, 
     `Task ${taskId} "${subject}" has a structured execution plan.`,
     `Next step: ${stepId} — ${stepTitle}`,
     'Begin the step now. Call TaskUpdate(stepId, stepStatus="in_progress") first, then execute.',
-    'Use TaskVerify after writing files to confirm artifacts before calling TaskUpdate(stepStatus="completed").',
+    'Use TaskVerify after writing files; passing checks atomically complete the step.',
   ].join('\n')
 }
 
@@ -341,8 +341,8 @@ function buildVerifyStepPrompt(
   const lines = [
     '[Runtime task-step]',
     `Task ${taskId} step ${stepId} "${stepTitle}" has ${checkCount} verification check${checkCount === 1 ? '' : 's'} defined but none have been run.`,
-    `Call TaskVerify(taskId="${taskId}", stepId="${stepId}") before marking the step completed.`,
-    'TaskUpdate(stepStatus="completed") will be rejected if any required checks have failed results.',
+    `Call TaskVerify(taskId="${taskId}", stepId="${stepId}"); passing checks atomically complete the step.`,
+    'Failed checks keep the step open and must be repaired before re-verification.',
   ]
   appendProjectMapVerificationLine(lines, projectMapCommands)
   return lines.join('\n')

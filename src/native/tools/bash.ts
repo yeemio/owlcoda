@@ -22,12 +22,15 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, realpathSync, statSync } from 'node:fs'
-import { readFile, stat } from 'node:fs/promises'
-import { delimiter, resolve as resolvePath } from 'node:path'
+import { accessSync, constants, existsSync, realpathSync, statSync } from 'node:fs'
+import { readFile, stat, unlink } from 'node:fs/promises'
+import { basename, delimiter, isAbsolute, relative, resolve as resolvePath } from 'node:path'
 import type { BashInput, NativeToolDef, ToolExecutionContext, ToolResult } from './types.js'
 import { extractWriteTargets } from '../write-provenance.js'
 import type { ExtractedWriteTarget } from '../protocol/write-provenance-types.js'
+import { evaluateCommandResult } from '../command-result-semantics.js'
+import { createRawRecoverySnapshot, existingFileNeedsOverwriteApproval } from './destructive-write-policy.js'
+import { checkNewScriptModuleMismatch } from './script-module-policy.js'
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_OUTPUT_BYTES = 1024 * 1024 // 1 MiB cap per stream
@@ -59,6 +62,33 @@ export function buildBashExecutionEnv(
 function splitPath(value: string | undefined): string[] {
   if (!value) return []
   return value.split(delimiter).filter(Boolean)
+}
+
+export function resolveInterpreterFallback(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { command: string; fallback?: { requested: 'python'; applied: 'python3' } } {
+  const match = /^(\s*)python(?=\s|$)/.exec(command)
+  if (!match || findExecutableOnPath('python', env) || !findExecutableOnPath('python3', env)) {
+    return { command }
+  }
+  return {
+    command: `${match[1] ?? ''}python3${command.slice(match[0].length)}`,
+    fallback: { requested: 'python', applied: 'python3' },
+  }
+}
+
+function findExecutableOnPath(name: string, env: NodeJS.ProcessEnv): string | null {
+  for (const directory of splitPath(env.PATH)) {
+    const candidate = resolvePath(directory, name)
+    try {
+      accessSync(candidate, constants.X_OK)
+      return candidate
+    } catch {
+      // Continue through PATH.
+    }
+  }
+  return null
 }
 
 function canonicalizeCwd(cwd: string): string {
@@ -125,8 +155,54 @@ export function createBashTool(): NativeToolDef<BashInput> {
         }
       }
 
-      const captureSeeds = await prepareBashWriteCaptures(command, effectiveCwd)
-      const result = await runCommand(command, effectiveCwd, timeoutMs, context)
+      const symlinkViolation = detectCrossWorkspaceSymlinkCommand(command, effectiveCwd)
+      if (symlinkViolation) {
+        return {
+          output:
+            `Error: refusing cross-workspace symlink from ${symlinkViolation.targetPath} ` +
+            `to ${symlinkViolation.sourcePath}. Create dependencies inside the current workspace instead.`,
+          isError: true,
+          metadata: {
+            symlinkPolicyDenied: true,
+            failureCategory: 'bash:cross_workspace_symlink',
+            sourcePath: symlinkViolation.sourcePath,
+            targetPath: symlinkViolation.targetPath,
+            cwd: effectiveCwd,
+          },
+        }
+      }
+
+      const executionEnv = buildBashExecutionEnv()
+      const interpreterResolution = resolveInterpreterFallback(command, executionEnv)
+      const effectiveCommand = interpreterResolution.command
+      let destructivePreflight: Awaited<ReturnType<typeof prepareDestructiveBashWrites>>
+      try {
+        destructivePreflight = await prepareDestructiveBashWrites(
+          effectiveCommand,
+          effectiveCwd,
+          input.allowDestructiveOverwrite === true,
+        )
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return {
+          output: `Cannot prepare destructive-write recovery snapshot: ${message}`,
+          isError: true,
+          metadata: { recoverySnapshotFailed: true },
+        }
+      }
+      if (destructivePreflight.deniedPath) {
+        return {
+          output: `Refusing destructive Bash overwrite of ${destructivePreflight.deniedPath}. Re-run with allowDestructiveOverwrite=true to create a raw-byte recovery snapshot first.`,
+          isError: true,
+          metadata: {
+            destructiveOverwriteDenied: true,
+            attemptedPath: destructivePreflight.deniedPath,
+          },
+        }
+      }
+
+      const captureSeeds = await prepareBashWriteCaptures(effectiveCommand, effectiveCwd)
+      const result = await runCommand(effectiveCommand, effectiveCwd, timeoutMs, context, executionEnv)
       const writeCaptures = await completeBashWriteCaptures(captureSeeds)
       if (writeCaptures.length > 0) {
         result.metadata = {
@@ -134,9 +210,282 @@ export function createBashTool(): NativeToolDef<BashInput> {
           writeCaptures,
         }
       }
+      if (destructivePreflight.snapshots.length > 0) {
+        result.metadata = {
+          ...(result.metadata ?? {}),
+          recoverySnapshots: destructivePreflight.snapshots,
+        }
+      }
+      const scriptModuleMismatches: Array<{
+        attemptedPath: string
+        packageJsonPath: string
+        quarantinePath?: string
+        quarantineError?: string
+      }> = []
+      for (const capture of writeCaptures) {
+        if (capture.oldContent !== null) continue
+        const mismatch = await checkNewScriptModuleMismatch(capture.path, capture.newContent)
+        if (!mismatch) continue
+        try {
+          const quarantinePath = await createRawRecoverySnapshot(capture.path)
+          await unlink(capture.path)
+          scriptModuleMismatches.push({
+            attemptedPath: capture.path,
+            packageJsonPath: mismatch.packageJsonPath,
+            quarantinePath,
+          })
+          result.output += `\nRefusing incompatible generated script ${capture.path}: ${mismatch.reason}. Preserved at ${quarantinePath}; use ESM syntax or .cjs.`
+        } catch (error) {
+          const quarantineError = error instanceof Error ? error.message : String(error)
+          scriptModuleMismatches.push({
+            attemptedPath: capture.path,
+            packageJsonPath: mismatch.packageJsonPath,
+            quarantineError,
+          })
+          result.output += `\nIncompatible generated script ${capture.path} was detected, but quarantine failed: ${quarantineError}. The file was left in place to avoid unbacked deletion.`
+        }
+      }
+      if (scriptModuleMismatches.length > 0) {
+        result.isError = true
+        result.metadata = {
+          ...(result.metadata ?? {}),
+          scriptModuleMismatch: true,
+          scriptModuleMismatches,
+        }
+      }
+      if (interpreterResolution.fallback) {
+        result.metadata = {
+          ...(result.metadata ?? {}),
+          interpreterFallback: interpreterResolution.fallback,
+          requestedCommand: command,
+          appliedCommand: effectiveCommand,
+        }
+      }
       return result
     },
   }
+}
+
+interface SymlinkPolicyViolation {
+  sourcePath: string
+  targetPath: string
+}
+
+function detectCrossWorkspaceSymlinkCommand(command: string, cwd: string, depth = 0): SymlinkPolicyViolation | null {
+  for (const segment of splitShellCommandStages(command)) {
+    const args = splitShellWords(segment.trim())
+    const nestedScript = nestedShellScript(args)
+    if (nestedScript && depth < 4) {
+      const nestedViolation = detectCrossWorkspaceSymlinkCommand(nestedScript, cwd, depth + 1)
+      if (nestedViolation) return nestedViolation
+    }
+    const operands = symbolicLinkOperands(args)
+    if (!operands) continue
+    if (operands.length < 1) continue
+    if (operands.some(hasShellPathExpansion)) {
+      return {
+        sourcePath: operands[0]!,
+        targetPath: operands[1] ?? basename(operands[0]!),
+      }
+    }
+    const sourcePath = canonicalizePathWithinCwd(operands[0]!, cwd)
+    const targetOperand = operands[1] ?? basename(operands[0]!)
+    const targetPath = canonicalizePathWithinCwd(targetOperand, cwd)
+    if (!isPathWithinRoot(sourcePath, cwd) || !isPathWithinRoot(targetPath, cwd)) {
+      return { sourcePath, targetPath }
+    }
+  }
+  return null
+}
+
+function splitShellCommandStages(command: string): string[] {
+  const stages: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+  let escaped = false
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]!
+    if (escaped) {
+      current += ch
+      escaped = false
+      continue
+    }
+    if (ch === '\\') {
+      current += ch
+      escaped = true
+      continue
+    }
+    if (quote) {
+      current += ch
+      if (ch === quote) quote = null
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      current += ch
+      quote = ch
+      continue
+    }
+    if (ch === ';' || ch === '|' || ch === '\n' || ch === '\r') {
+      stages.push(current)
+      current = ''
+      if (ch === '|' && command[i + 1] === '|') i++
+      continue
+    }
+    if (ch === '&' && command[i + 1] === '&') {
+      stages.push(current)
+      current = ''
+      i++
+      continue
+    }
+    current += ch
+  }
+  stages.push(current)
+  return stages
+}
+
+function symbolicLinkOperands(args: string[]): string[] | null {
+  const executableIndex = wrappedExecutableIndex(args)
+  const executable = args[executableIndex]
+  if (!executable || (executable !== 'ln' && !executable.endsWith('/ln'))) return null
+
+  const commandArgs = args.slice(executableIndex + 1)
+  const isSymbolic = commandArgs.some((arg) => (
+    arg === '--symbolic' || /^--symbolic=/.test(arg) || (/^-[A-Za-z]+$/.test(arg) && arg.slice(1).includes('s'))
+  ))
+  if (!isSymbolic) return null
+  return commandArgs.filter((arg) => arg !== '--' && !arg.startsWith('-'))
+}
+
+function wrappedExecutableIndex(args: string[]): number {
+  let executableIndex = 0
+  while (executableIndex < args.length) {
+    const token = args[executableIndex]!
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
+      executableIndex++
+      continue
+    }
+    if (token === 'command') {
+      executableIndex++
+      while (args[executableIndex] === '--' || /^-[A-Za-z]+$/.test(args[executableIndex] ?? '')) {
+        executableIndex++
+      }
+      continue
+    }
+    if (token === 'env') {
+      executableIndex++
+      while (executableIndex < args.length) {
+        const envArg = args[executableIndex]!
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(envArg)) {
+          executableIndex++
+          continue
+        }
+        if (envArg === '-u' || envArg === '--unset' || envArg === '-C' || envArg === '--chdir') {
+          executableIndex += 2
+          continue
+        }
+        if (envArg.startsWith('--unset=') || envArg.startsWith('--chdir=')) {
+          executableIndex++
+          continue
+        }
+        if (envArg === '-i' || envArg === '--ignore-environment' || envArg === '-0' || envArg === '--null') {
+          executableIndex++
+          continue
+        }
+        if (envArg === '--') {
+          executableIndex++
+          break
+        }
+        if (envArg.startsWith('-')) {
+          executableIndex++
+          continue
+        }
+        break
+      }
+      continue
+    }
+    break
+  }
+  return executableIndex
+}
+
+function nestedShellScript(args: string[]): string | null {
+  const executableIndex = wrappedExecutableIndex(args)
+  const executable = args[executableIndex]
+  if (!executable || !['bash', 'sh', 'zsh'].includes(basename(executable))) return null
+  const shellArgs = args.slice(executableIndex + 1)
+  const commandFlagIndex = shellArgs.findIndex((arg) => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg))
+  if (commandFlagIndex < 0) return null
+  return shellArgs[commandFlagIndex + 1] ?? null
+}
+
+function hasShellPathExpansion(value: string): boolean {
+  return value.startsWith('~') || /[$`]/.test(value)
+}
+
+function splitShellWords(input: string): string[] {
+  const words: string[] = []
+  let current = ''
+  let quote: '"' | "'" | null = null
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]!
+    if (quote) {
+      if (ch === quote) quote = null
+      else current += ch
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      continue
+    }
+    if (/\s/.test(ch)) {
+      if (current) {
+        words.push(current)
+        current = ''
+      }
+      continue
+    }
+    current += ch
+  }
+  if (current) words.push(current)
+  return words
+}
+
+function canonicalizePathWithinCwd(value: string, cwd: string): string {
+  const resolved = isAbsolute(value) ? resolvePath(value) : resolvePath(cwd, value)
+  try {
+    return realpathSync(resolved)
+  } catch {
+    const parent = resolvePath(resolved, '..')
+    try {
+      return resolvePath(realpathSync(parent), basename(resolved))
+    } catch {
+      return resolved
+    }
+  }
+}
+
+function isPathWithinRoot(candidate: string, root: string): boolean {
+  const normalizedRoot = canonicalizePathWithinCwd(root, root)
+  const normalizedCandidate = canonicalizePathWithinCwd(candidate, root)
+  if (normalizedCandidate === normalizedRoot) return true
+  const rel = relative(normalizedRoot, normalizedCandidate)
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+}
+
+async function prepareDestructiveBashWrites(
+  command: string,
+  cwd: string,
+  allowed: boolean,
+): Promise<{ deniedPath?: string; snapshots: Array<{ path: string; snapshotPath: string }> }> {
+  const targets = extractWriteTargets('bash', { command }, cwd)
+  const paths = [...new Set(targets.filter((target) => target.destructive).map((target) => target.path))]
+  const snapshots: Array<{ path: string; snapshotPath: string }> = []
+  for (const path of paths) {
+    if (!await existingFileNeedsOverwriteApproval(path)) continue
+    if (!allowed) return { deniedPath: path, snapshots }
+    snapshots.push({ path, snapshotPath: await createRawRecoverySnapshot(path) })
+  }
+  return { snapshots }
 }
 
 interface BashWriteCaptureSeed {
@@ -201,6 +550,7 @@ function runCommand(
   cwd: string,
   timeoutMs: number,
   context?: ToolExecutionContext,
+  executionEnv: NodeJS.ProcessEnv = buildBashExecutionEnv(),
 ): Promise<ToolResult> {
   return new Promise((resolve) => {
     const stdoutChunks: Buffer[] = []
@@ -225,8 +575,6 @@ function runCommand(
     let abortHardDeadline: ReturnType<typeof setTimeout> | null = null
     let timeoutEscalation: ReturnType<typeof setTimeout> | null = null
     let timeoutHardDeadline: ReturnType<typeof setTimeout> | null = null
-    const executionEnv = buildBashExecutionEnv()
-
     const child = spawn('bash', ['-c', command], {
       cwd,
       env: executionEnv,
@@ -405,6 +753,7 @@ function runCommand(
         && signal === null
         && isBackgroundShapedCommand(command)
       const killedForResult = killed && !backgroundLikely
+      const commandResult = evaluateCommandResult({ command, exitCode, stdout, stderr })
 
       // 0.13.60: smart bash output formatter. Always emits an
       // `[exit code: N]` trailer line; preserves the full stderr
@@ -424,17 +773,20 @@ function runCommand(
             timeoutExceeded,
             backgroundLikely,
           })
+      const semanticOutput = commandResult.semanticSuccess
+        ? `${formatted}\n[semantic success: ${commandResult.successDetail}]`
+        : formatted
       const output = missingCommand
         ? [
-            formatted,
+            semanticOutput,
             '',
             `[command not found] Missing executable "${missingCommand}". Use an installed fallback or install the command; do not treat this as missing project data.`,
           ].join('\n')
-        : formatted
+        : semanticOutput
 
       resolve({
         output,
-        isError: aborted ? true : exitCode !== 0,
+        isError: aborted ? true : !commandResult.success,
         metadata: {
           exitCode,
           killed: killedForResult,
@@ -444,6 +796,10 @@ function runCommand(
           ...(timeoutExceeded ? { timeoutExceeded: true } : {}),
           ...(backgroundLikely ? { backgroundLikely: true } : {}),
           ...(missingCommand ? { commandNotFound: true, missingCommand } : {}),
+          ...(commandResult.semanticSuccess ? {
+            semanticSuccess: true,
+            commandResultSemantics: commandResult.commandResultSemantics,
+          } : {}),
           cwd,
           path: executionEnv.PATH ?? '',
         },

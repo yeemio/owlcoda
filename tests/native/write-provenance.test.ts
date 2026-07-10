@@ -2299,7 +2299,7 @@ describe('extractWriteTargets — Bash redirect >, >>, 2> (S0-5.2)', () => {
     expect(r).toHaveLength(1)
     expect(r[0].kind).toBe('redirect_stdout')
     expect(r[0].path).toBe(canonicalizeProvenancePath('/tmp/foo.txt', tmpCwd))
-    expect(r[0].destructive).toBe(false)
+    expect(r[0].destructive).toBe(true)
   })
 
   it('append redirect `>>` extracts a redirect_stdout target', () => {
@@ -2650,6 +2650,27 @@ describe('extractWriteTargets — Bash heredoc + mkdir + fail-open (S0-5.5)', ()
     expect(r).toHaveLength(1)
     expect(r[0].kind).toBe('heredoc')
     expect(r[0].path).toBe(canonicalizeProvenancePath('/tmp/path', tmpCwd))
+  })
+
+  it('marks overwrite redirects destructive while append redirects remain non-destructive', () => {
+    const overwrite = extractWriteTargets('Bash', { command: 'echo x >| /tmp/overwrite' }, tmpCwd)
+    const append = extractWriteTargets('Bash', { command: 'echo x >> /tmp/append' }, tmpCwd)
+
+    expect(overwrite).toHaveLength(1)
+    expect(overwrite[0].destructive).toBe(true)
+    expect(append).toHaveLength(1)
+    expect(append[0].destructive).toBe(false)
+  })
+
+  it('ignores redirect-like text inside a heredoc body', () => {
+    const result = extractWriteTargets(
+      'Bash',
+      { command: 'cat <<EOF > /tmp/output\nbody > /tmp/not-a-target | tee /tmp/also-not-a-target\nEOF' },
+      tmpCwd,
+    )
+
+    expect(result).toHaveLength(1)
+    expect(result[0].path).toBe(canonicalizeProvenancePath('/tmp/output', tmpCwd))
   })
 
   it('heredoc with `<<-` indented form is also detected as heredoc', () => {

@@ -1658,6 +1658,8 @@ interface BashRedirectHit {
   kind: 'redirect_stdout' | 'redirect_stderr'
   /** verbatim target token as captured from the command string */
   target: string
+  /** Whether the redirect truncates/replaces its target instead of appending. */
+  destructive: boolean
 }
 
 function findBashRedirects(command: string): BashRedirectHit[] {
@@ -1697,10 +1699,10 @@ function findBashRedirects(command: string): BashRedirectHit[] {
         const targetToken = command.slice(targetStart, targetEnd)
         const unquoted = stripQuotes(targetToken)
         if (opMatch.combined) {
-          out.push({ kind: 'redirect_stdout', target: unquoted })
-          out.push({ kind: 'redirect_stderr', target: unquoted })
+          out.push({ kind: 'redirect_stdout', target: unquoted, destructive: opMatch.destructive })
+          out.push({ kind: 'redirect_stderr', target: unquoted, destructive: opMatch.destructive })
         } else {
-          out.push({ kind: opMatch.kind, target: unquoted })
+          out.push({ kind: opMatch.kind, target: unquoted, destructive: opMatch.destructive })
         }
         i = targetEnd
         continue
@@ -1722,28 +1724,34 @@ function findBashRedirects(command: string): BashRedirectHit[] {
  * Does NOT match `<` (input redirect — that's a read, not a write).
  */
 function matchRedirectOp(command: string, i: number):
-  | { opLen: number; kind: 'redirect_stdout' | 'redirect_stderr'; combined: boolean }
+  | { opLen: number; kind: 'redirect_stdout' | 'redirect_stderr'; combined: boolean; destructive: boolean }
   | null {
   const c = command[i]
   // Combined &> / &>>
   if (c === '&' && command[i + 1] === '>') {
     const opLen = command[i + 2] === '>' ? 3 : 2
-    return { opLen, kind: 'redirect_stdout', combined: true }
+    return { opLen, kind: 'redirect_stdout', combined: true, destructive: opLen === 2 }
   }
   // Stderr 2> / 2>>
   if (c === '2' && command[i + 1] === '>') {
-    const opLen = command[i + 2] === '>' ? 3 : 2
-    return { opLen, kind: 'redirect_stderr', combined: false }
+    const append = command[i + 2] === '>'
+    const force = command[i + 2] === '|'
+    const opLen = append || force ? 3 : 2
+    return { opLen, kind: 'redirect_stderr', combined: false, destructive: !append }
   }
   // Explicit stdout 1> / 1>>
   if (c === '1' && command[i + 1] === '>') {
-    const opLen = command[i + 2] === '>' ? 3 : 2
-    return { opLen, kind: 'redirect_stdout', combined: false }
+    const append = command[i + 2] === '>'
+    const force = command[i + 2] === '|'
+    const opLen = append || force ? 3 : 2
+    return { opLen, kind: 'redirect_stdout', combined: false, destructive: !append }
   }
   // Implicit stdout > / >>
   if (c === '>') {
-    const opLen = command[i + 1] === '>' ? 2 : 1
-    return { opLen, kind: 'redirect_stdout', combined: false }
+    const append = command[i + 1] === '>'
+    const force = command[i + 1] === '|'
+    const opLen = append || force ? 2 : 1
+    return { opLen, kind: 'redirect_stdout', combined: false, destructive: !append }
   }
   return null
 }
@@ -1869,7 +1877,7 @@ function splitBashCommands(command: string): string[] {
       continue
     }
     // Single-char operators: | / ;
-    if (c === '|' || c === ';') {
+    if ((c === '|' && command[i - 1] !== '>') || c === ';') {
       segments.push(cur)
       cur = ''
       i++
@@ -1887,9 +1895,8 @@ function splitBashCommands(command: string): string[] {
  * opener (`<<WORD` or `<<-WORD`). Used to reclassify subsequent stdout
  * redirects in the same segment as kind=heredoc.
  *
- * Known v1 limitation: heredoc body content (between `<<EOF` and `EOF`)
- * is not skipped, so a literal `>` inside the body would be picked up
- * by the redirect scanner. Pathological inputs only.
+ * Heredoc bodies are removed before command dispatch so their literal shell
+ * text cannot be mistaken for executable redirects or tool invocations.
  */
 function segmentHasHeredoc(seg: string): boolean {
   let i = 0
@@ -1918,6 +1925,28 @@ function segmentHasHeredoc(seg: string): boolean {
     i++
   }
   return false
+}
+
+/** Remove heredoc bodies before scanning redirects so body text cannot invent targets. */
+function stripHeredocBodies(seg: string): string {
+  const lines = seg.split('\n')
+  const kept: string[] = []
+  const pending: Array<{ delimiter: string; stripTabs: boolean }> = []
+  for (const line of lines) {
+    if (pending.length > 0) {
+      const current = pending[0]
+      const candidate = current.stripTabs ? line.replace(/^\t+/, '') : line
+      if (candidate.trimEnd() === current.delimiter) pending.shift()
+      continue
+    }
+    kept.push(line)
+    const heredocPattern = /<<(-)?\s*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2/g
+    let match: RegExpExecArray | null
+    while ((match = heredocPattern.exec(line)) !== null) {
+      pending.push({ delimiter: match[3], stripTabs: match[1] === '-' })
+    }
+  }
+  return kept.join('\n')
 }
 
 /**
@@ -2240,57 +2269,58 @@ function extractBashWriteTargets(
 ): ExtractedWriteTarget[] {
   const command = input['command']
   if (typeof command !== 'string' || command.length === 0) return []
+  const commandForExtraction = stripHeredocBodies(command)
   const out: ExtractedWriteTarget[] = []
   // Redirects are scanned per-segment so heredoc reclassification stays
   // segment-local (a heredoc in segment 1 does not affect redirects in
   // segment 2 of `cmdA; cmdB`).
-  for (const seg of splitBashCommands(command)) {
+  for (const seg of splitBashCommands(commandForExtraction)) {
     const hasHeredoc = segmentHasHeredoc(seg)
     for (const hit of findBashRedirects(seg)) {
       const kind = hasHeredoc && hit.kind === 'redirect_stdout' ? 'heredoc' : hit.kind
       out.push({
         path: canonicalizeProvenancePath(hit.target, cwd, opts),
         kind,
-        destructive: false,
+        destructive: hit.destructive,
       })
     }
   }
-  for (const target of findBashTeeTargets(command)) {
+  for (const target of findBashTeeTargets(commandForExtraction)) {
     out.push({
       path: canonicalizeProvenancePath(target, cwd, opts),
       kind: 'tee',
       destructive: false,
     })
   }
-  for (const target of findBashSedInplaceTargets(command)) {
+  for (const target of findBashSedInplaceTargets(commandForExtraction)) {
     out.push({
       path: canonicalizeProvenancePath(target, cwd, opts),
       kind: 'sed_inplace',
       destructive: true,
     })
   }
-  for (const target of findBashCpTargets(command)) {
+  for (const target of findBashCpTargets(commandForExtraction)) {
     out.push({
       path: canonicalizeProvenancePath(target, cwd, opts),
       kind: 'cp',
       destructive: false,
     })
   }
-  for (const target of findBashMvTargets(command)) {
+  for (const target of findBashMvTargets(commandForExtraction)) {
     out.push({
       path: canonicalizeProvenancePath(target, cwd, opts),
       kind: 'mv',
       destructive: true,
     })
   }
-  for (const target of findBashRmTargets(command)) {
+  for (const target of findBashRmTargets(commandForExtraction)) {
     out.push({
       path: canonicalizeProvenancePath(target, cwd, opts),
       kind: 'rm',
       destructive: true,
     })
   }
-  for (const target of findBashMkdirTargets(command)) {
+  for (const target of findBashMkdirTargets(commandForExtraction)) {
     out.push({
       path: canonicalizeProvenancePath(target, cwd, opts),
       kind: 'mkdir',

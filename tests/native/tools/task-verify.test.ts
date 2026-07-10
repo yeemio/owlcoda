@@ -12,6 +12,7 @@ import { createTaskVerifyTool } from '../../../src/native/tools/task-verify.js'
 import {
   resetTaskStore,
   createTask,
+  getTask,
   getTaskStep,
   updateTaskStep,
 } from '../../../src/native/tools/task-store.js'
@@ -112,6 +113,91 @@ describe('TaskVerify tool', () => {
     const r = await tool.execute({ taskId: 'task-1', stepId: 'step-99' })
     expect(r.isError).toBe(true)
     expect(r.output).toContain('not found')
+  })
+
+  it('atomically completes passing steps and aggregates the parent task', async () => {
+    const artifact = path.join(tmpDir, 'done.txt')
+    fs.writeFileSync(artifact, 'done\n')
+    const task = createTask({
+      subject: 'Two steps',
+      description: 'atomic verification',
+      steps: [
+        { title: 'One', description: 'one', verification: [{ id: 'one', kind: 'file_exists', path: artifact }] },
+        { title: 'Two', description: 'two', verification: [{ id: 'two', kind: 'file_exists', path: artifact }] },
+      ],
+    })
+    updateTaskStep(task.id, 'step-1', { status: 'in_progress' })
+
+    const first = await tool.execute({ taskId: task.id, stepId: 'step-1' })
+
+    expect(first.metadata).toMatchObject({ stepStatus: 'completed', taskStatus: 'in_progress' })
+    expect(getTaskStep(task.id, 'step-1')?.status).toBe('completed')
+    updateTaskStep(task.id, 'step-2', { status: 'in_progress' })
+    const second = await tool.execute({ taskId: task.id, stepId: 'step-2' })
+    expect(second.metadata).toMatchObject({ stepStatus: 'completed', taskStatus: 'completed' })
+    expect(getTask(task.id)?.status).toBe('completed')
+  })
+
+  it('downgrades failed re-verification and restores clean completion on the next pass', async () => {
+    const artifact = path.join(tmpDir, 'reverify.txt')
+    fs.writeFileSync(artifact, 'done\n')
+    const task = makeTaskWithVerification([{ id: 'artifact', kind: 'file_exists', path: artifact }])
+    updateTaskStep(task.id, 'step-1', { status: 'in_progress' })
+    await tool.execute({ taskId: task.id, stepId: 'step-1' })
+    fs.unlinkSync(artifact)
+
+    const failed = await tool.execute({ taskId: task.id, stepId: 'step-1' })
+
+    expect(failed.metadata).toMatchObject({ stepStatus: 'failed', taskStatus: 'blocked' })
+    expect(getTaskStep(task.id, 'step-1')?.failureReason).toContain('Re-verification failed')
+    fs.writeFileSync(artifact, 'restored\n')
+
+    const restored = await tool.execute({ taskId: task.id, stepId: 'step-1' })
+
+    expect(restored.metadata).toMatchObject({ stepStatus: 'completed', taskStatus: 'completed' })
+    expect(getTaskStep(task.id, 'step-1')?.failureReason).toBeUndefined()
+  })
+
+  it('fails when a command exits zero but expectedExitCode is non-zero', async () => {
+    makeTaskWithVerification([{ id: 'expected-seven', kind: 'command', command: 'true', expectedExitCode: 7 }])
+
+    const result = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+    expect(result.metadata?.passed).toBe(false)
+    expect(result.output).toContain('exit 0 (expected 7)')
+  })
+
+  it('passes when the actual non-zero command exit matches expectedExitCode', async () => {
+    makeTaskWithVerification([{ id: 'expected-one', kind: 'command', command: 'false', expectedExitCode: 1 }])
+
+    const result = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+    expect(result.metadata?.passed).toBe(true)
+    expect(result.output).toContain('exit 1 (expected)')
+  })
+
+  it('uses the same auditable python3 fallback as Bash command execution', async () => {
+    const bin = path.join(tmpDir, 'bin')
+    fs.mkdirSync(bin)
+    fs.symlinkSync('/bin/bash', path.join(bin, 'bash'))
+    fs.writeFileSync(path.join(bin, 'python3'), '#!/bin/sh\necho Python-3-fallback\n')
+    fs.chmodSync(path.join(bin, 'python3'), 0o755)
+    const previousPath = process.env.PATH
+    process.env.PATH = bin
+    try {
+      makeTaskWithVerification([{ id: 'python-version', kind: 'command', command: 'python --version' }])
+      const result = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+      const check = (result.metadata?.results as Array<Record<string, any>>)[0]
+
+      expect(check.passed).toBe(true)
+      expect(check.metadata).toMatchObject({
+        interpreterFallback: { requested: 'python', applied: 'python3' },
+        requestedCommand: 'python --version',
+        appliedCommand: 'python3 --version',
+      })
+    } finally {
+      process.env.PATH = previousPath
+    }
   })
 
   // 2026-06-13 dogfood (P2-11): list valid step ids so a model that invented a
@@ -588,6 +674,51 @@ describe('TaskVerify tool', () => {
     expect(r.output).not.toContain('command refused by risk classifier')
   })
 
+  it('accepts clean git diff --no-index --check differences without hiding the raw exit code', async () => {
+    const emptyPath = path.join(tmpDir, 'empty')
+    const artifactPath = path.join(tmpDir, 'artifact.md')
+    fs.writeFileSync(emptyPath, '')
+    fs.writeFileSync(artifactPath, '# clean\n')
+    makeTaskWithVerification([{
+      id: 'whitespace-check',
+      kind: 'command',
+      command: `git diff --no-index --check ${emptyPath} ${artifactPath}`,
+    }])
+
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+    expect(r.output).toContain('1/1 passed')
+    const results = r.metadata?.results as Array<Record<string, any>>
+    expect(results[0]).toMatchObject({
+      passed: true,
+      metadata: {
+        exitCode: 1,
+        semanticSuccess: true,
+        commandResultSemantics: 'git_diff_no_index_check',
+      },
+    })
+  })
+
+  it('rejects git diff --no-index --check when whitespace diagnostics are present', async () => {
+    const emptyPath = path.join(tmpDir, 'empty')
+    const artifactPath = path.join(tmpDir, 'artifact.md')
+    fs.writeFileSync(emptyPath, '')
+    fs.writeFileSync(artifactPath, '# bad  \n')
+    makeTaskWithVerification([{
+      id: 'whitespace-check',
+      kind: 'command',
+      command: `git diff --no-index --check ${emptyPath} ${artifactPath}`,
+    }])
+
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+    expect(r.output).toContain('0/1 passed')
+    expect(r.output).toContain('trailing whitespace')
+    const results = r.metadata?.results as Array<Record<string, any>>
+    expect(results[0]?.passed).toBe(false)
+    expect(results[0]?.metadata?.exitCode).not.toBe(0)
+  })
+
   it('command dangerous refused', async () => {
     makeTaskWithVerification([{ id: 'v1', kind: 'command', command: 'rm -rf /tmp/something' }])
     const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
@@ -640,6 +771,7 @@ describe('TaskVerify tool', () => {
     await tool.execute({ taskId: 'task-1', stepId: 'step-1', writeBack: false })
     const step = getTaskStep('task-1', 'step-1')
     expect(step!.verificationResults).toHaveLength(0)
+    expect(step!.status).toBe('pending')
   })
 
   it('multiple checks: mixed pass/fail', async () => {

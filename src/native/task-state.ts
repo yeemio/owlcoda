@@ -34,7 +34,7 @@ const GENERIC_PATH_RE = /(?:^|[\s(])((?:\/|\.\.?\/)?(?:[\w@~.-]+\/)+[\w@~.-]+(?:
 const SINGLE_FILE_RE = /(?:^|[\s(])((?:\/|\.\.?\/)?[\w@~.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|mdx|py|ipynb|rs|toml|yaml|yml|sh|txt|css|scss|html))(?=$|[\s),:;])/g
 const MUTATING_WRITE_TOOLS = new Set(['write', 'edit', 'NotebookEdit'])
 const SHELL_ARTIFACT_TOOLS = new Set(['bash', 'PowerShell'])
-const EXECUTION_PROGRESS_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskVerify', 'RunWorkspace', 'ArtifactVerify'])
+const EXECUTION_PROGRESS_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskVerify', 'RunWorkspace', 'ArtifactVerify', 'BrowserJob'])
 const BOOTSTRAP_SCOPE_FILE_EXTS = new Set(['.md', '.mdx', '.txt'])
 const BOOTSTRAP_SCOPE_MAX_BYTES = 256 * 1024
 const ALLOW_WRITE_SECTION_RE = /(允许写入|允许修改|可改动|allowed write|allowed files|allowed paths)/i
@@ -298,6 +298,11 @@ export function deriveTaskExecutionState(
       explicitWriteTargets,
       allowedWritePaths,
       touchedPaths: dedupeStrings(previous?.contract.touchedPaths ?? []),
+      initialDirtyPaths: sameTaskAsPrevious
+        ? dedupeStrings(previous?.contract.initialDirtyPaths ?? [])
+        : dedupeStrings(gitSummary?.dirtyPaths ?? []),
+      createdPaths: sameTaskAsPrevious ? dedupeStrings(previous?.contract.createdPaths ?? []) : [],
+      modifiedPaths: sameTaskAsPrevious ? dedupeStrings(previous?.contract.modifiedPaths ?? []) : [],
       createdAt: previous?.contract.createdAt ?? now,
       updatedAt: now,
       confidence,
@@ -612,7 +617,30 @@ export function recordWriteSuccess(
   if (!inWorkspace && !inAllowedExternal) return
 
   recordTouchedPath(taskState, attemptedPath)
+  const changeKind = metadata?.['changeKind']
+  if (changeKind === 'create') {
+    taskState.contract.createdPaths = dedupeStrings([...(taskState.contract.createdPaths ?? []), attemptedPath])
+  } else if (changeKind === 'update' || changeKind === 'overwrite') {
+    taskState.contract.modifiedPaths = dedupeStrings([...(taskState.contract.modifiedPaths ?? []), attemptedPath])
+  }
   markTaskProgress(taskState)
+}
+
+export function buildRunScopedTouchedFilesReceipt(taskState: TaskExecutionState): string {
+  const created = dedupeStrings(taskState.contract.createdPaths ?? [])
+  const modified = dedupeStrings(taskState.contract.modifiedPaths ?? [])
+  const classified = new Set([...created, ...modified])
+  const unknown = taskState.contract.touchedPaths.filter(path => !classified.has(path))
+  const initialDirty = new Set(taskState.contract.initialDirtyPaths ?? [])
+  const preexistingTouched = taskState.contract.touchedPaths.filter(path => initialDirty.has(path))
+  const format = (paths: string[]) => paths.length > 0 ? paths.join(', ') : '(none)'
+  return [
+    'Run-scoped touched files receipt:',
+    `- current_run_created: ${format(created)}`,
+    `- current_run_modified: ${format(modified)}`,
+    `- current_run_touched_unknown: ${format(unknown)}`,
+    `- preexisting_dirty_touched: ${format(preexistingTouched)}`,
+  ].join('\n')
 }
 
 // Interpreter-inline execution markers: `python -c`, `node -e`, `perl/ruby -e`,
@@ -1461,6 +1489,7 @@ interface GitWorktreeBoundarySummary {
   root: string
   branch: string | null
   dirtyWorktreeSummary: CrossRepoBoundaryDirtySummary
+  dirtyPaths: string[]
 }
 
 function readGitWorktreeSummary(cwd: string): GitWorktreeBoundarySummary | null {
@@ -1475,9 +1504,15 @@ function readGitWorktreeSummary(cwd: string): GitWorktreeBoundarySummary | null 
       maxBuffer: 1024 * 1024,
     })
     const lines = raw.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean)
+    const dirtyPaths = lines.map((line) => {
+      const rawPath = line.slice(3).trim()
+      const path = rawPath.includes(' -> ') ? rawPath.split(' -> ').at(-1)! : rawPath
+      return canonicalizePath(resolve(root, path))
+    })
     return {
       root,
       branch,
+      dirtyPaths,
       dirtyWorktreeSummary: {
         count: lines.length,
         sample: lines.slice(0, CROSS_REPO_DIRTY_SAMPLE_LIMIT),
@@ -1488,6 +1523,7 @@ function readGitWorktreeSummary(cwd: string): GitWorktreeBoundarySummary | null 
     return {
       root,
       branch,
+      dirtyPaths: [],
       dirtyWorktreeSummary: {
         count: 0,
         sample: [],
@@ -2214,6 +2250,17 @@ function extractToolProgressPaths(
     candidates.push(resolveProgressPath(result['artifactPath'], cwd))
   }
 
+  if (toolName === 'BrowserJob') {
+    const job = metadata?.['job']
+    if (isRecordLike(job) && Array.isArray(job['artifacts'])) {
+      for (const artifact of job['artifacts']) {
+        if (isRecordLike(artifact) && typeof artifact['path'] === 'string') {
+          candidates.push(resolveProgressPath(artifact['path'], cwd))
+        }
+      }
+    }
+  }
+
   return dedupeStrings(candidates)
 }
 
@@ -2221,6 +2268,7 @@ function isExecutionProgressToolCall(toolName: string, input: Record<string, unk
   if (toolName === 'TaskCreate' || toolName === 'TaskUpdate' || toolName === 'TaskVerify' || toolName === 'ArtifactVerify') {
     return true
   }
+  if (toolName === 'BrowserJob') return true
   if (toolName !== 'RunWorkspace') return false
   return input['action'] === 'create'
     || input['action'] === 'recordArtifact'

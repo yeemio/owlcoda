@@ -1,8 +1,8 @@
 import { afterEach, describe, it, expect } from 'vitest'
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { buildBashExecutionEnv, createBashTool } from '../../../src/native/tools/bash.js'
+import { buildBashExecutionEnv, createBashTool, resolveInterpreterFallback } from '../../../src/native/tools/bash.js'
 
 const temporaryRoots: string[] = []
 
@@ -63,6 +63,134 @@ describe('Native Bash tool', () => {
     const result = await bash.execute({ command: 'exit 42' })
     expect(result.isError).toBe(true)
     expect(result.metadata?.exitCode).toBe(42)
+  })
+
+  it('treats a clean git diff --no-index --check difference as semantic success', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-diff-check-'))
+    temporaryRoots.push(root)
+    writeFileSync(join(root, 'empty'), '')
+    writeFileSync(join(root, 'artifact.md'), '# clean\n')
+
+    const result = await bash.execute({
+      command: 'git diff --no-index --check empty artifact.md',
+      cwd: root,
+    })
+
+    expect(result.isError).toBe(false)
+    expect(result.metadata).toMatchObject({
+      exitCode: 1,
+      semanticSuccess: true,
+      commandResultSemantics: 'git_diff_no_index_check',
+    })
+    expect(result.output).toContain('[semantic success: no whitespace errors]')
+  })
+
+  it('keeps git diff --no-index --check whitespace diagnostics as a failure', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-diff-check-bad-'))
+    temporaryRoots.push(root)
+    writeFileSync(join(root, 'empty'), '')
+    writeFileSync(join(root, 'artifact.md'), '# bad  \n')
+
+    const result = await bash.execute({
+      command: 'git diff --no-index --check empty artifact.md',
+      cwd: root,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('trailing whitespace')
+    expect(result.metadata?.semanticSuccess).not.toBe(true)
+  })
+
+  it('does not apply diff-check semantic success to compound shell commands', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-diff-check-compound-'))
+    temporaryRoots.push(root)
+    writeFileSync(join(root, 'empty'), '')
+    writeFileSync(join(root, 'artifact.md'), '# clean\n')
+
+    const result = await bash.execute({
+      command: 'false; git diff --no-index --check empty artifact.md',
+      cwd: root,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.metadata?.semanticSuccess).not.toBe(true)
+  })
+
+  it('does not accept diff-check semantic success when quiet mode suppresses diagnostics', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-diff-check-quiet-'))
+    temporaryRoots.push(root)
+    writeFileSync(join(root, 'empty'), '')
+    writeFileSync(join(root, 'artifact.md'), '# bad  \n')
+
+    const result = await bash.execute({
+      command: 'git diff --no-index --check --quiet empty artifact.md',
+      cwd: root,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.metadata?.semanticSuccess).not.toBe(true)
+  })
+
+  it('falls back only for a leading python command when python is absent and python3 is executable', () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-python-fallback-'))
+    temporaryRoots.push(root)
+    const python3 = join(root, 'python3')
+    writeFileSync(python3, '#!/bin/sh\nexit 0\n')
+    chmodSync(python3, 0o755)
+
+    expect(resolveInterpreterFallback('python -m pytest', { PATH: root })).toEqual({
+      command: 'python3 -m pytest',
+      fallback: { requested: 'python', applied: 'python3' },
+    })
+    expect(resolveInterpreterFallback('echo python', { PATH: root })).toEqual({ command: 'echo python' })
+  })
+
+  it('records requested and applied commands when Bash uses python3 fallback', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-python-fallback-run-'))
+    temporaryRoots.push(root)
+    const bin = join(root, 'bin')
+    mkdirSync(bin)
+    symlinkSync('/bin/bash', join(bin, 'bash'))
+    writeFileSync(join(bin, 'python3'), '#!/bin/sh\necho fallback-ran\n')
+    chmodSync(join(bin, 'python3'), 0o755)
+    const previousPath = process.env.PATH
+    process.env.PATH = bin
+    try {
+      const result = await bash.execute({ command: 'python --version', cwd: root })
+      expect(result.isError).toBe(false)
+      expect(result.output).toContain('fallback-ran')
+      expect(result.metadata).toMatchObject({
+        interpreterFallback: { requested: 'python', applied: 'python3' },
+        requestedCommand: 'python --version',
+        appliedCommand: 'python3 --version',
+      })
+    } finally {
+      process.env.PATH = previousPath
+    }
+  })
+
+  it('quarantines every incompatible CommonJS .js file created in one Bash call', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-module-quarantine-'))
+    temporaryRoots.push(root)
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module' }))
+    const previousRecovery = process.env.OWLCODA_RECOVERY_DIR
+    process.env.OWLCODA_RECOVERY_DIR = join(root, 'recovery')
+    try {
+      const result = await bash.execute({
+        command: "printf 'module.exports = {};\\n' > first.js; printf 'const x = require(\\\"x\\\");\\n' > second.js",
+        cwd: root,
+      })
+
+      expect(result.isError).toBe(true)
+      expect(existsSync(join(root, 'first.js'))).toBe(false)
+      expect(existsSync(join(root, 'second.js'))).toBe(false)
+      const mismatches = result.metadata?.scriptModuleMismatches as Array<Record<string, string>>
+      expect(mismatches).toHaveLength(2)
+      expect(mismatches.every(item => existsSync(item.quarantinePath))).toBe(true)
+    } finally {
+      if (previousRecovery === undefined) delete process.env.OWLCODA_RECOVERY_DIR
+      else process.env.OWLCODA_RECOVERY_DIR = previousRecovery
+    }
   })
 
   it('reports failure for command not found', async () => {
@@ -213,6 +341,171 @@ describe('Native Bash tool', () => {
         newContent: 'after\n',
       }),
     ])
+  })
+
+  it('refuses cross-workspace node_modules symlink creation by default', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-symlink-root-'))
+    const outsideRoot = mkdtempSync(join(tmpdir(), 'owlcoda-bash-symlink-outside-'))
+    temporaryRoots.push(root, outsideRoot)
+    const outsideNodeModules = join(outsideRoot, 'node_modules')
+    mkdirSync(outsideNodeModules)
+
+    const result = await bash.execute({
+      command: `ln -s ${outsideNodeModules} node_modules`,
+      cwd: root,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('cross-workspace symlink')
+    expect(result.metadata).toMatchObject({
+      symlinkPolicyDenied: true,
+      failureCategory: 'bash:cross_workspace_symlink',
+    })
+    expect(existsSync(join(root, 'node_modules'))).toBe(false)
+  })
+
+  it.each([
+    ['pipeline stage', (source: string) => `printf x | ln -s ${source} node_modules`],
+    ['command wrapper', (source: string) => `command ln -s ${source} node_modules`],
+    ['GNU long option', (source: string) => `ln --symbolic ${source} node_modules`],
+    ['env wrapper', (source: string) => `env ln -s ${source} node_modules`],
+    ['env unset wrapper', (source: string) => `env -u PWD ln -s ${source} node_modules`],
+    ['GNU env long option', (source: string) => `env --ignore-environment ln -s ${source} node_modules`],
+    ['leading environment assignment', (source: string) => `OWLCODA_TEST=1 ln -s ${source} node_modules`],
+    ['newline-separated stage', (source: string) => `printf x\nln -s ${source} node_modules`],
+    ['nested bash command', (source: string) => `bash -c 'ln -s ${source} node_modules'`],
+    ['nested sh login command', (source: string) => `sh -lc 'ln -s ${source} node_modules'`],
+  ])('refuses a cross-workspace node_modules symlink behind a %s', async (_label, commandForSource) => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-symlink-bypass-root-'))
+    const outsideRoot = mkdtempSync(join(tmpdir(), 'owlcoda-bash-symlink-bypass-outside-'))
+    temporaryRoots.push(root, outsideRoot)
+    const outsideNodeModules = join(outsideRoot, 'node_modules')
+    mkdirSync(outsideNodeModules)
+
+    const result = await bash.execute({
+      command: commandForSource(outsideNodeModules),
+      cwd: root,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.metadata).toMatchObject({
+      symlinkPolicyDenied: true,
+      failureCategory: 'bash:cross_workspace_symlink',
+    })
+    expect(existsSync(join(root, 'node_modules'))).toBe(false)
+  })
+
+  it('allows symlinks whose source and destination are both inside the workspace', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-symlink-local-'))
+    temporaryRoots.push(root)
+    mkdirSync(join(root, 'packages', 'shared'), { recursive: true })
+
+    const result = await bash.execute({
+      command: 'ln -s packages/shared node_modules',
+      cwd: root,
+    })
+
+    expect(result.isError).toBe(false)
+    expect(realpathSync(join(root, 'node_modules'))).toBe(realpathSync(join(root, 'packages', 'shared')))
+  })
+
+  it('fails closed when a symlink operand uses shell expansion', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-symlink-expansion-'))
+    temporaryRoots.push(root)
+
+    const result = await bash.execute({
+      command: 'ln -s "$HOME/node_modules" node_modules',
+      cwd: root,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.metadata).toMatchObject({
+      symlinkPolicyDenied: true,
+      failureCategory: 'bash:cross_workspace_symlink',
+    })
+    expect(existsSync(join(root, 'node_modules'))).toBe(false)
+  })
+
+  it('allows append redirects without destructive overwrite approval', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-append-'))
+    temporaryRoots.push(root)
+    const targetPath = join(root, 'target.txt')
+    writeFileSync(targetPath, `${'before\n'.repeat(200)}`, 'utf8')
+
+    const result = await bash.execute({ command: 'printf "after\\n" >> target.txt', cwd: root })
+
+    expect(result.isError).toBe(false)
+    expect(readFileSync(targetPath, 'utf8')).toContain('after\n')
+  })
+
+  it.each([
+    ['ordinary redirect', 'printf "short\\n" > target.txt'],
+    ['force redirect', 'printf "short\\n" >| target.txt'],
+    ['heredoc redirect', 'cat <<EOF > target.txt\nshort\nEOF'],
+  ])('refuses a destructive %s before executing', async (_label, command) => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-destructive-'))
+    temporaryRoots.push(root)
+    const targetPath = join(root, 'target.txt')
+    const original = 'before\n'.repeat(3000)
+    writeFileSync(targetPath, original, 'utf8')
+
+    const result = await bash.execute({ command, cwd: root })
+
+    expect(result.isError).toBe(true)
+    expect(result.metadata?.destructiveOverwriteDenied).toBe(true)
+    expect(readFileSync(targetPath, 'utf8')).toBe(original)
+  })
+
+  it('refuses truncating a high-line-count text file even when it is below the byte threshold', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-lines-'))
+    temporaryRoots.push(root)
+    const targetPath = join(root, 'target.txt')
+    const original = 'x\n'.repeat(120)
+    writeFileSync(targetPath, original, 'utf8')
+
+    const result = await bash.execute({ command: 'printf "short\\n" > target.txt', cwd: root })
+
+    expect(result.isError).toBe(true)
+    expect(readFileSync(targetPath, 'utf8')).toBe(original)
+  })
+
+  it('snapshots an allowed Bash overwrite as exact raw bytes', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-snapshot-'))
+    temporaryRoots.push(root)
+    const targetPath = join(root, 'target.bin')
+    const recoveryRoot = join(root, 'recovery')
+    const original = Buffer.concat([Buffer.from([0xff, 0x00, 0xfe]), Buffer.alloc(20 * 1024, 0x91)])
+    writeFileSync(targetPath, original)
+    const previousRecovery = process.env['OWLCODA_RECOVERY_DIR']
+    process.env['OWLCODA_RECOVERY_DIR'] = recoveryRoot
+    try {
+      const result = await bash.execute({
+        command: 'printf "replacement\\n" > target.bin',
+        cwd: root,
+        allowDestructiveOverwrite: true,
+      })
+
+      expect(result.isError).toBe(false)
+      const snapshots = result.metadata?.recoverySnapshots as Array<{ snapshotPath: string }>
+      expect(snapshots).toHaveLength(1)
+      expect(readFileSync(snapshots[0].snapshotPath)).toEqual(original)
+    } finally {
+      if (previousRecovery === undefined) delete process.env['OWLCODA_RECOVERY_DIR']
+      else process.env['OWLCODA_RECOVERY_DIR'] = previousRecovery
+    }
+  })
+
+  it('does not treat a literal greater-than sign in a heredoc body as another target', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-bash-heredoc-body-'))
+    temporaryRoots.push(root)
+    const result = await bash.execute({
+      command: 'cat <<EOF > output.txt\nbody > not-a-target.txt\nEOF',
+      cwd: root,
+    })
+
+    expect(result.isError).toBe(false)
+    expect(readFileSync(join(root, 'output.txt'), 'utf8')).toBe('body > not-a-target.txt\n')
+    expect(result.metadata?.writeCaptures).toHaveLength(1)
   })
 
   // ── Progress callback ──

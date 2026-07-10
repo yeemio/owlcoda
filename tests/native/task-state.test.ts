@@ -7,6 +7,7 @@ import { createConversation, addUserMessage } from '../../src/native/conversatio
 import {
   approveTaskWriteScope,
   buildContextPressurePrompt,
+  buildRunScopedTouchedFilesReceipt,
   detectCrossRepoBoundaryCheckpoint,
   buildDeliveryCheckPrompt,
   buildTaskContinuePrompt,
@@ -33,6 +34,21 @@ import {
 import { admit as admitProvenanceRecord } from '../../src/native/write-provenance.js'
 
 describe('native task state', () => {
+  it('reports current-run touched paths separately from pre-existing dirty paths', () => {
+    const receipt = buildRunScopedTouchedFilesReceipt({
+      contract: {
+        touchedPaths: ['/repo/new.ts', '/repo/old.ts', '/repo/bash.txt'],
+        initialDirtyPaths: ['/repo/old.ts'],
+        createdPaths: ['/repo/new.ts'],
+        modifiedPaths: ['/repo/old.ts'],
+      },
+    } as any)
+
+    expect(receipt).toContain('current_run_created: /repo/new.ts')
+    expect(receipt).toContain('current_run_modified: /repo/old.ts')
+    expect(receipt).toContain('current_run_touched_unknown: /repo/bash.txt')
+    expect(receipt).toContain('preexisting_dirty_touched: /repo/old.ts')
+  })
   it('detects an external prompt boundary before source edits in a dirty target repo', async () => {
     const currentRepo = await mkdtemp(join(tmpdir(), 'owlcoda-cross-boundary-current-'))
     const promptRepo = await mkdtemp(join(tmpdir(), 'owlcoda-cross-boundary-prompt-'))

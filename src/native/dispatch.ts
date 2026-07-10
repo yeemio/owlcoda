@@ -196,6 +196,9 @@ export class ToolDispatcher {
       const rawResult = await tool.execute(block.input, context)
       const result = applyToolFailurePolicy(toolName, block.input, rawResult)
       await recordBashArtifactProgress(context?.taskState, toolName, block.input, start)
+      if (result.metadata?.['usablePartialEvidence'] === true) {
+        recordToolExecutionProgress(context?.taskState, toolName, block.input, result.metadata)
+      }
       if (!result.isError) {
         recordWriteSuccess(context?.taskState, toolName, block.input, result.metadata)
         recordToolExecutionProgress(context?.taskState, toolName, block.input, result.metadata)

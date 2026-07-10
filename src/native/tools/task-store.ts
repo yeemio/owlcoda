@@ -411,7 +411,10 @@ export function updateTaskStep(
     const previous = task.steps.find(s => s.id === completedPreviousStepId)
     if (previous) {
       previous.status = 'completed'
-      previous.completedAt = new Date().toISOString()
+      const now = new Date().toISOString()
+      previous.startedAt ??= now
+      previous.completedAt = now
+      previous.failureReason = undefined
     }
   }
 
@@ -422,7 +425,15 @@ export function updateTaskStep(
       step.startedAt = new Date().toISOString()
     }
     if (newStatus === 'completed') {
-      step.completedAt = new Date().toISOString()
+      const now = new Date().toISOString()
+      step.startedAt ??= now
+      step.completedAt = now
+    }
+    if (newStatus === 'pending' || newStatus === 'in_progress' || newStatus === 'completed') {
+      step.failureReason = undefined
+    }
+    if (newStatus !== 'completed') {
+      step.completedAt = undefined
     }
   }
   if (updates.touchedPaths !== undefined) {
@@ -437,7 +448,10 @@ export function updateTaskStep(
   if (updates.verificationResults !== undefined) {
     step.verificationResults = updates.verificationResults
   }
-  if (updates.failureReason !== undefined) {
+  if (
+    updates.failureReason !== undefined
+    && (newStatus === undefined || newStatus === 'failed' || newStatus === 'blocked' || newStatus === 'skipped')
+  ) {
     step.failureReason = updates.failureReason
   }
 
@@ -450,8 +464,60 @@ export function updateTaskStep(
     task.currentStepId = nextInProgress?.id
   }
 
+  reconcileTaskStatus(task)
   task.updatedAt = new Date().toISOString()
   return { ok: true, task, step, completedPreviousStepId }
+}
+
+/** TaskVerify-only evidence write that can revoke or restore prior completion. */
+export function recordTaskVerificationOutcome(
+  taskId: string,
+  stepId: string,
+  results: TaskVerificationResult[],
+): TaskStepUpdateResult {
+  const task = tasks.get(taskId)
+  if (!task) return { ok: false, reason: `Task "${taskId}" not found.` }
+  const step = task.steps?.find(candidate => candidate.id === stepId)
+  if (!step) return { ok: false, reason: `Step "${stepId}" not found in task "${taskId}".` }
+
+  step.verificationResults = results
+  const failed = results.filter(result => !result.passed)
+  if (failed.length === 0) {
+    const now = new Date().toISOString()
+    step.status = 'completed'
+    step.startedAt ??= now
+    step.completedAt = now
+    step.failureReason = undefined
+  } else if (step.status === 'completed' || step.status === 'failed') {
+    step.status = 'failed'
+    step.completedAt = undefined
+    step.failureReason = `Re-verification failed: ${failed.map(result => result.checkId).join(', ')}`
+  }
+
+  if (task.currentStepId === stepId && step.status !== 'in_progress') {
+    task.currentStepId = task.steps?.find(candidate => candidate.status === 'in_progress')?.id
+  }
+  reconcileTaskStatus(task)
+  task.updatedAt = new Date().toISOString()
+  return { ok: true, task, step }
+}
+
+function reconcileTaskStatus(task: Task): void {
+  if (!task.steps || task.steps.length === 0) return
+  const statuses = task.steps.map(step => step.status)
+  if (statuses.some(status => status === 'failed' || status === 'blocked')) {
+    task.status = 'blocked'
+  } else if (statuses.every(status => status === 'pending')) {
+    task.status = 'pending'
+  } else if (statuses.some(status => status === 'in_progress')) {
+    task.status = 'in_progress'
+  } else if (statuses.every(status => status === 'completed' || status === 'skipped')) {
+    task.status = 'completed'
+  } else if (statuses.every(status => status === 'completed' || status === 'skipped' || status === 'cancelled')) {
+    task.status = 'cancelled'
+  } else {
+    task.status = 'in_progress'
+  }
 }
 
 function verificationCompletionBlocker(

@@ -16,6 +16,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
       command: { type: 'string', description: 'The bash command to execute' },
       cwd: { type: 'string', description: 'Working directory' },
       timeoutMs: { type: 'number', description: 'Timeout in milliseconds' },
+      allowDestructiveOverwrite: { type: 'boolean', description: 'Allow truncating a large existing file after creating a private raw-byte recovery snapshot.' },
     },
     required: ['command'],
   },
@@ -46,6 +47,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
           'setting this flag is the operator\'s "I know I\'m replacing the ' +
           'file" signal. Append-only writes never need this flag.',
       },
+      allowDestructiveOverwrite: { type: 'boolean', description: 'Allow a destructive overwrite after creating a private raw-byte recovery snapshot.' },
     },
     required: ['path', 'content'],
   },
@@ -62,6 +64,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
           'a large fraction of a protected file (e.g. oldStr = entire section, ' +
           'newStr = "").',
       },
+      allowDestructiveOverwrite: { type: 'boolean', description: 'Allow a destructive edit after creating a private raw-byte recovery snapshot.' },
     },
     required: ['path', 'oldStr', 'newStr'],
   },
@@ -420,6 +423,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
     properties: {
       name: { type: 'string', description: 'Optional name slug for the worktree branch' },
       allow_untracked: { type: 'boolean', description: 'Set true to create the worktree even when untracked dependency/source files are present.' },
+      existing: { type: 'string', enum: ['fail', 'resume'], description: 'Use resume only for an existing matching OwlCoda-managed worktree.' },
     },
     description: 'Create an isolated git worktree and switch into it.',
   },
@@ -428,6 +432,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
     properties: {
       action: { type: 'string', enum: ['keep', 'remove'], description: '"keep" preserves worktree; "remove" deletes it' },
       discard_changes: { type: 'boolean', description: 'Must be true to remove with uncommitted changes' },
+      discard_commits: { type: 'boolean', description: 'Independent authorization to delete commits created after the managed worktree base.' },
     },
     required: ['action'],
   },
@@ -570,7 +575,7 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
       touchedPaths: { type: 'array', items: { type: 'string' }, description: 'Paths touched during this step (appended to existing)' },
       verification: {
         type: 'array',
-        description: 'Replacement verification checks for this step. Use this to correct an unsatisfiable or wrong TaskVerify spec, then re-run TaskVerify before completion. Replaces existing checks and clears stale results unless verificationResults is also supplied.',
+        description: 'Replacement verification checks for this step. Use this to correct an unsatisfiable or wrong TaskVerify spec, then re-run TaskVerify before completion. Replaces existing checks and clears stale results.',
         items: {
           type: 'object',
           properties: {
@@ -612,22 +617,6 @@ export const NATIVE_TOOL_SCHEMAS: Record<string, Record<string, unknown>> = {
             reason: { type: 'string' },
           },
           required: ['id', 'kind'],
-        },
-      },
-      verificationResults: {
-        type: 'array',
-        description: 'Verification results to record for this step (replaces existing results)',
-        items: {
-          type: 'object',
-          properties: {
-            checkId: { type: 'string' },
-            passed: { type: 'boolean' },
-            detail: { type: 'string' },
-            checkedAt: { type: 'string' },
-            unsatisfiable: { type: 'boolean' },
-            metadata: { type: 'object', description: 'Optional structured verification metadata, such as a verification pack result.' },
-          },
-          required: ['checkId', 'passed', 'checkedAt'],
         },
       },
       failureReason: { type: 'string', description: 'Failure reason for failed/blocked/skipped steps (required when stepStatus is failed, blocked, or skipped)' },

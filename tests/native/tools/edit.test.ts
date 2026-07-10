@@ -8,16 +8,21 @@ describe('Native Edit tool', () => {
   const edit = createEditTool()
   let dir: string
   let prevAllow: string | undefined
+  let prevRecovery: string | undefined
 
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), 'owlcoda-edit-test-'))
     prevAllow = process.env['OWLCODA_ALLOW_FS_ROOTS']
+    prevRecovery = process.env['OWLCODA_RECOVERY_DIR']
     process.env['OWLCODA_ALLOW_FS_ROOTS'] = dir
+    process.env['OWLCODA_RECOVERY_DIR'] = join(dir, 'recovery')
   })
 
   afterAll(async () => {
     if (prevAllow === undefined) delete process.env['OWLCODA_ALLOW_FS_ROOTS']
     else process.env['OWLCODA_ALLOW_FS_ROOTS'] = prevAllow
+    if (prevRecovery === undefined) delete process.env['OWLCODA_RECOVERY_DIR']
+    else process.env['OWLCODA_RECOVERY_DIR'] = prevRecovery
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -97,6 +102,26 @@ describe('Native Edit tool', () => {
     expect(result.isError).toBe(false)
     const content = await readFile(path, 'utf-8')
     expect(content).toBe('keep keep')
+  })
+
+  it('snapshots destructive edits as exact raw bytes before writing', async () => {
+    const path = join(dir, 'destructive-binary-edit.bin')
+    const text = Array.from({ length: 180 }, (_, index) => `payload ${index}`).join('\n')
+    const original = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text)])
+    await writeFile(path, original)
+    const decoded = await readFile(path, 'utf8')
+
+    const result = await edit.execute({
+      path,
+      oldStr: decoded,
+      newStr: 'replacement\n',
+      allowDestructiveOverwrite: true,
+    })
+
+    expect(result.isError).toBe(false)
+    const snapshotPath = result.metadata?.recoverySnapshotPath as string
+    expect(snapshotPath).toBeTruthy()
+    expect(await readFile(snapshotPath)).toEqual(original)
   })
 
   it('exposes change-block metadata with start line + kind', async () => {

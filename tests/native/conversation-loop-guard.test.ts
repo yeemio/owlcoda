@@ -5348,9 +5348,19 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
     ]
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
 
+    let bookkeepingExecutions = 0
+    const dispatcher = new ToolDispatcher()
+    dispatcher.register({
+      name: 'TodoWrite',
+      description: 'test todo bookkeeping',
+      async execute() {
+        bookkeepingExecutions += 1
+        return { output: 'Todos updated', isError: false }
+      },
+    })
     const errors: string[] = []
     const notices: string[] = []
-    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+    const result = await runConversationLoop(conv, dispatcher, {
       apiBaseUrl: 'http://localhost:0',
       apiKey: 'test',
       callbacks: {
@@ -5362,6 +5372,8 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
     expect(notices.some((n) => /Loop intercept \(soft\)/.test(n))).toBe(true)
     expect(result.stopReason).toBe('end_turn')
     expect(result.finalText).toContain('验收结论')
+    expect(bookkeepingExecutions).toBe(6)
+    expect(notices.some((notice) => /Final response gate: executed 1 bookkeeping/.test(notice))).toBe(true)
     expect(errors.filter((e) => /tool loop/.test(e))).toEqual([])
 
     const lastAssistant = result.conversation.turns.findLast(turn => turn.role === 'assistant')
@@ -6656,7 +6668,7 @@ describe('task execution nudge wiring (Slice 4)', () => {
     expect(checkpoint?.disposition).toBe('resolved')
   })
 
-  it('does not suppress step completion required after verification-repair recovery', async () => {
+  it('continues to the next step after TaskVerify atomically closes verification-repair recovery', async () => {
     resetTaskStore()
     const task = createTask({
       subject: 'Recovered verification repair',
@@ -6722,8 +6734,7 @@ describe('task execution nudge wiring (Slice 4)', () => {
         stepId: 'step-1',
       }),
       contentResponse([
-        { type: 'text', text: 'TaskVerify passed; I will close step-1 and continue.' },
-        { type: 'tool_use', id: 'tool-complete-step-1', name: 'TaskUpdate', input: { taskId: task.id, stepId: 'step-1', stepStatus: 'completed' } },
+        { type: 'text', text: 'TaskVerify passed and closed step-1; I will continue.' },
         { type: 'tool_use', id: 'tool-start-step-2', name: 'TaskUpdate', input: { taskId: task.id, stepId: 'step-2', stepStatus: 'in_progress' } },
       ], 'tool_use'),
       textResponse('Step 2 is now in progress after the recovered verification step closed.'),

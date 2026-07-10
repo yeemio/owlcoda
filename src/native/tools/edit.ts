@@ -4,13 +4,14 @@
  * Precise string replacement in files.
  */
 
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import type { EditInput, NativeToolDef, ToolExecutionContext, ToolResult } from './types.js'
 import { checkWritePathAllowed } from './fs-policy.js'
 import { checkProtectedWrite, formatProtectedRefusal } from './protected-source-policy.js'
 import { buildSchemaError, checkEditRequiredFields } from './tool-schema-error.js'
 import { buildOldStrNotFoundError, detectLineEnding } from './edit-helpers.js'
 import { extractUserDeclaredExternalRoots } from '../task-state.js'
+import { assessDestructiveReplacement, createRawRecoverySnapshot } from './destructive-write-policy.js'
 
 export function createEditTool(): NativeToolDef<EditInput> {
   return {
@@ -92,6 +93,15 @@ export function createEditTool(): NativeToolDef<EditInput> {
           ? content.replaceAll(oldStr, newStr)
           : content.replace(oldStr, newStr)
 
+        const destructive = assessDestructiveReplacement(content, updated, (await stat(filePath)).size)
+        if (destructive.destructive && input.allowDestructiveOverwrite !== true) {
+          return {
+            output: `Refusing destructive edit of ${filePath}. Re-run with allowDestructiveOverwrite=true to create a raw-byte recovery snapshot first.`,
+            isError: true,
+            metadata: { destructiveOverwriteDenied: true, attemptedPath: filePath, ...destructive },
+          }
+        }
+
         // Protected source-of-truth policy: even targeted edits can
         // delete entire sections (e.g. oldStr = the Suggested Commands
         // block, newStr = ''). Run the same check as write.ts so the
@@ -112,6 +122,9 @@ export function createEditTool(): NativeToolDef<EditInput> {
           }
         }
 
+        const recoverySnapshotPath = destructive.destructive
+          ? await createRawRecoverySnapshot(filePath)
+          : undefined
         await writeFile(filePath, updated, 'utf-8')
 
         // Build context diff: a few lines around the change for display
@@ -140,6 +153,7 @@ export function createEditTool(): NativeToolDef<EditInput> {
             // so the change block can label hunk lines with real file positions.
             contextStartLine: start + 1,
             changeKind: 'update',
+            ...(recoverySnapshotPath ? { recoverySnapshotPath } : {}),
           },
         }
       } catch (err: unknown) {

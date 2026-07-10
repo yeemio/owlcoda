@@ -2,6 +2,39 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.26] — 2026-07-10
+
+Workspace safety and state consistency release for destructive-write recovery,
+managed worktrees, task verification truth, browser evidence, and long-running
+conversation hygiene.
+
+### Added
+
+- Added destructive overwrite protection with raw-byte recovery snapshots for
+  Write, Edit, and Bash operations.
+- Added managed worktree lifecycle ledgers, safe resume, fail-closed cleanup,
+  and separate authorization before deleting commits created after entry.
+- Added static preflight for literal cross-workspace `ln -s` dependency links
+  across common shell stages and wrappers.
+- Added run-scoped touched-file receipts that distinguish created, modified,
+  unknown, and pre-existing dirty paths.
+
+### Changed
+
+- Made TaskVerify the atomic source of verification evidence and task
+  completion truth, including failure downgrade and later recovery.
+- Added auditable `python` to `python3` fallback and module-type safeguards for
+  generated scripts.
+- Kept BrowserJob evidence out of project roots, inherited active RunWorkspace
+  references, and preserved usable partial evidence on timeout.
+- Executed final task bookkeeping before preserving final reports, continued
+  non-destructive repair loops autonomously, and reduced repeated long output.
+
+### Fixed
+
+- Fixed `git diff --no-index --check` semantic exit handling without masking
+  actual whitespace diagnostics or compound-command failures.
+
 ## [0.15.25] — 2026-07-07
 
 Harness reliability patch for local tool availability, task verification, MCP

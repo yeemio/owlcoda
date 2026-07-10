@@ -12,12 +12,15 @@ import { NATIVE_TOOL_SCHEMAS } from '../../../src/native/tool-defs.js'
 
 describe('BrowserJob platform tool', () => {
   let artifactDir = ''
+  let previousOwlcodaHome: string | undefined
   let server: Server | undefined
   let baseUrl = ''
 
   beforeEach(async () => {
     resetJobSupervisor()
     artifactDir = await mkdtemp(join(tmpdir(), 'owlcoda-browser-job-'))
+    previousOwlcodaHome = process.env['OWLCODA_HOME']
+    process.env['OWLCODA_HOME'] = join(artifactDir, 'owl-home')
     server = createServer((req, res) => {
       if (req.url === '/slow') return
       res.setHeader('content-type', 'text/html; charset=utf-8')
@@ -40,6 +43,8 @@ describe('BrowserJob platform tool', () => {
     resetJobSupervisor()
     await new Promise<void>((resolve) => server?.close(() => resolve()))
     server = undefined
+    if (previousOwlcodaHome === undefined) delete process.env['OWLCODA_HOME']
+    else process.env['OWLCODA_HOME'] = previousOwlcodaHome
     await rm(artifactDir, { recursive: true, force: true })
   })
 
@@ -96,6 +101,22 @@ describe('BrowserJob platform tool', () => {
     expect(got.output).toContain('Type: browser')
     expect(got.output).toContain(htmlPath)
     expect(got.output).toContain('Provider: fetch_html')
+  })
+
+  it('stores implicit browser artifacts outside the project workspace', async () => {
+    const projectDir = join(artifactDir, 'project')
+    const tool = createBrowserJobTool()
+
+    const result = await tool.execute({
+      url: `${baseUrl}/page`,
+      cwd: projectDir,
+      deadlineMs: 1000,
+    })
+
+    expect(result.isError).toBe(false)
+    const job = (result.metadata as any).job
+    expect(job.artifacts.every((artifact: any) => artifact.path.startsWith(join(artifactDir, 'owl-home', 'browser-jobs')))).toBe(true)
+    expect(existsSync(join(projectDir, '.owlcoda-browser-jobs'))).toBe(false)
   })
 
   it('captures a URL through a chrome_headless provider with screenshot and DOM artifacts', async () => {
@@ -192,9 +213,15 @@ await new Promise((resolve) => setTimeout(resolve, 1000))
     expect(job).toMatchObject({
       type: 'browser',
       status: 'timeout',
-      stage: 'timeout',
+      stage: 'partial_evidence_timeout',
       provider: 'chrome_headless',
       terminationReason: 'deadline_exceeded',
+    })
+    expect(result.metadata).toMatchObject({
+      captureStatus: 'partial_success_with_evidence',
+      usablePartialEvidence: true,
+      recoverable: true,
+      retrySameInvocation: false,
     })
     expect(job.artifacts.map((artifact: any) => artifact.artifactType)).toEqual([
       'browser_screenshot',
@@ -247,6 +274,25 @@ await new Promise((resolve) => setTimeout(resolve, 1000))
       })
       expect(job.artifacts.some((jobArtifact: any) => jobArtifact.id === artifact.id)).toBe(true)
     }
+  })
+
+  it('uses the active run workspace when runRef is omitted', async () => {
+    const outputRoot = join(artifactDir, 'active-run-output')
+    const { paths } = await createRunWorkspace({ outputRoot, cwd: artifactDir })
+    const tool = createBrowserJobTool()
+
+    const result = await tool.execute({
+      url: `${baseUrl}/page`,
+      cwd: artifactDir,
+      deadlineMs: 1000,
+    }, {
+      taskState: { run: { runWorkspace: { runDir: paths.runDir } } } as any,
+    })
+
+    expect(result.isError).toBe(false)
+    const ledger = await readArtifactLedger(outputRoot, {}, artifactDir)
+    expect(ledger.artifacts).toHaveLength(2)
+    expect(ledger.artifacts.every((artifact) => artifact.path.startsWith(join(outputRoot, 'evidence', 'browser')))).toBe(true)
   })
 
   it('marks selector misses as structured browser job failures', async () => {

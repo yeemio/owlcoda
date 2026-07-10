@@ -202,6 +202,9 @@ export interface TaskContract {
   explicitWriteTargets: string[]
   allowedWritePaths: TaskPathScope[]
   touchedPaths: string[]
+  initialDirtyPaths?: string[]
+  createdPaths?: string[]
+  modifiedPaths?: string[]
   createdAt: number
   updatedAt: number
   /**

@@ -90,6 +90,8 @@ export interface BashInput {
   cwd?: string
   /** Timeout in milliseconds (default 120_000) */
   timeoutMs?: number
+  /** Explicitly allow truncating a large existing file after a recovery snapshot. */
+  allowDestructiveOverwrite?: boolean
 }
 
 /** Read tool input */
@@ -120,6 +122,8 @@ export interface WriteInput {
    * See protected-source-policy.ts.
    */
   replaceProtected?: boolean
+  /** Explicitly allow a destructive overwrite after a raw-byte recovery snapshot. */
+  allowDestructiveOverwrite?: boolean
 }
 
 /** Edit tool input */
@@ -130,6 +134,8 @@ export interface EditInput {
   /** See WriteInput.replaceProtected — same contract for edits that
    *  remove a large fraction of a protected file. */
   replaceProtected?: boolean
+  /** Explicitly allow a destructive edit after a raw-byte recovery snapshot. */
+  allowDestructiveOverwrite?: boolean
   /** 0.13.60: when true, replace ALL occurrences of oldStr with newStr
    *  instead of failing on multi-occurrence ambiguity. Default false
    *  preserves the legacy "must match exactly once" contract. Use
@@ -252,6 +258,8 @@ export interface EnterWorktreeInput {
   name?: string
   /** Explicitly bypass the untracked dependency/source file preflight */
   allow_untracked?: boolean
+  /** Resume a matching OwlCoda-managed worktree instead of creating one. */
+  existing?: 'fail' | 'resume'
 }
 
 /** ExitWorktree tool input */
@@ -260,4 +268,6 @@ export interface ExitWorktreeInput {
   action: 'keep' | 'remove'
   /** Must be true to remove a worktree with uncommitted changes */
   discard_changes?: boolean
+  /** Independent authorization to delete commits created after the worktree base. */
+  discard_commits?: boolean
 }

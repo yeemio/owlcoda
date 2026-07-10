@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createWriteTool } from '../../../src/native/tools/write.js'
@@ -10,6 +10,7 @@ describe('Native Write tool', () => {
   const write = createWriteTool()
   let dir: string
   let prevAllow: string | undefined
+  let prevRecovery: string | undefined
 
   beforeAll(async () => {
     dir = await mkdtemp(join(tmpdir(), 'owlcoda-write-test-'))
@@ -17,12 +18,16 @@ describe('Native Write tool', () => {
     // Test fixtures live under tmpdir(), so opt that path in via the same
     // env-var seam real users would use to extend scope.
     prevAllow = process.env['OWLCODA_ALLOW_FS_ROOTS']
+    prevRecovery = process.env['OWLCODA_RECOVERY_DIR']
     process.env['OWLCODA_ALLOW_FS_ROOTS'] = dir
+    process.env['OWLCODA_RECOVERY_DIR'] = join(dir, 'recovery')
   })
 
   afterAll(async () => {
     if (prevAllow === undefined) delete process.env['OWLCODA_ALLOW_FS_ROOTS']
     else process.env['OWLCODA_ALLOW_FS_ROOTS'] = prevAllow
+    if (prevRecovery === undefined) delete process.env['OWLCODA_RECOVERY_DIR']
+    else process.env['OWLCODA_RECOVERY_DIR'] = prevRecovery
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -48,6 +53,39 @@ describe('Native Write tool', () => {
     expect(content).toBe('new content')
   })
 
+  it('refuses a destructive overwrite unless explicitly allowed', async () => {
+    const path = join(dir, 'destructive-denied.txt')
+    const original = Array.from({ length: 180 }, (_, index) => `line ${index}`).join('\n')
+    await writeFile(path, original)
+
+    const result = await write.execute({ path, content: 'short\n' })
+
+    expect(result.isError).toBe(true)
+    expect(result.metadata?.destructiveOverwriteDenied).toBe(true)
+    expect(await readFile(path, 'utf8')).toBe(original)
+  })
+
+  it('snapshots destructive overwrites as exact raw bytes before writing', async () => {
+    const path = join(dir, 'destructive-binary.bin')
+    const original = Buffer.concat([
+      Buffer.from([0xff, 0x00, 0xfe, 0x80]),
+      Buffer.alloc(20 * 1024, 0xa5),
+    ])
+    await writeFile(path, original)
+
+    const result = await write.execute({
+      path,
+      content: 'replacement\n',
+      allowDestructiveOverwrite: true,
+    })
+
+    expect(result.isError).toBe(false)
+    const snapshotPath = result.metadata?.recoverySnapshotPath as string
+    expect(snapshotPath).toBeTruthy()
+    expect(await readFile(snapshotPath)).toEqual(original)
+    expect((await stat(snapshotPath)).mode & 0o777).toBe(0o600)
+  })
+
   it('creates parent directories', async () => {
     const path = join(dir, 'deep', 'nested', 'file.txt')
     const result = await write.execute({ path, content: 'deep' })
@@ -71,6 +109,49 @@ describe('Native Write tool', () => {
     expect(result.isError).toBe(false)
     const content = await readFile(path, 'utf-8')
     expect(content).toBe(text)
+  })
+
+  it('rejects a new executable CommonJS .js script inside a type=module package', async () => {
+    const root = join(dir, 'esm-reject')
+    await mkdir(root, { recursive: true })
+    await writeFile(join(root, 'package.json'), JSON.stringify({ type: 'module' }))
+    const path = join(root, 'probe.js')
+
+    const result = await write.execute({ path, content: "const fs = require('node:fs')\n" })
+
+    expect(result.isError).toBe(true)
+    expect(result.metadata?.scriptModuleMismatch).toBe(true)
+    await expect(readFile(path, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('rejects executable exports assignments in a type=module package', async () => {
+    const root = join(dir, 'esm-exports-reject')
+    await mkdir(root, { recursive: true })
+    await writeFile(join(root, 'package.json'), JSON.stringify({ type: 'module' }))
+
+    const result = await write.execute({
+      path: join(root, 'probe.js'),
+      content: 'exports.answer = 42\n',
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.metadata?.scriptModuleMismatch).toBe(true)
+  })
+
+  it.each([
+    '// require(\"example\")\nexport const ok = true\n',
+    'const docs = "module.exports = {}"\nexport { docs }\n',
+    'const sample = `require("example")`\nexport { sample }\n',
+  ])('does not reject CommonJS examples in comments, strings, or templates', async (content) => {
+    const root = join(dir, `esm-allow-${Math.random().toString(36).slice(2)}`)
+    await mkdir(root, { recursive: true })
+    await writeFile(join(root, 'package.json'), JSON.stringify({ type: 'module' }))
+    const path = join(root, 'example.js')
+
+    const result = await write.execute({ path, content })
+
+    expect(result.isError).toBe(false)
+    expect(await readFile(path, 'utf8')).toBe(content)
   })
 
   it('reports byte count in metadata', async () => {

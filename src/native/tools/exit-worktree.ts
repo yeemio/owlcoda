@@ -11,33 +11,27 @@
  * - Our version: same safety checks, simpler session management
  */
 
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import type { ExitWorktreeInput, NativeToolDef, ToolResult } from './types.js'
 import type { WorktreeState } from './enter-worktree.js'
+import { assertMatchingLedger, readLifecycleLedger, writeLifecycleLedger } from './worktree-lifecycle.js'
 
 /** Count uncommitted files and new commits in a worktree. */
-function countChanges(worktreePath: string): { changedFiles: number; commits: number } | null {
+function countChanges(worktreePath: string, baseCommit: string): { changedFiles: number; commits: number } | null {
   try {
-    const status = execSync('git status --porcelain', {
+    const status = execFileSync('git', ['status', '--porcelain'], {
       cwd: worktreePath,
       encoding: 'utf-8',
       stdio: 'pipe',
     })
     const changedFiles = status.split('\n').filter(l => l.trim() !== '').length
 
-    // Count commits ahead of HEAD's parent branch
-    let commits = 0
-    try {
-      const ahead = execSync('git rev-list --count @{upstream}..HEAD', {
-        cwd: worktreePath,
-        encoding: 'utf-8',
-        stdio: 'pipe',
-      })
-      commits = parseInt(ahead.trim(), 10) || 0
-    } catch {
-      // No upstream configured — count commits since worktree creation
-      // Fall back to 0, which is safe
-    }
+    const ahead = execFileSync('git', ['rev-list', '--count', `${baseCommit}..HEAD`], {
+      cwd: worktreePath,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    const commits = parseInt(ahead.trim(), 10) || 0
 
     return { changedFiles, commits }
   } catch {
@@ -63,29 +57,45 @@ export function createExitWorktreeTool(state: WorktreeState): NativeToolDef<Exit
         }
       }
 
-      const { worktreePath, worktreeBranch, originalCwd } = state
+      const { worktreePath, worktreeBranch, originalCwd, baseCommit, ledgerPath } = state
+
+      let ledger
+      if (input.action === 'remove') {
+        if (!baseCommit || !ledgerPath) {
+          return { output: 'Refusing managed cleanup: lifecycle ledger state is missing.', isError: true }
+        }
+        try {
+          ledger = readLifecycleLedger(ledgerPath)
+          assertMatchingLedger(ledger, { worktreePath, branch: worktreeBranch, baseCommit })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          return { output: `Refusing managed cleanup: lifecycle ledger is missing, corrupt, or mismatched (${message}).`, isError: true }
+        }
+      }
 
       // Safety check for removal
-      if (input.action === 'remove' && !input.discard_changes) {
-        const changes = countChanges(worktreePath)
+      let verifiedChanges = { changedFiles: 0, commits: 0 }
+      if (input.action === 'remove') {
+        const changes = countChanges(worktreePath, baseCommit!)
         if (changes === null) {
           return {
             output:
               `Could not verify worktree state at ${worktreePath}. ` +
-              'Re-invoke with discard_changes: true to proceed, or use action: "keep".',
+              'Managed cleanup is fail-closed; use action: "keep" and inspect it manually.',
             isError: true,
           }
         }
+        verifiedChanges = changes
         const { changedFiles, commits } = changes
-        if (changedFiles > 0 || commits > 0) {
-          const parts: string[] = []
-          if (changedFiles > 0) parts.push(`${changedFiles} uncommitted file(s)`)
-          if (commits > 0) parts.push(`${commits} commit(s)`)
+        if (changedFiles > 0 && input.discard_changes !== true) {
           return {
-            output:
-              `Worktree has ${parts.join(' and ')}. ` +
-              'Removing will discard this work permanently. ' +
-              'Re-invoke with discard_changes: true, or use action: "keep".',
+            output: `Worktree has ${changedFiles} uncommitted file(s). Re-invoke with discard_changes=true, or use action: "keep".`,
+            isError: true,
+          }
+        }
+        if (commits > 0 && input.discard_commits !== true) {
+          return {
+            output: `Worktree has ${commits} commit(s) created after base ${baseCommit}. discard_changes does not authorize deleting commits; re-invoke with discard_commits=true or keep the worktree.`,
             isError: true,
           }
         }
@@ -95,26 +105,47 @@ export function createExitWorktreeTool(state: WorktreeState): NativeToolDef<Exit
       process.chdir(originalCwd)
 
       if (input.action === 'remove') {
-        // Remove the worktree
         try {
-          execSync(`git worktree remove --force "${worktreePath}"`, {
+          const removeArgs = ['worktree', 'remove']
+          if (input.discard_changes === true) removeArgs.push('--force')
+          removeArgs.push(worktreePath)
+          execFileSync('git', removeArgs, {
+            cwd: originalCwd,
             encoding: 'utf-8',
-            stdio: 'pipe',
+            stdio: ['ignore', 'pipe', 'pipe'],
+          })
+          if (worktreeBranch) {
+            execFileSync('git', ['branch', input.discard_commits === true ? '-D' : '-d', worktreeBranch], {
+              cwd: originalCwd,
+              encoding: 'utf-8',
+              stdio: ['ignore', 'pipe', 'pipe'],
+            })
+          }
+          writeLifecycleLedger(ledgerPath!, {
+            ...ledger!,
+            status: 'removed',
+            cleanup: {
+              action: 'remove',
+              ...verifiedChanges,
+              discardChanges: input.discard_changes === true,
+              discardCommits: input.discard_commits === true,
+            },
+          })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          writeLifecycleLedger(ledgerPath!, { ...ledger!, status: 'cleanup_failed', error: message })
+          return { output: `Failed to remove managed worktree: ${message}`, isError: true }
+        }
+      } else if (ledgerPath) {
+        try {
+          const keepLedger = readLifecycleLedger(ledgerPath)
+          writeLifecycleLedger(ledgerPath, {
+            ...keepLedger,
+            status: 'kept',
+            cleanup: { action: 'keep', changedFiles: 0, commits: 0, discardChanges: false, discardCommits: false },
           })
         } catch {
-          // Best-effort — worktree may already be gone
-        }
-
-        // Delete the branch
-        if (worktreeBranch) {
-          try {
-            execSync(`git branch -D "${worktreeBranch}"`, {
-              encoding: 'utf-8',
-              stdio: 'pipe',
-            })
-          } catch {
-            // Best-effort
-          }
+          // Keeping is non-destructive and remains available even if its audit record is unavailable.
         }
       }
 
@@ -123,6 +154,8 @@ export function createExitWorktreeTool(state: WorktreeState): NativeToolDef<Exit
       state.worktreePath = undefined
       state.worktreeBranch = undefined
       state.originalCwd = undefined
+      state.baseCommit = undefined
+      state.ledgerPath = undefined
 
       const actionLabel = input.action === 'keep' ? 'Kept' : 'Removed'
       const branchNote = worktreeBranch ? ` on branch ${worktreeBranch}` : ''

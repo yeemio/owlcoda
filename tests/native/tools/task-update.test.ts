@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createTaskUpdateTool } from '../../../src/native/tools/task-update.js'
-import { resetTaskStore, createTask, getTask, getTaskStep, blockTask } from '../../../src/native/tools/task-store.js'
+import { resetTaskStore, createTask, getTask, getTaskStep, blockTask, recordTaskVerificationOutcome } from '../../../src/native/tools/task-store.js'
 
 describe('TaskUpdate tool', () => {
   const tool = createTaskUpdateTool()
@@ -170,16 +170,17 @@ describe('TaskUpdate — step updates (Slice 1)', () => {
     expect(r.output).toContain('touchedPaths +1')
   })
 
-  it('updates verificationResults', async () => {
+  it('rejects model-authored verificationResults', async () => {
     makeTask()
     await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
     const r = await tool.execute({
       taskId: 'task-1',
       stepId: 'step-1',
       verificationResults: [{ checkId: 'v1', passed: true, checkedAt: new Date().toISOString() }],
-    })
-    expect(r.isError).toBe(false)
-    expect(r.output).toContain('verification 1/1 passed')
+    } as any)
+    expect(r.isError).toBe(true)
+    expect(r.output).toContain('TaskVerify')
+    expect(getTaskStep('task-1', 'step-1')?.verificationResults).toEqual([])
   })
 
   it('rejects verification command checks that TaskVerify would refuse', async () => {
@@ -201,7 +202,7 @@ describe('TaskUpdate — step updates (Slice 1)', () => {
     expect(getTaskStep('task-1', 'step-1')?.verification).toEqual([])
   })
 
-  it('completes step after passed verification', async () => {
+  it('refuses to combine step completion with model-authored passed evidence', async () => {
     makeTask()
     await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
     const r = await tool.execute({
@@ -209,20 +210,19 @@ describe('TaskUpdate — step updates (Slice 1)', () => {
       stepId: 'step-1',
       stepStatus: 'completed',
       verificationResults: [{ checkId: 'v1', passed: true, checkedAt: new Date().toISOString() }],
-    })
-    expect(r.isError).toBe(false)
-    expect(r.output).toContain('completed')
+    } as any)
+    expect(r.isError).toBe(true)
+    expect(r.output).toContain('TaskVerify')
+    expect(getTaskStep('task-1', 'step-1')?.status).toBe('in_progress')
   })
 
   it('refuses completed if verification failed', async () => {
     makeTask()
     await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
-    const r = await tool.execute({
-      taskId: 'task-1',
-      stepId: 'step-1',
-      stepStatus: 'completed',
-      verificationResults: [{ checkId: 'v1', passed: false, detail: 'missing', checkedAt: new Date().toISOString() }],
-    })
+    recordTaskVerificationOutcome('task-1', 'step-1', [
+      { checkId: 'v1', passed: false, detail: 'missing', checkedAt: new Date().toISOString() },
+    ])
+    const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'completed' })
     expect(r.isError).toBe(true)
     expect(r.output).toMatch(/verification check/)
   })
@@ -240,7 +240,7 @@ describe('TaskUpdate — step updates (Slice 1)', () => {
     await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
     const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'completed' })
     expect(r.isError).toBe(true)
-    expect(r.output).toMatch(/TaskVerify|verification result/i)
+    expect(r.output).toMatch(/TaskVerify|verification result|verification checks failed/i)
   })
 
   it('does not allow failed verification to be bypassed by clearing results', async () => {
@@ -254,16 +254,14 @@ describe('TaskUpdate — step updates (Slice 1)', () => {
       }],
     })
     await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
-    await tool.execute({
-      taskId: 'task-1',
-      stepId: 'step-1',
-      verificationResults: [{ checkId: 'v1', passed: false, detail: 'missing', checkedAt: new Date().toISOString() }],
-    })
-    await tool.execute({ taskId: 'task-1', stepId: 'step-1', verificationResults: [] })
+    recordTaskVerificationOutcome('task-1', 'step-1', [
+      { checkId: 'v1', passed: false, detail: 'missing', checkedAt: new Date().toISOString() },
+    ])
+    await tool.execute({ taskId: 'task-1', stepId: 'step-1', verificationResults: [] } as any)
 
     const r = await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'completed' })
     expect(r.isError).toBe(true)
-    expect(r.output).toMatch(/TaskVerify|verification result/i)
+    expect(r.output).toMatch(/TaskVerify|verification result|verification checks failed/i)
   })
 
   it('replaces a broken verification spec and clears stale results until re-verified', async () => {
@@ -277,17 +275,13 @@ describe('TaskUpdate — step updates (Slice 1)', () => {
       }],
     })
     await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
-    await tool.execute({
-      taskId: 'task-1',
-      stepId: 'step-1',
-      verificationResults: [{
+    recordTaskVerificationOutcome('task-1', 'step-1', [{
         checkId: 'v1',
         passed: false,
         detail: 'path looks like an unresolved placeholder',
         checkedAt: new Date().toISOString(),
         unsatisfiable: true,
-      } as any],
-    })
+      } as any])
 
     const r = await tool.execute({
       taskId: 'task-1',
@@ -317,11 +311,9 @@ describe('TaskUpdate — step updates (Slice 1)', () => {
       }],
     })
     await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
-    await tool.execute({
-      taskId: 'task-1',
-      stepId: 'step-1',
-      verificationResults: [{ checkId: 'v1', passed: false, detail: 'missing', checkedAt: new Date().toISOString() }],
-    })
+    recordTaskVerificationOutcome('task-1', 'step-1', [
+      { checkId: 'v1', passed: false, detail: 'missing', checkedAt: new Date().toISOString() },
+    ])
 
     const r = await tool.execute({
       taskId: 'task-1',
@@ -348,11 +340,9 @@ describe('TaskUpdate — step updates (Slice 1)', () => {
       }],
     })
     await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
-    await tool.execute({
-      taskId: 'task-1',
-      stepId: 'step-1',
-      verificationResults: [{ checkId: 'v1', passed: false, detail: 'missing', checkedAt: new Date().toISOString() }],
-    })
+    recordTaskVerificationOutcome('task-1', 'step-1', [
+      { checkId: 'v1', passed: false, detail: 'missing', checkedAt: new Date().toISOString() },
+    ])
 
     const r = await tool.execute({
       taskId: 'task-1',
@@ -379,12 +369,9 @@ describe('TaskUpdate — step updates (Slice 1)', () => {
       }],
     })
     await tool.execute({ taskId: 'task-1', stepId: 'step-1', stepStatus: 'in_progress' })
-    await tool.execute({
-      taskId: 'task-1',
-      stepId: 'step-1',
-      stepStatus: 'completed',
-      verificationResults: [{ checkId: 'v1', passed: true, checkedAt: new Date().toISOString() }],
-    })
+    recordTaskVerificationOutcome('task-1', 'step-1', [
+      { checkId: 'v1', passed: true, checkedAt: new Date().toISOString() },
+    ])
 
     const r = await tool.execute({
       taskId: 'task-1',

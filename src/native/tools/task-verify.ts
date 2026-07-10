@@ -5,9 +5,8 @@
  * Supports: file_exists, file_contains, artifact_count, verification_pack,
  * run_verdict_gate, http_get (localhost only), command (safe_readonly only), none.
  *
- * By default (writeBack=true), verification results are written back to the step's
- * verificationResults via TaskUpdate semantics. Does NOT auto-transition step status —
- * the model must still call TaskUpdate to set stepStatus='completed' explicitly.
+ * By default (writeBack=true), verification results and a passing completion state are
+ * written atomically. Re-verification can revoke stale completion and restore it later.
  *
  * Security: `command` checks are gated by classifyBashCommand and refused if
  * not safe_readonly. This mirrors the TaskCreate command gate.
@@ -21,15 +20,16 @@ import type { NativeToolDef, ToolResult } from './types.js'
 import {
   getTask,
   getTaskStep,
-  updateTaskStep,
+  recordTaskVerificationOutcome,
   type TaskVerificationCheck,
   type TaskVerificationResult,
 } from './task-store.js'
 import { primaryBashRiskReason } from '../bash-risk.js'
-import { buildBashExecutionEnv } from './bash.js'
+import { buildBashExecutionEnv, resolveInterpreterFallback } from './bash.js'
 import { classifyTaskVerifyCommand } from './task-verification-policy.js'
 import { verifyHtmlDeck } from '../verification-packs/html-deck.js'
 import { evaluateRunVerdictGate, formatRunVerdictGateResult } from '../run-verdict-gate.js'
+import { evaluateCommandResult } from '../command-result-semantics.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -276,21 +276,34 @@ async function runCommand(check: TaskVerificationCheck, now: string, ctx: Verifi
   }
 
   const expectedCode = check.expectedExitCode ?? 0
+  const executionEnv = buildBashExecutionEnv()
+  const interpreterResolution = resolveInterpreterFallback(cmd, executionEnv)
+  const effectiveCommand = interpreterResolution.command
+  const commandMetadata = {
+    cwd: ctx.cwd,
+    commandPolicy: policy,
+    ...(interpreterResolution.fallback ? {
+      interpreterFallback: interpreterResolution.fallback,
+      requestedCommand: cmd,
+      appliedCommand: effectiveCommand,
+    } : {}),
+  }
 
   try {
-    const { stdout, stderr } = await execFileAsync('bash', ['-c', cmd], {
+    const { stdout, stderr } = await execFileAsync('bash', ['-c', effectiveCommand], {
       timeout: VERIFY_COMMAND_TIMEOUT_MS,
       encoding: 'utf-8',
       cwd: ctx.cwd,
-      env: buildBashExecutionEnv(),
+      env: executionEnv,
     })
     const detail = stdout.trim().slice(0, 500) || stderr.trim().slice(0, 500) || '(no output)'
+    const passed = expectedCode === 0
     return {
       checkId: check.id,
-      passed: true,
-      detail: `exit 0: ${detail}`,
+      passed,
+      detail: passed ? `exit 0: ${detail}` : `exit 0 (expected ${expectedCode}): ${detail}`,
       checkedAt: now,
-      metadata: { cwd: ctx.cwd, commandPolicy: policy },
+      metadata: { ...commandMetadata, exitCode: 0 },
     }
   } catch (err: unknown) {
     const anyErr = err as { code?: number; killed?: boolean; stdout?: string; stderr?: string }
@@ -298,22 +311,40 @@ async function runCommand(check: TaskVerificationCheck, now: string, ctx: Verifi
     if (anyErr.killed) {
       return { checkId: check.id, passed: false, detail: `command timed out after ${VERIFY_COMMAND_TIMEOUT_MS}ms`, checkedAt: now }
     }
-    if (exitCode === expectedCode) {
+    const stdout = anyErr.stdout ?? ''
+    const stderr = anyErr.stderr ?? ''
+    const commandResult = evaluateCommandResult({
+      command: cmd,
+      exitCode,
+      expectedExitCode: expectedCode,
+      stdout,
+      stderr,
+    })
+    if (commandResult.success) {
       return {
         checkId: check.id,
         passed: true,
-        detail: `exit ${exitCode} (expected)`,
+        detail: commandResult.semanticSuccess
+          ? `exit ${exitCode}: ${commandResult.successDetail}`
+          : `exit ${exitCode} (expected)`,
         checkedAt: now,
-        metadata: { cwd: ctx.cwd, commandPolicy: policy },
+        metadata: {
+          ...commandMetadata,
+          exitCode,
+          ...(commandResult.semanticSuccess ? {
+            semanticSuccess: true,
+            commandResultSemantics: commandResult.commandResultSemantics,
+          } : {}),
+        },
       }
     }
-    const output = (anyErr.stdout ?? '').trim().slice(0, 300) || (anyErr.stderr ?? '').trim().slice(0, 300)
+    const output = stdout.trim().slice(0, 300) || stderr.trim().slice(0, 300)
     return {
       checkId: check.id,
       passed: false,
       detail: `exit ${exitCode} (expected ${expectedCode})${output ? ': ' + output : ''}`,
       checkedAt: now,
-      metadata: { cwd: ctx.cwd, commandPolicy: policy },
+      metadata: { ...commandMetadata, exitCode },
     }
   }
 }
@@ -600,9 +631,8 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
     description:
       'Run deterministic verification checks defined on a task step. ' +
       'Supports: file_exists, file_contains, artifact_count, verification_pack/html_deck, run_verdict_gate, http_get (localhost only), command (safe_readonly only), none. ' +
-      'By default (writeBack=true), results are written back to step.verificationResults so subsequent ' +
-      'TaskUpdate can check them before allowing stepStatus=completed. ' +
-      'Does NOT auto-transition step status — use TaskUpdate(stepStatus="completed") after all checks pass. ' +
+      'By default (writeBack=true), results are written back atomically; all-passing checks complete the step and aggregate the parent task. ' +
+      'Use writeBack=false for a read-only verification probe. ' +
       'Use this after every step that touches files to build deterministic artifact evidence.',
     maturity: 'beta' as const,
 
@@ -649,9 +679,19 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
       const passedCount = results.filter(r => r.passed).length
       const overallPassed = passedCount === results.length
 
-      // Write results back to step if requested
+      let writtenStep = step
+      let writtenTask = task
       if (writeBack) {
-        updateTaskStep(taskId, stepId, { verificationResults: results })
+        const update = recordTaskVerificationOutcome(taskId, stepId, results)
+        if (!update.ok) {
+          return {
+            output: `Verification ran, but TaskVerify could not persist the result: ${update.reason}`,
+            isError: true,
+            metadata: { taskId, stepId, passed: overallPassed, results, writeBack, writeBackFailed: true },
+          }
+        }
+        writtenStep = update.step
+        writtenTask = update.task
       }
 
       // Build output text
@@ -681,6 +721,8 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
         passed: overallPassed,
         results,
         writeBack,
+        stepStatus: writtenStep.status,
+        taskStatus: writtenTask.status,
         cwd: verificationContext.cwd,
         ...(repairCheckpoint ? { repairCheckpoint } : {}),
       }

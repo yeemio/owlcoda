@@ -19,7 +19,6 @@ import {
   type TaskStatus,
   type TaskStepStatus,
   type TaskVerificationCheck,
-  type TaskVerificationResult,
 } from './task-store.js'
 import { findUnsafeVerificationCommand } from './task-verification-policy.js'
 
@@ -39,10 +38,8 @@ export interface TaskUpdateInput {
   completePrevious?: boolean
   /** Paths touched during this step (Slice 1). Appended to existing touchedPaths. */
   touchedPaths?: string[]
-  /** Verification checks for this step (Slice 1). Replaces existing checks and clears stale results unless verificationResults is also supplied. */
+  /** Verification checks for this step (Slice 1). Replaces existing checks and clears stale results. */
   verification?: TaskVerificationCheck[]
-  /** Verification results to record for this step (Slice 1). Replaces existing results. */
-  verificationResults?: TaskVerificationResult[]
   /** Failure reason for failed/blocked/skipped steps (Slice 1). Required when stepStatus is 'failed', 'blocked', or 'skipped'. */
   failureReason?: string
 }
@@ -79,19 +76,26 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
       'For pure-TODO tasks this is the only way status advances. For command-backed TaskCreate entries, ' +
       'the command runner moves status to in_progress/completed/cancelled and records stdout/stderr/exitCode, ' +
       'but TaskUpdate remains the manual way to annotate, block, unblock, or correct the user-visible task record. ' +
-      'No scheduler watches these tasks, and TaskUpdate itself never executes work. Use this every time you finish ' +
-      'a non-command step, start a manual step, or abandon/remove one so the user sees accurate progress. For actually ' +
+      'No scheduler watches these tasks, and TaskUpdate itself never executes work or writes verification evidence. ' +
+      'Use it to start, annotate, block, skip, cancel, or repair a step; passing TaskVerify checks complete verified steps atomically. For actually ' +
       'executing work, use Bash, Edit, Write, Agent, TaskCreate(command=...) for safe_readonly commands, or another execution tool first.',
     maturity: 'beta' as const,
 
     async execute(input: TaskUpdateInput): Promise<ToolResult> {
       const {
         taskId, subject, description, status, activeForm, addBlocks, removeBlocks,
-        stepId, stepStatus, completePrevious, touchedPaths, verification, verificationResults, failureReason,
+        stepId, stepStatus, completePrevious, touchedPaths, verification, failureReason,
       } = input
 
       if (!taskId) {
         return { output: 'taskId is required.', isError: true }
+      }
+      if (Object.prototype.hasOwnProperty.call(input, 'verificationResults')) {
+        return {
+          output: 'TaskUpdate cannot write verificationResults. Run TaskVerify to produce deterministic verification evidence.',
+          isError: true,
+          metadata: { verificationEvidenceDenied: true, requiredTool: 'TaskVerify' },
+        }
       }
       const requestedTaskId = taskId
       const resolvedTaskId = normalizeTaskUpdateTaskId(taskId)
@@ -138,7 +142,6 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
           completePrevious,
           touchedPaths,
           verification,
-          verificationResults,
           failureReason,
         })
 
@@ -154,10 +157,6 @@ export function createTaskUpdateTool(): NativeToolDef<TaskUpdateInput> {
         if (stepStatus) changes.push(`status=${stepStatus}`)
         if (touchedPaths?.length) changes.push(`touchedPaths +${touchedPaths.length}`)
         if (verification) changes.push(`verification spec ${verification.length} checks`)
-        if (verificationResults?.length) {
-          const passed = verificationResults.filter(r => r.passed).length
-          changes.push(`verification ${passed}/${verificationResults.length} passed`)
-        }
         if (failureReason) changes.push('failureReason set')
 
         // Also apply task-level changes if any were requested alongside step update

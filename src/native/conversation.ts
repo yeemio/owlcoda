@@ -33,6 +33,7 @@ import { tryCompact } from './llm-compact.js'
 import {
   buildContextPressurePrompt,
   buildDeliveryCheckPrompt,
+  buildRunScopedTouchedFilesReceipt,
   buildMaxTokensContinuationPrompt,
   buildOutputBloatPrompt,
   buildProductionGatePrompt,
@@ -79,6 +80,8 @@ import {
 import { recordGateEvent, buildPredicateComparisonEvent, type GateEvent } from './gate-telemetry.js'
 import { recordMicrocompactShadow } from './microcompact.js'
 import { recordClaimFidelityTelemetry } from './evidence-ledger-fidelity.js'
+import { dedupeFinalReportLines } from './final-text-hygiene.js'
+import { compactOlderToolResults } from './rolling-context-hygiene.js'
 import { isGateV2Enabled } from './gate-v2-flag.js'
 import { isModesEnabled, evaluateModeGate, evaluateAutoApproval } from './modes.js'
 import {
@@ -291,7 +294,9 @@ function classifyLoopInterceptKind(
   return 'generic'
 }
 
-function buildLoopInterceptPrompt(
+const NON_DESTRUCTIVE_REPAIR_TOOLS = new Set(['taskcreate', 'taskverify', 'runworkspace', 'browserjob', 'todowrite'])
+
+export function buildLoopInterceptPrompt(
   reason: string,
   attempt: { name: string; category: string; intentTarget: string; intentKey: string },
   options: { conversationId?: string } = {},
@@ -331,6 +336,19 @@ function buildLoopInterceptPrompt(
       }),
       '',
       'Do not ask for permission to keep waiting, and do not call Sleep/bash again for the same monitor loop before the user replies.',
+    ].join('\n')
+  }
+  if (NON_DESTRUCTIVE_REPAIR_TOOLS.has(attempt.name.toLowerCase())) {
+    return [
+      '[Runtime loop repair]',
+      `${reason}.`,
+      '',
+      `intent: tool=${attempt.name}, target=${attempt.intentTarget}`,
+      '',
+      'Do not ask the user to continue this non-destructive repair.',
+      'Use the structured error and current runtime state to choose one different recovery action, then continue autonomously.',
+      'Examples: inherit the active runRef, inspect already-saved artifacts, correct missing schema fields, or use a narrower verification method.',
+      'Do not repeat the same intent. A second matching attempt remains a hard loop violation.',
     ].join('\n')
   }
   return [
@@ -1200,6 +1218,12 @@ export async function runConversationLoop(
       currentFocus: convergence.lastGap ?? convergence.dominantHypothesis,
       dominantGap: convergence.lastGap,
     })
+    const rollingCompaction = compactOlderToolResults(conversation, { iteration: iterations })
+    if (rollingCompaction.compactedResults > 0) {
+      opts.callbacks?.onNotice?.(
+        `Context hygiene: compacted ${rollingCompaction.compactedResults} older tool result(s), omitting ${rollingCompaction.omittedChars} repeated characters from live context; raw artifacts remain retained.`,
+      )
+    }
 
     // Slice 2: consume pending edit_now nudge before any model request.
     // The nudge is set by the abandoned-grant predicate after a granted risky
@@ -2322,20 +2346,33 @@ export async function runConversationLoop(
       }
     }
     if (shouldDropFinalBookkeepingToolUse(response)) {
+      const bookkeepingResults = await dispatcher.executeAll(response.toolUseBlocks, {
+        signal: opts.signal,
+        taskState,
+        projectMapSnapshot: conversation.options?.projectMapSnapshot,
+        conversationId: conversation.id,
+        runtimeRecoveryLedger: conversation.options?.runtimeRecoveryLedger,
+      })
+      const bookkeepingSucceeded = bookkeepingResults.every(result => !result.result.isError)
       appendRuntimeEvent(conversation, {
         kind: 'runtime_intervention',
         turnId: runtimeTurnId,
         payload: {
-          intervention_kind: 'final_text_bookkeeping_tool_drop',
-          action: 'dropped_bookkeeping_tool_use_preserved_text',
-          ignored_tool_count: response.toolUseBlocks.length,
-          ignored_tools: response.toolUseBlocks.map(summarizeIgnoredRuntimeTruthResumeTool),
+          intervention_kind: 'final_text_bookkeeping_tool_execution',
+          action: bookkeepingSucceeded
+            ? 'executed_bookkeeping_tool_use_preserved_text'
+            : 'bookkeeping_tool_use_failed_preserved_text',
+          bookkeeping_tool_count: response.toolUseBlocks.length,
+          bookkeeping_tools: response.toolUseBlocks.map(summarizeIgnoredRuntimeTruthResumeTool),
         },
       })
       opts.callbacks?.onNotice?.(
-        `Final response gate: ignored ${response.toolUseBlocks.length} bookkeeping tool request(s) and preserved the final text.`,
+        `Final response gate: ${bookkeepingSucceeded ? 'executed' : 'attempted'} ${response.toolUseBlocks.length} bookkeeping tool request(s) and preserved the final text.`,
       )
-      response = normalizeFinalAnswerResponse(response, response.text)
+      const preservedText = bookkeepingSucceeded
+        ? response.text
+        : `${response.text.trimEnd()}\n\nRuntime bookkeeping warning: the final TodoWrite update failed; task state remains authoritative.`
+      response = normalizeFinalAnswerResponse(response, preservedText)
       toolPlan = {
         executeBlocks: [],
         runtimeBlocks: [],
@@ -3180,6 +3217,10 @@ export async function runConversationLoop(
     markTaskGuardBlocked(taskState, `The loop hit the iteration cap (${iterations}/${maxIterations}) before the task finished.`)
   } else if (!finalText.trim() && taskState.run.status === 'open' && lastUserTurnHasSuccessfulToolResult(conversation.turns)) {
     markTaskGuardBlocked(taskState, 'The loop stopped after successful tool results before the assistant produced a durable next step.')
+  }
+
+  if (lastStopReason === 'end_turn' && finalText.trim() && taskState.contract.touchedPaths.length > 0) {
+    finalText = dedupeFinalReportLines(`${finalText.trimEnd()}\n\n${buildRunScopedTouchedFilesReceipt(taskState)}`)
   }
 
   appendRuntimeEvent(conversation, {
@@ -4378,10 +4419,11 @@ function normalizeFinalAnswerResponse(
   response: AssistantResponse,
   text: string,
 ): AssistantResponse {
+  const normalizedText = dedupeFinalReportLines(text)
   return {
     ...response,
-    text,
-    textBlocks: [{ type: 'text', text }],
+    text: normalizedText,
+    textBlocks: [{ type: 'text', text: normalizedText }],
     toolUseBlocks: [],
     hasToolUse: false,
     stopReason: 'end_turn',
@@ -8450,11 +8492,12 @@ async function executeTools(
       // (same prompt/description) — those keep working because intentKey
       // includes the input shape, so 3 different sub-agent prompts stay
       // distinct from 3 retries of the same prompt.
+      const usablePartialEvidence = result.result.metadata?.['usablePartialEvidence'] === true
       const isSubAgentIsolatedFailure =
         result.result.metadata?.['subAgentIsolatedFailure'] === true
       const rawFailureCategory = result.result.metadata?.['failureCategory']
       const failureCategory =
-        !isSubAgentIsolatedFailure &&
+        !isSubAgentIsolatedFailure && !usablePartialEvidence &&
         typeof rawFailureCategory === 'string' &&
         rawFailureCategory.length > 0
           ? rawFailureCategory
@@ -8468,7 +8511,7 @@ async function executeTools(
         ...(progressFingerprint
           ? { signature: `${nextAttempt.signature}#progress:${hashToolPayload(progressFingerprint)}` }
           : {}),
-        isError: result.result.isError,
+        isError: result.result.isError && !usablePartialEvidence,
         failureCategory,
       }
       recordToolAttempt(attempts, completedAttempt)

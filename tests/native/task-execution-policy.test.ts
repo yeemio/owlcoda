@@ -354,6 +354,8 @@ describe('buildTaskExecutionNudge — verify_step', () => {
     expect(result).not.toBeNull()
     expect(result!.kind).toBe('verify_step')
     expect(result!.text).toContain('TaskVerify')
+    expect(result!.text).toContain('atomically complete')
+    expect(result!.text).not.toContain('TaskUpdate(stepStatus="completed")')
   })
 
   it('includes Project Map verification commands in verify_step nudges when provided', () => {

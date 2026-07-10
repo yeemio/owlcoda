@@ -59,6 +59,11 @@ describe('NATIVE_TOOL_SCHEMAS', () => {
     expect(schema.properties.verification.items.properties.kind.enum).toContain('run_verdict_gate')
   })
 
+  it('TaskUpdate schema does not expose verification result writes', () => {
+    const schema = NATIVE_TOOL_SCHEMAS['TaskUpdate'] as Record<string, any>
+    expect(schema.properties.verificationResults).toBeUndefined()
+  })
+
   it('TaskUpdate schema exposes skipped step status and failureReason contract', () => {
     const schema = NATIVE_TOOL_SCHEMAS['TaskUpdate'] as Record<string, any>
     expect(schema.properties.stepStatus.enum).toContain('skipped')

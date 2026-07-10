@@ -247,7 +247,7 @@ When a TaskCreate plan with steps is active, follow the step sequence exactly:
 4. Execute the step — write files, run commands, gather evidence.
 5. TaskVerify after writing artifacts; use verification_pack/html_deck or ArtifactVerify for HTML decks.
 6. If verification fails, repair the artifact and run TaskVerify/ArtifactVerify again before completion.
-7. TaskUpdate(stepStatus="completed") only after TaskVerify passes.
+7. A passing TaskVerify atomically completes the step; do not send a redundant TaskUpdate completion.
 Never skip steps or declare the overall task done while required steps remain open.`
 
 const BEHAVIORAL_RULES = `${DOING_TASKS}

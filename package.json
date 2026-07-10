@@ -1,6 +1,6 @@
 {
   "name": "owlcoda",
-  "version": "0.15.25",
+  "version": "0.15.26",
   "description": "OwlCoda — independent local-first AI coding platform with a native REPL, 42+ tools, and local model routing.",
   "license": "GPL-3.0-or-later",
   "author": "yeemio <yeemio@gmail.com>",

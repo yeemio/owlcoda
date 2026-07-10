@@ -16,6 +16,7 @@ import {
   type JobRecord,
 } from '../job-supervisor.js'
 import { getRunWorkspacePathsFromRef, recordArtifact } from '../run-workspace.js'
+import { getOwlcodaDir } from '../../paths.js'
 import { htmlToText } from './web-fetch.js'
 import type { NativeToolDef, ToolExecutionContext, ToolResult } from './types.js'
 
@@ -53,7 +54,8 @@ export function createBrowserJobTool(): NativeToolDef<BrowserJobInput> {
       const validation = validateInput(input)
       if (validation) return validation
 
-      const cwd = input.cwd && input.cwd.trim() ? resolve(input.cwd) : process.cwd()
+      const effectiveInput = withActiveRunRef(input, context)
+      const cwd = effectiveInput.cwd && effectiveInput.cwd.trim() ? resolve(effectiveInput.cwd) : process.cwd()
       const deadlineMs = clampDeadline(input.deadlineMs)
       const provider = input.provider?.trim() || FETCH_HTML_PROVIDER
       const parsed = new URL(input.url)
@@ -80,7 +82,7 @@ export function createBrowserJobTool(): NativeToolDef<BrowserJobInput> {
       try {
         if (provider === CHROME_HEADLESS_PROVIDER) {
           return await runChromeHeadlessJob({
-            input,
+            input: effectiveInput,
             jobId,
             parsed,
             cwd,
@@ -117,21 +119,21 @@ export function createBrowserJobTool(): NativeToolDef<BrowserJobInput> {
 
         const artifacts = await writeBrowserArtifacts({
           jobId,
-          artifactDir: resolveBrowserArtifactDir(input, cwd),
+          artifactDir: resolveBrowserArtifactDir(effectiveInput, cwd),
           cwd,
           html,
           text: htmlToText(html),
         })
         const recordedArtifacts = await recordBrowserArtifacts({
           artifacts,
-          input,
+          input: effectiveInput,
           jobId,
           cwd,
         })
         addJobArtifacts(jobId, recordedArtifacts)
         appendJobOutput(jobId, `Saved ${artifacts.length} artifact(s)\n`)
 
-        if (input.waitForSelector && !selectorExists(html, input.waitForSelector)) {
+        if (effectiveInput.waitForSelector && !selectorExists(html, effectiveInput.waitForSelector)) {
           const message = `selector not found: ${input.waitForSelector}`
           const hint =
             'fetch_html captures static HTML only; for client-rendered selectors use provider=chrome_headless or inspect saved browser_html/browser_text artifacts.'
@@ -147,7 +149,7 @@ export function createBrowserJobTool(): NativeToolDef<BrowserJobInput> {
 
         finishJob(jobId, 'done', { stage: 'completed' })
         recordFetchCleanup(jobId)
-        const selectorNote = input.waitForSelector ? ` selector=${input.waitForSelector}` : ''
+        const selectorNote = effectiveInput.waitForSelector ? ` selector=${effectiveInput.waitForSelector}` : ''
         return browserResult(jobId, false, `Browser job completed: ${jobId}${selectorNote}`)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -245,7 +247,7 @@ async function runChromeHeadlessJob(args: {
     return browserResult(args.jobId, true, `Browser job failed: ${message}`)
   }
 
-  const artifactRoot = resolve(args.cwd, resolveBrowserArtifactDir(args.input, args.cwd)?.trim() || '.owlcoda-browser-jobs')
+  const artifactRoot = resolve(args.cwd, resolveBrowserArtifactDir(args.input, args.cwd))
   const dir = resolve(artifactRoot, sanitizePathSegment(args.jobId))
   const profileDir = resolve(dir, 'chrome-profile')
   const screenshotPath = resolve(dir, 'screenshot.png')
@@ -317,8 +319,8 @@ async function runChromeHeadlessJob(args: {
       await cleanupChromeProfile(args.jobId, profileDir)
       return browserResult(args.jobId, true, `Browser job cancelled: ${args.jobId}`)
     }
-    if (timedOut) {
-      await recordPartialChromeArtifacts({
+    const hasPartialEvidence = timedOut
+      ? await recordPartialChromeArtifacts({
         jobId: args.jobId,
         input: args.input,
         cwd: args.cwd,
@@ -326,10 +328,10 @@ async function runChromeHeadlessJob(args: {
         domPath,
         textPath,
         html: partialOutput.stdout.trim(),
-      })
-    }
+        })
+      : false
     finishJob(args.jobId, timedOut ? 'timeout' : 'failed', {
-      stage: timedOut ? 'timeout' : 'failed',
+      stage: timedOut && hasPartialEvidence ? 'partial_evidence_timeout' : timedOut ? 'timeout' : 'failed',
       error: timedOut ? `chrome_headless timed out after ${args.deadlineMs}ms` : message,
       terminationReason: timedOut ? 'deadline_exceeded' : 'execution_error',
     })
@@ -340,6 +342,15 @@ async function runChromeHeadlessJob(args: {
       timedOut
         ? `Browser job timed out after ${args.deadlineMs}ms: ${args.jobId}`
         : `Browser job failed: ${message}`,
+      hasPartialEvidence
+        ? {
+            captureStatus: 'partial_success_with_evidence',
+            usablePartialEvidence: true,
+            recoverable: true,
+            retrySameInvocation: false,
+            nextAction: 'Inspect the saved browser artifacts before deciding whether another capture is necessary.',
+          }
+        : undefined,
     )
   }
 }
@@ -457,7 +468,7 @@ async function recordPartialChromeArtifacts(args: {
   domPath: string
   textPath: string
   html: string
-}): Promise<void> {
+}): Promise<boolean> {
   const artifacts: Array<{ path: string; artifactType: string }> = []
   if (existsSync(args.screenshotPath)) {
     artifacts.push({ path: args.screenshotPath, artifactType: 'browser_screenshot' })
@@ -470,7 +481,7 @@ async function recordPartialChromeArtifacts(args: {
       { path: args.textPath, artifactType: 'browser_text' },
     )
   }
-  if (artifacts.length === 0) return
+  if (artifacts.length === 0) return false
   const recordedArtifacts = await recordBrowserArtifacts({
     artifacts,
     input: args.input,
@@ -479,6 +490,7 @@ async function recordPartialChromeArtifacts(args: {
   })
   addJobArtifacts(args.jobId, recordedArtifacts)
   appendJobOutput(args.jobId, `Saved ${artifacts.length} partial chrome_headless artifact(s)\n`)
+  return true
 }
 
 async function resolveChromeExecutable(explicitPath?: string): Promise<string | undefined> {
@@ -580,12 +592,12 @@ function isExecTimeoutError(err: unknown): boolean {
 
 async function writeBrowserArtifacts(args: {
   jobId: string
-  artifactDir?: string
+  artifactDir: string
   cwd: string
   html: string
   text: string
 }): Promise<Array<{ path: string; artifactType: string }>> {
-  const root = resolve(args.cwd, args.artifactDir?.trim() || '.owlcoda-browser-jobs')
+  const root = resolve(args.cwd, args.artifactDir)
   const dir = resolve(root, sanitizePathSegment(args.jobId))
   await mkdir(dir, { recursive: true })
   const htmlPath = resolve(dir, 'page.html')
@@ -598,11 +610,19 @@ async function writeBrowserArtifacts(args: {
   ]
 }
 
-function resolveBrowserArtifactDir(input: BrowserJobInput, cwd: string): string | undefined {
+function resolveBrowserArtifactDir(input: BrowserJobInput, cwd: string): string {
   if (input.artifactDir?.trim()) return input.artifactDir
-  if (!input.runRef?.trim()) return undefined
-  const paths = getRunWorkspacePathsFromRef(input.runRef, cwd)
-  return join(paths.evidenceDir, 'browser')
+  if (input.runRef?.trim()) {
+    const paths = getRunWorkspacePathsFromRef(input.runRef, cwd)
+    return join(paths.evidenceDir, 'browser')
+  }
+  return join(getOwlcodaDir(), 'browser-jobs')
+}
+
+function withActiveRunRef(input: BrowserJobInput, context?: ToolExecutionContext): BrowserJobInput {
+  if (input.runRef?.trim()) return input
+  const runDir = context?.taskState?.run.runWorkspace?.runDir
+  return runDir ? { ...input, runRef: runDir } : input
 }
 
 async function recordBrowserArtifacts(args: {

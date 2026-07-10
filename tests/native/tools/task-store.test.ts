@@ -280,6 +280,17 @@ describe('TaskStore — Steps (Slice 1)', () => {
     expect(r.ok === true && r.step.status).toBe('completed')
   })
 
+  it('reconciles the parent back to pending when every step is reset to pending', () => {
+    const task = makeTaskWithSteps()
+    updateTaskStep(task.id, 'step-1', { status: 'blocked', failureReason: 'temporary' })
+    expect(getTask(task.id)?.status).toBe('blocked')
+
+    updateTaskStep(task.id, 'step-1', { status: 'pending' })
+
+    expect(getTask(task.id)?.status).toBe('pending')
+    expect(getTaskStep(task.id, 'step-1')?.failureReason).toBeUndefined()
+  })
+
   it('cannot complete step with failed verification result', () => {
     const task = makeTaskWithSteps()
     updateTaskStep(task.id, 'step-1', { status: 'in_progress' })

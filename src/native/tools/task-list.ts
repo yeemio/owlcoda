@@ -22,7 +22,7 @@ export function createTaskListTool(): NativeToolDef<TaskListInput> {
       'List the entries in the in-memory TODO tracker that backs TaskCreate / TaskUpdate. ' +
       'This does NOT discover background processes, scheduled jobs, or remote agents — ' +
       'the only tasks visible here are the ones explicitly recorded via TaskCreate in this session, ' +
-      'and their status is whatever was last written via TaskUpdate (nothing advances on its own). ' +
+      'and their status comes from TaskUpdate transitions or TaskVerify-owned verification outcomes. ' +
       'Use this to review the planning surface you have been maintaining for the user. ' +
       'For listing live shells, use Bash with the appropriate inspection command; for parallel work units, use Agent.',
     maturity: 'beta' as const,

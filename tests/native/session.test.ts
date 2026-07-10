@@ -13,7 +13,6 @@ import {
 import { createConversation, addUserMessage } from '../../src/native/conversation.js'
 import { ensureTaskExecutionState } from '../../src/native/task-state.js'
 import { createTaskVerifyTool } from '../../src/native/tools/task-verify.js'
-import { createTaskUpdateTool } from '../../src/native/tools/task-update.js'
 import {
   createAgentRunGetTool,
   __resetAgentRunHistoryForTesting,
@@ -980,13 +979,7 @@ describe('Native Session Persistence', { timeout: SESSION_IO_TEST_TIMEOUT_MS }, 
       const verify = await createTaskVerifyTool().execute({ taskId: task.id, stepId: 'prove-resume' })
       expect(verify.isError).toBe(false)
       expect(verify.metadata?.passed).toBe(true)
-
-      const complete = await createTaskUpdateTool().execute({
-        taskId: task.id,
-        stepId: 'prove-resume',
-        stepStatus: 'completed',
-      })
-      expect(complete.isError).toBe(false)
+      expect(verify.metadata).toMatchObject({ stepStatus: 'completed', taskStatus: 'completed' })
       expect(getTask(task.id)?.steps?.[0]?.status).toBe('completed')
     } finally {
       fs.rmSync(artifactPath, { force: true })

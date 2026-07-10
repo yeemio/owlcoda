@@ -4,7 +4,7 @@
  * Atomic file write using temp + rename pattern.
  */
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { NativeToolDef, ToolExecutionContext, ToolResult, WriteInput } from './types.js'
@@ -12,6 +12,8 @@ import { checkWritePathAllowed } from './fs-policy.js'
 import { checkProtectedWrite, formatProtectedRefusal } from './protected-source-policy.js'
 import { buildSchemaError, checkWriteRequiredFields } from './tool-schema-error.js'
 import { extractUserDeclaredExternalRoots } from '../task-state.js'
+import { assessDestructiveReplacement, createRawRecoverySnapshot } from './destructive-write-policy.js'
+import { checkNewScriptModuleMismatch } from './script-module-policy.js'
 
 export function createWriteTool(): NativeToolDef<WriteInput> {
   return {
@@ -51,10 +53,33 @@ export function createWriteTool(): NativeToolDef<WriteInput> {
       // Capture pre-existing content so the transcript can render a change
       // block against the real before-state for overwrites. ENOENT → create.
       let oldContent: string | null = null
+      let oldBytes = 0
       try {
         oldContent = await readFile(filePath, 'utf-8')
+        oldBytes = (await stat(filePath)).size
       } catch {
         oldContent = null
+      }
+
+      const destructive = oldContent === null
+        ? null
+        : assessDestructiveReplacement(oldContent, input.content, oldBytes)
+      if (oldContent === null) {
+        const mismatch = await checkNewScriptModuleMismatch(filePath, input.content)
+        if (mismatch) {
+          return {
+            output: `Refusing incompatible script ${filePath}: ${mismatch.reason}. Use ESM syntax or a .cjs extension.`,
+            isError: true,
+            metadata: { scriptModuleMismatch: true, attemptedPath: filePath, packageJsonPath: mismatch.packageJsonPath },
+          }
+        }
+      }
+      if (destructive?.destructive && input.allowDestructiveOverwrite !== true) {
+        return {
+          output: `Refusing destructive overwrite of ${filePath}. Re-run with allowDestructiveOverwrite=true to create a raw-byte recovery snapshot first.`,
+          isError: true,
+          metadata: { destructiveOverwriteDenied: true, attemptedPath: filePath, ...destructive },
+        }
       }
 
       // Protected source-of-truth policy: refuse destructive overwrites
@@ -78,6 +103,9 @@ export function createWriteTool(): NativeToolDef<WriteInput> {
       }
 
       try {
+        const recoverySnapshotPath = destructive?.destructive
+          ? await createRawRecoverySnapshot(filePath)
+          : undefined
         if (createDirs) {
           await mkdir(dirname(filePath), { recursive: true })
         }
@@ -101,6 +129,7 @@ export function createWriteTool(): NativeToolDef<WriteInput> {
             oldContent,
             newContent: input.content,
             changeKind: created ? 'create' : 'overwrite',
+            ...(recoverySnapshotPath ? { recoverySnapshotPath } : {}),
           },
         }
       } catch (err: unknown) {

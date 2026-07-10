@@ -110,20 +110,27 @@ export function createRunWorkspaceTool(): NativeToolDef<RunWorkspaceInput> {
       }
 
       try {
-        if (action === 'create') return await executeCreate(input, context)
-        if (action === 'readManifest') return await executeReadManifest(input, context)
-        if (action === 'recordArtifact') return await executeRecordArtifact(input, context)
-        if (action === 'readLedger') return await executeReadLedger(input, context)
-        if (action === 'refreshLedger') return await executeRefreshLedger(input, context)
-        if (action === 'recordEvent') return await executeRecordEvent(input, context)
-        if (action === 'writeCheckpoint') return await executeWriteCheckpoint(input, context)
-        return await executeReadCheckpoint(input, context)
+        const effectiveInput = action === 'create' ? input : withActiveRunRef(input, context)
+        if (action === 'create') return await executeCreate(effectiveInput, context)
+        if (action === 'readManifest') return await executeReadManifest(effectiveInput, context)
+        if (action === 'recordArtifact') return await executeRecordArtifact(effectiveInput, context)
+        if (action === 'readLedger') return await executeReadLedger(effectiveInput, context)
+        if (action === 'refreshLedger') return await executeRefreshLedger(effectiveInput, context)
+        if (action === 'recordEvent') return await executeRecordEvent(effectiveInput, context)
+        if (action === 'writeCheckpoint') return await executeWriteCheckpoint(effectiveInput, context)
+        return await executeReadCheckpoint(effectiveInput, context)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         return error(`Error: ${message}`, 'run-workspace:execution-error')
       }
     },
   }
+}
+
+function withActiveRunRef(input: RunWorkspaceInput, context?: ToolExecutionContext): RunWorkspaceInput {
+  if (input.runRef?.trim()) return input
+  const runDir = context?.taskState?.run.runWorkspace?.runDir
+  return runDir ? { ...input, runRef: runDir } : input
 }
 
 async function executeCreate(input: RunWorkspaceInput, context?: ToolExecutionContext): Promise<ToolResult> {

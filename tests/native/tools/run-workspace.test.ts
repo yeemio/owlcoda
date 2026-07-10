@@ -128,6 +128,29 @@ describe('RunWorkspace native tool', () => {
     expect(eventLines).toHaveLength(1)
   })
 
+  it('resolves omitted runRef from the active task run workspace', async () => {
+    const tool = createRunWorkspaceTool()
+    const outputRoot = join(tempDir, 'active-run')
+    const created = await tool.execute({ action: 'create', outputRoot, cwd: tempDir })
+    const runDir = JSON.parse(created.output).paths.runDir as string
+    await writeFile(join(outputRoot, 'report.md'), '# Report\n', 'utf8')
+
+    const result = await tool.execute({
+      action: 'recordArtifact',
+      path: 'report.md',
+      origin: 'write',
+      cwd: tempDir,
+    }, {
+      taskState: {
+        contract: { cwd: tempDir, allowedWritePaths: [] },
+        run: { runWorkspace: { runDir } },
+      } as any,
+    })
+
+    expect(result.isError).toBe(false)
+    expect(JSON.parse(result.output).path).toBe(join(outputRoot, 'report.md'))
+  })
+
   it('filters artifact ledger reads by runtime metadata', async () => {
     const tool = createRunWorkspaceTool()
     const outputRoot = join(tempDir, 'filtered-output')

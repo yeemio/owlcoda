@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { execSync } from 'node:child_process'
-import { mkdirSync, rmSync, existsSync, realpathSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, existsSync, readFileSync, realpathSync, writeFileSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createEnterWorktreeTool, type WorktreeState } from '../../../src/native/tools/enter-worktree.js'
 import { createExitWorktreeTool } from '../../../src/native/tools/exit-worktree.js'
+import { lifecycleLedgerPath } from '../../../src/native/tools/worktree-lifecycle.js'
 
 function makeTmpGitRepo(): string {
   const raw = join(tmpdir(), `owlcoda-wt-test-${Date.now()}`)
@@ -99,6 +100,34 @@ describe('EnterWorktree tool', () => {
     process.chdir(savedCwd)
   }, 20_000)
 
+  it('resumes an existing managed worktree from its lifecycle ledger', async () => {
+    const firstState: WorktreeState = { inWorktree: false }
+    const firstEnter = createEnterWorktreeTool(firstState)
+    const firstExit = createExitWorktreeTool(firstState)
+    await firstEnter.execute({ name: 'resume-test' })
+    const wtPath = firstState.worktreePath
+    await firstExit.execute({ action: 'keep' })
+
+    const resumedState: WorktreeState = { inWorktree: false }
+    const result = await createEnterWorktreeTool(resumedState).execute({
+      name: 'resume-test',
+      existing: 'resume',
+    })
+
+    expect(result.isError).toBe(false)
+    expect(result.metadata?.resumed).toBe(true)
+    expect(resumedState.worktreePath).toBe(wtPath)
+    expect(resumedState.baseCommit).toBeTruthy()
+    expect(resumedState.ledgerPath).toBeTruthy()
+  }, 20_000)
+
+  it('keeps lifecycle ledger paths distinct when normalized slugs would collide', () => {
+    const slashSlug = lifecycleLedgerPath(tmpRepo, 'a/b')
+    const underscoreSlug = lifecycleLedgerPath(tmpRepo, 'a_b')
+
+    expect(slashSlug).not.toBe(underscoreSlug)
+  })
+
   it('rejects if already in worktree', async () => {
     const state: WorktreeState = { inWorktree: true, worktreePath: '/tmp/x', originalCwd: savedCwd }
     const tool = createEnterWorktreeTool(state)
@@ -182,6 +211,7 @@ describe('ExitWorktree tool', () => {
     const exit = createExitWorktreeTool(state)
     await enter.execute({ name: 'rm-test' })
     const wtPath = state.worktreePath!
+    const ledgerPath = state.ledgerPath!
 
     const result = await exit.execute({ action: 'remove', discard_changes: true })
     expect(result.isError).toBe(false)
@@ -189,5 +219,48 @@ describe('ExitWorktree tool', () => {
     expect(state.inWorktree).toBe(false)
     // Worktree directory should be gone (or at least we tried)
     expect(existsSync(wtPath)).toBe(false)
+    expect(JSON.parse(readFileSync(ledgerPath, 'utf8'))).toMatchObject({
+      status: 'removed',
+      cleanup: { action: 'remove', discardChanges: true, discardCommits: false },
+    })
+  })
+
+  it('does not let discard_changes delete commits created after the worktree base', async () => {
+    const state: WorktreeState = { inWorktree: false }
+    const enter = createEnterWorktreeTool(state)
+    const exit = createExitWorktreeTool(state)
+    await enter.execute({ name: 'commit-protection' })
+    const wtPath = state.worktreePath!
+    writeFileSync(join(wtPath, 'committed.txt'), 'keep me\n')
+    execSync('git add committed.txt && git commit -m "worktree commit"', { cwd: wtPath, stdio: 'pipe' })
+
+    const result = await exit.execute({ action: 'remove', discard_changes: true })
+
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('discard_commits')
+    expect(existsSync(wtPath)).toBe(true)
+    expect(execSync('git branch --list owlcoda/commit-protection', { cwd: tmpRepo, encoding: 'utf8' })).toContain('owlcoda/commit-protection')
+  })
+
+  it.each(['missing', 'corrupt'])('fails closed when the lifecycle ledger is %s', async (mode) => {
+    const state: WorktreeState = { inWorktree: false }
+    const enter = createEnterWorktreeTool(state)
+    const exit = createExitWorktreeTool(state)
+    await enter.execute({ name: `ledger-${mode}` })
+    const wtPath = state.worktreePath!
+    const ledgerPath = state.ledgerPath!
+    if (mode === 'missing') unlinkSync(ledgerPath)
+    else writeFileSync(ledgerPath, '{not valid json')
+
+    const result = await exit.execute({
+      action: 'remove',
+      discard_changes: true,
+      discard_commits: true,
+    })
+
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain('lifecycle ledger')
+    expect(existsSync(wtPath)).toBe(true)
+    expect(execSync(`git branch --list owlcoda/ledger-${mode}`, { cwd: tmpRepo, encoding: 'utf8' })).toContain(`owlcoda/ledger-${mode}`)
   })
 })
