@@ -15,7 +15,7 @@ import type {
 } from './protocol/types.js'
 import { checkWritePathAllowed } from './tools/fs-policy.js'
 import { classifyBashCommand } from './bash-risk.js'
-import { createRunWorkspace, recordArtifact, type TaskFamily } from './run-workspace.js'
+import { createRunWorkspace, recordArtifact, recordEvent, type TaskFamily } from './run-workspace.js'
 import {
   admit as admitProvenanceRecord,
   cloneProvenanceLedgerData,
@@ -392,14 +392,24 @@ export function describeTaskExecutionState(taskState: TaskExecutionState): strin
   if (taskState.contract.scopeMode === 'workspace') {
     return null
   }
-  const preview = taskState.contract.allowedWritePaths
-    .slice(0, 3)
-    .map((scope) => scope.path)
+  const addedWritePaths = taskState.contract.allowedWritePaths
+    .map(scope => `${scope.path} [kind=${scope.kind}; origin=${scope.origin}]`)
     .join(', ')
-  const extra = taskState.contract.allowedWritePaths.length > 3
-    ? ` (+${taskState.contract.allowedWritePaths.length - 3} more)`
-    : ''
-  return `Task contract: write scope narrowed to ${taskState.contract.allowedWritePaths.length} task paths (${preview}${extra}).`
+  const scratchRoot = taskState.run.runWorkspace
+    ? resolve(taskState.run.runWorkspace.runDir, 'stage')
+    : '(RunWorkspace not initialized)'
+  return [
+    `Task contract: write scope narrowed to ${taskState.contract.allowedWritePaths.length} task paths.`,
+    `added_read_paths: (none)`,
+    `removed_read_paths: (none)`,
+    `added_write_paths: ${addedWritePaths || '(none)'}`,
+    `removed_write_paths: (none)`,
+    `added_commands: (none)`,
+    `removed_commands: (none)`,
+    `authorization_duration: current_task`,
+    `reason: explicit paths inferred from the user task`,
+    `scratch_root: ${scratchRoot}`,
+  ].join('\n')
 }
 
 export function markTaskIteration(
@@ -739,7 +749,16 @@ export async function recordBashArtifactProgress(
           path: artifactPath,
           origin: 'bash_detected',
           participatesInFinal: isWithinRoot(artifactPath, resolve(runWorkspace.outputRoot, 'final')),
-        }).catch(() => undefined))
+        }).catch(async (error: unknown) => {
+          const reason = `RunWorkspace artifact registration failed for ${artifactPath}: ${error instanceof Error ? error.message : String(error)}`
+          markTaskGuardBlocked(taskState, reason)
+          await recordEvent(runWorkspace.runDir, {
+            type: 'artifact_registration_failed',
+            message: reason,
+            data: { artifactPath },
+          }).catch(() => undefined)
+          throw error
+        }))
       }
       recorded = true
     } else if (isScratchArtifactPath(artifactPath)) {
@@ -816,6 +835,7 @@ export async function ensureRunWorkspaceForStructuredTask(
   const fsVerdict = checkWritePathAllowed(manifestPath, {
     workspaceRoot: taskState.contract.cwd,
     allowedRoots: [outputRoot],
+    allowRunWorkspaceMetadata: true,
   })
   if (!fsVerdict.allowed) {
     return { created: false, reason: `fs_policy:${fsVerdict.reason}`, outputRoot }

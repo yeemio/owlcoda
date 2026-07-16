@@ -5,7 +5,7 @@
  *   - unsafe tools denied without explicit autoApprove,
  *   - autoApprove allows unsafe tools (and the decision is visible).
  */
-import { mkdtemp } from 'node:fs/promises'
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
@@ -43,6 +43,16 @@ async function makeWorkspaceCodeChangeTaskState() {
   const cwd = await mkdtemp(join(tmpdir(), 'owlcoda-headless-code-change-'))
   const conversation = createConversation({ system: 'test', model: 'm' })
   addUserMessage(conversation, 'Fix the failing tests by modifying the source code in this repository.')
+  return { cwd, taskState: ensureTaskExecutionState(conversation, cwd) }
+}
+
+async function makeExplicitResearchTaskState() {
+  const cwd = await mkdtemp(join(tmpdir(), 'owlcoda-headless-research-'))
+  const conversation = createConversation({ system: 'test', model: 'm' })
+  addUserMessage(conversation, [
+    'Research the current repository without modifying source files.',
+    `Write the final report to \`${join(cwd, 'reports', 'findings.md')}\`.`,
+  ].join('\n'))
   return { cwd, taskState: ensureTaskExecutionState(conversation, cwd) }
 }
 
@@ -382,6 +392,144 @@ describe('headless approval policy', () => {
       expect(decision.reason).toBe('workspace-test-bash')
       expect(decision.bashRisk.level).toBe('unknown')
     }
+  })
+
+  it('auto-approves a workspace-local Node analysis script for an explicit report task', async () => {
+    const { cwd, taskState } = await makeExplicitResearchTaskState()
+    expect(taskState.contract.scopeMode).toBe('explicit_paths')
+    await mkdir(join(cwd, 'scripts'))
+    await writeFile(join(cwd, 'scripts', 'analyze-market-v0.cjs'), "console.log('ok')\n")
+
+    const command = `cd "${cwd}" && node scripts/analyze-market-v0.cjs`
+    const decision = decideHeadlessApproval('bash', true, { command }, taskState)
+
+    expect(decision.allowed).toBe(true)
+    if (decision.allowed) {
+      expect(decision.reason).toBe('workspace-script-bash')
+    }
+  })
+
+  it('does not auto-approve workspace scripts through Node environment injection', async () => {
+    const { cwd, taskState } = await makeExplicitResearchTaskState()
+    await mkdir(join(cwd, 'scripts'))
+    await writeFile(join(cwd, 'scripts', 'analyze-market-v0.cjs'), "console.log('ok')\n")
+
+    const decision = decideHeadlessApproval('bash', true, {
+      command: `cd "${cwd}" && NODE_OPTIONS=--require=/tmp/evil.cjs node scripts/analyze-market-v0.cjs`,
+    }, taskState)
+
+    expect(decision.allowed).toBe(false)
+  })
+
+  it('does not auto-approve workspace scripts through cd command substitution', async () => {
+    const { cwd, taskState } = await makeExplicitResearchTaskState()
+    await mkdir(join(cwd, 'scripts'))
+    await writeFile(join(cwd, 'scripts', 'analyze-market-v0.cjs'), "console.log('ok')\n")
+
+    const decision = decideHeadlessApproval('bash', true, {
+      command: `cd "$(touch /tmp/owlcoda-pwn; printf '${cwd}')" && node "${join(cwd, 'scripts', 'analyze-market-v0.cjs')}"`,
+    }, taskState)
+
+    expect(decision.allowed).toBe(false)
+  })
+
+  it('does not auto-approve command substitution in a trailing read-only-looking chunk', async () => {
+    const { cwd, taskState } = await makeExplicitResearchTaskState()
+    await mkdir(join(cwd, 'scripts'))
+    await writeFile(join(cwd, 'scripts', 'analyze-market-v0.cjs'), "console.log('ok')\n")
+
+    const decision = decideHeadlessApproval('bash', true, {
+      command: `cd "${cwd}" && node scripts/analyze-market-v0.cjs && echo "$(touch /tmp/owlcoda-pwn)"`,
+    }, taskState)
+
+    expect(decision.allowed).toBe(false)
+  })
+
+  it('does not auto-approve workspace scripts through cd tilde expansion', async () => {
+    const { cwd, taskState } = await makeExplicitResearchTaskState()
+    await mkdir(join(cwd, 'scripts'))
+    await writeFile(join(cwd, 'scripts', 'analyze-market-v0.cjs'), "console.log('ok')\n")
+
+    const decision = decideHeadlessApproval('bash', true, {
+      command: `cd ~ && node "${join(cwd, 'scripts', 'analyze-market-v0.cjs')}"`,
+    }, taskState)
+
+    expect(decision.allowed).toBe(false)
+  })
+
+  it('does not auto-approve tilde-expanded Node script paths', async () => {
+    const { cwd, taskState } = await makeExplicitResearchTaskState()
+    await mkdir(join(cwd, '~'))
+    await writeFile(join(cwd, '~', 'analyze.cjs'), "console.log('placeholder')\n")
+
+    const decision = decideHeadlessApproval('bash', true, {
+      command: `cd "${cwd}" && node ~/analyze.cjs`,
+    }, taskState)
+
+    expect(decision.allowed).toBe(false)
+  })
+
+  it('does not auto-approve backslash-escaped external Node script paths', async () => {
+    const { cwd, taskState } = await makeExplicitResearchTaskState()
+    await mkdir(join(cwd, '\\', 'tmp'), { recursive: true })
+    await writeFile(join(cwd, '\\', 'tmp', 'evil.js'), "console.log('placeholder')\n")
+
+    const decision = decideHeadlessApproval('bash', true, {
+      command: `cd "${cwd}" && node \\/tmp/evil.js`,
+    }, taskState)
+
+    expect(decision.allowed).toBe(false)
+  })
+
+  it('does not auto-approve globbed workspace script paths', async () => {
+    const { cwd, taskState } = await makeExplicitResearchTaskState()
+    await mkdir(join(cwd, 'scripts'))
+    await writeFile(join(cwd, 'scripts', 'analyze-market-v0.js'), "console.log('ok')\n")
+
+    const decision = decideHeadlessApproval('bash', true, {
+      command: `cd "${cwd}" && node scripts/*.js`,
+    }, taskState)
+
+    expect(decision.allowed).toBe(false)
+  })
+
+  it('does not auto-approve workspace script symlinks that resolve outside the workspace', async () => {
+    const { cwd, taskState } = await makeExplicitResearchTaskState()
+    const externalDir = await mkdtemp(join(tmpdir(), 'owlcoda-headless-external-script-'))
+    const externalScript = join(externalDir, 'analyze.cjs')
+    await writeFile(externalScript, "console.log('external')\n")
+    await mkdir(join(cwd, 'scripts'))
+    await symlink(externalScript, join(cwd, 'scripts', 'analyze.cjs'))
+
+    const decision = decideHeadlessApproval('bash', true, {
+      command: `cd "${cwd}" && node scripts/analyze.cjs`,
+    }, taskState)
+
+    expect(decision.allowed).toBe(false)
+  })
+
+  it('does not auto-approve workspace scripts with additional network arguments', async () => {
+    const { cwd, taskState } = await makeExplicitResearchTaskState()
+    await mkdir(join(cwd, 'scripts'))
+    await writeFile(join(cwd, 'scripts', 'analyze.cjs'), "console.log('ok')\n")
+
+    const decision = decideHeadlessApproval('bash', true, {
+      command: `cd "${cwd}" && node scripts/analyze.cjs https://example.com/data`,
+    }, taskState)
+
+    expect(decision.allowed).toBe(false)
+  })
+
+  it('does not auto-approve workspace scripts for unrelated explicit-path tasks', async () => {
+    const { cwd, taskState } = await makeExplicitTaskState('deliverable.md')
+    await mkdir(join(cwd, 'scripts'))
+    await writeFile(join(cwd, 'scripts', 'build.cjs'), "console.log('ok')\n")
+
+    const decision = decideHeadlessApproval('bash', true, {
+      command: `cd "${cwd}" && node scripts/build.cjs`,
+    }, taskState)
+
+    expect(decision.allowed).toBe(false)
   })
 
   it('auto-approves real SWE-bench pytest bash with verbose flag and tail filter', async () => {

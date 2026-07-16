@@ -16,6 +16,8 @@ export interface RuntimeTranscriptReadInput {
   projectRoot: string
   projectId?: string
   threadId: string
+  /** Return only transcript items at or after this append-only cursor. */
+  cursor?: number
 }
 
 export interface RuntimeTranscriptResult {
@@ -27,6 +29,8 @@ export interface RuntimeTranscriptResult {
   createdAt: number
   updatedAt: number
   itemCount: number
+  cursor: number
+  nextCursor: number
   runtimeEventCount: number
   items: RuntimeTranscriptItem[]
   replay?: RuntimeTranscriptReplay
@@ -221,6 +225,9 @@ export function readRuntimeTranscript(input: RuntimeTranscriptReadInput): Runtim
     })
   })
 
+  const cursor = normalizeTranscriptCursor(input.cursor, items.length)
+  const incrementalItems = items.slice(cursor).map(sanitizeTranscriptItem)
+
   return {
     threadId: session.id,
     ...(input.projectId ? { projectId: input.projectId } : {}),
@@ -230,12 +237,44 @@ export function readRuntimeTranscript(input: RuntimeTranscriptReadInput): Runtim
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     itemCount: items.length,
+    cursor,
+    nextCursor: items.length,
     runtimeEventCount: session.runtimeEventLog?.events.length ?? 0,
-    items,
+    items: incrementalItems,
     ...(session.runtimeEventLog?.events.length
       ? { replay: buildRuntimeTranscriptReplay(session.id, session.runtimeEventLog.events) }
       : {}),
   }
+}
+
+function normalizeTranscriptCursor(cursor: number | undefined, itemCount: number): number {
+  if (cursor === undefined) return 0
+  if (!Number.isSafeInteger(cursor) || cursor < 0) return 0
+  return Math.min(cursor, itemCount)
+}
+
+function sanitizeTranscriptItem(item: RuntimeTranscriptItem): RuntimeTranscriptItem {
+  if (item.kind === 'message' || item.kind === 'thinking') {
+    return { ...item, text: stripTerminalControlSequences(item.text) }
+  }
+  if (item.kind === 'tool_call' && item.result) {
+    return { ...item, result: sanitizeToolResult(item.result) }
+  }
+  if (item.kind === 'tool_result') {
+    return { ...item, result: sanitizeToolResult(item.result) }
+  }
+  return item
+}
+
+function sanitizeToolResult(result: RuntimeTranscriptToolResult): RuntimeTranscriptToolResult {
+  return { ...result, content: stripTerminalControlSequences(result.content) }
+}
+
+/** Keep raw PTY capture in its artifact; machine transcript reads contain text only. */
+export function stripTerminalControlSequences(value: string): string {
+  return value
+    .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, '')
+    .replace(/\x1B(?:\[[0-?]*[ -/]*[@-~]|[@-_])/g, '')
 }
 
 function buildRuntimeTranscriptReplay(threadId: string, events: RuntimeEventRecord[]): RuntimeTranscriptReplay {

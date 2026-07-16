@@ -491,6 +491,22 @@ describe('CLI commands integration', { timeout: CLI_COMMANDS_TEST_TIMEOUT_MS }, 
     expect(result.stderr).toMatch(/✅.*Node\.js/)
   })
 
+  it('doctor --json emits machine-readable build and schema identity', async () => {
+    const runtimeDir = makeRuntimeDir()
+    const result = await runCli(['doctor', '--json'], runtimeDir)
+    const report = JSON.parse(result.stdout)
+    expect(report.releaseIdentity).toMatchObject({
+      packageVersion: expect.any(String),
+      build: { sha: expect.any(String), dirty: expect.any(Boolean), builtAt: expect.any(String) },
+      schemaBundle: {
+        algorithm: 'sha256',
+        hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        fileCount: expect.any(Number),
+      },
+    })
+    expect(result.stderr).not.toContain('owlcoda doctor')
+  })
+
   it('init creates config.json', async () => {
     const runtimeDir = makeRuntimeDir()
     const result = await runCli(['init'], runtimeDir)

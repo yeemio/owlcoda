@@ -1181,7 +1181,8 @@ describe('runConversationLoop', () => {
     const secondMessages = requestBodies[1]?.['messages'] as Array<Record<string, unknown>>
     expect(JSON.stringify(secondMessages)).toContain('[Runtime task-step]')
     expect(JSON.stringify(secondMessages)).toContain('Call TaskCreate')
-    expect(result.finalText).toBe('Done.')
+    expect(result.finalText).toContain('Done.')
+    expect(result.finalText).toContain('Run-scoped touched files receipt:')
     expect(result.conversation.options?.taskState?.contract.touchedPaths).toContain(`${process.cwd()}/docs/contract.md`)
     expect(result.conversation.options?.taskState?.run.status).toBe('completed')
   })

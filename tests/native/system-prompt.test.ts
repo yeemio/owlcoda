@@ -50,6 +50,7 @@ describe('buildSystemPrompt', () => {
     const prompt = buildSystemPrompt()
     expect(prompt).toContain('# Doing tasks')
     expect(prompt).toContain('# Output')
+    expect(prompt).toContain('exact McNemar test')
   })
 
   it('includes OwlCoda daemon and live-client lifecycle facts', () => {

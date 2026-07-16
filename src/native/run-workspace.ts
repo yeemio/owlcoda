@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { appendFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, normalize, resolve } from 'node:path'
 import type { DeliverableMode } from './deliverable-contract.js'
 import type { ProjectMapSnapshot } from './protocol/project-map-types.js'
@@ -42,6 +42,7 @@ export interface RunWorkspacePaths {
   verificationPath: string
   projectMapPath: string
   eventsPath: string
+  taskReceiptPath: string
   stageDir: string
   finalDir: string
   assetsDir: string
@@ -162,6 +163,27 @@ export interface ReadArtifactLedgerOptions {
 }
 
 export type RunCheckpoint = Record<string, unknown>
+export type RunTaskReceipt = Record<string, unknown>
+
+export interface RunWorkspaceCompletionAssessment {
+  verdict: 'pass' | 'blocked'
+  blockers: string[]
+  registryParseable: boolean
+  requiredFinalArtifacts: {
+    expected: number
+    produced: number
+    missing: string[]
+  }
+  checkpointStatus: string | null
+  verification: {
+    checks: number
+    results: number
+    passed: boolean
+  }
+  activeFailureEvents: string[]
+}
+
+const ledgerMutationQueues = new Map<string, Promise<void>>()
 
 export function getRunWorkspacePaths(outputRoot: string, cwd = process.cwd()): RunWorkspacePaths {
   const resolvedOutputRoot = resolvePath(outputRoot, cwd)
@@ -228,6 +250,12 @@ export async function readCheckpoint(runRef: string, cwd = process.cwd()): Promi
   return readJson<RunCheckpoint>(paths.checkpointPath)
 }
 
+export async function writeTaskReceipt(runRef: string, receipt: RunTaskReceipt, cwd = process.cwd()): Promise<RunTaskReceipt> {
+  const paths = getRunWorkspacePathsFromRef(runRef, cwd)
+  await writeJson(paths.taskReceiptPath, receipt)
+  return receipt
+}
+
 export async function writeSkillRoute(runRef: string, skillRoute: Record<string, unknown>, cwd = process.cwd()): Promise<void> {
   const paths = getRunWorkspacePathsFromRef(runRef, cwd)
   await writeJson(paths.skillRoutePath, skillRoute)
@@ -276,6 +304,13 @@ export async function recordArtifact(
   cwd = process.cwd(),
 ): Promise<RunArtifactRecord> {
   const paths = getRunWorkspacePathsFromRef(runRef, cwd)
+  return withLedgerMutation(paths.artifactsPath, () => recordArtifactUnlocked(paths, options))
+}
+
+async function recordArtifactUnlocked(
+  paths: RunWorkspacePaths,
+  options: RecordArtifactOptions,
+): Promise<RunArtifactRecord> {
   const manifest = await readManifest(paths.runDir)
   const ledger = await readArtifactLedger(paths.runDir)
   const now = new Date().toISOString()
@@ -334,7 +369,11 @@ export async function recordArtifact(
 
 export async function refreshArtifactLedger(runRef: string, cwd = process.cwd()): Promise<ArtifactLedger> {
   const paths = getRunWorkspacePathsFromRef(runRef, cwd)
-  const ledger = await readArtifactLedger(paths.runDir)
+  return withLedgerMutation(paths.artifactsPath, () => refreshArtifactLedgerUnlocked(paths))
+}
+
+async function refreshArtifactLedgerUnlocked(paths: RunWorkspacePaths): Promise<ArtifactLedger> {
+  const ledger = await readJson<ArtifactLedger>(paths.artifactsPath)
   let changed = false
   const now = new Date().toISOString()
   const artifacts: RunArtifactRecord[] = []
@@ -371,6 +410,95 @@ export async function refreshArtifactLedger(runRef: string, cwd = process.cwd())
     await writeJson(paths.artifactsPath, refreshed)
   }
   return refreshed
+}
+
+export async function assessRunWorkspaceCompletion(
+  runRef: string,
+  cwd = process.cwd(),
+): Promise<RunWorkspaceCompletionAssessment> {
+  const paths = getRunWorkspacePathsFromRef(runRef, cwd)
+  const blockers: string[] = []
+  let ledger: ArtifactLedger | null = null
+  let registryParseable = true
+  try {
+    ledger = await refreshArtifactLedger(paths.runDir, cwd)
+    if (!Array.isArray(ledger.artifacts)) throw new Error('artifacts must be an array')
+  } catch {
+    registryParseable = false
+    blockers.push('artifact_registry_unparseable')
+  }
+
+  const required = ledger?.artifacts.filter(artifact => artifact.participatesInFinal) ?? []
+  const missing = required.filter(artifact => artifact.status !== 'present').map(artifact => artifact.path)
+  if (required.length === 0) blockers.push('no_required_final_artifacts')
+  if (missing.length > 0) blockers.push('required_final_artifacts_missing')
+
+  let checkpointStatus: string | null = null
+  let checkpointSource: string | null = null
+  try {
+    const checkpoint = await readJson<Record<string, unknown>>(paths.checkpointPath)
+    checkpointStatus = typeof checkpoint['status'] === 'string' ? checkpoint['status'] : null
+    checkpointSource = typeof checkpoint['source'] === 'string' ? checkpoint['source'] : null
+  } catch {
+    blockers.push('checkpoint_unparseable')
+  }
+  if (checkpointStatus !== 'completed' || checkpointSource !== 'task_verify') blockers.push('checkpoint_not_completed')
+
+  let verificationChecks = 0
+  let verificationResults = 0
+  let verificationPassed = false
+  try {
+    const verification = await readJson<Record<string, unknown>>(paths.verificationPath)
+    const checks = Array.isArray(verification['checks']) ? verification['checks'] : []
+    const results = Array.isArray(verification['results']) ? verification['results'] : []
+    verificationChecks = checks.length
+    verificationResults = results.length
+    verificationPassed = verification['source'] === 'task_verify'
+      && verificationRecordsMatch(checks, results)
+  } catch {
+    blockers.push('verification_unparseable')
+  }
+  if (verificationChecks === 0 || verificationResults === 0) blockers.push('verification_empty')
+  else if (!verificationPassed) blockers.push('verification_failed')
+
+  const activeFailureEvents = await readActiveFailureEvents(paths.eventsPath)
+  blockers.push(...activeFailureEvents.map(type => `active_runtime_failure:${type}`))
+
+  return {
+    verdict: blockers.length === 0 ? 'pass' : 'blocked',
+    blockers: [...new Set(blockers)],
+    registryParseable,
+    requiredFinalArtifacts: {
+      expected: required.length,
+      produced: required.length - missing.length,
+      missing,
+    },
+    checkpointStatus,
+    verification: {
+      checks: verificationChecks,
+      results: verificationResults,
+      passed: verificationPassed,
+    },
+    activeFailureEvents,
+  }
+}
+
+function verificationRecordsMatch(checks: unknown[], results: unknown[]): boolean {
+  if (checks.length === 0 || results.length !== checks.length) return false
+  const checkIds = checks.map(recordId)
+  const resultIds = results.map(recordId)
+  if (checkIds.some(id => id === null) || resultIds.some(id => id === null)) return false
+  if (new Set(checkIds).size !== checkIds.length || new Set(resultIds).size !== resultIds.length) return false
+  const expected = new Set(checkIds as string[])
+  return resultIds.every(id => id !== null && expected.has(id))
+    && results.every(result => isPassedVerificationResult(result))
+}
+
+function recordId(value: unknown): string | null {
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const id = typeof record['checkId'] === 'string' ? record['checkId'] : record['id']
+  return typeof id === 'string' && id.trim() ? id : null
 }
 
 export async function recordEvent(
@@ -455,6 +583,7 @@ function buildRunWorkspacePaths(outputRoot: string, runDir: string): RunWorkspac
     verificationPath: join(runDir, 'verification.json'),
     projectMapPath: join(runDir, 'project-map.json'),
     eventsPath: join(runDir, 'events.jsonl'),
+    taskReceiptPath: join(runDir, 'task-receipt.json'),
     stageDir: join(outputRoot, 'stage'),
     finalDir: join(outputRoot, 'final'),
     assetsDir: join(outputRoot, 'assets'),
@@ -512,7 +641,50 @@ async function readJson<T>(path: string): Promise<T> {
 }
 
 async function writeJson(path: string, value: unknown): Promise<void> {
-  await writeFile(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+  const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`
+  await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+  await rename(tempPath, path)
+}
+
+async function withLedgerMutation<T>(path: string, operation: () => Promise<T>): Promise<T> {
+  const previous = ledgerMutationQueues.get(path) ?? Promise.resolve()
+  const run = previous.catch(() => undefined).then(operation)
+  const tail = run.then(() => undefined, () => undefined)
+  ledgerMutationQueues.set(path, tail)
+  try {
+    return await run
+  } finally {
+    if (ledgerMutationQueues.get(path) === tail) ledgerMutationQueues.delete(path)
+  }
+}
+
+function isPassedVerificationResult(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && (value as Record<string, unknown>)['passed'] === true
+}
+
+const ACTIVE_FAILURE_EVENT_TYPES = new Set([
+  'artifact_registry_error',
+  'artifact_registration_failed',
+  'loop_intercept',
+  'repair_checkpoint',
+])
+
+async function readActiveFailureEvents(eventsPath: string): Promise<string[]> {
+  const raw = await readFile(eventsPath, 'utf8')
+  const active: string[] = []
+  for (const line of raw.split(/\r?\n/).filter(Boolean)) {
+    try {
+      const event = JSON.parse(line) as Record<string, unknown>
+      const type = typeof event['type'] === 'string' ? event['type'] : ''
+      const data = typeof event['data'] === 'object' && event['data'] !== null
+        ? event['data'] as Record<string, unknown>
+        : null
+      if (ACTIVE_FAILURE_EVENT_TYPES.has(type) && data?.['resolved'] !== true) active.push(type)
+    } catch {
+      active.push('events_unparseable')
+    }
+  }
+  return [...new Set(active)]
 }
 
 function artifactRecordsEqual(a: RunArtifactRecord, b: RunArtifactRecord): boolean {

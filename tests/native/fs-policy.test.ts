@@ -78,6 +78,16 @@ describe('fs-policy.checkWritePathAllowed', () => {
   })
 
   describe('out-of-scope writes', () => {
+    it('reserves RunWorkspace completion metadata for runtime tools', () => {
+      for (const name of ['verification.json', 'events.jsonl', 'task-receipt.json']) {
+        const target = join(workspaceRoot, '.owlcoda-run', name)
+        const ordinary = checkWritePathAllowed(target, { workspaceRoot })
+        expect(ordinary.allowed).toBe(false)
+        const runtime = checkWritePathAllowed(target, { workspaceRoot, allowRunWorkspaceMetadata: true })
+        expect(runtime.allowed).toBe(true)
+      }
+    })
+
     it('rejects ../ traversal escape', () => {
       // resolve("/ws/src/../../outside/x") => "/outside/x"
       const r = checkWritePathAllowed('src/../../escape.txt', { workspaceRoot })
@@ -109,6 +119,24 @@ describe('fs-policy.checkWritePathAllowed', () => {
   })
 
   describe('sensitive locations', () => {
+    it('rejects sensitive paths even with runtime metadata capability', () => {
+      const fakeHome = mkdtempSync(join(tmpdir(), 'owlcoda-fs-policy-runtime-home-'))
+      try {
+        mkdirSync(join(fakeHome, '.ssh'))
+        const target = join(fakeHome, '.ssh', '.owlcoda-run', 'manifest.json')
+        const result = checkWritePathAllowed(target, {
+          workspaceRoot: fakeHome,
+          homeDir: fakeHome,
+          allowedRoots: [fakeHome],
+          allowRunWorkspaceMetadata: true,
+        })
+        expect(result.allowed).toBe(false)
+        if (!result.allowed) expect(result.reason).toContain('SSH credentials')
+      } finally {
+        rmSync(fakeHome, { recursive: true, force: true })
+      }
+    })
+
     it('rejects ~/.ssh writes even when allowedRoots includes the home dir', () => {
       // Make HOME a temp dir so we can synthesize ~/.ssh deterministically.
       const fakeHome = mkdtempSync(join(tmpdir(), 'owlcoda-fs-policy-home-'))

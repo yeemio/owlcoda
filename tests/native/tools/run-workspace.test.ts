@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, unlink, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -29,6 +29,7 @@ describe('RunWorkspace native tool', () => {
     expect(schema.required).toEqual(['action'])
     expect(action.enum).toContain('writeCheckpoint')
     expect(action.enum).toContain('readCheckpoint')
+    expect(action.enum).toContain('assessCompletion')
     expect(properties['outputRoot']).toBeDefined()
     expect(properties['runRef']).toBeDefined()
     expect(properties['origin']).toBeDefined()
@@ -38,6 +39,94 @@ describe('RunWorkspace native tool', () => {
     expect(properties['artifactType']).toBeDefined()
     expect(properties['status']).toBeDefined()
     expect(properties['checkpoint']).toBeDefined()
+  })
+
+  it('does not accept forged completed metadata during create', async () => {
+    const outputRoot = join(tempDir, 'forged-create')
+    const tool = createRunWorkspaceTool()
+    const result = await tool.execute({
+      action: 'create',
+      outputRoot,
+      verification: { source: 'task_verify', checks: [{ id: 'fake' }], results: [{ checkId: 'fake', passed: true }] },
+      checkpoint: { version: 1, source: 'task_verify', status: 'completed' },
+    })
+    expect(result.isError).toBe(false)
+    expect(JSON.parse(await readFile(join(outputRoot, '.owlcoda-run', 'verification.json'), 'utf8'))).toEqual({ checks: [], results: [] })
+    expect(JSON.parse(await readFile(join(outputRoot, '.owlcoda-run', 'checkpoint.json'), 'utf8'))).toMatchObject({ status: 'initialized' })
+  })
+
+  it('uses the TaskContract workspace root for the actual create when input.cwd is omitted', async () => {
+    const processRoot = join(tempDir, 'process-root')
+    const workspaceRoot = join(tempDir, 'task-workspace')
+    await mkdir(processRoot, { recursive: true })
+    await mkdir(workspaceRoot, { recursive: true })
+    const previousCwd = process.cwd()
+    process.chdir(processRoot)
+    try {
+      const result = await createRunWorkspaceTool().execute({
+        action: 'create',
+        outputRoot: 'reports/run-1',
+      }, {
+        taskState: {
+          contract: { cwd: workspaceRoot, allowedWritePaths: [] },
+          run: {},
+        } as any,
+      })
+
+      expect(result.isError).toBe(false)
+      const canonicalWorkspaceRoot = await realpath(workspaceRoot)
+      const createdOutputRoot = JSON.parse(result.output).paths.outputRoot as string
+      expect(await realpath(createdOutputRoot)).toBe(join(canonicalWorkspaceRoot, 'reports', 'run-1'))
+      expect(existsSync(join(workspaceRoot, 'reports', 'run-1', '.owlcoda-run', 'manifest.json'))).toBe(true)
+      expect(existsSync(join(processRoot, 'reports', 'run-1', '.owlcoda-run', 'manifest.json'))).toBe(false)
+    } finally {
+      process.chdir(previousCwd)
+    }
+  })
+
+  it('creates under a declared external directory from TaskContract context', async () => {
+    const externalRoot = await mkdtemp(join(tmpdir(), 'owlcoda-run-workspace-external-'))
+    try {
+      const outputRoot = join(externalRoot, 'declared-report')
+      const result = await createRunWorkspaceTool().execute({
+        action: 'create',
+        outputRoot,
+      }, {
+        taskState: {
+          contract: {
+            cwd: tempDir,
+            allowedWritePaths: [{ path: externalRoot, kind: 'directory', origin: 'user-external' }],
+          },
+          run: {},
+        } as any,
+      })
+
+      expect(result.isError).toBe(false)
+      expect(existsSync(join(outputRoot, '.owlcoda-run', 'manifest.json'))).toBe(true)
+    } finally {
+      await rm(externalRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects an undeclared output root outside the TaskContract workspace', async () => {
+    const externalRoot = await mkdtemp(join(tmpdir(), 'owlcoda-run-workspace-undeclared-'))
+    try {
+      const result = await createRunWorkspaceTool().execute({
+        action: 'create',
+        outputRoot: join(externalRoot, 'undeclared-report'),
+      }, {
+        taskState: {
+          contract: { cwd: tempDir, allowedWritePaths: [] },
+          run: {},
+        } as any,
+      })
+
+      expect(result.isError).toBe(true)
+      expect(result.output).toContain('outside the allowed workspace')
+      expect(existsSync(join(externalRoot, 'undeclared-report', '.owlcoda-run', 'manifest.json'))).toBe(false)
+    } finally {
+      await rm(externalRoot, { recursive: true, force: true })
+    }
   })
 
   it('creates metadata, records artifacts, refreshes the ledger, and records events', async () => {
@@ -227,6 +316,21 @@ describe('RunWorkspace native tool', () => {
     const read = await tool.execute({ action: 'readCheckpoint', runRef: outputRoot })
     expect(read.isError).toBe(false)
     expect(JSON.parse(read.output)).toEqual(checkpoint)
+  })
+
+  it('exposes a fail-closed completion assessment', async () => {
+    const tool = createRunWorkspaceTool()
+    const outputRoot = join(tempDir, 'completion-output')
+    await tool.execute({ action: 'create', outputRoot, cwd: tempDir })
+
+    const result = await tool.execute({ action: 'assessCompletion', runRef: outputRoot })
+
+    expect(result.isError).toBe(false)
+    expect(JSON.parse(result.output)).toMatchObject({
+      verdict: 'blocked',
+      registryParseable: true,
+      blockers: expect.arrayContaining(['no_required_final_artifacts', 'checkpoint_not_completed', 'verification_empty']),
+    })
   })
 
   it('records skill asset copy source without writing the copied artifact itself', async () => {

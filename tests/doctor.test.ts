@@ -40,6 +40,20 @@ describe('doctor module', { timeout: 15000 }, () => {
     expect(report).toHaveProperty('failCount')
     expect(report).toHaveProperty('skipCount')
     expect(report).toHaveProperty('replacement')
+    expect(report.releaseIdentity).toMatchObject({
+      packageVersion: expect.any(String),
+      build: {
+        sha: expect.any(String),
+        dirty: expect.any(Boolean),
+        builtAt: expect.any(String),
+      },
+      schemaBundle: {
+        algorithm: 'sha256',
+        hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        fileCount: expect.any(Number),
+        files: expect.arrayContaining(['runtime-event-contract.v1.schema.json']),
+      },
+    })
     expect(Array.isArray(report.checks)).toBe(true)
     expect(report.checks.length).toBeGreaterThanOrEqual(5) // at minimum: node, tsx, config, launch, runtime health
   })
@@ -162,6 +176,9 @@ describe('doctor module', { timeout: 15000 }, () => {
     const { parseArgs } = await import('../src/cli-core.js')
     const result = parseArgs(['node', 'owlcoda', 'doctor'])
     expect(result.command).toBe('doctor')
+    const jsonResult = parseArgs(['node', 'owlcoda', 'doctor', '--json'])
+    expect(jsonResult.command).toBe('doctor')
+    expect(jsonResult.jsonOutput).toBe(true)
   })
 
   it('SearXNG check is present', async () => {

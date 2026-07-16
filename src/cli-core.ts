@@ -470,7 +470,7 @@ Usage:
   owlcoda                       Open the native REPL (proxy auto-started)
   owlcoda -p "…"                Headless one-shot (alias of \`owlcoda run -p\`)
   owlcoda init                  Create config.json (auto-detects local backend)
-  owlcoda doctor                Diagnose environment
+  owlcoda doctor [--json]       Diagnose environment with optional machine-readable release identity
 
 Daily:
   owlcoda                       Native REPL (default)
@@ -481,7 +481,7 @@ Daily:
 Setup & diagnostics:
   owlcoda init                  Create config.json (--endpoint URL, --force)
   owlcoda config                Show active configuration and resolved models
-  owlcoda doctor                Environment health (Node/endpoints/models/skills/etc.)
+  owlcoda doctor [--json]       Environment health and machine-readable release identity
   owlcoda validate              Validate config file (schema + semantics)
   owlcoda health                Check proxy, local runtime, and model health
   owlcoda models                Show configured models and runtime visibility
@@ -1702,7 +1702,11 @@ export async function main(): Promise<void> {
     case 'doctor': {
       const { runDoctor, formatDoctorReport } = await import('./doctor.js')
       const report = await runDoctor(configPath)
-      console.error(formatDoctorReport(report))
+      if (jsonOutput || passthroughArgs.includes('--json')) {
+        console.log(JSON.stringify(report, null, 2))
+      } else {
+        console.error(formatDoctorReport(report))
+      }
       process.exit(report.failCount > 0 ? 1 : 0)
     }
     case 'cutover-status': {

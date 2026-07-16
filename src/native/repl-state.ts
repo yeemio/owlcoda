@@ -22,6 +22,8 @@ export interface ReplTaskState {
   outputGateToken: number
   startedAt: number
   activeToolName?: string
+  interruptedPhase?: ReplTaskState['phase']
+  interruptedToolName?: string
 }
 
 export interface ReplRuntimeState {
@@ -84,6 +86,8 @@ export function interruptReplTask(runtime: ReplRuntimeState): ReplTaskState | nu
     stack: interruptTraceStack('interruptReplTask.before'),
   })
   task.aborted = true
+  task.interruptedPhase = task.phase
+  task.interruptedToolName = task.activeToolName
   task.phase = 'interrupted'
   task.activeToolName = undefined
   runtime.phase = 'interrupted'

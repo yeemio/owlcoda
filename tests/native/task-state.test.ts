@@ -1314,6 +1314,10 @@ describe('native task state', () => {
       const description = describeTaskExecutionState(taskState)
       expect(description).not.toBeNull()
       expect(description).toMatch(/^Task contract: write scope narrowed/)
+      expect(description).toContain('added_write_paths:')
+      expect(description).toContain('kind=file')
+      expect(description).toContain('authorization_duration: current_task')
+      expect(description).toContain('scratch_root:')
     })
   })
 

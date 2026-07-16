@@ -105,7 +105,7 @@ owlcoda -m fast                  # 按 id / 别名 / 部分匹配选模型
 owlcoda -p "list all .ts files"  # headless（非交互）
 owlcoda init                     # 写出 config.json（自动检测模型）
 owlcoda admin                    # 浏览器 Admin
-owlcoda doctor                   # 环境诊断
+owlcoda doctor [--json]          # 环境诊断；JSON 包含 build/schema identity
 owlcoda models                   # 分层模型列表 + 路由探测
 owlcoda --resume last            # 恢复上次会话
 owlcoda skills                   # 列出已学习技能

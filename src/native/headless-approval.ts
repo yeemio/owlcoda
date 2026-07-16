@@ -65,7 +65,7 @@ export const UNSAFE_HEADLESS_TOOLS: ReadonlySet<string> = new Set([
   'LongTaskReplace',
 ])
 
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, realpathSync, statSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { classifyBashCommand, type BashRiskClassification, type BashRiskLevel } from './bash-risk.js'
 import { classifyDeliverableContract } from './deliverable-contract.js'
@@ -77,6 +77,7 @@ export type HeadlessApprovalDecision =
   | { allowed: true; reason: 'safe-tool' }
   | { allowed: true; reason: 'safe-bash'; toolName: 'bash' | 'TaskCreate' | 'LongTaskReplace'; bashRisk: BashRiskClassification }
   | { allowed: true; reason: 'workspace-test-bash'; toolName: 'bash' | 'TaskCreate' | 'LongTaskReplace'; bashRisk: BashRiskClassification }
+  | { allowed: true; reason: 'workspace-script-bash'; toolName: 'bash' | 'TaskCreate' | 'LongTaskReplace'; bashRisk: BashRiskClassification }
   | { allowed: true; reason: 'task-contract-auto-approve'; toolName: string }
   | { allowed: false; reason: 'deny-tool-explicit'; toolName: string }
   | { allowed: false; reason: 'deny-tool-not-allowed'; toolName: string }
@@ -169,6 +170,9 @@ export function decideHeadlessApproval(
     if (autoApprove && isAllowedWorkspaceTestBash(input?.['command'], taskState)) {
       return { allowed: true, reason: 'workspace-test-bash', toolName: 'bash', bashRisk }
     }
+    if (autoApprove && isAllowedWorkspaceScriptBash(input?.['command'], taskState)) {
+      return { allowed: true, reason: 'workspace-script-bash', toolName: 'bash', bashRisk }
+    }
     // needs_approval / dangerous / unknown — fail closed in unattended
     // headless even with --auto-approve. File mutation approval for headless
     // is limited to structured write/edit/NotebookEdit paths declared in the
@@ -192,6 +196,9 @@ export function decideHeadlessApproval(
     if (autoApprove && isAllowedWorkspaceTestBash(cmd, taskState)) {
       return { allowed: true, reason: 'workspace-test-bash', toolName: 'TaskCreate', bashRisk }
     }
+    if (autoApprove && isAllowedWorkspaceScriptBash(cmd, taskState)) {
+      return { allowed: true, reason: 'workspace-script-bash', toolName: 'TaskCreate', bashRisk }
+    }
     return { allowed: false, reason: 'deny-bash-risk', toolName: 'TaskCreate', bashRisk }
   }
 
@@ -206,6 +213,9 @@ export function decideHeadlessApproval(
     }
     if (autoApprove && isAllowedWorkspaceTestBash(cmd, taskState)) {
       return { allowed: true, reason: 'workspace-test-bash', toolName: 'LongTaskReplace', bashRisk }
+    }
+    if (autoApprove && isAllowedWorkspaceScriptBash(cmd, taskState)) {
+      return { allowed: true, reason: 'workspace-script-bash', toolName: 'LongTaskReplace', bashRisk }
     }
     return { allowed: false, reason: 'deny-bash-risk', toolName: 'LongTaskReplace', bashRisk }
   }
@@ -308,6 +318,7 @@ function isAllowedWorkspaceTestBash(
     const cdTarget = parseCdChunk(chunk)
     if (cdTarget !== undefined) {
       if (cdTarget === null) return false
+      if (!isLiteralShellPath(cdTarget)) return false
       const nextDir = resolve(currentDir, cdTarget)
       if (!pathStaysInWorkspace(nextDir, workspaceRoot)) return false
       currentDir = nextDir
@@ -330,6 +341,70 @@ function isAllowedWorkspaceTestBash(
   }
 
   return sawAllowedCommand
+}
+
+function isAllowedWorkspaceScriptBash(
+  command: unknown,
+  taskState: TaskExecutionState | undefined,
+): boolean {
+  if (typeof command !== 'string' || !command.trim() || !taskState) return false
+  if (/[$`\\]|[<>]\(/.test(command)) return false
+  if (taskState.contract.scopeMode !== 'explicit_paths') return false
+  if (!isHighConfidenceResearchArtifactTask(taskState)) return false
+  if (!taskState.contract.allowedWritePaths.some(scope => scope.origin !== 'external_reference')) {
+    return false
+  }
+
+  const workspaceRoot = resolve(taskState.contract.cwd)
+  let currentDir = workspaceRoot
+  let sawWorkspaceScript = false
+
+  for (const chunk of splitHeadlessCommand(command)) {
+    if (hasMutatingShellRedirect(chunk)) return false
+
+    const cdTarget = parseCdChunk(chunk)
+    if (cdTarget !== undefined) {
+      if (cdTarget === null) return false
+      if (!isLiteralShellPath(cdTarget)) return false
+      const nextDir = resolve(currentDir, cdTarget)
+      if (!pathStaysInWorkspace(nextDir, workspaceRoot)) return false
+      currentDir = nextDir
+      continue
+    }
+
+    const tokens = tokenizeShellLike(stripFdDuplication(chunk))
+    if (tokens[0] === 'env' || (tokens[0] && isShellEnvAssignment(tokens[0]))) return false
+    if (tokens[0] === 'node' && tokens.length === 2 && isWorkspaceLocalNodeScript(tokens[1]!, currentDir, workspaceRoot)) {
+      sawWorkspaceScript = true
+      continue
+    }
+
+    const risk = classifyBashCommand(chunk)
+    if (risk.level !== 'safe_readonly') return false
+  }
+
+  return sawWorkspaceScript
+}
+
+function isLiteralShellPath(value: string): boolean {
+  return value.length > 0 && !/[\0\r\n$`~\\*?\[\]{}<>|;&]/.test(value)
+}
+
+function isHighConfidenceResearchArtifactTask(taskState: TaskExecutionState): boolean {
+  const text = `${taskState.contract.objective}\n\n${taskState.contract.sourceText}`
+  const deliverable = classifyDeliverableContract(text)
+  return deliverable.mode === 'file_artifact_delivery'
+    && deliverable.confidence === 'high'
+    && /(?:\bresearch\b|\banalysis\b|\baudit\b|\breport\b|研究|分析|审计|报告)/i.test(text)
+}
+
+function isWorkspaceLocalNodeScript(script: string, currentDir: string, workspaceRoot: string): boolean {
+  if (!/\.(?:cjs|mjs|js)$/.test(script) || script.includes('\0')) return false
+  if (script.startsWith('-')) return false
+  if (!isLiteralShellPath(script)) return false
+  const scriptPath = resolve(currentDir, script)
+  if (!existsSync(scriptPath) || !statSync(scriptPath).isFile()) return false
+  return pathStaysInWorkspace(scriptPath, workspaceRoot)
 }
 
 function isAllowedWorkspacePythonHeredocCommand(command: string, workspaceRoot: string): boolean {

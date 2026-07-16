@@ -113,7 +113,7 @@ owlcoda -m fast                  # pick a model by id / alias / partial match
 owlcoda -p "list all .ts files"  # headless (non-interactive)
 owlcoda init                     # write config.json (auto-detects models)
 owlcoda admin                    # browser admin
-owlcoda doctor                   # environment diagnostics
+owlcoda doctor [--json]          # environment diagnostics; JSON includes build/schema identity
 owlcoda models                   # tiered model list + route probing
 owlcoda --resume last            # resume the previous session
 owlcoda skills                   # list learned skills

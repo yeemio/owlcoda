@@ -280,6 +280,35 @@ describe('0.13.97 streaming timeout layers', () => {
     }, 10_000)
   })
 
+  describe('stream total-runtime watchdog', () => {
+    let server: http.Server
+    afterAll(() => { server?.close() })
+
+    it('terminates a continuously active stream at the configured hard ceiling', async () => {
+      mockRouterHandler = (_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        const timer = setInterval(() => writeOpenAiContentChunk(res, 'still-running '), 40)
+        res.on('close', () => clearInterval(timer))
+      }
+      await startOwlcodaWith({
+        requestTimeoutMs: 30_000,
+        streamFirstTokenTimeoutMs: 2_000,
+        streamIdleTimeoutMs: 2_000,
+        streamTotalTimeoutMs: 300,
+      })
+      server = owlcodaServer
+      const res = await postStream({ model: 'default', messages: [{ role: 'user', content: 'Hi' }], max_tokens: 50 })
+      const { events } = await readSseEvents(res)
+      expect(events.filter(e => e.type === 'content_block_delta').length).toBeGreaterThan(1)
+      const errorEvent = events.find(e => e.type === 'error')
+      expect(errorEvent?.error.diagnostic).toMatchObject({
+        kind: 'timeout',
+        partialOutputSeen: true,
+      })
+      expect(errorEvent?.error.diagnostic.detail).toContain('total-runtime watchdog')
+    }, 10_000)
+  })
+
   describe('provider socket close after partial output', () => {
     let server: http.Server
     afterAll(() => { server?.close() })

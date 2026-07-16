@@ -65,6 +65,10 @@ export interface MiddlewareConfig {
    *  (default 600_000). Only useful when you want streaming idle to
    *  diverge from the route's overall HTTP timeout. */
   streamIdleTimeoutMs?: number
+  /** Hard ceiling for the complete streaming response, even when chunks keep
+   *  arriving. Prevents a provider from holding a task forever with heartbeat
+   *  or thinking-only output. Defaults to 600_000 (10 minutes). */
+  streamTotalTimeoutMs?: number
   /** 0.13.98 Batch B: model used by auto-compact's LLM-summary path.
    *  Defaults to the conversation's current model. Set to a cheap-and-fast
    *  model id (e.g. an aliased local 7B) to decouple compaction cost from

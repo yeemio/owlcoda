@@ -82,6 +82,7 @@ export type TaskVerificationKind =
   | 'artifact_count'
   | 'verification_pack'
   | 'run_verdict_gate'
+  | 'mcnemar_method'
   | 'http_get'
   | 'command'
   | 'none'
@@ -100,6 +101,9 @@ export interface TaskVerificationCheck {
   root?: string
   glob?: string
   min?: number
+  discordant01?: number
+  discordant10?: number
+  requestedMethod?: 'exact' | 'asymptotic'
   deckPath?: string
   expectedSections?: number
   buildNotesPath?: string

@@ -230,6 +230,30 @@ describe('runtime transcript replay model', () => {
       ],
     })
   })
+
+  it('returns cursor-based text-only increments without replaying prior TUI output', () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const conversation = createConversation({ system: 'runtime replay system', model: 'replay-model' })
+    conversation.turns.push({
+      role: 'assistant',
+      timestamp: 1,
+      content: [
+        { type: 'text', text: '\u001b[2J\u001b[Hfirst\u001b[31m red\u001b[0m' },
+        { type: 'text', text: 'second' },
+      ],
+    })
+    saveSession(conversation, 'Incremental transcript', { cwd: projectRoot })
+    createdSessions.push(conversation.id)
+
+    const first = readRuntimeTranscript({ projectRoot, threadId: conversation.id, cursor: 0 })
+    expect(first?.items.map(item => item.kind === 'message' ? item.text : '')).toEqual(['first red', 'second'])
+    expect(first?.nextCursor).toBe(2)
+
+    const unchanged = readRuntimeTranscript({ projectRoot, threadId: conversation.id, cursor: first?.nextCursor })
+    expect(unchanged?.cursor).toBe(2)
+    expect(unchanged?.nextCursor).toBe(2)
+    expect(unchanged?.items).toEqual([])
+  })
 })
 
 function makeTemporaryProjectRoot(): string {

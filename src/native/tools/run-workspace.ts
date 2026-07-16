@@ -1,5 +1,6 @@
 import type { DeliverableMode } from '../deliverable-contract.js'
 import {
+  assessRunWorkspaceCompletion,
   createRunWorkspace,
   getRunWorkspacePaths,
   getRunWorkspacePathsFromRef,
@@ -29,6 +30,7 @@ export type RunWorkspaceAction =
   | 'recordEvent'
   | 'writeCheckpoint'
   | 'readCheckpoint'
+  | 'assessCompletion'
 
 export interface RunWorkspaceInput {
   action: RunWorkspaceAction | string
@@ -68,6 +70,7 @@ const ACTIONS = new Set<RunWorkspaceAction>([
   'recordEvent',
   'writeCheckpoint',
   'readCheckpoint',
+  'assessCompletion',
 ])
 
 const TASK_FAMILIES = new Set<TaskFamily>([
@@ -95,7 +98,7 @@ export function createRunWorkspaceTool(): NativeToolDef<RunWorkspaceInput> {
     description:
       'Manage OwlCoda durable run metadata under .owlcoda-run. Supports ' +
       'create/readManifest/recordArtifact/readLedger/refreshLedger/recordEvent/' +
-      'writeCheckpoint/readCheckpoint. ' +
+      'writeCheckpoint/readCheckpoint/writeVerification/assessCompletion. ' +
       'This tool does not execute shell commands or write user deliverables; it ' +
       'only creates and updates run manifest, artifact ledger, verification, checkpoint, and event metadata.',
     maturity: 'beta',
@@ -118,6 +121,7 @@ export function createRunWorkspaceTool(): NativeToolDef<RunWorkspaceInput> {
         if (action === 'refreshLedger') return await executeRefreshLedger(effectiveInput, context)
         if (action === 'recordEvent') return await executeRecordEvent(effectiveInput, context)
         if (action === 'writeCheckpoint') return await executeWriteCheckpoint(effectiveInput, context)
+        if (action === 'assessCompletion') return await executeAssessCompletion(effectiveInput, context)
         return await executeReadCheckpoint(effectiveInput, context)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -142,19 +146,18 @@ async function executeCreate(input: RunWorkspaceInput, context?: ToolExecutionCo
   const deliverableMode = optionalEnum(input.deliverableMode, DELIVERABLE_MODES, 'deliverableMode')
   if (deliverableMode instanceof Error) return validationError(deliverableMode.message)
 
-  const paths = getRunWorkspacePaths(outputRoot, input.cwd ?? context?.taskState?.contract.cwd ?? process.cwd())
+  const effectiveCwd = input.cwd ?? context?.taskState?.contract.cwd ?? process.cwd()
+  const paths = getRunWorkspacePaths(outputRoot, effectiveCwd)
   const fsVerdict = allowMetadataWrite(paths.manifestPath, input, context)
   if (fsVerdict) return fsVerdict
 
   const result = await createRunWorkspace({
     outputRoot,
-    ...(typeof input.cwd === 'string' && input.cwd.trim() ? { cwd: input.cwd } : {}),
+    cwd: effectiveCwd,
     ...(taskFamily ? { taskFamily } : {}),
     ...(deliverableMode ? { deliverableMode } : {}),
     ...(isRecord(input.skillRoute) ? { skillRoute: input.skillRoute } : {}),
     ...(isRecord(input.plan) ? { plan: input.plan } : {}),
-    ...(isRecord(input.verification) ? { verification: input.verification } : {}),
-    ...(isRecord(input.checkpoint) ? { checkpoint: input.checkpoint } : {}),
   })
 
   return jsonResult(result, { action: 'create', runDir: result.paths.runDir })
@@ -251,6 +254,9 @@ async function executeWriteCheckpoint(input: RunWorkspaceInput, context?: ToolEx
   if (typeof runRef !== 'string') return runRef
   const checkpoint = resolveCheckpointInput(input)
   if (checkpoint instanceof Error) return validationError(checkpoint.message)
+  if (checkpoint.status === 'completed') {
+    return validationError('RunWorkspace completed checkpoints are runtime-owned and can only be written by passing TaskVerify.')
+  }
 
   const fsVerdict = allowMetadataWrite(getRunWorkspacePathsFromRef(runRef, input.cwd).checkpointPath, input, context)
   if (fsVerdict) return fsVerdict
@@ -266,6 +272,16 @@ async function executeReadCheckpoint(input: RunWorkspaceInput, context?: ToolExe
   if (fsVerdict) return fsVerdict
   const result = await readCheckpoint(runRef, input.cwd)
   return jsonResult(result, { action: 'readCheckpoint' })
+}
+
+async function executeAssessCompletion(input: RunWorkspaceInput, context?: ToolExecutionContext): Promise<ToolResult> {
+  const runRef = requiredString(input.runRef, 'runRef')
+  if (typeof runRef !== 'string') return runRef
+  const paths = getRunWorkspacePathsFromRef(runRef, input.cwd)
+  const fsVerdict = allowMetadataRead(paths.runDir, input, context)
+  if (fsVerdict) return fsVerdict
+  const result = await assessRunWorkspaceCompletion(runRef, input.cwd)
+  return jsonResult(result, { action: 'assessCompletion', verdict: result.verdict, blockerCount: result.blockers.length })
 }
 
 function resolveEventInput(input: RunWorkspaceInput): RunWorkspaceEvent | Error {
@@ -339,6 +355,7 @@ function allowMetadataWrite(targetPath: string, input: RunWorkspaceInput, contex
   const policy = checkWritePathAllowed(targetPath, {
     workspaceRoot: input.cwd ?? context?.taskState?.contract.cwd,
     externalScopes: extractUserDeclaredExternalRoots(context?.taskState),
+    allowRunWorkspaceMetadata: true,
   })
   if (policy.allowed) return null
   return {

@@ -2,6 +2,78 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.29] — 2026-07-11
+
+Harness reliability release for unattended execution, evidence-backed
+completion, bounded provider lifecycles, and resumable task receipts.
+
+### Added
+
+- Added atomic RunWorkspace artifact registration and completion gates that
+  require readable artifacts, completed checkpoints, and passing verification.
+- Added contract-aware headless approval for declared safe work while keeping
+  undeclared paths and unsafe operations fail-closed.
+- Added first-token, idle, and total provider timeouts with structured fallback
+  classification, plus cursor-based incremental PTY transcripts.
+- Added interruption receipts, run-scoped write sets, scratch/final path
+  persistence, and explainable TaskContract permission diffs.
+- Added content-fingerprint-aware verification retries and exact small-sample
+  McNemar policy with fail-closed asymptotic guards.
+
+### Fixed
+
+- Prevented artifact registration, verification, loop, or repair failures from
+  being reported as completed tasks.
+- Filtered terminal redraw control sequences from machine-readable transcript
+  output while preserving raw evidence for review.
+- Returned restart guidance when filesystem roots require startup-time
+  configuration instead of repeating ineffective approval attempts.
+
+## [0.15.28] — 2026-07-10
+
+Execution-economics patch for bounded structured-output tasks and state-aware
+verification retries.
+
+### Added
+
+- Added persistent task-level limits for provider calls, input/output tokens,
+  elapsed time, and caller-priced cost, with typed stop checkpoints.
+- Added explicit primary/rerun idempotency reservations and independent
+  provider, parse, repair, salvage, and rerun counters.
+- Added `doctor --json` release identity and deterministic schema bundle hash.
+
+### Fixed
+
+- Aborted real upstream requests when the remaining task elapsed budget
+  expires, and serialized shared budget/idempotency reservations across
+  runtime processes.
+- Allowed a failed verification command to run again after tracked worktree
+  state changes while still intercepting unchanged no-progress retries.
+
+## [0.15.27] — 2026-07-10
+
+Structured-output correctness patch for contract identity, provider-native
+schema transport, and typed output-budget failures.
+
+### Added
+
+- Added provider/model contract matrices with inspectable provenance for the
+  effective locale, token budget, and reasoning controls.
+- Added complete nested JSON Schema transport for explicitly supported
+  OpenAI-compatible and Anthropic structured-output routes.
+- Added typed `output_budget_exhausted` evidence across responses, attempts,
+  persisted artifacts, runtime events, and OpenAPI.
+
+### Fixed
+
+- Made hybrid built-in/custom structured-output contracts fail closed instead
+  of silently combining mismatched identities, schemas, and defaults.
+- Prevented built-in and custom preset/schema identity forgery, including
+  mutation of shared canonical contract values.
+- Preserved prompt-and-parse fallback for providers whose native JSON Schema
+  capability is unknown, while keeping successful repair and salvage results
+  usable when a provider reports `max_tokens`.
+
 ## [0.15.26] — 2026-07-10
 
 Workspace safety and state consistency release for destructive-write recovery,

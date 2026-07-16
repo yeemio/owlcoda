@@ -73,6 +73,24 @@ describe('model output provider matrix', () => {
     })
     expect(report.samples).toEqual(expect.arrayContaining([
       expect.objectContaining({
+        sampleId: 'kimi-json-after-explanation',
+        expectedOutcome: 'parse_success',
+        actualOutcome: 'parse_success',
+        ok: true,
+      }),
+      expect.objectContaining({
+        sampleId: 'kimi-max-tokens-repair',
+        expectedOutcome: 'repair_success',
+        actualOutcome: 'repair_success',
+        ok: true,
+      }),
+      expect.objectContaining({
+        sampleId: 'kimi-long-reasoning-salvage',
+        expectedOutcome: 'salvage_success',
+        actualOutcome: 'salvage_success',
+        ok: true,
+      }),
+      expect.objectContaining({
         providerClass: 'kimi-long-context-thinking',
         sampleId: 'kimi-thinking-only-fallback',
         expectedOutcome: 'failed_fallback',

@@ -317,6 +317,7 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
       projectId: project.id,
       projectRoot: project.root,
       threadId,
+      ...(numberField(params, 'cursor') !== undefined ? { cursor: numberField(params, 'cursor') } : {}),
     })
     if (!result) {
       throw new JsonRpcError(-32602, 'Thread not found for project')

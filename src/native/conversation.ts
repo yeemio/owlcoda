@@ -6,7 +6,8 @@
  */
 
 import { createHash } from 'node:crypto'
-import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { basename as pathBasename, dirname as pathDirname, isAbsolute as pathIsAbsolute, join as pathJoin, normalize as pathNormalize, resolve as pathResolve } from 'node:path'
 import * as v8 from 'node:v8'
 import type {
@@ -82,6 +83,7 @@ import { recordMicrocompactShadow } from './microcompact.js'
 import { recordClaimFidelityTelemetry } from './evidence-ledger-fidelity.js'
 import { dedupeFinalReportLines } from './final-text-hygiene.js'
 import { compactOlderToolResults } from './rolling-context-hygiene.js'
+import { assessRunWorkspaceCompletion, recordEvent as recordRunWorkspaceEvent } from './run-workspace.js'
 import { isGateV2Enabled } from './gate-v2-flag.js'
 import { isModesEnabled, evaluateModeGate, evaluateAutoApproval } from './modes.js'
 import {
@@ -3217,6 +3219,27 @@ export async function runConversationLoop(
     markTaskGuardBlocked(taskState, `The loop hit the iteration cap (${iterations}/${maxIterations}) before the task finished.`)
   } else if (!finalText.trim() && taskState.run.status === 'open' && lastUserTurnHasSuccessfulToolResult(conversation.turns)) {
     markTaskGuardBlocked(taskState, 'The loop stopped after successful tool results before the assistant produced a durable next step.')
+  }
+
+  if (taskState.run.status === 'completed' && taskState.run.runWorkspace) {
+    const runRef = taskState.run.runWorkspace.runDir
+    try {
+      const assessment = await assessRunWorkspaceCompletion(runRef)
+      if (assessment.verdict !== 'pass') {
+        const reason = `RunWorkspace completion gate blocked: ${assessment.blockers.join(', ')}`
+        markTaskGuardBlocked(taskState, reason)
+        opts.callbacks?.onNotice?.(reason)
+        await recordRunWorkspaceEvent(runRef, {
+          type: 'completion_gate_blocked',
+          message: reason,
+          data: { assessment },
+        }).catch(() => undefined)
+      }
+    } catch (err) {
+      const reason = `RunWorkspace completion gate unavailable: ${err instanceof Error ? err.message : String(err)}`
+      markTaskGuardBlocked(taskState, reason)
+      opts.callbacks?.onNotice?.(reason)
+    }
   }
 
   if (lastStopReason === 'end_turn' && finalText.trim() && taskState.contract.touchedPaths.length > 0) {
@@ -7891,7 +7914,20 @@ async function executeTools(
       schemaFailCounts.set(key, priorCount + 1)
     }
 
-    const nextAttempt = buildToolAttempt(block.name, block.input)
+    let nextAttempt = buildToolAttempt(block.name, block.input)
+    const isStateAwareBashAttempt = isVerificationLikeBashCommand(block.name, block.input)
+      || isBashMonitoringAttempt(nextAttempt)
+    if (isStateAwareBashAttempt) {
+      const worktreeStateFingerprint = bashWorktreeStateFingerprint(
+        String(block.input['cwd'] ?? taskState?.contract.cwd ?? process.cwd()),
+      )
+      if (worktreeStateFingerprint) {
+        nextAttempt = {
+          ...nextAttempt,
+          signature: `${nextAttempt.signature}#state:${hashToolPayload(worktreeStateFingerprint)}`,
+        }
+      }
+    }
     const loopError = isToolLoopGuardEnabled() ? detectToolLoop(attempts, nextAttempt, crossTurnFailureClasses) : null
     if (loopError) {
       const mode = getLoopInterceptMode()
@@ -8502,14 +8538,18 @@ async function executeTools(
         rawFailureCategory.length > 0
           ? rawFailureCategory
           : undefined
-      const progressFingerprint =
-        !result.result.isError && (block.name === 'bash' || block.name === 'Bash')
-          ? bashMonitorProgressFingerprint(result.result.output)
-          : null
+      const outputProgressFingerprint = !result.result.isError && (block.name === 'bash' || block.name === 'Bash')
+        ? bashMonitorProgressFingerprint(String(block.input['command'] ?? ''), result.result.output)
+        : null
       const completedAttempt = {
         ...nextAttempt,
-        ...(progressFingerprint
-          ? { signature: `${nextAttempt.signature}#progress:${hashToolPayload(progressFingerprint)}` }
+        ...(outputProgressFingerprint
+          ? {
+              signature: [
+                nextAttempt.signature,
+                `progress:${hashToolPayload(outputProgressFingerprint)}`,
+              ].join('#'),
+            }
           : {}),
         isError: result.result.isError && !usablePartialEvidence,
         failureCategory,
@@ -8580,7 +8620,8 @@ function hasUnprotectedPipeline(command: string): boolean {
   return !/\b(?:pipefail|PIPESTATUS)\b/.test(command)
 }
 
-function bashMonitorProgressFingerprint(output: string): string | null {
+export function bashMonitorProgressFingerprint(command: string, output: string): string | null {
+  void command
   const counts: string[] = []
   for (const line of output.split(/\r?\n/)) {
     const match = line.match(/^\s*(\d+)\s+(\S+\.(?:jsonl|json|log|txt|csv|tsv))\b/)
@@ -8588,6 +8629,31 @@ function bashMonitorProgressFingerprint(output: string): string | null {
     counts.push(`${match[2]}=${match[1]}`)
   }
   return counts.length >= 2 ? `count-lines:${counts.join(';')}` : null
+}
+
+export function bashWorktreeStateFingerprint(cwd: string): string | null {
+  try {
+    const status = execFileSync(
+      'git',
+      ['status', '--porcelain=v1', '--untracked-files=all'],
+      { cwd, encoding: 'utf8', timeout: 1_500, maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] },
+    )
+    const changedContent = status
+      .split(/\r?\n/)
+      .filter(line => line.length >= 4)
+      .map(line => line.slice(3).split(' -> ').at(-1) ?? '')
+      .sort()
+      .map(path => {
+        try {
+          return `${path}:${createHash('sha256').update(readFileSync(pathResolve(cwd, path))).digest('hex')}`
+        } catch {
+          return `${path}:unreadable`
+        }
+      })
+    return `worktree-state:${hashToolPayload(`${normalizeToolPayload(status).trim()}\n${changedContent.join('\n')}`)}`
+  } catch {
+    return null
+  }
 }
 
 export function buildToolAttempt(
@@ -8676,6 +8742,10 @@ function sleepBashPollingLoopReason(window: ToolAttemptSignature[]): string | nu
 
   const bashAttempts = window.filter((attempt) => attempt.category === 'bash')
   if (bashAttempts.some((attempt) => attempt.signature.includes('#progress:'))) return null
+  const worktreeStates = bashAttempts
+    .map(attempt => attempt.signature.match(/#state:([^#]+)/)?.[1])
+    .filter((value): value is string => Boolean(value))
+  if (new Set(worktreeStates).size > 1) return null
   if (!bashAttempts.every(isBashMonitoringAttempt)) return null
 
   return `task stuck in tool loop: repeated ${pattern} monitoring attempts`
@@ -8685,6 +8755,7 @@ function isBashMonitoringAttempt(attempt: ToolAttemptSignature): boolean {
   if (attempt.category !== 'bash') return false
   const text = `${attempt.target} ${attempt.intentTarget}`.toLowerCase()
   return /\b(?:date|du|find|grep|jobs|lsof|ls|pgrep|ps|stat|tail|wc)\b/.test(text)
+    || /\bgit(?:\s+-C\s+\S+)?\s+(?:status|diff)\b/.test(text)
 }
 
 export function detectToolLoop(

@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startServer } from '../src/server.js'
+import { resetStructuredOutputIdempotencyForTesting } from '../src/endpoints/structured-output.js'
 import type { OwlCodaConfig } from '../src/config.js'
 import { createRunWorkspace, readArtifactLedger } from '../src/native/run-workspace.js'
 
@@ -12,6 +13,7 @@ let backendUrl = ''
 let app: http.Server
 let appUrl = ''
 const backendBodies: any[] = []
+let hardBudgetUpstreamClosed = false
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -164,11 +166,45 @@ beforeAll(async () => {
     const raw = await readBody(req)
     const body = JSON.parse(raw)
     backendBodies.push(body)
+    if (bodyContains(body, 'Task hard abort probe')) {
+      res.on('close', () => {
+        if (!res.writableEnded) hardBudgetUpstreamClosed = true
+      })
+      await sleep(200)
+      if (res.destroyed) return
+    }
     if (body.stream === true) {
       await writeStreamingResponse(res, body)
       return
     }
     res.writeHead(200, { 'Content-Type': 'application/json' })
+    const outputBudgetExhausted = bodyContains(body, 'Budget exhaustion persistence probe')
+    const content = bodyContains(body, 'Repair count probe')
+      ? '```json\n{"artifact":"evidence-digest.v1","summary":"Repaired digest","confidence":0.66,}\n```'
+      : bodyContains(body, 'Salvage count probe')
+        ? 'artifact: evidence-digest.v1\nsummary: Salvaged digest\nconfidence: 0.58\n{broken'
+      : outputBudgetExhausted
+      ? '{"artifact":"evidence-digest.v1","summary":"Truncated before confidence"}'
+      : bodyContains(body, 'OwlFootball custom contract example')
+      ? '{"artifact":"owlfootball-evidence.v2","summary":"业务证据摘要。","confidence":0.88,"source_refs":[],"risks":[],"data_gaps":[]}'
+      : bodyContains(body, 'Nested schema transport probe')
+        ? '{"artifact":"nested-contract.v2","summary":"Nested schema.","evidence":{"status":"confirmed","sources":[{"kind":"report","label":"Primary"}]}}'
+      : bodyContains(body, 'Built-in documentation example')
+        ? '{"artifact":"evidence-digest.v1","summary":"简短的证据摘要。","confidence":0.88}'
+        : '{"artifact":"evidence-digest.v1","summary":"Endpoint digest","confidence":0.88}'
+    if (body.model === 'anthropic-nonstream-upstream') {
+      res.end(JSON.stringify({
+        id: 'msg-test',
+        type: 'message',
+        role: 'assistant',
+        model: body.model,
+        content: [{ type: 'text', text: content }],
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        usage: { input_tokens: 11, output_tokens: 7, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      }))
+      return
+    }
     res.end(JSON.stringify({
       id: 'chatcmpl-test',
       object: 'chat.completion',
@@ -176,9 +212,9 @@ beforeAll(async () => {
         index: 0,
         message: {
           role: 'assistant',
-          content: '{"artifact":"evidence-digest.v1","summary":"Endpoint digest","confidence":0.88}',
+          content,
         },
-        finish_reason: 'stop',
+        finish_reason: outputBudgetExhausted ? 'length' : 'stop',
       }],
       usage: {
         prompt_tokens: 11,
@@ -208,6 +244,16 @@ beforeAll(async () => {
         supportsStreaming: true,
       },
       {
+        id: 'kimi-matrix-model',
+        label: 'Kimi Matrix Model',
+        backendModel: 'upstream-model',
+        aliases: [],
+        tier: 'general',
+        endpoint: `${backendUrl}/v1/chat/completions`,
+        supportsStructuredOutput: true,
+        supportsStreaming: false,
+      },
+      {
         id: 'anthropic-stream-model',
         label: 'Anthropic Stream Model',
         backendModel: 'anthropic-upstream-model',
@@ -215,6 +261,16 @@ beforeAll(async () => {
         tier: 'general',
         endpoint: `${backendUrl}/v1/messages`,
         supportsStreaming: true,
+      },
+      {
+        id: 'anthropic-nonstream-model',
+        label: 'Anthropic Non-stream Model',
+        backendModel: 'anthropic-nonstream-upstream',
+        aliases: [],
+        tier: 'general',
+        endpoint: `${backendUrl}/v1/messages`,
+        supportsStructuredOutput: true,
+        supportsStreaming: false,
       },
       {
         id: 'non-streaming-model',
@@ -264,15 +320,6 @@ describe('/v1/structured-output', () => {
       body: JSON.stringify({
         model: 'test-model',
         preset: 'evidence-digest.v1',
-        schema: {
-          type: 'object',
-          required: ['artifact', 'summary', 'confidence'],
-          properties: {
-            artifact: { const: 'evidence-digest.v1' },
-            summary: { type: 'string' },
-            confidence: { type: 'number' },
-          },
-        },
         user: 'Digest this.',
         maxTokens: 500,
       }),
@@ -294,6 +341,89 @@ describe('/v1/structured-output', () => {
     expect(backendBodies[0].messages[0].content).toContain('Return exactly one short JSON object')
     expect(backendBodies[0].messages[0].content).toContain('Required top-level keys: artifact, summary, confidence')
     expect(backendBodies[0].messages[0].content).toContain('Constant fields: artifact="evidence-digest.v1"')
+    expect(backendBodies[0].response_format).toBeUndefined()
+  })
+
+  it('sends the full resolved nested schema to OpenAI-compatible upstream', async () => {
+    const beforeCalls = backendBodies.length
+    const schema = {
+      type: 'object',
+      required: ['artifact', 'summary', 'evidence'],
+      additionalProperties: false,
+      properties: {
+        artifact: { const: 'nested-contract.v2' },
+        summary: { type: 'string' },
+        evidence: {
+          type: 'object',
+          required: ['status', 'sources'],
+          additionalProperties: false,
+          properties: {
+            status: { type: 'string', enum: ['confirmed', 'rejected'] },
+            sources: {
+              type: 'array',
+              items: {
+                type: 'object',
+                required: ['kind', 'label'],
+                additionalProperties: false,
+                properties: {
+                  kind: { type: 'string', enum: ['report', 'dataset'] },
+                  label: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+    const res = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'non-streaming-model',
+        preset: 'nested-contract.v2',
+        schemaId: 'nested-contract',
+        schemaVersion: 'v2',
+        schema,
+        system: 'Return the nested contract as JSON.',
+        policy: { maxArrayItems: 10, maxStringLength: 500 },
+        maxTokens: 800,
+        user: 'Nested schema transport probe',
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).ok).toBe(true)
+    expect(backendBodies).toHaveLength(beforeCalls + 1)
+    expect(backendBodies.at(-1).response_format).toEqual({
+      type: 'json_schema',
+      json_schema: { name: 'nested-contract', strict: false, schema },
+    })
+  })
+
+  it('sends the full resolved built-in schema to Anthropic Messages upstream', async () => {
+    const res = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'anthropic-nonstream-model',
+        preset: 'evidence-digest.v1',
+        user: 'Capture the Anthropic schema contract.',
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.ok).toBe(true)
+    expect(backendBodies.at(-1).output_config).toEqual({
+      format: {
+        type: 'json_schema',
+        schema: expect.objectContaining({
+          type: 'object',
+          required: ['artifact', 'summary', 'confidence'],
+          properties: expect.objectContaining({ artifact: { const: 'evidence-digest.v1' } }),
+        }),
+      },
+    })
   })
 
   it('streams provider chunks into structured output and records activity metadata', async () => {
@@ -304,15 +434,6 @@ describe('/v1/structured-output', () => {
       body: JSON.stringify({
         model: 'test-model',
         preset: 'evidence-digest.v1',
-        schema: {
-          type: 'object',
-          required: ['artifact', 'summary', 'confidence'],
-          properties: {
-            artifact: { const: 'evidence-digest.v1' },
-            summary: { type: 'string' },
-            confidence: { type: 'number' },
-          },
-        },
         user: 'Digest this through provider streaming delta.',
         maxTokens: 500,
         idleTimeoutMs: 200,
@@ -559,6 +680,196 @@ describe('/v1/structured-output', () => {
     expect(backendBodies.at(-1).temperature).toBe(1)
   })
 
+  it('sends the matched Kimi matrix controls to the real upstream request', async () => {
+    const beforeCalls = backendBodies.length
+    const res = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'kimi-matrix-model',
+        preset: 'evidence-digest.v1',
+        user: 'Resolve the Kimi effective request.',
+      }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(backendBodies).toHaveLength(beforeCalls + 1)
+    expect(backendBodies.at(-1)).toMatchObject({ max_tokens: 20_480, temperature: 0.2 })
+    expect(body.providerMatrixProvenance).toMatchObject({
+      providerMatrixEntryId: 'provider-preset-matrix.v1/evidence-digest.v1/kimi',
+      matched: true,
+      applied: true,
+      appliedControls: expect.arrayContaining(['maxTokens', 'temperature', 'idleTimeoutMs', 'hardTimeoutMs', 'forceLocale']),
+    })
+  })
+
+  it('rejects a built-in preset with a caller custom schema before upstream', async () => {
+    const beforeCalls = backendBodies.length
+    const res = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'test-model',
+        preset: 'evidence-digest.v1',
+        schema: { type: 'object', required: ['custom'], properties: { custom: { type: 'string' } } },
+        user: 'Reject this hybrid contract.',
+      }),
+    })
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.message).toContain('built-in preset cannot be combined with a custom schema')
+    expect(backendBodies).toHaveLength(beforeCalls)
+  })
+
+  it('rejects cross-contract built-in identity before upstream while allowing canonical identity', async () => {
+    const beforeCalls = backendBodies.length
+    const rejected = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'deepseek-reasoner',
+        preset: 'evidence-digest.v1',
+        presetId: 'analyst-audit',
+        presetVersion: 'v1',
+        schemaId: 'custom-schema',
+        schemaVersion: 'v9',
+        user: 'Reject cross-contract identity.',
+      }),
+    })
+    expect(rejected.status).toBe(400)
+    expect((await rejected.json()).error.message).toContain('built-in preset identity conflicts with canonical contract')
+    expect(backendBodies).toHaveLength(beforeCalls)
+
+    const accepted = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'test-model',
+        preset: 'evidence-digest.v1',
+        presetId: 'evidence-digest',
+        presetVersion: 'v1',
+        schemaId: 'evidence-digest',
+        schemaVersion: 'v1',
+        user: 'Accept canonical identity.',
+      }),
+    })
+    expect(accepted.status).toBe(200)
+    expect(await accepted.json()).toMatchObject({
+      presetId: 'evidence-digest',
+      presetVersion: 'v1',
+      schemaId: 'evidence-digest',
+      schemaVersion: 'v1',
+    })
+    expect(backendBodies).toHaveLength(beforeCalls + 1)
+  })
+
+  it('rejects forged custom preset and built-in schema identities before upstream', async () => {
+    const beforeCalls = backendBodies.length
+    const customContract = {
+      model: 'kimi-matrix-model',
+      preset: 'owlfootball-evidence.v2',
+      schema: { type: 'object', required: ['summary'], properties: { summary: { type: 'string' } } },
+      system: 'Return the caller schema.',
+      policy: { maxArrayItems: 8 },
+      maxTokens: 600,
+      user: 'Reject forged custom identity.',
+    }
+
+    const forgedPreset = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...customContract,
+        presetId: 'evidence-digest',
+        presetVersion: 'v1',
+        schemaId: 'owlfootball-evidence',
+        schemaVersion: 'v2',
+      }),
+    })
+    expect(forgedPreset.status).toBe(400)
+    expect((await forgedPreset.json()).error.message).toContain('preset identity conflicts with canonical preset')
+
+    const forgedSchema = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...customContract,
+        schemaId: 'evidence-digest',
+        schemaVersion: 'v1',
+      }),
+    })
+    expect(forgedSchema.status).toBe(400)
+    expect((await forgedSchema.json()).error.message).toContain('custom schema identity conflicts with built-in contract')
+    expect(backendBodies).toHaveLength(beforeCalls)
+  })
+
+  it('executes the built-in and OwlFootball custom documentation request contracts', async () => {
+    const beforeCalls = backendBodies.length
+    const builtIn = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'kimi-matrix-model',
+        preset: 'evidence-digest.v1',
+        system: 'Return only one JSON object. Do not include chain-of-thought.',
+        user: 'Built-in documentation example',
+        repairPolicy: { enabled: true, maxAttempts: 1 },
+        salvagePolicy: { enabled: true, fields: ['artifact', 'summary', 'confidence', 'source_refs', 'risks'] },
+        policy: { forbiddenPhrases: ['下注', '出票', '入串', 'EV', 'Kelly', 'fair odds'] },
+      }),
+    })
+    expect(builtIn.status).toBe(200)
+    expect(await builtIn.json()).toMatchObject({
+      ok: true,
+      presetId: 'evidence-digest',
+      schemaId: 'evidence-digest',
+      providerMatrixProvenance: { matched: true, applied: true },
+    })
+    expect(backendBodies.at(-1)).toMatchObject({ max_tokens: 20_480, temperature: 0.2 })
+
+    const custom = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'kimi-matrix-model',
+        preset: 'owlfootball-evidence.v2',
+        presetId: 'owlfootball-evidence',
+        presetVersion: 'v2',
+        schemaId: 'owlfootball-evidence-contract',
+        schemaVersion: 'v2',
+        schema: {
+          type: 'object',
+          required: ['artifact', 'summary', 'confidence', 'source_refs', 'risks'],
+          properties: {
+            artifact: { const: 'owlfootball-evidence.v2' },
+            summary: { type: 'string' },
+            confidence: { type: 'number' },
+            source_refs: { type: 'array', items: { type: 'string' } },
+            risks: { type: 'array', items: { type: 'string' } },
+            data_gaps: { type: 'array', items: { type: 'string' } },
+          },
+        },
+        system: 'Return only a compact JSON object. No chain-of-thought.',
+        user: 'OwlFootball custom contract example',
+        maxTokens: 1200,
+        policy: { forbiddenPhrases: ['下注', '出票', '入串', 'EV', 'Kelly', 'fair odds'] },
+      }),
+    })
+    expect(custom.status).toBe(200)
+    expect(await custom.json()).toMatchObject({
+      ok: true,
+      presetId: 'owlfootball-evidence',
+      presetVersion: 'v2',
+      schemaId: 'owlfootball-evidence-contract',
+      schemaVersion: 'v2',
+      providerMatrixProvenance: { matched: false, applied: false },
+    })
+    expect(backendBodies.at(-1)).toMatchObject({ max_tokens: 1200 })
+    expect(backendBodies).toHaveLength(beforeCalls + 2)
+  })
+
   it('persists artifact and attempts into the RunWorkspace ledger when requested', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'owlcoda-structured-output-ledger-'))
     try {
@@ -574,19 +885,11 @@ describe('/v1/structured-output', () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'test-model',
+          model: 'kimi-matrix-model',
           preset: 'evidence-digest.v1',
-          schema: {
-            type: 'object',
-            required: ['artifact', 'summary', 'confidence'],
-            properties: {
-              artifact: { const: 'evidence-digest.v1' },
-              summary: { type: 'string' },
-              confidence: { type: 'number' },
-            },
-          },
           user: 'Digest this and persist it.',
           maxTokens: 500,
+          forceLocale: 'en-US',
           persist: true,
           runRef: outputRoot,
           role: 'evidence',
@@ -632,7 +935,7 @@ describe('/v1/structured-output', () => {
         version: 1,
         artifactKind: 'structured_output_artifact',
         role: 'evidence',
-        model: 'test-model',
+        model: 'kimi-matrix-model',
         preset: 'evidence-digest.v1',
         presetId: 'evidence-digest',
         presetVersion: 'v1',
@@ -640,6 +943,17 @@ describe('/v1/structured-output', () => {
         schemaVersion: 'v1',
         repairPolicyVersion: 'repair-policy.v1',
         providerMatrixVersion: 'provider-preset-matrix.v1',
+        providerMatrixProvenance: {
+          providerMatrixEntryId: 'provider-preset-matrix.v1/evidence-digest.v1/kimi',
+          providerMatrixEntryHash: expect.stringMatching(/^sha256:/),
+          matched: true,
+          applied: true,
+          appliedControls: expect.arrayContaining(['temperature', 'idleTimeoutMs', 'hardTimeoutMs']),
+          overrides: {
+            maxTokens: { source: 'request', value: 500, matrixValue: 20_480 },
+            forceLocale: { source: 'request', value: 'en-US', matrixValue: 'zh-CN' },
+          },
+        },
         ok: true,
         usable: true,
         consumerReady: true,
@@ -666,7 +980,7 @@ describe('/v1/structured-output', () => {
         },
         capabilityGate: {
           ok: true,
-          source: 'fallback',
+          source: 'declared',
           requestedMaxTokens: 500,
           appliedMaxTokens: 500,
         },
@@ -684,16 +998,70 @@ describe('/v1/structured-output', () => {
         presetVersion: 'v1',
         schemaId: 'evidence-digest',
         schemaVersion: 'v1',
+        providerMatrixProvenance: body.providerMatrixProvenance,
         capabilityGate: {
           ok: true,
-          source: 'fallback',
+          source: 'declared',
         },
       })
+      expect(artifactPayload.providerMatrixProvenance).toEqual(body.providerMatrixProvenance)
+      expect(attemptsPayload.providerMatrixProvenance).toEqual(body.providerMatrixProvenance)
+      expect(attemptsPayload.attempts[0].providerMatrixProvenance).toEqual(body.providerMatrixProvenance)
       expect(attemptsPayload.attempts.map((attempt: any) => attempt.label)).toEqual(['primary', 'parse'])
+      expect(attemptsPayload.executionCounts).toMatchObject({ providerCalls: 1, parseAttempts: 1, rerunAttempts: 0 })
 
       const eventsText = await readFile(join(outputRoot, '.owlcoda-run', 'events.jsonl'), 'utf8')
       expect(eventsText).toContain('structured_output_artifact_recorded')
       expect(eventsText).toContain(body.artifactId)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('persists output_budget_exhausted in artifact and attempt receipts', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'owlcoda-structured-output-budget-'))
+    try {
+      const outputRoot = join(dir, 'run-output')
+      await createRunWorkspace({ outputRoot, cwd: dir, runId: 'run-output-budget' })
+      const res = await fetch(`${appUrl}/v1/structured-output`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'non-streaming-model',
+          preset: 'evidence-digest.v1',
+          user: 'Budget exhaustion persistence probe',
+          maxTokens: 50,
+          persist: true,
+          runRef: outputRoot,
+          role: 'evidence',
+        }),
+      })
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body).toMatchObject({
+        ok: false,
+        unusableReason: 'output_budget_exhausted',
+        stopReason: 'max_tokens',
+        persisted: true,
+      })
+      const ledger = await readArtifactLedger(outputRoot)
+      const artifactRecord = ledger.artifacts.find(artifact => artifact.id === body.artifactId)!
+      const attemptsRecord = ledger.artifacts.find(artifact => artifact.id === body.attemptLedgerId)!
+      const artifactPayload = JSON.parse(await readFile(artifactRecord.path, 'utf8'))
+      const attemptsPayload = JSON.parse(await readFile(attemptsRecord.path, 'utf8'))
+      expect(artifactPayload).toMatchObject({
+        unusableReason: 'output_budget_exhausted',
+        stopReason: 'max_tokens',
+        fallbackUsed: true,
+      })
+      expect(attemptsPayload.attempts.at(-1)).toMatchObject({
+        label: 'fallback',
+        failureReason: 'output_budget_exhausted',
+        error: 'output_budget_exhausted',
+        stopReason: 'max_tokens',
+      })
+      expect(attemptsPayload.failureReason).toBe('output_budget_exhausted')
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -776,7 +1144,7 @@ describe('/v1/structured-output', () => {
 
       const first = await fetch(`${appUrl}/v1/structured-output`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'shared-primary-rerun-key' },
         body: JSON.stringify({
           model: 'test-model',
           preset: 'evidence-digest.v1',
@@ -798,7 +1166,7 @@ describe('/v1/structured-output', () => {
       const beforeRerunCalls = backendBodies.length
       const rerun = await fetch(`${appUrl}/v1/structured-output/rerun`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'shared-primary-rerun-key' },
         body: JSON.stringify({
           model: 'test-model',
           preset: 'evidence-digest.v1',
@@ -825,7 +1193,11 @@ describe('/v1/structured-output', () => {
       })
       expect(rerunBody.artifactId).toMatch(/^structured-output-/)
       expect(rerunBody.artifactId).not.toBe(firstBody.artifactId)
+      expect(firstBody.idempotency.namespace).toBe('primary')
+      expect(rerunBody.idempotency.namespace).toBe('rerun')
+      expect(rerunBody.idempotency.replayed).toBe(false)
       expect(rerunBody.attemptLedgerId).toBe(`${rerunBody.artifactId}-attempts`)
+      expect(rerunBody.executionCounts).toMatchObject({ providerCalls: 1, rerunAttempts: 1 })
       expect(backendBodies).toHaveLength(beforeRerunCalls + 1)
       const rerunUpstreamBody = backendBodies[backendBodies.length - 1]
       expect(JSON.stringify(rerunUpstreamBody.messages)).toContain(firstBody.artifactId)
@@ -885,6 +1257,7 @@ describe('/v1/structured-output', () => {
         },
       })
       expect(attemptsPayload.attempts.map((attempt: any) => attempt.label)).toEqual(['primary', 'parse'])
+      expect(attemptsPayload.executionCounts).toMatchObject({ providerCalls: 1, parseAttempts: 1, rerunAttempts: 1 })
 
       const eventsText = await readFile(join(outputRoot, '.owlcoda-run', 'events.jsonl'), 'utf8')
       expect(eventsText).toContain('structured_output_artifact_rerun_recorded')
@@ -932,6 +1305,317 @@ describe('/v1/structured-output', () => {
       expect(missingInput.status).toBe(400)
       expect((await missingInput.json()).error.message).toContain('user, inputRef, or artifactRef is required')
       expect(backendBodies).toHaveLength(beforeCalls)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('coalesces concurrent and later requests with the same explicit idempotency key', async () => {
+    const beforeCalls = backendBodies.length
+    const request = () => fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'endpoint-idempotency-a' },
+      body: JSON.stringify({ model: 'test-model', user: 'Idempotency primary probe' }),
+    })
+
+    const [first, concurrent] = await Promise.all([request(), request()])
+    expect(first.status).toBe(200)
+    expect(concurrent.status).toBe(200)
+    const firstBody = await first.json()
+    const concurrentBody = await concurrent.json()
+    expect(backendBodies).toHaveLength(beforeCalls + 1)
+    expect([firstBody.idempotency.replayed, concurrentBody.idempotency.replayed].sort()).toEqual([false, true])
+    expect(concurrentBody.idempotency.requestHash).toBe(firstBody.idempotency.requestHash)
+
+    const later = await request()
+    expect(later.status).toBe(200)
+    expect((await later.json()).idempotency.replayed).toBe(true)
+    expect(backendBodies).toHaveLength(beforeCalls + 1)
+
+    const conflict = await fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'endpoint-idempotency-a' },
+      body: JSON.stringify({ model: 'test-model', user: 'Different request under the same key' }),
+    })
+    expect(conflict.status).toBe(409)
+    expect((await conflict.json()).error.type).toBe('idempotency_conflict')
+    expect(backendBodies).toHaveLength(beforeCalls + 1)
+  })
+
+  it('replays a persisted idempotent result after the in-memory reservation cache is reset', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'owlcoda-structured-output-durable-idempotency-'))
+    try {
+      const outputRoot = join(dir, 'run-output')
+      await createRunWorkspace({ outputRoot, cwd: dir, runId: 'run-durable-idempotency' })
+      const request = () => fetch(`${appUrl}/v1/structured-output`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'durable-idempotency-key' },
+        body: JSON.stringify({
+          model: 'test-model',
+          user: 'Durable idempotency probe',
+          persist: true,
+          runRef: outputRoot,
+          taskId: 'task-durable-idempotency',
+        }),
+      })
+      const beforeCalls = backendBodies.length
+      const first = await request()
+      expect(first.status).toBe(200)
+      const firstBody = await first.json()
+      expect(firstBody.idempotency.replayed).toBe(false)
+      expect(backendBodies).toHaveLength(beforeCalls + 1)
+
+      resetStructuredOutputIdempotencyForTesting()
+      const replay = await request()
+      expect(replay.status).toBe(200)
+      const replayBody = await replay.json()
+      expect(replayBody.idempotency.replayed).toBe(true)
+      expect(replayBody.artifactId).toBe(firstBody.artifactId)
+      expect(backendBodies).toHaveLength(beforeCalls + 1)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps unkeyed repeats intentional and reports independent execution counts', async () => {
+    const beforeCalls = backendBodies.length
+    const request = () => fetch(`${appUrl}/v1/structured-output`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'test-model',
+        user: 'Intentional unkeyed repeat',
+        intentionalRepeat: true,
+      }),
+    })
+    const first = await request()
+    const second = await request()
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    expect(backendBodies).toHaveLength(beforeCalls + 2)
+    expect((await first.json()).executionCounts).toEqual({
+      providerCalls: 1,
+      parseAttempts: 1,
+      repairAttempts: 0,
+      salvageAttempts: 0,
+      rerunAttempts: 0,
+    })
+  })
+
+  it('separates deterministic repair and salvage counts from provider calls', async () => {
+    const request = async (user: string) => {
+      const response = await fetch(`${appUrl}/v1/structured-output`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'test-model', user }),
+      })
+      expect(response.status).toBe(200)
+      return response.json()
+    }
+
+    const repaired = await request('Repair count probe')
+    expect(repaired.executionCounts).toEqual({
+      providerCalls: 1,
+      parseAttempts: 1,
+      repairAttempts: 1,
+      salvageAttempts: 0,
+      rerunAttempts: 0,
+    })
+
+    const salvaged = await request('Salvage count probe')
+    expect(salvaged.executionCounts).toEqual({
+      providerCalls: 1,
+      parseAttempts: 1,
+      repairAttempts: 0,
+      salvageAttempts: 1,
+      rerunAttempts: 0,
+    })
+  })
+
+  it('enforces a cumulative task budget before the second provider call and persists a typed checkpoint', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'owlcoda-structured-output-task-budget-'))
+    try {
+      const outputRoot = join(dir, 'run-output')
+      await createRunWorkspace({ outputRoot, cwd: dir, runId: 'run-task-budget' })
+      const requestBody = {
+        model: 'test-model',
+        user: 'Task budget endpoint probe',
+        persist: true,
+        runRef: outputRoot,
+        taskId: 'task-endpoint-budget',
+        executionBudget: {
+          maxProviderCalls: 1,
+          maxInputTokens: 100_000,
+          maxOutputTokens: 2_000,
+          maxElapsedMs: 60_000,
+        },
+      }
+      const beforeCalls = backendBodies.length
+      const first = await fetch(`${appUrl}/v1/structured-output`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      })
+      expect(first.status).toBe(200)
+      const firstBody = await first.json()
+      expect(firstBody.executionEconomics).toMatchObject({
+        taskId: 'task-endpoint-budget',
+        current: { providerCalls: 1, parseAttempts: 1 },
+        cumulative: { providerCalls: 1, parseAttempts: 1 },
+      })
+      expect(firstBody.executionCounts).toMatchObject({ providerCalls: 1, parseAttempts: 1 })
+
+      const second = await fetch(`${appUrl}/v1/structured-output`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      })
+      expect(second.status).toBe(429)
+      const secondBody = await second.json()
+      expect(secondBody).toMatchObject({
+        type: 'error',
+        error: { type: 'task_budget_exhausted', dimension: 'provider_calls' },
+      })
+      expect(secondBody.error.stopReceipt.checkpointPath).toContain('execution-budget-stop-')
+      expect(backendBodies).toHaveLength(beforeCalls + 1)
+
+      const ledger = await readArtifactLedger(outputRoot)
+      const artifact = ledger.artifacts.find(item => item.id === firstBody.artifactId)!
+      const persisted = JSON.parse(await readFile(artifact.path, 'utf8'))
+      expect(persisted.executionCounts).toMatchObject({ providerCalls: 1, parseAttempts: 1 })
+      expect(persisted.executionEconomics.cumulative.providerCalls).toBe(1)
+      const events = await readFile(join(outputRoot, '.owlcoda-run', 'events.jsonl'), 'utf8')
+      expect(events).toContain('structured_output_task_budget_exhausted')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('applies the remaining task output budget to the upstream max token request', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'owlcoda-structured-output-budget-clamp-'))
+    try {
+      const outputRoot = join(dir, 'run-output')
+      await createRunWorkspace({ outputRoot, cwd: dir, runId: 'run-budget-clamp' })
+      const response = await fetch(`${appUrl}/v1/structured-output`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'test-model',
+          user: 'Budget clamp probe',
+          maxTokens: 500,
+          persist: true,
+          runRef: outputRoot,
+          taskId: 'task-budget-clamp',
+          executionBudget: {
+            maxProviderCalls: 3,
+            maxInputTokens: 100_000,
+            maxOutputTokens: 50,
+            maxElapsedMs: 60_000,
+          },
+        }),
+      })
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(backendBodies.at(-1).max_tokens).toBe(50)
+      expect(body.capabilityGate.appliedMaxTokens).toBe(50)
+      expect(body.executionEconomics.reservation.outputTokens).toBe(50)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('aborts the real upstream request when the remaining task elapsed budget expires', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'owlcoda-structured-output-hard-budget-'))
+    try {
+      hardBudgetUpstreamClosed = false
+      const outputRoot = join(dir, 'run-output')
+      await createRunWorkspace({ outputRoot, cwd: dir, runId: 'run-hard-budget' })
+      const response = await fetch(`${appUrl}/v1/structured-output`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'non-streaming-model',
+          user: 'Task hard abort probe',
+          persist: true,
+          runRef: outputRoot,
+          taskId: 'task-hard-budget',
+          executionBudget: {
+            maxProviderCalls: 3,
+            maxInputTokens: 100_000,
+            maxOutputTokens: 2_000,
+            maxElapsedMs: 40,
+          },
+        }),
+      })
+      expect(response.status).toBe(200)
+      expect((await response.json()).terminationKind).toBe('hard_timeout')
+      await sleep(30)
+      expect(hardBudgetUpstreamClosed).toBe(true)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects malformed or changing task budgets and keyed intentional repeats before upstream', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'owlcoda-structured-output-budget-contract-'))
+    try {
+      const outputRoot = join(dir, 'run-output')
+      await createRunWorkspace({ outputRoot, cwd: dir, runId: 'run-budget-contract' })
+      const beforeCalls = backendBodies.length
+      const base = {
+        model: 'test-model',
+        user: 'Budget contract validation probe',
+        persist: true,
+        runRef: outputRoot,
+        taskId: 'task-budget-contract',
+      }
+
+      const malformed = await fetch(`${appUrl}/v1/structured-output`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...base,
+          executionBudget: {
+            maxProviderCalls: 3,
+            maxInputTokens: 100_000,
+            maxOutputTokens: 5_000,
+            maxElapsedMs: 60_000,
+            maxCostUsd: 1,
+          },
+        }),
+      })
+      expect(malformed.status).toBe(400)
+      expect((await malformed.json()).error.message).toContain('inputCostPerMillionUsd')
+
+      const budget = {
+        maxProviderCalls: 3,
+        maxInputTokens: 100_000,
+        maxOutputTokens: 5_000,
+        maxElapsedMs: 60_000,
+      }
+      const first = await fetch(`${appUrl}/v1/structured-output`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...base, executionBudget: budget }),
+      })
+      expect(first.status).toBe(200)
+
+      const changed = await fetch(`${appUrl}/v1/structured-output`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...base, executionBudget: { ...budget, maxProviderCalls: 4 } }),
+      })
+      expect(changed.status).toBe(409)
+      expect((await changed.json()).error.type).toBe('task_budget_contract_mismatch')
+
+      const contradictory = await fetch(`${appUrl}/v1/structured-output`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Idempotency-Key': 'contradictory-repeat-key' },
+        body: JSON.stringify({ model: 'test-model', user: 'Repeat contract', intentionalRepeat: true }),
+      })
+      expect(contradictory.status).toBe(400)
+      expect((await contradictory.json()).error.message).toContain('intentionalRepeat')
+      expect(backendBodies).toHaveLength(beforeCalls + 1)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

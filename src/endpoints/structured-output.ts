@@ -12,17 +12,42 @@ import { computeAdaptiveTimeoutMs } from '../middleware/adaptive-timeout.js'
 import { readBody } from '../server.js'
 import { parseSSEStream } from '../utils/sse.js'
 import {
-  applyStructuredOutputPresetDefaults,
+  evaluateStructuredOutputCapabilityGate,
   runModelOutputHarness,
+  resolveStructuredOutputContract,
   type StructuredOutputExecutor,
   type StructuredOutputModelResponse,
   type StructuredOutputRequest,
+  type StructuredOutputResponse,
 } from '../model-output-harness.js'
 import {
   findRunWorkspaceArtifact,
   persistStructuredOutputResult,
   readStructuredOutputArtifactInput,
 } from '../structured-output-persistence.js'
+import {
+  StructuredOutputBudgetContractMismatchError,
+  StructuredOutputBudgetExceededError,
+  completeDurableStructuredOutputIdempotency,
+  reserveStructuredOutputBudget,
+  reserveDurableStructuredOutputIdempotency,
+  settleStructuredOutputBudget,
+  structuredOutputExecutionCounts,
+  structuredOutputIdempotencyHash,
+  validateStructuredOutputExecutionBudget,
+} from '../structured-output-execution-economics.js'
+
+interface StructuredOutputHttpResult {
+  status: number
+  body: Record<string, unknown>
+}
+
+interface IdempotencyReservation {
+  requestHash: string
+  promise: Promise<StructuredOutputHttpResult>
+  settled: boolean
+}
+const idempotencyReservations = new Map<string, IdempotencyReservation>()
 
 function sendJson(res: http.ServerResponse, statusCode: number, body: unknown): void {
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -50,6 +75,283 @@ function validateStructuredOutputRerunBody(body: unknown): body is Partial<Struc
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false
   const record = body as Record<string, unknown>
   return typeof record.model === 'string' && record.model.length > 0
+}
+
+function resolveIdempotencyKey(
+  req: http.IncomingMessage,
+  body: StructuredOutputRequest | (Partial<StructuredOutputRequest> & { model: string }),
+): string | undefined {
+  const rawHeader = req.headers['idempotency-key']
+  const header = (Array.isArray(rawHeader) ? rawHeader[0] : rawHeader)?.trim()
+  const bodyKey = body.idempotencyKey?.trim()
+  if (header && bodyKey && header !== bodyKey) {
+    throw new Error('Idempotency-Key header and idempotencyKey body field must match')
+  }
+  const key = header || bodyKey
+  if (key && body.intentionalRepeat === true) {
+    throw new Error('intentionalRepeat cannot be combined with an idempotency key')
+  }
+  if (key && (key.length < 8 || key.length > 200)) {
+    throw new Error('Idempotency-Key must contain 8 to 200 characters')
+  }
+  return key
+}
+
+async function executeIdempotently(
+  namespace: 'primary' | 'rerun',
+  key: string | undefined,
+  request: StructuredOutputRequest,
+  work: () => Promise<StructuredOutputHttpResult>,
+): Promise<StructuredOutputHttpResult> {
+  if (!key) return work()
+  const requestHash = structuredOutputIdempotencyHash(namespace, request)
+  const cacheKey = `${namespace}:${key}`
+  const existing = idempotencyReservations.get(cacheKey)
+  if (existing) {
+    if (existing.requestHash !== requestHash) {
+      return {
+        status: 409,
+        body: {
+          type: 'error',
+          error: {
+            type: 'idempotency_conflict',
+            message: 'Idempotency-Key is already reserved for a different canonical request',
+            requestHash,
+            reservedRequestHash: existing.requestHash,
+          },
+        },
+      }
+    }
+    const replay = await existing.promise
+    return {
+      ...replay,
+      body: {
+        ...replay.body,
+        idempotency: { key, requestHash, replayed: true, namespace },
+      },
+    }
+  }
+
+  const durable = Boolean(request.runRef && (request.persist === true || namespace === 'rerun'))
+  const reservedWork = async (): Promise<StructuredOutputHttpResult> => {
+    if (durable) {
+      const durableReservation = await reserveDurableStructuredOutputIdempotency({
+        runRef: request.runRef!,
+        namespace,
+        key,
+        requestHash,
+      })
+      if (durableReservation.kind === 'conflict') {
+        return {
+          status: 409,
+          body: {
+            type: 'error',
+            error: {
+              type: 'idempotency_conflict',
+              message: 'Idempotency-Key is durably reserved for a different canonical request',
+              requestHash,
+              reservedRequestHash: durableReservation.record.requestHash,
+            },
+          },
+        }
+      }
+      if (durableReservation.kind === 'in_progress') {
+        return {
+          status: 409,
+          body: {
+            type: 'error',
+            error: {
+              type: 'idempotency_in_progress',
+              message: 'Idempotency-Key has an unresolved durable provider reservation',
+              requestHash,
+              reservedAt: durableReservation.record.reservedAt,
+            },
+          },
+        }
+      }
+      if (durableReservation.kind === 'replay') {
+        return {
+          status: durableReservation.record.status ?? 200,
+          body: {
+            ...(durableReservation.record.body ?? {}),
+            idempotency: { key, requestHash, replayed: true, namespace },
+          },
+        }
+      }
+    }
+
+    const result = await work()
+    if (durable) {
+      await completeDurableStructuredOutputIdempotency({
+        runRef: request.runRef!,
+        namespace,
+        key,
+        requestHash,
+        status: result.status,
+        body: result.body,
+      })
+    }
+    return result
+  }
+  const reservation: IdempotencyReservation = {
+    requestHash,
+    promise: Promise.resolve().then(reservedWork),
+    settled: false,
+  }
+  idempotencyReservations.set(cacheKey, reservation)
+  pruneSettledIdempotencyReservations()
+  let result: StructuredOutputHttpResult
+  try {
+    result = await reservation.promise
+    reservation.settled = true
+  } catch (err) {
+    if (idempotencyReservations.get(cacheKey) === reservation) {
+      idempotencyReservations.delete(cacheKey)
+    }
+    throw err
+  }
+  if (result.status === 409) return result
+  const replayed = (result.body['idempotency'] as Record<string, unknown> | undefined)?.['replayed'] === true
+  return {
+    ...result,
+    body: {
+      ...result.body,
+      idempotency: { key, requestHash, replayed, namespace },
+    },
+  }
+}
+
+export function resetStructuredOutputIdempotencyForTesting(): void {
+  idempotencyReservations.clear()
+}
+
+function pruneSettledIdempotencyReservations(): void {
+  if (idempotencyReservations.size <= 1_000) return
+  for (const [key, reservation] of idempotencyReservations) {
+    if (!reservation.settled) continue
+    idempotencyReservations.delete(key)
+    if (idempotencyReservations.size <= 900) break
+  }
+}
+
+async function executeStructuredOutputRequest(
+  request: StructuredOutputRequest,
+  config: OwlCodaConfig,
+  options: { rerun: boolean; persist: boolean },
+): Promise<StructuredOutputHttpResult> {
+  let reservation: Awaited<ReturnType<typeof reserveStructuredOutputBudget>> | undefined
+  const executor = createStructuredOutputModelExecutor(config)
+  if (request.executionBudget) {
+    if (!request.runRef || !request.taskId || !options.persist) {
+      throw new Error('executionBudget requires persist=true, runRef, and taskId')
+    }
+    const capabilityGate = evaluateStructuredOutputCapabilityGate(request, request.maxTokens ?? 1024)
+    if (capabilityGate.ok) {
+      try {
+        reservation = await reserveStructuredOutputBudget({
+          runRef: request.runRef,
+          taskId: request.taskId,
+          budget: request.executionBudget,
+          requestedMaxTokens: capabilityGate.appliedMaxTokens,
+          estimatedInputTokens: estimateStructuredOutputInputTokens(request),
+          rerun: options.rerun,
+        })
+      } catch (err) {
+        if (err instanceof StructuredOutputBudgetExceededError) {
+          return {
+            status: 429,
+            body: {
+              type: 'error',
+              error: {
+                type: err.code,
+                message: err.message,
+                dimension: err.dimension,
+                executionEconomics: err.receipt,
+                stopReceipt: err.receipt.stopReceipt,
+              },
+            },
+          }
+        }
+        if (err instanceof StructuredOutputBudgetContractMismatchError) {
+          return {
+            status: 409,
+            body: {
+              type: 'error',
+              error: { type: err.code, message: err.message },
+            },
+          }
+        }
+        throw err
+      }
+    }
+  }
+
+  let result: StructuredOutputResponse = await runModelOutputHarness(
+    request,
+    executor,
+    reservation
+      ? { maxTokens: reservation.appliedMaxTokens, hardTimeoutMs: reservation.remainingElapsedMs }
+      : undefined,
+  )
+  const executionCounts = structuredOutputExecutionCounts(result.attempts, options.rerun)
+  result = { ...result, executionCounts }
+  if (reservation) {
+    const executionEconomics = await settleStructuredOutputBudget({
+      reservation,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+      durationMs: result.durationMs,
+      counts: executionCounts,
+    })
+    result = { ...result, executionEconomics }
+  }
+  if (request.idempotencyKey) {
+    const namespace = options.rerun ? 'rerun' : 'primary'
+    result = {
+      ...result,
+      idempotency: {
+        key: request.idempotencyKey,
+        requestHash: structuredOutputIdempotencyHash(namespace, request),
+        replayed: false,
+        namespace,
+      },
+    }
+  }
+  if (options.persist) {
+    const persisted = await persistStructuredOutputResult(request, result)
+    result = {
+      ...result,
+      persisted: true,
+      artifactId: persisted.artifactId,
+      attemptLedgerId: persisted.attemptLedgerId,
+      runRef: request.runRef,
+    }
+  }
+  if (options.rerun) {
+    result = {
+      ...result,
+      rerun: true,
+      parentArtifactId: request.previousArtifactId,
+      rerunOf: request.previousArtifactId,
+      ...(request.inputRef ? { inputRef: request.inputRef } : {}),
+      ...(request.artifactRef ? { artifactRef: request.artifactRef } : {}),
+    }
+  }
+  return { status: 200, body: result as unknown as Record<string, unknown> }
+}
+
+function estimateStructuredOutputInputTokens(request: StructuredOutputRequest): number {
+  const bytes = Buffer.byteLength(JSON.stringify({
+    model: request.model,
+    system: request.system,
+    user: request.user,
+    schema: request.schema,
+    policy: request.policy,
+  }), 'utf8')
+  // A BPE token cannot contain less than one source byte. Doubling the full
+  // caller contract plus fixed overhead also covers the preset/schema summary
+  // that the harness appends when it builds the actual provider messages.
+  return Math.max(1, bytes * 2 + 4_096)
 }
 
 function withRegistryStructuredOutputCapabilities(
@@ -95,6 +397,15 @@ function mapOpenAIStopReason(finishReason: unknown): string | null {
   if (finishReason === 'length') return 'max_tokens'
   if (finishReason === 'tool_calls' || finishReason === 'function_call') return 'tool_use'
   return String(finishReason)
+}
+
+function structuredOutputSchemaName(request: StructuredOutputRequest): string {
+  const raw = request.schemaId?.trim() || request.presetId?.trim() || 'structured_output'
+  return raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64) || 'structured_output'
+}
+
+function supportsProviderNativeSchema(request: StructuredOutputRequest): boolean {
+  return request.modelCapabilities?.jsonMode.status === 'supported'
 }
 
 async function collectOpenAICompatibleStream(args: {
@@ -233,6 +544,7 @@ export function createStructuredOutputModelExecutor(config: OwlCodaConfig): Stru
   return async (request): Promise<StructuredOutputModelResponse> => {
     const route = resolveModelRoute(config, request.model)
     const stream = shouldStreamStructuredOutput(request)
+    const nativeSchema = supportsProviderNativeSchema(request) ? request.schema : undefined
     const anthropicBody: AnthropicMessagesRequest = {
       model: request.model,
       system: request.system,
@@ -240,9 +552,27 @@ export function createStructuredOutputModelExecutor(config: OwlCodaConfig): Stru
       messages: [{ role: 'user', content: request.user }],
       stream,
       ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+      ...(nativeSchema
+        ? { output_config: { format: { type: 'json_schema' as const, schema: nativeSchema } } }
+        : {}),
     }
     const upstreamBody = route.translate
-      ? { ...translateRequest(anthropicBody, route.backendModel), stream }
+      ? {
+          ...translateRequest(anthropicBody, route.backendModel),
+          stream,
+          ...(nativeSchema
+            ? {
+                response_format: {
+                  type: 'json_schema' as const,
+                  json_schema: {
+                    name: structuredOutputSchemaName(request),
+                    strict: false,
+                    schema: nativeSchema,
+                  },
+                },
+              }
+            : {}),
+        }
       : {
           ...anthropicBody,
           model: route.backendModel,
@@ -257,7 +587,11 @@ export function createStructuredOutputModelExecutor(config: OwlCodaConfig): Stru
       body: anthropicBody,
       middleware: config.middleware,
     })
-    const signal = AbortSignal.timeout(adaptiveBudget.timeoutMs)
+    const timeoutMs = Math.min(
+      adaptiveBudget.timeoutMs,
+      request.hardTimeoutMs ?? adaptiveBudget.timeoutMs,
+    )
+    const signal = AbortSignal.timeout(timeoutMs)
     const started = Date.now()
     const upstream = await fetch(route.endpointUrl, {
       method: 'POST',
@@ -348,26 +682,32 @@ export async function handleStructuredOutput(
   }
 
   let harnessRequest: StructuredOutputRequest
+  let idempotencyKey: string | undefined
   try {
-    harnessRequest = applyStructuredOutputPresetDefaults(withRegistryStructuredOutputCapabilities(config, body))
+    idempotencyKey = resolveIdempotencyKey(req, body)
+    if (body.executionBudget && (!body.persist || !body.runRef || !body.taskId)) {
+      throw new Error('executionBudget requires persist=true, runRef, and taskId')
+    }
+    const executionBudget = body.executionBudget
+      ? validateStructuredOutputExecutionBudget(body.executionBudget)
+      : undefined
+    harnessRequest = resolveStructuredOutputContract(withRegistryStructuredOutputCapabilities(config, {
+      ...body,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(executionBudget ? { executionBudget } : {}),
+    }))
   } catch (err) {
     invalidRequest(res, err instanceof Error ? err.message : String(err))
     return
   }
 
   try {
-    let result = await runModelOutputHarness(harnessRequest, createStructuredOutputModelExecutor(config))
-    if (harnessRequest.persist === true) {
-      const persisted = await persistStructuredOutputResult(harnessRequest, result)
-      result = {
-        ...result,
-        persisted: true,
-        artifactId: persisted.artifactId,
-        attemptLedgerId: persisted.attemptLedgerId,
-        runRef: harnessRequest.runRef,
-      }
-    }
-    sendJson(res, 200, result)
+    const result = await executeIdempotently('primary', idempotencyKey, harnessRequest, () =>
+      executeStructuredOutputRequest(harnessRequest, config, {
+        rerun: false,
+        persist: harnessRequest.persist === true,
+      }))
+    sendJson(res, result.status, result.body)
   } catch (err) {
     if (err instanceof LocalRuntimeProtocolUnresolvedError) {
       sendJson(res, 503, {
@@ -429,10 +769,19 @@ export async function handleStructuredOutputRerun(
   }
 
   let rerunRequest: StructuredOutputRequest
+  let idempotencyKey: string | undefined
   try {
+    idempotencyKey = resolveIdempotencyKey(req, body)
+    const executionBudget = body.executionBudget
+      ? validateStructuredOutputExecutionBudget(body.executionBudget)
+      : undefined
     await findRunWorkspaceArtifact(body.runRef, body.previousArtifactId)
-    rerunRequest = applyStructuredOutputPresetDefaults(
-      withRegistryStructuredOutputCapabilities(config, await buildRerunRequest(body)),
+    rerunRequest = resolveStructuredOutputContract(
+      withRegistryStructuredOutputCapabilities(config, await buildRerunRequest({
+        ...body,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+        ...(executionBudget ? { executionBudget } : {}),
+      })),
     )
   } catch (err) {
     invalidRequest(res, err instanceof Error ? err.message : String(err))
@@ -440,21 +789,9 @@ export async function handleStructuredOutputRerun(
   }
 
   try {
-    let result = await runModelOutputHarness(rerunRequest, createStructuredOutputModelExecutor(config))
-    const persisted = await persistStructuredOutputResult(rerunRequest, result)
-    result = {
-      ...result,
-      persisted: true,
-      artifactId: persisted.artifactId,
-      attemptLedgerId: persisted.attemptLedgerId,
-      runRef: rerunRequest.runRef,
-      rerun: true,
-      parentArtifactId: rerunRequest.previousArtifactId,
-      rerunOf: rerunRequest.previousArtifactId,
-      ...(rerunRequest.inputRef ? { inputRef: rerunRequest.inputRef } : {}),
-      ...(rerunRequest.artifactRef ? { artifactRef: rerunRequest.artifactRef } : {}),
-    }
-    sendJson(res, 200, result)
+    const result = await executeIdempotently('rerun', idempotencyKey, rerunRequest, () =>
+      executeStructuredOutputRequest(rerunRequest, config, { rerun: true, persist: true }))
+    sendJson(res, result.status, result.body)
   } catch (err) {
     if (err instanceof LocalRuntimeProtocolUnresolvedError) {
       sendJson(res, 503, {

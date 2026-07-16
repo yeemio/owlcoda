@@ -51,13 +51,16 @@ afterEach(() => {
 
 function makeTaskWithVerification(checks: Array<{
   id: string
-  kind: 'file_exists' | 'file_contains' | 'artifact_count' | 'verification_pack' | 'command' | 'none' | 'run_verdict_gate' | 'http_get'
+  kind: 'file_exists' | 'file_contains' | 'artifact_count' | 'verification_pack' | 'command' | 'none' | 'run_verdict_gate' | 'mcnemar_method' | 'http_get'
   packId?: string
   path?: string
   pattern?: string
   root?: string
   glob?: string
   min?: number
+  discordant01?: number
+  discordant10?: number
+  requestedMethod?: 'exact' | 'asymptotic'
   deckPath?: string
   expectedSections?: number
   buildNotesPath?: string
@@ -922,6 +925,21 @@ describe('TaskVerify tool', () => {
     const step = getTaskStep('task-1', 'step-1')
     expect(step!.verificationResults).toHaveLength(1)
     expect(step!.verificationResults[0]!.passed).toBe(false)
+  })
+
+  it('fails closed for an asymptotic McNemar check with sparse discordant pairs', async () => {
+    makeTaskWithVerification([{
+      id: 'mcnemar-policy',
+      kind: 'mcnemar_method',
+      discordant01: 1,
+      discordant10: 0,
+      requestedMethod: 'asymptotic',
+    }])
+
+    const result = await tool.execute({ taskId: 'task-1', stepId: 'step-1' })
+
+    expect(result.output).toContain('0/1 passed')
+    expect(result.output).toMatch(/asymptotic test refused.*use exact/i)
   })
 })
 

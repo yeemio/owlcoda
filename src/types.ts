@@ -85,6 +85,12 @@ export interface AnthropicMessagesRequest {
   thinking?: unknown
   metadata?: unknown
   betas?: string[]
+  output_config?: {
+    format: {
+      type: 'json_schema'
+      schema: object
+    }
+  }
 }
 
 // ─── Anthropic Response Types ───
@@ -168,6 +174,14 @@ export interface OpenAIChatRequest {
   stream?: boolean
   tools?: OpenAIToolDef[]
   tool_choice?: string | { type: string; function?: { name: string } }
+  response_format?: {
+    type: 'json_schema'
+    json_schema: {
+      name: string
+      strict: boolean
+      schema: object
+    }
+  }
 }
 
 // ─── OpenAI Response Types ───

@@ -1,3 +1,10 @@
+import { createHash } from 'node:crypto'
+import type {
+  StructuredOutputExecutionBudget,
+  StructuredOutputExecutionCounts,
+  StructuredOutputExecutionReceipt,
+} from './structured-output-execution-economics.js'
+
 export type BuiltinStructuredOutputPreset =
   | 'evidence-digest.v1'
   | 'analyst-audit.v1'
@@ -48,6 +55,25 @@ export type StructuredOutputTerminationKind =
   | 'provider_error'
   | 'aborted'
   | 'unknown'
+
+export const STRUCTURED_OUTPUT_FAILURE_REASONS = [
+  'output_budget_exhausted',
+  'schema_validation_failed',
+  'parse_failed',
+  'empty_text',
+  'empty_text_with_thinking',
+  'locale_mismatch',
+  'silent_timeout',
+  'hard_timeout',
+  'model_call_failed',
+  'capability_json_unsupported',
+  'capability_gate_failed',
+  'policy_violation',
+  'failed_fallback',
+  'missing_required_artifact',
+] as const
+
+export type StructuredOutputFailureReason = typeof STRUCTURED_OUTPUT_FAILURE_REASONS[number]
 
 export type StructuredOutputDeltaKind = 'text' | 'content' | 'thinking' | 'heartbeat'
 
@@ -124,6 +150,32 @@ export interface ProviderPresetMatrix {
   presets: ProviderPresetMatrixEntry[]
 }
 
+export type StructuredOutputEffectiveControl = 'maxTokens' | 'temperature' | 'idleTimeoutMs' | 'hardTimeoutMs' | 'forceLocale'
+export type StructuredOutputControlSource = 'request' | 'provider_matrix' | 'preset_default'
+
+export interface ProviderMatrixOverride {
+  source: 'request'
+  value: number | string
+  matrixValue?: number | string
+  presetValue?: number | string
+}
+
+export interface ProviderMatrixProvenance {
+  providerMatrixVersion: string
+  providerMatrixEntryId: string | null
+  providerMatrixEntryHash: string | null
+  matched: boolean
+  applied: boolean
+  appliedControls: StructuredOutputEffectiveControl[]
+  overrides: Partial<Record<StructuredOutputEffectiveControl, ProviderMatrixOverride>>
+  controlSources: Partial<Record<StructuredOutputEffectiveControl, StructuredOutputControlSource>>
+  policyVersions: {
+    repairPolicy: string | null
+    salvagePolicy: string | null
+    outputDiscipline: string | null
+  }
+}
+
 export interface StructuredOutputRequest {
   model: string
   preset?: StructuredOutputPreset
@@ -157,6 +209,10 @@ export interface StructuredOutputRequest {
   inputRef?: string
   artifactRef?: string
   modelCapabilities?: StructuredOutputModelCapabilities
+  providerMatrixProvenance?: ProviderMatrixProvenance
+  executionBudget?: StructuredOutputExecutionBudget
+  idempotencyKey?: string
+  intentionalRepeat?: boolean
 }
 
 export interface StructuredOutputExecutorRequest extends StructuredOutputRequest {
@@ -181,6 +237,11 @@ export type StructuredOutputExecutor = (
   request: StructuredOutputExecutorRequest,
 ) => Promise<StructuredOutputModelResponse>
 
+export interface StructuredOutputExecutionLimits {
+  maxTokens?: number
+  hardTimeoutMs?: number
+}
+
 export interface StructuredOutputAttempt {
   label: StructuredOutputAttemptLabel
   model: string
@@ -191,9 +252,11 @@ export interface StructuredOutputAttempt {
   parsed: boolean
   schemaValid: boolean
   error?: string
+  failureReason?: StructuredOutputFailureReason
   requestedTemperature?: number
   appliedTemperature?: number
-  temperatureSource?: 'request'
+  temperatureSource?: StructuredOutputControlSource
+  providerMatrixProvenance?: ProviderMatrixProvenance
   terminationKind?: StructuredOutputTerminationKind
   lastOutputAt?: string
   idleMs?: number
@@ -245,7 +308,8 @@ export interface StructuredOutputResponse {
   rawText: string
   rawThinkingText?: string
   usable: boolean
-  unusableReason?: string
+  failureReason?: StructuredOutputFailureReason
+  unusableReason?: StructuredOutputFailureReason
   salvage: StructuredOutputSalvageReceipt
   artifactCompleteness: ArtifactCompletenessReceipt
   consumerReady: boolean
@@ -259,6 +323,7 @@ export interface StructuredOutputResponse {
   schemaVersion: string
   repairPolicyVersion: string
   providerMatrixVersion: string
+  providerMatrixProvenance: ProviderMatrixProvenance
   parsed: boolean
   schemaValid: boolean
   validationErrors: string[]
@@ -280,6 +345,14 @@ export interface StructuredOutputResponse {
   inputRef?: string
   artifactRef?: string
   capabilityGate?: StructuredOutputCapabilityGateResult
+  executionCounts?: StructuredOutputExecutionCounts
+  executionEconomics?: StructuredOutputExecutionReceipt
+  idempotency?: {
+    key: string
+    requestHash: string
+    replayed: boolean
+    namespace: 'primary' | 'rerun'
+  }
 }
 
 export const STRUCTURED_OUTPUT_PRESETS: Record<BuiltinStructuredOutputPreset, StructuredOutputPresetContract> = {
@@ -429,6 +502,8 @@ export const PROVIDER_PRESET_MATRIX: ProviderPresetMatrix = {
   ],
 }
 
+const resolvedStructuredOutputContracts = new WeakMap<StructuredOutputRequest, string>()
+
 export function getStructuredOutputPresetContract(
   preset: StructuredOutputPreset | undefined,
 ): StructuredOutputPresetContract | undefined {
@@ -439,32 +514,200 @@ export function getStructuredOutputPresetContract(
 export function structuredOutputRequestContractErrors(request: StructuredOutputRequest): string[] {
   const preset = request.preset ?? 'evidence-digest.v1'
   const contract = getStructuredOutputPresetContract(preset)
-  if (!contract && !request.schema) {
-    return ['custom preset requires an explicit schema']
+  const canonicalPreset = versionPartsFromPreset(preset)
+  if (contract && request.schema) {
+    return ['built-in preset cannot be combined with a custom schema']
+  }
+  const conflictingPresetIdentity = [
+    ['presetId', request.presetId, canonicalPreset.presetId],
+    ['presetVersion', request.presetVersion, canonicalPreset.presetVersion],
+  ].find(([, provided, canonical]) => provided !== undefined && provided.trim() !== canonical)
+  if (conflictingPresetIdentity) {
+    const [field, provided, canonical] = conflictingPresetIdentity
+    const error = `${field}=${provided}, expected ${canonical}`
+    return [contract
+      ? `built-in preset identity conflicts with canonical contract: ${error}`
+      : `preset identity conflicts with canonical preset: ${error}`]
+  }
+  if (contract) {
+    const conflictingSchemaIdentity = [
+      ['schemaId', request.schemaId, contract.schemaId],
+      ['schemaVersion', request.schemaVersion, contract.schemaVersion],
+    ].find(([, provided, canonical]) => provided !== undefined && provided.trim() !== canonical)
+    if (conflictingSchemaIdentity) {
+      const [field, provided, canonical] = conflictingSchemaIdentity
+      return [`built-in preset identity conflicts with canonical contract: ${field}=${provided}, expected ${canonical}`]
+    }
+  }
+  if (!contract) {
+    const errors: string[] = []
+    if (!request.schema) errors.push('custom preset requires an explicit schema')
+    if (!request.schemaId?.trim() || !request.schemaVersion?.trim()) {
+      errors.push('custom preset requires explicit schemaId and schemaVersion')
+    }
+    if (!request.system?.trim()) errors.push('custom preset requires an explicit system')
+    if (!request.policy) errors.push('custom preset requires an explicit policy')
+    if (request.maxTokens === undefined) errors.push('custom preset requires an explicit maxTokens budget')
+    const impersonatedBuiltin = Object.values(STRUCTURED_OUTPUT_PRESETS).find(candidate =>
+      request.schemaId?.trim() === candidate.schemaId
+      && request.schemaVersion?.trim() === candidate.schemaVersion,
+    )
+    if (impersonatedBuiltin) errors.push('custom schema identity conflicts with built-in contract')
+    return errors
   }
   return []
 }
 
-export function applyStructuredOutputPresetDefaults(request: StructuredOutputRequest): StructuredOutputRequest {
+export function resolveStructuredOutputContract(request: StructuredOutputRequest): StructuredOutputRequest {
   const errors = structuredOutputRequestContractErrors(request)
-  if (errors.length > 0) {
-    throw new Error(errors.join('; '))
-  }
+  if (errors.length > 0) throw new Error(errors.join('; '))
   const preset = request.preset ?? 'evidence-digest.v1'
   const contract = getStructuredOutputPresetContract(preset)
-  const schema = request.schema ?? contract?.schema
+  const schemaSource = request.schema ?? contract?.schema
+  const schema = schemaSource ? cloneStructuredContractValue(schemaSource) : undefined
   const policy = mergePolicy(contract?.policy, request.policy)
-  const salvagePolicy = request.salvagePolicy ?? contract?.salvagePolicy
-  const maxTokens = request.maxTokens ?? contract?.maxTokens
+  const salvagePolicySource = request.salvagePolicy ?? contract?.salvagePolicy
+  const salvagePolicy = salvagePolicySource ? cloneStructuredContractValue(salvagePolicySource) : undefined
+  const presetParts = versionPartsFromPreset(preset)
+  const presetId = presetParts.presetId
+  const presetVersion = presetParts.presetVersion
+  const schemaId = contract?.schemaId ?? request.schemaId!.trim()
+  const schemaVersion = contract?.schemaVersion ?? request.schemaVersion!.trim()
+  const matrixEntry = PROVIDER_PRESET_MATRIX.presets.find(entry =>
+    entry.presetId === presetId
+    && entry.presetVersion === presetVersion
+    && new RegExp(entry.modelPattern, 'iu').test(request.model),
+  )
+  const provenance = resolveProviderMatrixProvenance(request, contract, matrixEntry)
+  const maxTokens = effectiveControl('maxTokens', request.maxTokens, matrixEntry?.maxTokens, contract?.maxTokens)
+  const temperature = effectiveControl('temperature', request.temperature, matrixEntry?.temperature)
+  const idleTimeoutMs = effectiveControl('idleTimeoutMs', request.idleTimeoutMs, matrixEntry?.idleTimeoutMs)
+  const hardTimeoutMs = effectiveControl('hardTimeoutMs', request.hardTimeoutMs, matrixEntry?.hardTimeoutMs)
+  const forceLocale = effectiveControl('forceLocale', forcedLocale(request), matrixEntry?.forceLocale)
 
-  return {
+  const effectiveRequest: StructuredOutputRequest = {
     ...request,
     preset,
+    presetId,
+    presetVersion,
+    schemaId,
+    schemaVersion,
     ...(schema ? { schema } : {}),
     ...(policy ? { policy } : {}),
     ...(salvagePolicy ? { salvagePolicy } : {}),
-    ...(maxTokens ? { maxTokens } : {}),
+    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    ...(temperature !== undefined ? { temperature } : {}),
+    ...(idleTimeoutMs !== undefined ? { idleTimeoutMs } : {}),
+    ...(hardTimeoutMs !== undefined ? { hardTimeoutMs } : {}),
+    ...(forceLocale !== undefined ? { forceLocale } : {}),
+    providerMatrixProvenance: provenance,
   }
+  resolvedStructuredOutputContracts.set(effectiveRequest, resolvedStructuredOutputContractHash(effectiveRequest))
+  return effectiveRequest
+}
+
+function resolvedStructuredOutputContractHash(request: StructuredOutputRequest): string {
+  return createHash('sha256').update(stableSortedJson(request)).digest('hex')
+}
+
+function effectiveControl<T>(
+  _name: StructuredOutputEffectiveControl,
+  requestValue: T | undefined,
+  matrixValue: T | undefined,
+  presetValue?: T,
+): T | undefined {
+  return requestValue !== undefined ? requestValue : matrixValue !== undefined ? matrixValue : presetValue
+}
+
+function resolveProviderMatrixProvenance(
+  request: StructuredOutputRequest,
+  contract: StructuredOutputPresetContract | undefined,
+  entry: ProviderPresetMatrixEntry | undefined,
+): ProviderMatrixProvenance {
+  const requestValues: Partial<Record<StructuredOutputEffectiveControl, number | string>> = {
+    ...(request.maxTokens !== undefined ? { maxTokens: request.maxTokens } : {}),
+    ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+    ...(request.idleTimeoutMs !== undefined ? { idleTimeoutMs: request.idleTimeoutMs } : {}),
+    ...(request.hardTimeoutMs !== undefined ? { hardTimeoutMs: request.hardTimeoutMs } : {}),
+    ...(forcedLocale(request) !== undefined ? { forceLocale: forcedLocale(request) } : {}),
+  }
+  const matrixValues: Partial<Record<StructuredOutputEffectiveControl, number | string>> = entry
+    ? {
+        maxTokens: entry.maxTokens,
+        temperature: entry.temperature,
+        idleTimeoutMs: entry.idleTimeoutMs,
+        hardTimeoutMs: entry.hardTimeoutMs,
+        ...(entry.forceLocale ? { forceLocale: entry.forceLocale } : {}),
+      }
+    : {}
+  const presetValues: Partial<Record<StructuredOutputEffectiveControl, number | string>> = {
+    ...(contract?.maxTokens !== undefined ? { maxTokens: contract.maxTokens } : {}),
+  }
+  const controls: StructuredOutputEffectiveControl[] = ['maxTokens', 'temperature', 'idleTimeoutMs', 'hardTimeoutMs', 'forceLocale']
+  const appliedControls: StructuredOutputEffectiveControl[] = []
+  const overrides: ProviderMatrixProvenance['overrides'] = {}
+  const controlSources: ProviderMatrixProvenance['controlSources'] = {}
+  for (const control of controls) {
+    if (requestValues[control] !== undefined) {
+      controlSources[control] = 'request'
+      overrides[control] = {
+        source: 'request',
+        value: requestValues[control]!,
+        ...(matrixValues[control] !== undefined ? { matrixValue: matrixValues[control] } : {}),
+        ...(presetValues[control] !== undefined ? { presetValue: presetValues[control] } : {}),
+      }
+    } else if (matrixValues[control] !== undefined) {
+      controlSources[control] = 'provider_matrix'
+      appliedControls.push(control)
+    } else if (presetValues[control] !== undefined) {
+      controlSources[control] = 'preset_default'
+    }
+  }
+  return {
+    providerMatrixVersion: PROVIDER_PRESET_MATRIX.version,
+    providerMatrixEntryId: entry ? providerPresetMatrixEntryId(entry) : null,
+    providerMatrixEntryHash: entry ? providerPresetMatrixEntryHash(entry) : null,
+    matched: Boolean(entry),
+    applied: appliedControls.length > 0,
+    appliedControls,
+    overrides,
+    controlSources,
+    policyVersions: {
+      repairPolicy: entry?.repairPolicy ?? null,
+      salvagePolicy: entry?.salvagePolicy ?? null,
+      outputDiscipline: entry?.outputDiscipline ?? null,
+    },
+  }
+}
+
+export function providerPresetMatrixEntryId(entry: ProviderPresetMatrixEntry): string {
+  return `${PROVIDER_PRESET_MATRIX.version}/${entry.presetId}.${entry.presetVersion}/${entry.provider}`
+}
+
+export function providerPresetMatrixEntryHash(entry: ProviderPresetMatrixEntry): string {
+  return `sha256:${createHash('sha256').update(stableSortedJson(entry)).digest('hex')}`
+}
+
+function stableSortedJson(value: unknown): string {
+  return JSON.stringify(sortJson(value))
+}
+
+function cloneStructuredContractValue<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(item => cloneStructuredContractValue(item)) as T
+  if (!value || typeof value !== 'object') return value
+  const out: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value)) out[key] = cloneStructuredContractValue(item)
+  return out as T
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJson)
+  if (!value || typeof value !== 'object') return value
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    out[key] = sortJson((value as Record<string, unknown>)[key])
+  }
+  return out
 }
 
 function mergePolicy(
@@ -490,7 +733,7 @@ function mergePolicy(
   }
 }
 
-function evaluateStructuredOutputCapabilityGate(
+export function evaluateStructuredOutputCapabilityGate(
   request: StructuredOutputRequest,
   requestedMaxTokens: number,
 ): StructuredOutputCapabilityGateResult {
@@ -892,7 +1135,7 @@ function validateArtifact(
   schema: JsonSchema | undefined,
   rawText: string,
   policy: StructuredOutputPolicy | undefined,
-): { artifact: Record<string, unknown>; schemaValid: boolean; validationErrors: string[]; failureReason?: string } {
+): { artifact: Record<string, unknown>; schemaValid: boolean; validationErrors: string[]; failureReason?: StructuredOutputFailureReason } {
   const preparedArtifact = sanitizeForbiddenPhrases(artifact, policy)
   const schemaErrors = schema ? validateJsonSchema(preparedArtifact, schema) : []
   const policyErrors = collectPolicyErrors(preparedArtifact, rawText, policy)
@@ -916,9 +1159,10 @@ function attempt(args: {
   parsed: boolean
   schemaValid: boolean
   error?: string
+  failureReason?: StructuredOutputFailureReason
   requestedTemperature?: number
   appliedTemperature?: number
-  temperatureSource?: 'request'
+  temperatureSource?: StructuredOutputControlSource
   terminationKind?: StructuredOutputTerminationKind
   lastOutputAt?: string
   idleMs?: number
@@ -936,6 +1180,7 @@ function attempt(args: {
     parsed: args.parsed,
     schemaValid: args.schemaValid,
     ...(args.error ? { error: args.error } : {}),
+    ...(args.failureReason ? { failureReason: args.failureReason } : {}),
     ...(args.requestedTemperature !== undefined ? { requestedTemperature: args.requestedTemperature } : {}),
     ...(args.appliedTemperature !== undefined ? { appliedTemperature: args.appliedTemperature } : {}),
     ...(args.temperatureSource ? { temperatureSource: args.temperatureSource } : {}),
@@ -949,13 +1194,13 @@ function attempt(args: {
 }
 
 function providerControlAttemptFields(request: StructuredOutputRequest): Pick<StructuredOutputAttempt, 'requestedTemperature' | 'appliedTemperature' | 'temperatureSource'> {
-  return request.temperature !== undefined
-    ? {
-        requestedTemperature: request.temperature,
-        appliedTemperature: request.temperature,
-        temperatureSource: 'request',
-      }
-    : {}
+  if (request.temperature === undefined) return {}
+  const source = request.providerMatrixProvenance?.controlSources.temperature
+  return {
+    ...(source === 'request' ? { requestedTemperature: request.temperature } : {}),
+    appliedTemperature: request.temperature,
+    ...(source ? { temperatureSource: source } : {}),
+  }
 }
 
 interface GovernanceTelemetry {
@@ -1095,8 +1340,8 @@ function schemaVersionParts(request: StructuredOutputRequest, preset: Structured
   const contract = getStructuredOutputPresetContract(preset)
   const fallback = versionPartsFromPreset(preset)
   return {
-    schemaId: request.schemaId?.trim() || contract?.schemaId || fallback.presetId,
-    schemaVersion: request.schemaVersion?.trim() || contract?.schemaVersion || fallback.presetVersion,
+    schemaId: contract?.schemaId ?? request.schemaId?.trim() ?? fallback.presetId,
+    schemaVersion: contract?.schemaVersion ?? request.schemaVersion?.trim() ?? fallback.presetVersion,
   }
 }
 
@@ -1116,7 +1361,7 @@ function localeContractPrompt(locale: string | undefined): string | null {
 function failedFallbackArtifact(args: {
   request: StructuredOutputRequest
   preset: StructuredOutputPreset
-  failureReason: string
+  failureReason: StructuredOutputFailureReason
   stopReason: string | null
   inputTokens: number
   outputTokens: number
@@ -1262,6 +1507,12 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined
 }
 
+function structuredOutputFailureReason(value: string | undefined): StructuredOutputFailureReason | undefined {
+  return STRUCTURED_OUTPUT_FAILURE_REASONS.includes(value as StructuredOutputFailureReason)
+    ? value as StructuredOutputFailureReason
+    : undefined
+}
+
 function buildConsumerReadiness(args: {
   usable: boolean
   fallbackUsed: boolean
@@ -1284,6 +1535,9 @@ function buildConsumerReadiness(args: {
   if (args.terminationKind === 'silent_timeout') blockers.push({ code: 'silent_timeout', message: 'Structured output attempt was idle past timeout' })
   if (args.terminationKind === 'hard_timeout') blockers.push({ code: 'hard_timeout', message: 'Structured output attempt reached hard timeout' })
   if (args.unusableReason === 'locale_mismatch') blockers.push({ code: 'locale_mismatch', message: 'Structured output locale does not match requested forceLocale' })
+  if (args.unusableReason === 'output_budget_exhausted') {
+    blockers.push({ code: 'output_budget_exhausted', message: 'Structured output exhausted its provider output-token budget before producing a valid artifact' })
+  }
   if (args.validationErrors.some(error => error.startsWith('forbidden_phrase'))) {
     blockers.push({ code: 'policy_violation', message: 'Structured output contains forbidden policy phrase' })
   }
@@ -1318,7 +1572,7 @@ function finalizeStructuredOutputResponse(args: {
   outputTokens: number
   durationMs: number
   capabilityGatePayload: { capabilityGate?: StructuredOutputCapabilityGateResult }
-  failureReason?: string
+  failureReason?: StructuredOutputFailureReason
   terminationKind?: StructuredOutputTerminationKind
   lastOutputAt?: string
   idleMs?: number
@@ -1337,9 +1591,9 @@ function finalizeStructuredOutputResponse(args: {
     salvageUsed: args.salvageUsed,
     fallbackUsed: args.fallbackUsed,
   })
-  const unusableReason = args.failureReason
+  const unusableReason: StructuredOutputFailureReason | undefined = args.failureReason
     ?? (localeMismatch ? 'locale_mismatch' : undefined)
-    ?? (args.fallbackUsed ? optionalString(args.artifact['failureReason']) ?? 'failed_fallback' : undefined)
+    ?? (args.fallbackUsed ? structuredOutputFailureReason(optionalString(args.artifact['failureReason'])) ?? 'failed_fallback' : undefined)
     ?? (terminationKind === 'silent_timeout' || terminationKind === 'hard_timeout' ? terminationKind : undefined)
     ?? (!schemaValid ? 'schema_validation_failed' : undefined)
     ?? (completeness.missing.length > 0 ? 'missing_required_artifact' : undefined)
@@ -1358,6 +1612,7 @@ function finalizeStructuredOutputResponse(args: {
     unusableReason,
   })
   const presetParts = versionPartsFromPreset(args.preset)
+  const contract = getStructuredOutputPresetContract(args.preset)
   const schemaParts = schemaVersionParts(args.request, args.preset)
   const salvage = buildSalvageReceipt({
     artifact: args.artifact,
@@ -1368,6 +1623,8 @@ function finalizeStructuredOutputResponse(args: {
   })
   const attempts = args.attempts.map(item => ({
     ...item,
+    ...(item.label === 'fallback' && unusableReason && !item.failureReason ? { failureReason: unusableReason } : {}),
+    providerMatrixProvenance: args.request.providerMatrixProvenance,
     terminationKind: item.terminationKind ?? terminationKind,
     ...(args.lastOutputAt && !item.lastOutputAt ? { lastOutputAt: args.lastOutputAt } : {}),
     ...(args.idleMs !== undefined && item.idleMs === undefined ? { idleMs: args.idleMs } : {}),
@@ -1392,7 +1649,7 @@ function finalizeStructuredOutputResponse(args: {
     rawText: args.rawText,
     ...(args.rawThinkingText ? { rawThinkingText: args.rawThinkingText } : {}),
     usable,
-    ...(unusableReason && !usable ? { unusableReason } : {}),
+    ...(unusableReason && !usable ? { failureReason: unusableReason, unusableReason } : {}),
     salvage,
     artifactCompleteness: completeness,
     consumerReady: consumerReadiness.consumerReady,
@@ -1400,12 +1657,13 @@ function finalizeStructuredOutputResponse(args: {
     terminationKind,
     ...(args.lastOutputAt ? { lastOutputAt: args.lastOutputAt } : {}),
     ...(args.idleMs !== undefined ? { idleMs: args.idleMs } : {}),
-    presetId: args.request.presetId?.trim() || presetParts.presetId,
-    presetVersion: args.request.presetVersion?.trim() || presetParts.presetVersion,
+    presetId: contract?.presetId ?? args.request.presetId?.trim() ?? presetParts.presetId,
+    presetVersion: contract?.presetVersion ?? args.request.presetVersion?.trim() ?? presetParts.presetVersion,
     schemaId: schemaParts.schemaId,
     schemaVersion: schemaParts.schemaVersion,
     repairPolicyVersion: 'repair-policy.v1',
     providerMatrixVersion: PROVIDER_PRESET_MATRIX.version,
+    providerMatrixProvenance: args.request.providerMatrixProvenance!,
     parsed: args.parsed,
     schemaValid,
     validationErrors,
@@ -1446,20 +1704,34 @@ function joinSystemPrompt(system: string | undefined, preset: StructuredOutputPr
 export async function runModelOutputHarness(
   request: StructuredOutputRequest,
   executor: StructuredOutputExecutor,
+  executionLimits: StructuredOutputExecutionLimits = {},
 ): Promise<StructuredOutputResponse> {
   const start = Date.now()
-  const effectiveRequest = applyStructuredOutputPresetDefaults(request)
+  const resolvedHash = resolvedStructuredOutputContracts.get(request)
+  if (resolvedHash && resolvedStructuredOutputContractHash(request) !== resolvedHash) {
+    throw new Error('resolved structured output contract was mutated before execution')
+  }
+  const effectiveRequest = resolvedHash ? request : resolveStructuredOutputContract(request)
   const preset = effectiveRequest.preset ?? 'evidence-digest.v1'
   const attempts: StructuredOutputAttempt[] = []
   const requestedMaxTokens = effectiveRequest.maxTokens ?? 1024
-  const capabilityGate = evaluateStructuredOutputCapabilityGate(effectiveRequest, requestedMaxTokens)
+  const evaluatedCapabilityGate = evaluateStructuredOutputCapabilityGate(effectiveRequest, requestedMaxTokens)
+  const maxTokens = executionLimits.maxTokens === undefined
+    ? evaluatedCapabilityGate.appliedMaxTokens
+    : Math.min(evaluatedCapabilityGate.appliedMaxTokens, Math.max(1, Math.floor(executionLimits.maxTokens)))
+  const capabilityGate = maxTokens === evaluatedCapabilityGate.appliedMaxTokens
+    ? evaluatedCapabilityGate
+    : {
+        ...evaluatedCapabilityGate,
+        appliedMaxTokens: maxTokens,
+        warnings: [...evaluatedCapabilityGate.warnings, 'task execution budget reduced appliedMaxTokens'],
+      }
   const capabilityGatePayload = effectiveRequest.modelCapabilities ? { capabilityGate } : {}
-  const maxTokens = capabilityGate.appliedMaxTokens
   const providerControls = providerControlAttemptFields(effectiveRequest)
 
   if (!capabilityGate.ok) {
     const durationMs = Date.now() - start
-    const failureReason = capabilityGate.errors.some(error => error.includes('jsonMode=unsupported'))
+      const failureReason: StructuredOutputFailureReason = capabilityGate.errors.some(error => error.includes('jsonMode=unsupported'))
       ? 'capability_json_unsupported'
       : 'capability_gate_failed'
     const fallbackArtifact = failedFallbackArtifact({
@@ -1510,11 +1782,20 @@ export async function runModelOutputHarness(
   let modelResponse: StructuredOutputModelResponse
   let telemetry: GovernanceTelemetry | undefined
   try {
+    const executionRequest = executionLimits.hardTimeoutMs === undefined
+      ? effectiveRequest
+      : {
+          ...effectiveRequest,
+          hardTimeoutMs: Math.min(
+            effectiveRequest.hardTimeoutMs ?? executionLimits.hardTimeoutMs,
+            Math.max(1, Math.floor(executionLimits.hardTimeoutMs)),
+          ),
+        }
     const governed = await runExecutorWithActivityGovernance({
-      request: effectiveRequest,
+      request: executionRequest,
       executor,
       executorRequest: {
-        ...effectiveRequest,
+        ...executionRequest,
         preset,
         system: joinSystemPrompt(effectiveRequest.system, preset, effectiveRequest.schema, forcedLocale(effectiveRequest)),
         maxTokens,
@@ -1758,11 +2039,15 @@ export async function runModelOutputHarness(
   let repairCount = 0
   let salvageUsed = false
 
-  const fallback = (failureReason: string, validationErrors: string[] = [failureReason]): StructuredOutputResponse => {
+  const fallback = (failureReason: StructuredOutputFailureReason, validationErrors: string[] = [failureReason]): StructuredOutputResponse => {
+    const resolvedFailureReason: StructuredOutputFailureReason = stopReason === 'max_tokens'
+      && ['schema_validation_failed', 'parse_failed', 'empty_text', 'empty_text_with_thinking'].includes(failureReason)
+      ? 'output_budget_exhausted'
+      : failureReason
     const artifact = failedFallbackArtifact({
       request: effectiveRequest,
       preset,
-      failureReason,
+      failureReason: resolvedFailureReason,
       stopReason,
       inputTokens,
       outputTokens,
@@ -1778,7 +2063,8 @@ export async function runModelOutputHarness(
       stopReason,
       parsed: false,
       schemaValid: false,
-      error: failureReason,
+      error: resolvedFailureReason,
+      failureReason: resolvedFailureReason,
       terminationKind,
       ...(telemetry?.lastOutputAt ? { lastOutputAt: telemetry.lastOutputAt } : {}),
       ...(telemetry?.idleMs !== undefined ? { idleMs: telemetry.idleMs } : {}),
@@ -1802,7 +2088,7 @@ export async function runModelOutputHarness(
       outputTokens,
       durationMs: totalDurationMs,
       capabilityGatePayload,
-      failureReason,
+      failureReason: resolvedFailureReason,
       terminationKind,
       lastOutputAt: telemetry?.lastOutputAt,
       idleMs: telemetry?.idleMs,

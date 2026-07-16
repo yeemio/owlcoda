@@ -250,11 +250,16 @@ When a TaskCreate plan with steps is active, follow the step sequence exactly:
 7. A passing TaskVerify atomically completes the step; do not send a redundant TaskUpdate completion.
 Never skip steps or declare the overall task done while required steps remain open.`
 
+const STATISTICAL_SAFETY = `# Statistical safety
+For paired binary comparisons, use an exact McNemar test by default. Never use the asymptotic McNemar approximation with fewer than 25 discordant pairs; fail the verification closed if an exact implementation is unavailable.`
+
 const BEHAVIORAL_RULES = `${DOING_TASKS}
 
 ${FAILURE_LADDER}
 
 ${EVIDENCE_FIRST}
+
+${STATISTICAL_SAFETY}
 
 ${INVESTIGATION_DISCIPLINE}
 

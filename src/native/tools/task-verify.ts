@@ -16,7 +16,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import type { NativeToolDef, ToolResult } from './types.js'
+import type { NativeToolDef, ToolExecutionContext, ToolResult } from './types.js'
 import {
   getTask,
   getTaskStep,
@@ -30,6 +30,8 @@ import { classifyTaskVerifyCommand } from './task-verification-policy.js'
 import { verifyHtmlDeck } from '../verification-packs/html-deck.js'
 import { evaluateRunVerdictGate, formatRunVerdictGateResult } from '../run-verdict-gate.js'
 import { evaluateCommandResult } from '../command-result-semantics.js'
+import { recordEvent, writeCheckpoint, writeVerification } from '../run-workspace.js'
+import { selectMcNemarMethod } from '../statistical-test-policy.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -560,6 +562,18 @@ async function runCheck(check: TaskVerificationCheck, now: string, ctx: Verifica
     case 'artifact_count': return [await runArtifactCount(check, now, ctx)]
     case 'verification_pack': return runVerificationPack(check, now, ctx)
     case 'run_verdict_gate': return [await runRunVerdictGate(check, now, ctx)]
+    case 'mcnemar_method': {
+      try {
+        const selection = selectMcNemarMethod(
+          check.discordant01 ?? -1,
+          check.discordant10 ?? -1,
+          check.requestedMethod ?? 'exact',
+        )
+        return [{ checkId: check.id, passed: true, detail: `${selection.method} McNemar accepted: ${selection.discordantPairs} discordant pairs`, checkedAt: now, metadata: selection as unknown as Record<string, unknown> }]
+      } catch (error) {
+        return [{ checkId: check.id, passed: false, unsatisfiable: true, detail: error instanceof Error ? error.message : String(error), checkedAt: now }]
+      }
+    }
     case 'http_get': return [await runHttpGet(check, now)]
     case 'command': return [await runCommand(check, now, ctx)]
     case 'none': return [runNone(check, now)]
@@ -636,7 +650,7 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
       'Use this after every step that touches files to build deterministic artifact evidence.',
     maturity: 'beta' as const,
 
-    async execute(input: TaskVerifyInput): Promise<ToolResult> {
+    async execute(input: TaskVerifyInput, toolContext?: ToolExecutionContext): Promise<ToolResult> {
       const { taskId, stepId, writeBack = true } = input
 
       if (!taskId || !stepId) {
@@ -751,6 +765,36 @@ export function createTaskVerifyTool(): NativeToolDef<TaskVerifyInput> {
         if (repairCheckpoint.taskUpdateCommand) {
           lines.push(`  updateSpec=${repairCheckpoint.taskUpdateCommand}`)
         }
+      }
+
+      const runRef = toolContext?.taskState?.run.runWorkspace?.runDir
+      if (runRef && writeBack) {
+        await writeVerification(runRef, {
+          version: 1,
+          source: 'task_verify',
+          updatedAt: now,
+          taskId,
+          stepId,
+          checks: step.verification,
+          results,
+          passed: overallPassed,
+        })
+        const taskCompleted = writtenTask.status === 'completed'
+        await writeCheckpoint(runRef, {
+          version: 1,
+          source: 'task_verify',
+          updatedAt: now,
+          status: taskCompleted && overallPassed ? 'completed' : overallPassed ? 'in_progress' : 'blocked',
+          taskId,
+          stepId,
+          taskStatus: writtenTask.status,
+          verificationPassed: overallPassed,
+        })
+        await recordEvent(runRef, {
+          type: overallPassed ? 'verification_passed' : 'verification_failed',
+          stepId,
+          data: { taskId, resultCount: results.length, passed: overallPassed },
+        })
       }
 
       return {

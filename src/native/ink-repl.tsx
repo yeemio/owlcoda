@@ -123,6 +123,7 @@ import {
   type ReplRuntimeState,
   type ReplTaskState,
 } from './repl-state.js'
+import { recordEvent as recordRunWorkspaceEvent, writeCheckpoint as writeRunWorkspaceCheckpoint, writeTaskReceipt } from './run-workspace.js'
 import {
   handleSlashCommand,
   parseApiError,
@@ -1806,6 +1807,55 @@ function NativeReplApp({
         finalTaskRunStatus,
         ...summarizeTaskForInterruptTrace(task),
       })
+      if (task.aborted) {
+        const executionState = conversation.options?.taskState
+        const runRef = executionState?.run.runWorkspace?.runDir
+        if (runRef) {
+          const writtenPaths = [...new Set([
+            ...(executionState.contract.createdPaths ?? []),
+            ...(executionState.contract.modifiedPaths ?? []),
+            ...executionState.contract.touchedPaths,
+          ])]
+          const pendingDeliverables = executionState.contract.allowedWritePaths
+            .map(scope => scope.path)
+            .filter(path => !writtenPaths.includes(path))
+          const interruptedAt = new Date().toISOString()
+          const receipt = {
+            schema_version: 1,
+            status: 'interrupted',
+            phase: task.interruptedPhase ?? 'awaiting_model',
+            active_tool: task.interruptedToolName ?? null,
+            completed_actions: executionState.contract.touchedPaths,
+            created_paths: executionState.contract.createdPaths ?? [],
+            modified_paths: executionState.contract.modifiedPaths ?? [],
+            written_paths: writtenPaths,
+            final_paths: writtenPaths.filter(path => executionState.contract.allowedWritePaths.some(scope => scope.path === path)),
+            scratch_paths: executionState.run.scratchArtifactPaths ?? [],
+            artifact_refs: [],
+            pending_deliverables: pendingDeliverables,
+            resume_id: conversation.id,
+            provider_error: 'manual_interrupt',
+            interrupted_at: interruptedAt,
+          }
+          await Promise.all([
+            writeTaskReceipt(runRef, receipt),
+            writeRunWorkspaceCheckpoint(runRef, {
+              version: 1,
+              status: 'interrupted',
+              updatedAt: interruptedAt,
+              resumeId: conversation.id,
+              phase: receipt.phase,
+            }),
+            recordRunWorkspaceEvent(runRef, {
+              type: 'task_interrupted',
+              message: 'Interactive task interrupted by operator.',
+              data: receipt,
+            }),
+          ]).catch((err) => {
+            appendTranscript(dim(`Interrupt receipt write failed: ${err instanceof Error ? err.message : String(err)}`))
+          })
+        }
+      }
       finishReplTask(runtime, task, finalTaskPhase)
       if (activeAbortRef.current === abortController) {
         activeAbortRef.current = null

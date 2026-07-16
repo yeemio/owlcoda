@@ -107,6 +107,7 @@ export function validateConfig(raw: unknown): ValidationResult {
         checkNumber(mw, 'requestTimeoutMs', 1000),
         checkNumber(mw, 'streamFirstTokenTimeoutMs', 1000),
         checkNumber(mw, 'streamIdleTimeoutMs', 1000),
+        checkNumber(mw, 'streamTotalTimeoutMs', 1000),
         checkBoolean(mw, 'adaptiveTimeoutEnabled'),
         checkNumber(mw, 'adaptiveTimeoutExtensionPer10kMs', 0),
         checkNumber(mw, 'adaptiveTimeoutCapMs', 1000),

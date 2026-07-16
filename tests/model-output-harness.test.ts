@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
+import { createHash } from 'node:crypto'
 import {
   PROVIDER_PRESET_MATRIX,
   STRUCTURED_OUTPUT_PRESETS,
+  resolveStructuredOutputContract,
   runModelOutputHarness,
   type StructuredOutputExecutor,
   type StructuredOutputRequest,
@@ -25,8 +27,12 @@ function executorReturning(response: Awaited<ReturnType<StructuredOutputExecutor
 
 const baseRequest: StructuredOutputRequest = {
   model: 'kimi',
-  preset: 'evidence-digest.v1',
+  preset: 'custom-evidence.v1',
   schema: digestSchema,
+  schemaId: 'custom-evidence',
+  schemaVersion: 'v1',
+  system: 'Return the caller-owned evidence schema as JSON.',
+  policy: { maxArrayItems: 12, maxStringLength: 1200 },
   user: 'Digest this evidence.',
   maxTokens: 1000,
 }
@@ -72,7 +78,7 @@ describe('model output harness', () => {
   it('applies built-in preset default schema and policy when caller only passes preset', async () => {
     let executorRequest: Parameters<StructuredOutputExecutor>[0] | undefined
     const result = await runModelOutputHarness({
-      model: 'kimi',
+      model: 'unmatched-model',
       preset: 'evidence-digest.v1',
       user: 'Digest this evidence.',
     }, async request => {
@@ -117,6 +123,51 @@ describe('model output harness', () => {
       failureReason: 'schema_validation_failed',
     })
     expect(result.data).toBe(result.artifact)
+  })
+
+  it('classifies an incomplete max_tokens result as output_budget_exhausted', async () => {
+    const result = await runModelOutputHarness({
+      model: 'unmatched-model',
+      preset: 'evidence-digest.v1',
+      user: 'Digest within the output budget.',
+    }, executorReturning({
+      text: '{"artifact":"evidence-digest.v1","summary":"Truncated before confidence"}',
+      stopReason: 'max_tokens',
+      outputTokens: 1200,
+    }))
+
+    expect(result).toMatchObject({
+      ok: false,
+      fallbackUsed: true,
+      failureReason: 'output_budget_exhausted',
+      unusableReason: 'output_budget_exhausted',
+      stopReason: 'max_tokens',
+      artifact: {
+        artifact: 'failed_fallback.v1',
+        failureReason: 'output_budget_exhausted',
+      },
+    })
+    expect(result.attempts.at(-1)).toMatchObject({
+      label: 'fallback',
+      failureReason: 'output_budget_exhausted',
+      error: 'output_budget_exhausted',
+      stopReason: 'max_tokens',
+    })
+    expect(result.validationErrors).toEqual(expect.arrayContaining(['$.confidence is required']))
+  })
+
+  it('keeps a complete artifact successful when the provider reports max_tokens', async () => {
+    const result = await runModelOutputHarness({
+      model: 'unmatched-model',
+      preset: 'evidence-digest.v1',
+      user: 'Return a complete artifact at the budget boundary.',
+    }, executorReturning({
+      text: '{"artifact":"evidence-digest.v1","summary":"Complete.","confidence":0.8}',
+      stopReason: 'max_tokens',
+    }))
+
+    expect(result).toMatchObject({ ok: true, schemaValid: true, stopReason: 'max_tokens' })
+    expect(result.unusableReason).toBeUndefined()
   })
 
   it('rejects structured output before executor call when model capability declares JSON unsupported', async () => {
@@ -211,7 +262,7 @@ describe('model output harness', () => {
       return {
         text: JSON.stringify({
           artifact: 'evidence-digest.v1',
-          summary: 'Uncapped digest.',
+          summary: '未限制预算的摘要。',
           confidence: 0.83,
         }),
         stopReason: 'end_turn',
@@ -427,9 +478,9 @@ describe('model output harness', () => {
     expect(result.artifact).toMatchObject({
       artifact: 'failed_fallback.v1',
       ok: false,
-      failureReason: 'empty_text_with_thinking',
+      failureReason: 'output_budget_exhausted',
       model: 'kimi',
-      preset: 'evidence-digest.v1',
+      preset: 'custom-evidence.v1',
       retryHint: 'rerun_role_artifact',
     })
     expect(JSON.stringify(result.artifact)).not.toBe('{}')
@@ -576,6 +627,35 @@ describe('model output harness', () => {
     })
   })
 
+  it('applies task execution token and elapsed limits before the executor runs', async () => {
+    let appliedMaxTokens = 0
+    const result = await runModelOutputHarness({
+      ...baseRequest,
+      idleTimeoutMs: 200,
+      hardTimeoutMs: 500,
+      maxTokens: 500,
+      modelCapabilities: {
+        jsonMode: { status: 'supported', source: 'manual' },
+        maxContextTokens: { tokens: 128_000, source: 'manual' },
+        maxOutputTokens: { tokens: 4_096, source: 'manual' },
+        streaming: { status: 'supported', source: 'manual' },
+        thinking: { behavior: 'unknown', source: 'manual' },
+      },
+    }, async request => {
+      appliedMaxTokens = request.maxTokens
+      request.onOutputDelta?.({ type: 'text', text: '{"artifact":' })
+      await sleep(80)
+      return {
+        text: '{"artifact":"evidence-digest.v1","summary":"too late","confidence":0.6}',
+      }
+    }, { maxTokens: 17, hardTimeoutMs: 25 })
+
+    expect(appliedMaxTokens).toBe(17)
+    expect(result.terminationKind).toBe('hard_timeout')
+    expect(result.capabilityGate?.appliedMaxTokens).toBe(17)
+    expect(result.capabilityGate?.warnings).toContain('task execution budget reduced appliedMaxTokens')
+  })
+
   it('marks failed fallbacks as unusable and not consumer ready while preserving attempts and completeness', async () => {
     const result = await runModelOutputHarness(baseRequest, executorReturning({
       text: '',
@@ -587,7 +667,7 @@ describe('model output harness', () => {
 
     expect(result.ok).toBe(false)
     expect(result.usable).toBe(false)
-    expect(result.unusableReason).toBe('empty_text_with_thinking')
+    expect(result.unusableReason).toBe('output_budget_exhausted')
     expect(result.consumerReady).toBe(false)
     expect(result.artifactCompleteness).toMatchObject({
       expected: ['artifact', 'summary', 'confidence'],
@@ -598,6 +678,7 @@ describe('model output harness', () => {
     })
     expect(result.consumerReadiness.blockers).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'failed_fallback' }),
+      expect.objectContaining({ code: 'output_budget_exhausted' }),
       expect.objectContaining({ code: 'missing_required_artifact' }),
     ]))
     expect(result.artifact).toMatchObject({
@@ -732,7 +813,11 @@ describe('model output harness', () => {
       }),
     ]))
 
-    const result = await runModelOutputHarness(baseRequest, executorReturning({
+    const result = await runModelOutputHarness({
+      model: 'unmatched-model',
+      preset: 'evidence-digest.v1',
+      user: 'Version this digest.',
+    }, executorReturning({
       text: JSON.stringify({
         artifact: 'evidence-digest.v1',
         summary: 'Versioned digest.',
@@ -750,4 +835,319 @@ describe('model output harness', () => {
       providerMatrixVersion: 'provider-preset-matrix.v1',
     })
   })
+
+  it.each([
+    ['moonshot-v1-128k', 'evidence-digest.v1', 20_480, {
+      artifact: 'evidence-digest.v1', summary: 'Kimi digest.', confidence: 0.8,
+    }],
+    ['deepseek-reasoner', 'analyst-audit.v1', 8192, {
+      artifact: 'analyst-audit.v1', candidate_findings: [], conflicts: [], gaps: [], assumptions: [], confidence: 0.8,
+    }],
+    ['gpt-5.6', 'canonical-judge.v1', 8192, {
+      artifact: 'canonical-judge.v1', decision: 'hold', confidence: 0.8, evidence_refs: [], conflicts: [],
+    }],
+  ])('applies provider matrix budget for %s + %s', async (model, preset, expectedMaxTokens, artifact) => {
+    let captured: Parameters<StructuredOutputExecutor>[0] | undefined
+    const result = await runModelOutputHarness({ model, preset, user: 'Resolve provider contract.' }, async request => {
+      captured = request
+      return { text: JSON.stringify(artifact), stopReason: 'end_turn' }
+    })
+
+    expect(captured?.maxTokens).toBe(expectedMaxTokens)
+    expect(result.providerMatrixProvenance).toMatchObject({
+      providerMatrixVersion: 'provider-preset-matrix.v1',
+      matched: true,
+      applied: true,
+      appliedControls: expect.arrayContaining(['maxTokens', 'temperature', 'idleTimeoutMs', 'hardTimeoutMs']),
+      controlSources: { maxTokens: 'provider_matrix' },
+    })
+  })
+
+  it('gives caller controls precedence over a matched matrix and records request sources', async () => {
+    let captured: Parameters<StructuredOutputExecutor>[0] | undefined
+    const result = await runModelOutputHarness({
+      model: 'kimi-k2.5',
+      preset: 'evidence-digest.v1',
+      user: 'Use caller controls.',
+      maxTokens: 777,
+      temperature: 0.9,
+      idleTimeoutMs: 1111,
+      hardTimeoutMs: 2222,
+      forceLocale: 'en-US',
+    }, async request => {
+      captured = request
+      return {
+        text: JSON.stringify({ artifact: 'evidence-digest.v1', summary: 'Caller controls.', confidence: 0.8 }),
+      }
+    })
+
+    expect(captured).toMatchObject({
+      maxTokens: 777,
+      temperature: 0.9,
+      idleTimeoutMs: 1111,
+      hardTimeoutMs: 2222,
+      forceLocale: 'en-US',
+    })
+    expect(result.providerMatrixProvenance).toMatchObject({
+      matched: true,
+      applied: false,
+      appliedControls: [],
+      controlSources: {
+        maxTokens: 'request',
+        temperature: 'request',
+        idleTimeoutMs: 'request',
+        hardTimeoutMs: 'request',
+        forceLocale: 'request',
+      },
+      overrides: {
+        maxTokens: { source: 'request', value: 777, matrixValue: 20_480 },
+        temperature: { source: 'request', value: 0.9, matrixValue: 0.2 },
+        idleTimeoutMs: { source: 'request', value: 1111, matrixValue: 45_000 },
+        hardTimeoutMs: { source: 'request', value: 2222, matrixValue: 900_000 },
+        forceLocale: { source: 'request', value: 'en-US', matrixValue: 'zh-CN' },
+      },
+    })
+  })
+
+  it('records unmatched matrix truth without implying the matrix was applied', async () => {
+    let captured: Parameters<StructuredOutputExecutor>[0] | undefined
+    const result = await runModelOutputHarness({
+      model: 'private-local-model',
+      preset: 'evidence-digest.v1',
+      user: 'Use preset default.',
+    }, async request => {
+      captured = request
+      return { text: JSON.stringify({ artifact: 'evidence-digest.v1', summary: 'Default.', confidence: 0.8 }) }
+    })
+
+    expect(captured?.maxTokens).toBe(1200)
+    expect(result.providerMatrixProvenance).toEqual(expect.objectContaining({
+      providerMatrixVersion: 'provider-preset-matrix.v1',
+      providerMatrixEntryId: null,
+      providerMatrixEntryHash: null,
+      matched: false,
+      applied: false,
+      appliedControls: [],
+      overrides: {},
+      controlSources: { maxTokens: 'preset_default' },
+    }))
+  })
+
+  it('rejects a built-in preset combined with a caller custom schema before execution', async () => {
+    let called = false
+    await expect(runModelOutputHarness({
+      model: 'kimi',
+      preset: 'evidence-digest.v1',
+      schema: digestSchema,
+      user: 'Do not silently hybridize this contract.',
+    }, async () => {
+      called = true
+      return { text: '{}' }
+    })).rejects.toThrow('built-in preset cannot be combined with a custom schema')
+    expect(called).toBe(false)
+  })
+
+  it('rejects forged built-in preset/schema identity before matrix matching or execution', async () => {
+    let called = false
+    await expect(runModelOutputHarness({
+      model: 'deepseek-reasoner',
+      preset: 'evidence-digest.v1',
+      presetId: 'analyst-audit',
+      presetVersion: 'v1',
+      schemaId: 'custom-schema',
+      schemaVersion: 'v9',
+      user: 'Do not cross-wire contracts.',
+    }, async () => {
+      called = true
+      return { text: '{}' }
+    })).rejects.toThrow('built-in preset identity conflicts with canonical contract')
+    expect(called).toBe(false)
+  })
+
+  it('accepts explicit built-in identity only when every field matches the canonical contract', async () => {
+    const result = await runModelOutputHarness({
+      model: 'kimi-k2.5',
+      preset: 'evidence-digest.v1',
+      presetId: 'evidence-digest',
+      presetVersion: 'v1',
+      schemaId: 'evidence-digest',
+      schemaVersion: 'v1',
+      user: 'Use canonical identity.',
+    }, executorReturning({
+      text: JSON.stringify({ artifact: 'evidence-digest.v1', summary: '规范身份。', confidence: 0.8 }),
+    }))
+
+    expect(result).toMatchObject({
+      presetId: 'evidence-digest',
+      presetVersion: 'v1',
+      schemaId: 'evidence-digest',
+      schemaVersion: 'v1',
+      providerMatrixProvenance: {
+        providerMatrixEntryId: 'provider-preset-matrix.v1/evidence-digest.v1/kimi',
+        matched: true,
+      },
+    })
+  })
+
+  it('rejects mutation of a resolved contract before execution', async () => {
+    const resolved = resolveStructuredOutputContract({
+      model: 'kimi-k2.5',
+      preset: 'evidence-digest.v1',
+      user: 'Resolve then protect this contract.',
+    })
+    resolved.preset = 'analyst-audit.v1'
+    resolved.presetId = 'analyst-audit'
+    resolved.schemaId = 'analyst-audit'
+    resolved.maxTokens = 1
+
+    let called = false
+    await expect(runModelOutputHarness(resolved, async () => {
+      called = true
+      return { text: '{}' }
+    })).rejects.toThrow('resolved structured output contract was mutated')
+    expect(called).toBe(false)
+  })
+
+  it('isolates built-in canonical schema from nested resolved-request mutation', async () => {
+    const canonicalRequired = [...STRUCTURED_OUTPUT_PRESETS['evidence-digest.v1'].schema.required!]
+    const resolved = resolveStructuredOutputContract({
+      model: 'unmatched-model',
+      preset: 'evidence-digest.v1',
+      user: 'Do not expose the canonical schema by reference.',
+    })
+    resolved.schema!.required = []
+
+    let mutatedCalls = 0
+    await expect(runModelOutputHarness(resolved, async () => {
+      mutatedCalls += 1
+      return { text: '{}' }
+    })).rejects.toThrow('resolved structured output contract was mutated')
+    expect(mutatedCalls).toBe(0)
+    expect(STRUCTURED_OUTPUT_PRESETS['evidence-digest.v1'].schema.required).toEqual(canonicalRequired)
+
+    let freshRequired: string[] | undefined
+    await runModelOutputHarness({
+      model: 'unmatched-model',
+      preset: 'evidence-digest.v1',
+      user: 'Use fresh canonical schema.',
+    }, async request => {
+      freshRequired = request.schema?.required
+      return {
+        text: JSON.stringify({ artifact: 'evidence-digest.v1', summary: 'Fresh.', confidence: 0.8 }),
+      }
+    })
+    expect(freshRequired).toEqual(canonicalRequired)
+  })
+
+  it('rejects a custom preset that forges a built-in preset identity before matrix matching or execution', async () => {
+    let called = false
+    await expect(runModelOutputHarness({
+      model: 'kimi-k2.5',
+      preset: 'owlfootball-evidence.v2',
+      presetId: 'evidence-digest',
+      presetVersion: 'v1',
+      schema: digestSchema,
+      schemaId: 'owlfootball-evidence',
+      schemaVersion: 'v2',
+      system: 'Return the caller schema.',
+      policy: { maxArrayItems: 8 },
+      maxTokens: 600,
+      user: 'Reject forged custom preset identity.',
+    }, async () => {
+      called = true
+      return { text: '{}' }
+    })).rejects.toThrow('preset identity conflicts with canonical preset')
+    expect(called).toBe(false)
+  })
+
+  it('rejects a custom schema identity that impersonates a built-in schema', async () => {
+    let called = false
+    await expect(runModelOutputHarness({
+      model: 'custom-model',
+      preset: 'owlfootball-evidence.v2',
+      schema: digestSchema,
+      schemaId: 'evidence-digest',
+      schemaVersion: 'v1',
+      system: 'Return the caller schema.',
+      policy: { maxArrayItems: 8 },
+      maxTokens: 600,
+      user: 'Reject forged built-in schema identity.',
+    }, async () => {
+      called = true
+      return { text: '{}' }
+    })).rejects.toThrow('custom schema identity conflicts with built-in contract')
+    expect(called).toBe(false)
+  })
+
+  it('requires custom schema identity and preserves it instead of a built-in schema identity', async () => {
+    await expect(runModelOutputHarness({
+      model: 'custom-model',
+      preset: 'owlfootball-evidence.v2',
+      schema: digestSchema,
+      system: 'Return the caller schema.',
+      policy: { maxArrayItems: 8 },
+      maxTokens: 600,
+      user: 'Missing explicit schema identity.',
+    }, executorReturning({ text: '{}' }))).rejects.toThrow('custom preset requires explicit schemaId and schemaVersion')
+
+    const result = await runModelOutputHarness({
+      model: 'custom-model',
+      preset: 'owlfootball-evidence.v2',
+      schema: digestSchema,
+      schemaId: 'owlfootball-evidence',
+      schemaVersion: 'v2',
+      system: 'Return the caller schema.',
+      policy: { maxArrayItems: 8 },
+      maxTokens: 600,
+      user: 'Use explicit custom identity.',
+    }, executorReturning({
+      text: JSON.stringify({ artifact: 'evidence-digest.v1', summary: 'Custom.', confidence: 0.8 }),
+    }))
+
+    expect(result).toMatchObject({
+      presetId: 'owlfootball-evidence',
+      presetVersion: 'v2',
+      schemaId: 'owlfootball-evidence',
+      schemaVersion: 'v2',
+    })
+  })
+
+  it('keeps matrix entry id/hash and controls identical across response attempts', async () => {
+    const result = await runModelOutputHarness({
+      model: 'kimi-k2.5',
+      preset: 'evidence-digest.v1',
+      user: 'Record matrix provenance.',
+    }, executorReturning({
+      text: JSON.stringify({ artifact: 'evidence-digest.v1', summary: 'Provenance.', confidence: 0.8 }),
+    }))
+    const entry = PROVIDER_PRESET_MATRIX.presets[0]!
+    const expectedHash = `sha256:${createHash('sha256').update(stableJson(entry)).digest('hex')}`
+
+    expect(result.providerMatrixProvenance).toMatchObject({
+      providerMatrixEntryId: 'provider-preset-matrix.v1/evidence-digest.v1/kimi',
+      providerMatrixEntryHash: expectedHash,
+      matched: true,
+      applied: true,
+      policyVersions: {
+        repairPolicy: 'repair-policy.v1',
+        salvagePolicy: 'salvage-policy.v1',
+      },
+    })
+    for (const item of result.attempts) {
+      expect(item.providerMatrixProvenance).toEqual(result.providerMatrixProvenance)
+    }
+  })
 })
+
+function stableJson(value: unknown): string {
+  return JSON.stringify(sortJson(value))
+}
+
+function sortJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortJson)
+  if (!value || typeof value !== 'object') return value
+  return Object.fromEntries(Object.keys(value as Record<string, unknown>).sort().map(key => [
+    key,
+    sortJson((value as Record<string, unknown>)[key]),
+  ]))
+}

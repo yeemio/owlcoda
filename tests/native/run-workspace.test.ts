@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  assessRunWorkspaceCompletion,
   createRunWorkspace,
   getRunWorkspacePaths,
   readCheckpoint,
@@ -168,6 +169,97 @@ describe('run workspace', () => {
         participatesInFinal: true,
         status: 'present',
       })
+    })
+  })
+
+  it('serializes concurrent artifact registrations without corrupting or losing ledger entries', async () => {
+    await withTempDir('owlcoda-run-workspace-concurrent-', async (dir) => {
+      const outputRoot = join(dir, 'out')
+      await createRunWorkspace({ outputRoot, cwd: dir, runId: 'run-concurrent' })
+      const paths = Array.from({ length: 24 }, (_, index) => join(outputRoot, 'final', `report-${index}.md`))
+      await Promise.all(paths.map(path => writeFile(path, path, 'utf8')))
+
+      await Promise.all(paths.map((path, index) => recordArtifact(outputRoot, {
+        path,
+        origin: 'write',
+        stepId: `step-${index}`,
+        participatesInFinal: true,
+      })))
+
+      const ledger = await readArtifactLedger(outputRoot)
+      expect(ledger.artifacts).toHaveLength(paths.length)
+      expect(new Set(ledger.artifacts.map(artifact => artifact.path))).toEqual(new Set(paths))
+    })
+  })
+
+  it('fails completion closed until final artifacts, verification, and checkpoint are complete', async () => {
+    await withTempDir('owlcoda-run-workspace-completion-', async (dir) => {
+      const outputRoot = join(dir, 'out')
+      const { paths } = await createRunWorkspace({ outputRoot, cwd: dir, runId: 'run-completion' })
+
+      const initial = await assessRunWorkspaceCompletion(outputRoot)
+      expect(initial.verdict).toBe('blocked')
+      expect(initial.blockers).toEqual(expect.arrayContaining([
+        'no_required_final_artifacts',
+        'checkpoint_not_completed',
+        'verification_empty',
+      ]))
+
+      const finalPath = join(outputRoot, 'final', 'report.md')
+      await writeFile(finalPath, '# report\n', 'utf8')
+      await recordArtifact(outputRoot, { path: finalPath, origin: 'write', participatesInFinal: true })
+      await writeVerification(outputRoot, {
+        source: 'task_verify',
+        checks: [{ id: 'report-exists' }],
+        results: [{ checkId: 'report-exists', passed: true }],
+      })
+      await writeCheckpoint(outputRoot, { version: 1, source: 'task_verify', status: 'completed', updatedAt: new Date().toISOString() })
+
+      await expect(assessRunWorkspaceCompletion(outputRoot)).resolves.toMatchObject({
+        verdict: 'pass',
+        blockers: [],
+        registryParseable: true,
+        requiredFinalArtifacts: { expected: 1, produced: 1, missing: [] },
+      })
+
+      await writeFile(paths.verificationPath, JSON.stringify({
+        source: 'task_verify',
+        checks: [{ id: 'a' }, { id: 'b' }],
+        results: [{ checkId: 'a', passed: true }, { checkId: 'a', passed: true }],
+      }), 'utf8')
+      await expect(assessRunWorkspaceCompletion(outputRoot)).resolves.toMatchObject({
+        verdict: 'blocked',
+        blockers: expect.arrayContaining(['verification_failed']),
+      })
+
+      await writeVerification(outputRoot, {
+        source: 'task_verify',
+        checks: [{ id: 'report-exists' }],
+        results: [{ checkId: 'report-exists', passed: true }],
+      })
+      await import('node:fs/promises').then(fs => fs.unlink(finalPath))
+      await expect(assessRunWorkspaceCompletion(outputRoot)).resolves.toMatchObject({
+        verdict: 'blocked',
+        blockers: expect.arrayContaining(['required_final_artifacts_missing']),
+      })
+    })
+  })
+
+  it('fails completion closed for a corrupted registry or unresolved loop event', async () => {
+    await withTempDir('owlcoda-run-workspace-corrupt-', async (dir) => {
+      const outputRoot = join(dir, 'out')
+      const { paths } = await createRunWorkspace({ outputRoot, cwd: dir, runId: 'run-corrupt' })
+      await writeFile(paths.artifactsPath, '{"version":1}\n{"duplicate":true}\n', 'utf8')
+
+      const corrupt = await assessRunWorkspaceCompletion(outputRoot)
+      expect(corrupt.verdict).toBe('blocked')
+      expect(corrupt.registryParseable).toBe(false)
+      expect(corrupt.blockers).toContain('artifact_registry_unparseable')
+
+      await writeFile(paths.artifactsPath, JSON.stringify({ version: 1, updatedAt: new Date().toISOString(), artifacts: [] }), 'utf8')
+      await recordEvent(outputRoot, { type: 'loop_intercept', data: { resolved: false } })
+      const loopBlocked = await assessRunWorkspaceCompletion(outputRoot)
+      expect(loopBlocked.blockers).toContain('active_runtime_failure:loop_intercept')
     })
   })
 

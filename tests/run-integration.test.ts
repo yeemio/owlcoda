@@ -672,6 +672,108 @@ describe('run: tool_result transcript completeness', () => {
     )).toBe(true)
   }, CLI_SUBPROCESS_TEST_TIMEOUT_MS)
 
+  it('run --auto-approve executes a workspace analysis script before writing a declared report', async () => {
+    const runtimeDir = makeRuntimeDir()
+    const isolatedHome = makeRuntimeDir()
+    const outputDir = makeRuntimeDir()
+    const outputPath = join(outputDir, 'research-report.md')
+    const routerPort = await getFreePort()
+    const proxyPort = await getFreePort()
+    let callCount = 0
+
+    await startFakeRouter(routerPort, (_req, body) => {
+      callCount++
+      const parsed = JSON.parse(body)
+      if (callCount === 1) {
+        return {
+          id: 'fake-research-script',
+          object: 'chat.completion',
+          model: parsed.model,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [{
+                id: 'call_research_script',
+                type: 'function',
+                function: {
+                  name: 'bash',
+                  arguments: JSON.stringify({
+                    command: `cd "${REPO_ROOT}" && node scripts/check-imported-untracked.mjs`,
+                  }),
+                },
+              }],
+            },
+            finish_reason: 'tool_calls',
+          }],
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        }
+      }
+      if (callCount === 2) {
+        expect(JSON.stringify(parsed.messages)).toContain('build.imported_untracked')
+        return {
+          id: 'fake-research-write',
+          object: 'chat.completion',
+          model: parsed.model,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: null,
+              tool_calls: [{
+                id: 'call_research_write',
+                type: 'function',
+                function: {
+                  name: 'write',
+                  arguments: JSON.stringify({ path: outputPath, content: 'research complete\n' }),
+                },
+              }],
+            },
+            finish_reason: 'tool_calls',
+          }],
+          usage: { prompt_tokens: 20, completion_tokens: 8, total_tokens: 28 },
+        }
+      }
+
+      expect(JSON.stringify(parsed.messages)).toContain('Wrote')
+      return {
+        id: 'fake-research-final',
+        object: 'chat.completion',
+        model: parsed.model,
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'Research report completed' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 30, completion_tokens: 8, total_tokens: 38 },
+      }
+    })
+    const configPath = makeConfig(runtimeDir, proxyPort, `http://127.0.0.1:${routerPort}`)
+
+    const result = await runCli(
+      [
+        'run',
+        '--prompt',
+        `Research the repository without modifying source files. Write the report to \`${outputPath}\`.`,
+        '--auto-approve',
+        '--json',
+        '--config',
+        configPath,
+      ],
+      runtimeDir,
+      { HOME: isolatedHome },
+      undefined,
+      25_000,
+    )
+
+    expect(result.stderr).not.toContain('denied by headless approval policy')
+    expect(readFileSync(outputPath, 'utf-8')).toBe('research complete\n')
+    const json = JSON.parse(result.stdout.trim())
+    expect(json.approval_denials).toEqual([])
+    expect(json.tool_calls.map((call: { tool: string }) => call.tool)).toEqual(['bash', 'write'])
+  }, CLI_SUBPROCESS_TEST_TIMEOUT_MS)
+
   it('run --auto-approve still rejects dangerous bash in isolated headless mode', async () => {
     const runtimeDir = makeRuntimeDir()
     const isolatedHome = makeRuntimeDir()

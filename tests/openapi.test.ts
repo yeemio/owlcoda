@@ -58,6 +58,35 @@ describe('OpenAPI spec', () => {
     expect(spec.components.schemas.MessagesResponse).toBeDefined()
   })
 
+  it('documents typed structured-output budget exhaustion', () => {
+    const response = spec.components.schemas.StructuredOutputResponse
+    const failureReason = spec.components.schemas.StructuredOutputFailureReason
+    expect(failureReason.enum).toContain('output_budget_exhausted')
+    expect(response.properties.failureReason.$ref).toBe('#/components/schemas/StructuredOutputFailureReason')
+    expect(response.properties.unusableReason.$ref).toBe('#/components/schemas/StructuredOutputFailureReason')
+    expect(spec.components.schemas.StructuredOutputAttempt.properties.failureReason.$ref)
+      .toBe('#/components/schemas/StructuredOutputFailureReason')
+    expect(response.properties.stopReason).toMatchObject({ type: 'string', nullable: true })
+  })
+
+  it('documents execution economics, idempotency, and task-budget stop responses', () => {
+    const request = spec.components.schemas.StructuredOutputRequest
+    const response = spec.components.schemas.StructuredOutputResponse
+    expect(request.properties.executionBudget.$ref).toBe('#/components/schemas/StructuredOutputExecutionBudget')
+    expect(request.properties.idempotencyKey).toMatchObject({ type: 'string', minLength: 8 })
+    expect(response.properties.executionCounts.$ref).toBe('#/components/schemas/StructuredOutputExecutionCounts')
+    expect(response.properties.executionEconomics.$ref).toBe('#/components/schemas/StructuredOutputExecutionEconomics')
+    const economics = spec.components.schemas.StructuredOutputExecutionEconomics
+    expect(economics.properties.current.$ref).toBe('#/components/schemas/StructuredOutputExecutionTotals')
+    expect(economics.properties.cumulative.$ref).toBe('#/components/schemas/StructuredOutputExecutionTotals')
+    expect(economics.properties.reservation.$ref).toBe('#/components/schemas/StructuredOutputBudgetReservation')
+    expect(economics.properties.stopReceipt.$ref).toBe('#/components/schemas/StructuredOutputBudgetStopReceipt')
+    expect(spec.paths['/v1/structured-output'].post.responses['409']).toBeDefined()
+    expect(spec.paths['/v1/structured-output'].post.responses['429']).toBeDefined()
+    expect(spec.components.schemas.ErrorResponse.properties.error.properties.type.enum)
+      .toEqual(expect.arrayContaining(['idempotency_conflict', 'task_budget_contract_mismatch', 'task_budget_exhausted']))
+  })
+
   it('includes /metrics path', () => {
     expect(spec.paths['/metrics']).toBeDefined()
     expect(spec.paths['/metrics'].get).toBeDefined()

@@ -30,12 +30,16 @@ const response = await fetch("http://127.0.0.1:8019/v1/structured-output", {
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
     model: "kimi",
-    preset: "evidence-digest.v1",
+    preset: "owlfootball-evidence.v2",
+    presetId: "owlfootball-evidence",
+    presetVersion: "v2",
+    schemaId: "owlfootball-evidence-contract",
+    schemaVersion: "v2",
     schema: {
       type: "object",
       required: ["artifact", "summary", "confidence", "source_refs", "risks"],
       properties: {
-        artifact: { const: "evidence-digest.v1" },
+        artifact: { const: "owlfootball-evidence.v2" },
         summary: { type: "string" },
         confidence: { type: "number" },
         source_refs: { type: "array", items: { type: "string" } },
@@ -89,7 +93,7 @@ return {
 ```ts
 await rerunRoleArtifact({
   role: "evidence",
-  preset: "evidence-digest.v1",
+  preset: "owlfootball-evidence.v2",
   previousAttempts: result.attempts
 })
 ```
@@ -100,8 +104,10 @@ await rerunRoleArtifact({
 
 业务代码可以选择 `model: "kimi"`、`model: "deepseek"` 或其它模型。
 
-业务代码不应该创建 `kimi-evidence-digest` 这种 preset。preset 是 OwlCoda 的通用能力名：
+业务代码不应该创建 `kimi-evidence-digest` 这种 provider 专用 preset。使用 OwlCoda built-in contract 时，preset 是通用能力名：
 
 - `evidence-digest.v1`
 - `analyst-audit.v1`
 - `canonical-judge.v1`
+
+OwlFootball 传入自己的 schema 时必须使用自己的 custom preset（如上面的 `owlfootball-evidence.v2`），并显式提供独立 `schemaId/schemaVersion`、`system`、`policy` 和 `maxTokens`。`presetId/presetVersion` 可省略，由 preset 字符串 canonical 派生；若显式提供，则必须与派生值完全一致。built-in preset 与 caller custom schema 的混合请求会在调用模型前被拒绝。

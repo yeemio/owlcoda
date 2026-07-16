@@ -71,6 +71,8 @@ export interface FsPolicyOptions {
   homeDir?: string
   /** Override platform lookup (test seam). */
   platformName?: NodeJS.Platform
+  /** Reserved for the RunWorkspace metadata tool; ordinary writes cannot forge completion state. */
+  allowRunWorkspaceMetadata?: boolean
 }
 
 export type FsPolicyResult =
@@ -175,6 +177,18 @@ function evaluateFsPolicy(
   const resolvedRaw = isAbsolute(expanded) ? resolve(expanded) : resolve(workspaceRoot, expanded)
   const resolvedReal = realpathParents(resolvedRaw)
 
+  if (
+    mode.action === 'write'
+    && !opts.allowRunWorkspaceMetadata
+    && /(?:^|[/\\])\.owlcoda-run[/\\](?:(?:manifest|checkpoint|verification|artifacts|task-receipt)\.json|events\.jsonl)$/.test(resolvedReal)
+  ) {
+    return {
+      allowed: false,
+      reason: 'RunWorkspace completion metadata is runtime-owned; use RunWorkspace and TaskVerify instead of writing it directly.',
+      attemptedPath: resolvedReal,
+    }
+  }
+
   const sensitive = sensitiveDeny(resolvedReal, { home, owlcodaHome, plat })
   if (sensitive) {
     return {
@@ -218,7 +232,8 @@ function evaluateFsPolicy(
       `Resolved: ${resolvedReal}. ` +
       `Allowed roots: ${summary}${more}. ` +
       `For recoverable task artifacts, write inside the current workspace or a RunWorkspace output root. ` +
-      `To extend the allowed set, set OWLCODA_ALLOW_FS_ROOTS=<root>[:<root>...].`,
+      `OWLCODA_ALLOW_FS_ROOTS is read when OwlCoda starts and cannot be expanded by approval in the current process. ` +
+      `Restart with: OWLCODA_ALLOW_FS_ROOTS="${resolvedReal}" owlcoda <your existing arguments>.`,
     attemptedPath: resolvedReal,
   }
 }

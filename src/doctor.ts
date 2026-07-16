@@ -3,15 +3,17 @@
  * Checks native runtime readiness and local platform health.
  */
 
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { get as httpGet } from 'node:http'
 import { loadConfig, type OwlCodaConfig } from './config.js'
 import { assessReplacementReadiness, type ReplacementReadiness } from './replacement-readiness.js'
-import { VERSION } from './version.js'
+import { BUILD_INFO, VERSION } from './version.js'
 import { validateSemantics } from './config-semantic.js'
-import { readFile, stat } from 'node:fs/promises'
-import { join } from 'node:path'
+import { readFile, readdir, stat } from 'node:fs/promises'
+import { dirname, join, relative } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { getTranscriptInteractionCapability } from './native/repl-compat.js'
 import { ModelTruthAggregator, type ModelTruthSnapshot, type ModelStatus } from './model-truth.js'
 import { findFlagDebt, GATE_REGISTRY } from './native/gate-registry.js'
@@ -29,6 +31,18 @@ export interface DoctorReport {
   failCount: number
   skipCount: number
   replacement: ReplacementReadiness
+  releaseIdentity: DoctorReleaseIdentity
+}
+
+export interface DoctorReleaseIdentity {
+  packageVersion: string
+  build: { sha: string; dirty: boolean; builtAt: string }
+  schemaBundle: {
+    algorithm: 'sha256'
+    hash: string
+    fileCount: number
+    files: string[]
+  }
 }
 
 function check(name: string, status: CheckResult['status'], detail: string): CheckResult {
@@ -413,7 +427,51 @@ export async function runDoctor(configPath?: string): Promise<DoctorReport> {
     failCount,
     skipCount,
     replacement: assessReplacementReadiness(checks),
+    releaseIdentity: await buildDoctorReleaseIdentity(),
   }
+}
+
+export async function buildDoctorReleaseIdentity(): Promise<DoctorReleaseIdentity> {
+  const moduleDir = dirname(fileURLToPath(import.meta.url))
+  const schemaRoot = join(moduleDir, '..', 'schemas')
+  const files = await listFiles(schemaRoot)
+  const digest = createHash('sha256')
+  for (const file of files) {
+    const name = relative(schemaRoot, file).replace(/\\/g, '/')
+    digest.update(`${name.length}:${name}\0`)
+    digest.update(await readFile(file))
+    digest.update('\0')
+  }
+  return {
+    packageVersion: VERSION,
+    build: { ...BUILD_INFO },
+    schemaBundle: {
+      algorithm: 'sha256',
+      hash: `sha256:${digest.digest('hex')}`,
+      fileCount: files.length,
+      files: files.map(file => relative(schemaRoot, file).replace(/\\/g, '/')),
+    },
+  }
+}
+
+async function listFiles(root: string): Promise<string[]> {
+  const out: string[] = []
+  async function walk(dir: string): Promise<void> {
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+      throw err
+    }
+    for (const entry of entries) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) await walk(path)
+      else if (entry.isFile()) out.push(path)
+    }
+  }
+  await walk(root)
+  return out.sort()
 }
 
 const ICONS: Record<CheckResult['status'], string> = {

@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { ToolDispatcher } from '../../src/native/dispatch.js'
 import {
   addUserMessage,
   buildToolAttempt,
+  bashWorktreeStateFingerprint,
   createConversation,
   detectToolLoop,
   recordCrossTurnFailureClass,
@@ -98,6 +101,30 @@ describe('cross-turn failure-class accumulation (loop guard)', () => {
     )
     // ReadMcpResource still at 5 → re-entering it still trips.
     expect(detectToolLoop([], NEXT('mcp://r-6'), ledger)).toBeTruthy()
+  })
+})
+
+describe('bash monitoring worktree-state fingerprint', () => {
+  it('reads actual task-cwd file state for arbitrary successful Bash commands', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'owlcoda-loop-worktree-state-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd })
+      const clean = bashWorktreeStateFingerprint(cwd)
+      writeFileSync(join(cwd, 'artifact.txt'), 'v1\n')
+      const created = bashWorktreeStateFingerprint(cwd)
+      writeFileSync(join(cwd, 'artifact.txt'), 'v2\n')
+      const untrackedChanged = bashWorktreeStateFingerprint(cwd)
+      execFileSync('git', ['add', 'artifact.txt'], { cwd })
+      const staged = bashWorktreeStateFingerprint(cwd)
+
+      expect(clean).toMatch(/^worktree-state:/)
+      expect(created).not.toBe(clean)
+      expect(untrackedChanged).not.toBe(created)
+      expect(staged).toMatch(/^worktree-state:/)
+      expect(bashWorktreeStateFingerprint(cwd)).toBe(staged)
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
   })
 })
 
@@ -738,6 +765,100 @@ describe('native conversation tool loop guard', () => {
     expect(bashCalls).toBe(2)
     expect(result.stopReason).toBe('tool_loop')
     expect(errors.at(-1)).toMatch(/repeated failing bash attempts/)
+  })
+
+  it('soft-loop guards the third failing verification command when worktree state is unchanged', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'owlcoda-verification-loop-unchanged-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd })
+      const conv = createConversation({ system: 'test', model: 'test-model' })
+      addUserMessage(conv, 'Run the focused tests and report the failing result.')
+      const dispatcher = new ToolDispatcher()
+      let bashCalls = 0
+      dispatcher.register({
+        name: 'bash',
+        description: 'test bash',
+        async execute() {
+          bashCalls += 1
+          return { output: '1 test failed', isError: true }
+        },
+      })
+      const input = { cwd, command: 'npx vitest run tests/fixture.test.ts --maxWorkers=1' }
+      const responses = [
+        toolUseResponse('bash', 'verify-1', input),
+        toolUseResponse('bash', 'verify-2', input),
+        toolUseResponse('bash', 'verify-3', input),
+      ]
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+      const result = await runConversationLoop(conv, dispatcher, {
+        apiBaseUrl: 'http://localhost:0',
+        apiKey: 'test',
+      })
+
+      expect(result.stopReason).toBe('tool_loop')
+      expect(bashCalls).toBe(2)
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('gives a failing verification command one new-state retry, then guards unchanged repeats', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'owlcoda-verification-loop-changed-'))
+    try {
+      execFileSync('git', ['init', '-q'], { cwd })
+      const fixturePath = join(cwd, 'tests', 'fixture.test.ts')
+      mkdirSync(join(cwd, 'tests'))
+      writeFileSync(fixturePath, 'export const fixture = 1\n', { flag: 'w' })
+      execFileSync('git', ['add', 'tests/fixture.test.ts'], { cwd })
+      execFileSync('git', ['-c', 'user.name=OwlCoda Test', '-c', 'user.email=test@owlcoda.local', 'commit', '-qm', 'fixture'], { cwd })
+
+      const conv = createConversation({ system: 'test', model: 'test-model' })
+      addUserMessage(conv, 'Fix the tracked test fixture, rerun the same focused verification, and stop if it still fails.')
+      const dispatcher = new ToolDispatcher()
+      let bashCalls = 0
+      dispatcher.register({
+        name: 'bash',
+        description: 'test bash',
+        async execute() {
+          bashCalls += 1
+          return { output: '1 test failed', isError: true }
+        },
+      })
+      dispatcher.register({
+        name: 'edit',
+        description: 'test edit',
+        async execute() {
+          writeFileSync(fixturePath, 'export const fixture = 2\n')
+          return { output: 'updated tracked fixture', isError: false }
+        },
+      })
+      const verificationInput = { cwd, command: 'npx vitest run tests/fixture.test.ts --maxWorkers=1' }
+      const responses = [
+        toolUseResponse('bash', 'verify-old-1', verificationInput),
+        toolUseResponse('bash', 'verify-old-2', verificationInput),
+        toolUseResponse('edit', 'edit-fixture', {
+          path: fixturePath,
+          oldString: 'export const fixture = 1',
+          newString: 'export const fixture = 2',
+        }),
+        toolUseResponse('bash', 'verify-new-1', verificationInput),
+        toolUseResponse('bash', 'verify-new-2', verificationInput),
+        toolUseResponse('bash', 'verify-new-3', verificationInput),
+      ]
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async () => responses.shift()!)
+
+      const result = await runConversationLoop(conv, dispatcher, {
+        apiBaseUrl: 'http://localhost:0',
+        apiKey: 'test',
+      })
+
+      expect(result.stopReason).toBe('tool_loop')
+      expect(bashCalls).toBe(4)
+      expect(bashWorktreeStateFingerprint(cwd)).toMatch(/^worktree-state:/)
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
   })
 
   it('allows productive rereads of the same file when the read window changes', async () => {

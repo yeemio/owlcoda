@@ -1063,19 +1063,27 @@ async function handleMessagesStream(
   })
   const streamFirstTokenTimeoutMs = streamFirstTokenAdaptive.timeoutMs
   const firstTokenController = new AbortController()
+  const streamTotalTimeoutMs = mwForStream.streamTotalTimeoutMs ?? 600_000
+  const totalRuntimeController = new AbortController()
   let firstTokenWatchdogFired = false
+  let totalRuntimeWatchdogFired = false
   let firstChunkArrived = false
   const firstTokenTimer = setTimeout(() => {
     if (firstChunkArrived) return
     firstTokenWatchdogFired = true
     firstTokenController.abort()
   }, streamFirstTokenTimeoutMs)
+  const totalRuntimeTimer = setTimeout(() => {
+    totalRuntimeWatchdogFired = true
+    totalRuntimeController.abort()
+  }, streamTotalTimeoutMs)
   const markFirstChunkArrived = (): void => {
     if (firstChunkArrived) return
     firstChunkArrived = true
     clearTimeout(firstTokenTimer)
   }
-  const combinedSignal = AbortSignal.any([signal, firstTokenController.signal])
+  const combinedSignal = AbortSignal.any([signal, firstTokenController.signal, totalRuntimeController.signal])
+  const fallbackSignal = AbortSignal.any([signal, totalRuntimeController.signal])
 
   const translator = servedRoute.translate
     ? new StreamTranslator(body.model, inputTokenEstimate)
@@ -1345,7 +1353,20 @@ async function handleMessagesStream(
     // by name alone — there's no other TimeoutError source on this path.
     const isPerChunkIdle = errName === 'TimeoutError'
     let failure: ProviderRequestDiagnostic
-    if (firstTokenWatchdogFired) {
+    if (totalRuntimeWatchdogFired) {
+      const detail = `total-runtime watchdog fired after ${streamTotalTimeoutMs}ms`
+      failure = {
+        provider: diagCtx.provider ?? 'unknown-provider',
+        model: body.model,
+        kind: 'timeout',
+        message: `${body.model} request failed: ${detail}`,
+        status: 504,
+        requestId: streamRequestId,
+        retryable: true,
+        detail,
+        partialOutputSeen: streamPartialOutputSeen,
+      }
+    } else if (firstTokenWatchdogFired) {
       failure = createStreamFirstTokenTimeoutDiagnostic(diagCtx, { timeoutMs: streamFirstTokenTimeoutMs })
     } else if (isPerChunkIdle) {
       failure = streamPartialOutputSeen
@@ -1386,7 +1407,7 @@ async function handleMessagesStream(
     // through to the existing wording emission below.
     const preFirstTokenStreamClose =
       failure.kind === 'stream_interrupted_before_first_token' && !streamPartialOutputSeen
-    const fallbackEligible = isFallbackEnabled(mwForStream) &&
+    const fallbackEligible = !totalRuntimeWatchdogFired && isFallbackEnabled(mwForStream) &&
       (firstTokenWatchdogFired || (isPerChunkIdle && !streamPartialOutputSeen) || preFirstTokenStreamClose)
     let fallbackSucceeded = false
     if (fallbackEligible) {
@@ -1403,7 +1424,7 @@ async function handleMessagesStream(
         servedRoute.endpointUrl,
         retryHeaders,
         retryBody,
-        signal,
+        fallbackSignal,
         fallbackBudget.timeoutMs,
         {
           translate: Boolean(servedRoute.translate),
@@ -1436,6 +1457,19 @@ async function handleMessagesStream(
         // above; client sees a normal successful SSE sequence.
       } else {
         trace.mark('stream_fallback_fail')
+        if (totalRuntimeWatchdogFired) {
+          failure = {
+            provider: diagCtx.provider ?? 'unknown-provider',
+            model: body.model,
+            kind: 'timeout',
+            message: `${body.model} request failed: total-runtime watchdog fired during non-streaming fallback after ${streamTotalTimeoutMs}ms`,
+            detail: `total-runtime watchdog fired during non-streaming fallback after ${streamTotalTimeoutMs}ms`,
+            status: 504,
+            requestId: streamRequestId,
+            retryable: false,
+            partialOutputSeen: streamPartialOutputSeen,
+          }
+        }
       }
     }
     if (!fallbackSucceeded) {
@@ -1462,6 +1496,7 @@ async function handleMessagesStream(
     // BEFORE first chunk and BEFORE the watchdog itself fired, the timer
     // would still be live. Idempotent.
     clearTimeout(firstTokenTimer)
+    clearTimeout(totalRuntimeTimer)
     trace.mark('stream_end')
     const streamTraceResult = trace.end()
     res.end()
