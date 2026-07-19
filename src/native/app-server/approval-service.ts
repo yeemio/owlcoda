@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type { AskUserQuestionOpts } from '../tools/types.js'
+import type { RiskClass } from '../protocol/task-permission-types.js'
 
 export type AppServerApprovalStatus = 'pending' | 'approved' | 'denied' | 'cancelled' | 'answered'
 export type AppServerApprovalDecision = 'approve' | 'deny'
@@ -22,6 +23,8 @@ export interface AppServerInteractionRequest {
   threadId: string
   toolName: string
   input: Record<string, unknown>
+  riskClass?: RiskClass
+  riskReason?: string
   status: 'pending'
   createdAt: number
   question?: string
@@ -81,6 +84,8 @@ export interface AppServerApprovalBroker {
     threadId: string
     toolName: string
     toolInput: Record<string, unknown>
+    riskClass: RiskClass
+    riskReason: string
     signal?: AbortSignal
   }): Promise<boolean>
   requestTaskScopeApproval(input: {
@@ -88,6 +93,8 @@ export interface AppServerApprovalBroker {
     threadId: string
     toolName: string
     toolInput: Record<string, unknown>
+    riskClass: RiskClass
+    riskReason: string
     taskScope: AppServerTaskScopePayload
     signal?: AbortSignal
   }): Promise<boolean>
@@ -103,6 +110,7 @@ export interface AppServerApprovalBroker {
   listInteractions(input?: AppServerApprovalListInput): AppServerInteractionListResult
   resolveApproval(input: AppServerApprovalResolveInput): AppServerApprovalResolveResult | null
   respondInteraction(input: AppServerInteractionRespondInput): AppServerApprovalResolveResult | null
+  discardRestoredInteractions(input?: AppServerApprovalListInput): number
 }
 
 interface PendingInteraction {
@@ -203,6 +211,8 @@ export function createAppServerApprovalBroker(
         threadId: input.threadId,
         toolName: input.toolName,
         input: input.toolInput,
+        riskClass: input.riskClass,
+        riskReason: input.riskReason,
       }, input.signal)
       return response.approved
     },
@@ -213,6 +223,8 @@ export function createAppServerApprovalBroker(
         threadId: input.threadId,
         toolName: input.toolName,
         input: input.toolInput,
+        riskClass: input.riskClass,
+        riskReason: input.riskReason,
         taskScope: input.taskScope,
       }, input.signal)
       return response.approved
@@ -245,15 +257,26 @@ export function createAppServerApprovalBroker(
       }
     },
     resolveApproval(input) {
+      if (pending.get(input.approvalId)?.interaction.source === 'restored') return null
       return settleInteraction(input.approvalId, input.decision === 'approve' ? 'approved' : 'denied', undefined)
     },
     respondInteraction(input) {
       const item = pending.get(input.interactionId)
-      if (!item) return null
+      if (!item || item.interaction.source === 'restored') return null
       if (item.interaction.kind === 'user_question') {
+        if (input.decision === 'deny') {
+          return settleInteraction(input.interactionId, 'denied', undefined)
+        }
         return settleInteraction(input.interactionId, 'answered', input.answer ?? '')
       }
       return settleInteraction(input.interactionId, input.decision === 'approve' ? 'approved' : 'denied', undefined)
+    },
+    discardRestoredInteractions(input = {}) {
+      const ids = filterInteractions([...pending.values()].map(item => item.interaction), input)
+        .filter(interaction => interaction.source === 'restored')
+        .map(interaction => interaction.id)
+      for (const id of ids) settleInteraction(id, 'cancelled', undefined)
+      return ids.length
     },
   }
 }

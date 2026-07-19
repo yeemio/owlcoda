@@ -325,3 +325,15 @@ describe('external_reference origin does not drive deliverable mode', () => {
     expect(isHighDurable).toBe(false)
   })
 })
+
+describe('read-only file inspection does not become artifact delivery', () => {
+  it('reads package.json and reports fields without forcing a file plan', () => {
+    const result = classifyDeliverableContract(
+      'Read package.json and report the package name and version. Do not modify any files.',
+    )
+
+    expect(result.mode).toBe('read_only_review')
+    expect(result.requiresDurableArtifact).toBe(false)
+    expect(result.allowsChatFinal).toBe(true)
+  })
+})

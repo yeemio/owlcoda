@@ -64,6 +64,28 @@ describe('decideTuiToolApproval', () => {
     expect(d).toMatchObject({ action: 'allow', reason: 'persistent-allow' })
   })
 
+  it('persistent always-allow does NOT cover system package management', () => {
+    const d = decideTuiToolApproval({
+      ...baseOpts,
+      perToolApprove: new Set(['bash']),
+      toolName: 'bash',
+      input: { command: 'brew install tesseract poppler' },
+    })
+    expect(d).toMatchObject({ action: 'prompt', reason: 'system-override' })
+    if (d.action === 'prompt') expect(d.bashRisk?.level).toBe('system')
+  })
+
+  it('fresh batch-all consent still covers system commands for this turn', () => {
+    const d = decideTuiToolApproval({
+      ...baseOpts,
+      batchApproveAll: true,
+      perToolApprove: new Set(['bash']),
+      toolName: 'bash',
+      input: { command: 'brew install tesseract poppler' },
+    })
+    expect(d).toMatchObject({ action: 'allow', reason: 'batch-all' })
+  })
+
   it('persistent always-allow does NOT cover dangerous bash (rm -rf)', () => {
     const d = decideTuiToolApproval({
       ...baseOpts,

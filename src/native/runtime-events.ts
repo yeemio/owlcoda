@@ -689,6 +689,7 @@ export function applyRuntimeTruthResumeSnapshot(conversation: Conversation): boo
   conversation.turns.push({
     role: 'user',
     content: [{ type: 'text', text: prompt }],
+    audience: 'runtime',
     timestamp: Date.now(),
   })
   conversation.options = {
@@ -2252,7 +2253,7 @@ function cloneConversationTurns(turns: ConversationTurn[]): ConversationTurn[] {
   return JSON.parse(JSON.stringify(turns)) as ConversationTurn[]
 }
 
-function isRuntimeTruthResumePromptTurn(turn: ConversationTurn): boolean {
+export function isRuntimeTruthResumePromptTurn(turn: ConversationTurn): boolean {
   return turn.role === 'user'
     && turn.content.some((block) =>
       block.type === 'text'

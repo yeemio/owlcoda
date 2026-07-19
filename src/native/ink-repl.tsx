@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 // Upstream Ink fork — ScrollBox, viewport culling, native scroll
 import { render as inkRender, Box, Static, Text, useApp, useInput, type Instance as InkInstance } from '../ink.js'
 
-import { loadConfig, resolveModelContextWindow } from '../config.js'
+import { loadConfig, resolveModelContextCapability, resolveModelContextWindow } from '../config.js'
 import { VERSION, buildTag } from '../version.js'
 import { SubmissionGuard } from './submission-guard.js'
 import { SubmissionQueue } from './submission-queue.js'
@@ -58,8 +58,8 @@ import { StreamingMarkdownRenderer } from './markdown.js'
 import { MCPManager } from './mcp/manager.js'
 import { loadPermissions, addGlobalPermission } from './permissions.js'
 import { decideTuiTaskScopeApproval, decideTuiToolApproval } from './tui-approval.js'
-import { classifyBashCommand } from './bash-risk.js'
-import type { Conversation } from './protocol/types.js'
+import { classifyBashCommand, primaryBashRiskReason } from './bash-risk.js'
+import type { Conversation, ConversationContextCapability } from './protocol/types.js'
 import { validateAndRepairConversation } from './protocol/request.js'
 import {
   buildInlineStatusLine,
@@ -70,9 +70,11 @@ import {
   drainAssistantStreamBoundary,
   composeAssistantChunk,
   countInterruptsInInput,
+  decideResumeContinuationAction,
   estimateWrappedLineCount,
   formatContinuationRetryStatus,
   formatExpensiveFailureGuidance,
+  formatPermissionDecisionAudit,
   formatRepeatedContinuationRetryGuidance,
   formatResumeCommand,
   isExpensiveFailedContinuationFailure,
@@ -85,6 +87,7 @@ import {
   shouldDrainQueuedInputAfterTurn,
   shouldQueueSubmitBehindRunningTask,
   shouldScheduleRuntimeAutoRetry,
+  summarizePendingResumeUserMessage,
   SLASH_COMMANDS_REQUIRING_ARGS,
   splitTranscriptAppendText,
   splitTranscriptForScrollback,
@@ -167,7 +170,6 @@ import { dumpRenderIncident, recordFullToolOutput, recordRawMdChunk, renderNarra
 import { stripAnsi } from './tui/colors.js'
 import {
   renderBashPermission,
-  detectDestructiveCommand,
   renderFilePermission,
   renderInlinePermission,
   renderWebPermission,
@@ -191,6 +193,40 @@ import { registerPickerIsolation } from './tui/picker.js'
 import { runEditorSession } from './editor-session.js'
 
 const DEFAULT_SYSTEM_PROMPT = buildSystemPrompt()
+
+export function resolveReplContextCapability(
+  conversation: Conversation,
+  config: ReturnType<typeof loadConfig>,
+): ConversationContextCapability {
+  const persisted = conversation.options?.contextCapability
+  if (persisted?.model === conversation.model) return persisted
+
+  const resolved = resolveModelContextCapability(config, conversation.model)
+  const capability: ConversationContextCapability = {
+    model: conversation.model,
+    contextWindow: resolved.contextWindow,
+    source: resolved.source,
+    confidence: resolved.confidence,
+  }
+  conversation.options = {
+    ...conversation.options,
+    contextCapability: capability,
+  }
+  return capability
+}
+
+function syncUsageTotals(conversation: Conversation, usage: UsageTracker): void {
+  const snapshot = usage.getSnapshot()
+  conversation.options = {
+    ...conversation.options,
+    usageTotals: {
+      inputTokens: snapshot.totalInputTokens,
+      outputTokens: snapshot.totalOutputTokens,
+      requestCount: snapshot.requestCount,
+      startedAt: snapshot.startedAt,
+    },
+  }
+}
 const SAFE_TOOLS = new Set([
   'read',
   'glob',
@@ -255,6 +291,7 @@ type QuestionPrompt = {
   toolName: string
   options?: Array<{ label: string; description?: string }>
   multiSelect?: boolean
+  defaultAnswer?: string
   resolve: (answer: string) => void
 }
 
@@ -544,7 +581,7 @@ function buildPermissionDialog(
   }
 }
 
-function buildPermissionCardProps(
+export function buildPermissionCardProps(
   toolName: string,
   input: Record<string, unknown>,
   selectedIndex: number,
@@ -572,10 +609,13 @@ function buildPermissionCardProps(
       }
     case 'bash': {
       const command = String(input['command'] ?? '')
-      const risk = detectDestructiveCommand(command) ?? undefined
+      const verdict = classifyBashCommand(command)
+      const risk = verdict.level === 'safe_readonly'
+        ? undefined
+        : `${verdict.level.replace('_', ' ').toUpperCase()} — ${primaryBashRiskReason(verdict)}`
       return {
         ...base,
-        kind: risk ? 'danger' : 'exec',
+        kind: verdict.level === 'dangerous' ? 'danger' : 'exec',
         action: 'Execute shell command',
         target: command,
         risk,
@@ -754,9 +794,23 @@ function buildWelcomeEntries(
   return items
 }
 
-function buildResumedTranscriptEntries(conversation: Conversation): TranscriptItem[] {
+function isVisibleUserExchange(turn: Conversation['turns'][number]): boolean {
+  if (turn.role !== 'user' || turn.audience === 'runtime') return false
+  return turn.content.some((block) => {
+    const candidate = block as unknown as Record<string, unknown>
+    return candidate['type'] !== 'text'
+      || typeof candidate['text'] !== 'string'
+      || !isSystemNudgeText(candidate['text'])
+  })
+}
+
+export function buildResumedTranscriptEntries(
+  conversation: Conversation,
+  columns: number = Math.max(1, process.stdout.columns || 80),
+): TranscriptItem[] {
   const items: TranscriptItem[] = []
   for (const turn of conversation.turns) {
+    if (turn.audience === 'runtime') continue
     for (const block of turn.content) {
       const b = block as unknown as Record<string, unknown>
       if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) {
@@ -775,17 +829,20 @@ function buildResumedTranscriptEntries(conversation: Conversation): TranscriptIt
         if (turn.role === 'user') {
           items.push({ id: nextId('resumed'), text: formatUserMessage(textValue) })
         } else {
-          const prefix = dim('⎿ ')
-          const indent = '  '
-          const lines = textValue.split('\n')
-          const formatted = lines.map((line, i) => i === 0 ? prefix + line : indent + line).join('\n')
-          items.push({ id: nextId('resumed'), text: formatted })
+          items.push({
+            id: nextId('resumed'),
+            text: dim(renderNarration(textValue, { firstBlock: true, columns })),
+          })
         }
       }
     }
   }
   if (items.length > 0) {
-    items.unshift({ id: nextId('resumed'), text: dim(`  ── Resumed session (${conversation.turns.length} turns) ──`) })
+    const exchanges = conversation.turns.filter(isVisibleUserExchange).length
+    items.unshift({
+      id: nextId('resumed'),
+      text: dim(`  ── Resumed session (${exchanges} exchange${exchanges === 1 ? '' : 's'}) ──`),
+    })
   }
   return items
 }
@@ -968,7 +1025,7 @@ function NativeReplApp({
   const [transcriptItems, setTranscriptItems] = useState<TranscriptItem[]>(() => {
     const welcome = buildWelcomeEntries(conversation, preflightOk, initialTranscriptCols)
     if (isResumed && conversation.turns.length > 0) {
-      return [...welcome, ...buildResumedTranscriptEntries(conversation)]
+      return [...welcome, ...buildResumedTranscriptEntries(conversation, initialTranscriptCols)]
     }
     return welcome
   })
@@ -1272,10 +1329,15 @@ function NativeReplApp({
   const requestUserQuestion = useCallback(async (
     toolName: string,
     question: string,
-    opts?: { options?: Array<{ label: string; description?: string }>; multiSelect?: boolean },
+    opts?: {
+      options?: Array<{ label: string; description?: string }>
+      multiSelect?: boolean
+      defaultAnswer?: string
+    },
   ): Promise<string> => {
     const options = opts?.options
     const multiSelect = opts?.multiSelect ?? false
+    const defaultAnswer = opts?.defaultAnswer
     const lines: string[] = [`${themeColor('info')}📋 ${question}${sgr.reset}`]
     if (options && options.length > 0) {
       for (let i = 0; i < options.length; i++) {
@@ -1289,9 +1351,12 @@ function NativeReplApp({
     } else {
       lines.push(dim('  Type your answer and press Enter.'))
     }
+    if (defaultAnswer !== undefined) {
+      lines.push(dim(`  Press Enter for the default (${defaultAnswer}).`))
+    }
     appendTranscript(lines.join('\n'))
     return await new Promise<string>((resolve) => {
-      setQuestionPrompt({ toolName, options, multiSelect, resolve })
+      setQuestionPrompt({ toolName, options, multiSelect, defaultAnswer, resolve })
     })
   }, [appendTranscript])
 
@@ -1463,7 +1528,7 @@ function NativeReplApp({
       const cmd = permissionPrompt.input?.['command']
       if (typeof cmd === 'string' && cmd.length > 0) {
         const verdict = classifyBashCommand(cmd)
-        if (verdict.level === 'dangerous') {
+        if (verdict.level === 'dangerous' || verdict.level === 'system') {
           effectiveDecision = 'allow'
         }
       }
@@ -1485,14 +1550,13 @@ function NativeReplApp({
     setPermissionChoiceIndex(1)
     setUiVersion((value) => value + 1)
     const downgraded = effectiveDecision !== decision
-    const verb = permissionPrompt.toolName === 'TaskContract' && effectiveDecision === 'always' ? 'Allowed'
-      : effectiveDecision === 'allow'
-        ? (downgraded ? 'Allowed once (Always demoted: dangerous command)' : 'Allowed')
-      : effectiveDecision === 'deny' ? 'Denied'
-      : effectiveDecision === 'always' ? 'Allowed (always for this tool)'
-      : 'Allowed (rest of this turn)'
-    setFooterNotice(dim(`↳ ${verb}: ${toolDisplay}`))
-  }, [permissionPrompt])
+    appendTranscript(formatPermissionDecisionAudit({
+      decision: effectiveDecision,
+      toolName: toolDisplay,
+      input: permissionPrompt.input,
+      downgraded,
+    }))
+  }, [appendTranscript, permissionPrompt])
 
   const withTaskCallbacks = useCallback((
     base: ConversationCallbacks,
@@ -1668,7 +1732,7 @@ function NativeReplApp({
     let taskFailed = false
     let autoRetryFailure: ConversationRuntimeFailure | null = null
     let runtimeRetrySuppressionFailure: ConversationRuntimeFailure | null = null
-    const contextWindow = resolveModelContextWindow(configRef.current, conversation.model)
+    const contextWindow = resolveReplContextCapability(conversation, configRef.current).contextWindow
 
     try {
       const { finalText, iterations, stopReason, usage: apiUsage, runtimeFailure } = await runConversationLoop(
@@ -1729,17 +1793,18 @@ function NativeReplApp({
         } else {
           usage.recordEstimated(input, finalText)
         }
+        syncUsageTotals(conversation, usage)
 
         // Normal completion must drain the composer BEFORE the stats/footer
         // transcript entries are appended. Otherwise a final partial line
         // (commonly the conclusion sentence) gets stranded until `finally`,
         // rendering after `(N iterations)` / usage and looking like a copied
         // tail block.
-        flushBufferedAssistantResponse()
-
         if (toolCollectorRef.current.pending > 0) {
           appendTranscript(toolCollectorRef.current.flush())
         }
+
+        flushBufferedAssistantResponse()
 
         if (shouldShowNoResponseFallback({
           finalText,
@@ -1899,10 +1964,10 @@ function NativeReplApp({
       // Error/interrupt fallback: normal completion drains this before
       // appending stats. Keep the finally drain so partial turns still keep
       // their trailing line when an error path exits before the normal flush.
-      flushBufferedAssistantResponse()
       if (toolCollectorRef.current.pending > 0) {
         appendTranscript(toolCollectorRef.current.flush())
       }
+      flushBufferedAssistantResponse()
 
       // Flush per-turn loop-noise summary into transcript, then reset state
       // and clear workflowPhase. Placed AFTER the partial-response + tool
@@ -2320,7 +2385,6 @@ function NativeReplApp({
     resetPasteStore(pasteStoreRef.current)
     value = expanded
     const trimmed = value.trim()
-    if (!trimmed) return
 
     // AskUserQuestion tool waiting for an answer — Enter-submit
     // resolves the tool's Promise with the typed answer instead of
@@ -2329,12 +2393,15 @@ function NativeReplApp({
     // Echo the answer to transcript so the user can see what they
     // sent (transcript entry, not footer — becomes permanent history).
     if (questionPrompt) {
+      if (!trimmed && questionPrompt.defaultAnswer === undefined) return
+      const answer = trimmed || questionPrompt.defaultAnswer || ''
       setInputValue('')
-      appendTranscript(`  ${dim('→ ' + trimmed)}`)
-      questionPrompt.resolve(trimmed)
+      appendTranscript(`  ${dim(`→ ${answer}${trimmed ? '' : ' (default)'}`)}`)
+      questionPrompt.resolve(answer)
       setQuestionPrompt(null)
       return
     }
+    if (!trimmed) return
 
     const failedContinuationAction = decideFailedContinuationSubmitAction({
       text: trimmed,
@@ -2517,23 +2584,45 @@ function NativeReplApp({
   // without a circular useCallback dependency.
   handleSubmitRef.current = handleSubmit
 
-  // Resume continuation (resume bug fix): auto-continue a restored session that
-  // ended with an unanswered user turn — the "interrupted a tool loop, typed a
-  // message, quit before the assistant replied" shape. It used to resume silent
-  // (the pending tool_result / instructions were never picked up, so the agent
-  // sat idle). Fire one continuation turn on mount so the agent acts on what was
-  // already said; it is announced and fully abortable (Ctrl+C). Mount-only
-  // (empty deps run it exactly once); the ref guards a StrictMode double-invoke.
+  // Resume continuation (resume bug fix): a restored session may end with real
+  // pending user work, but runtime snapshots and system nudges do not count.
+  // Interactive sessions ask before sending anything; unattended callers must
+  // opt in explicitly. Mount-only; the ref guards a StrictMode double-invoke.
   useEffect(() => {
     if (resumeContinuationFiredRef.current) return
     if (!isResumed) return
-    if (!conversationEndsAwaitingAssistant(conversation.turns)) return
+    const pending = conversationEndsAwaitingAssistant(conversation.turns)
+    const initialAction = decideResumeContinuationAction({
+      pending,
+      autoContinueEnv: process.env['OWLCODA_RESUME_AUTO_CONTINUE'],
+    })
+    if (initialAction === 'none') return
     resumeContinuationFiredRef.current = true
-    appendTranscript(
-      `${themeColor('info')}↻ Resuming — continuing from the last unanswered message. ` +
-        `Press Ctrl+C to stop.${sgr.reset}`,
-    )
-    void runConversationTurn({ kind: 'resume_continuation' })
+    if (initialAction === 'continue') {
+      appendTranscript(`${themeColor('info')}↻ Resuming — unattended continuation explicitly enabled.${sgr.reset}`)
+      void runConversationTurn({ kind: 'resume_continuation' })
+      return
+    }
+    const summary = summarizePendingResumeUserMessage(conversation.turns)
+    void (async () => {
+      const answer = await requestUserQuestion(
+        'ResumeContinuation',
+        `The restored session has pending user work: “${summary}”\nContinue? [y/N]`,
+        {
+          options: [
+            { label: 'Continue', description: 'Send the pending work to the assistant now.' },
+            { label: 'Stay paused', description: 'Keep the restored session idle.' },
+          ],
+          defaultAnswer: 'n',
+        },
+      )
+      const action = decideResumeContinuationAction({ pending: true, confirmationAnswer: answer })
+      if (action === 'continue') {
+        await runConversationTurn({ kind: 'resume_continuation' })
+      } else if (isMountedRef.current) {
+        appendTranscript(dim('Resume continuation left paused.'))
+      }
+    })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -3028,7 +3117,8 @@ function NativeReplApp({
     () => estimateConversationTokens(conversation).totalTokens,
     [conversation.system, conversation.turns.length, isLoading],
   )
-  const contextMax = resolveModelContextWindow(configRef.current, conversation.model)
+  const contextCapability = resolveReplContextCapability(conversation, configRef.current)
+  const contextMax = contextCapability.contextWindow
   const mcpConnected = mcpManager.summary().connected
   // Keep the rail entirely off the draft hot path. The input itself is the
   // authoritative draft surface; repainting a "DRAFT" rail cell while typing
@@ -3051,13 +3141,14 @@ function NativeReplApp({
       queued: queuedDraft ? 1 : 0,
       contextTokens,
       contextMax,
+      contextApproximate: contextCapability.source !== 'configured',
       draftChars: railDraftChars,
       draftCellMode: 'hidden',
       interruptRequested: railInterruptRequested,
       columns: cols,
       approval: Boolean(permissionPrompt),
       activeToolName: railActiveToolName,
-      cost: usageSnapshot.estimatedCostUsd,
+      cost: usageSnapshot.estimatedCostUsd ?? undefined,
       branch: gitBranchRef.current,
       mcpConnected,
       hintContext: railHintContext,
@@ -3257,7 +3348,9 @@ export async function startInkRepl(opts: ReplOptions): Promise<void> {
     apiKey: opts.apiKey,
     model: opts.model,
     getModel: () => conversation?.model ?? opts.model,
-    getContextWindow: () => resolveModelContextWindow(loadConfig(), conversation?.model ?? opts.model),
+    getContextWindow: () => conversation
+      ? resolveReplContextCapability(conversation, loadConfig()).contextWindow
+      : resolveModelContextWindow(loadConfig(), opts.model),
     maxTokens: opts.maxTokens ?? resolveDefaultMaxOutputTokens(),
   }))
 
@@ -3325,6 +3418,8 @@ export async function startInkRepl(opts: ReplOptions): Promise<void> {
     })
   }
   initializeOperatingModeState(conversation, opts.mode ?? 'normal')
+  if (conversation.options?.usageTotals) usage.seed(conversation.options.usageTotals)
+  resolveReplContextCapability(conversation, loadConfig())
 
   if (opts.liveReplClientId) {
     updateLiveReplClientSession(opts.liveReplClientId, conversation.id)

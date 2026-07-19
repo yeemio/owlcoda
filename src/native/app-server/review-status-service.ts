@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname } from 'node:path'
+import { appServerProjectStatePath } from './project-state-service.js'
 
 export const REVIEW_STATUS_VALUES = [
   'pending',
@@ -61,7 +62,7 @@ export function isReviewStatusValue(value: unknown): value is ReviewStatusValue 
 }
 
 export function defaultReviewStatusStoragePath(projectRoot: string): string {
-  return join(projectRoot, '.owlcoda', 'app-server', 'review-status.json')
+  return appServerProjectStatePath(projectRoot, 'review-status.json')
 }
 
 export function listReviewStatuses(input: ReviewStatusListInput): ReviewStatusListResult {

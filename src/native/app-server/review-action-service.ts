@@ -6,6 +6,12 @@ import type { AnthropicContentBlock, AnthropicToolResultBlock, AnthropicToolUseB
 import { canonicalizeProvenancePath, extractWriteTargets } from '../write-provenance.js'
 import type { ExtractedWriteTargetKind } from '../protocol/write-provenance-types.js'
 import type { ReviewStatusRecord } from './review-status-service.js'
+import {
+  listRepositoryUnstagedChanges,
+  type RepositoryReviewScope,
+  type RepositoryUnstagedChange,
+  type ReviewScopeCapabilities,
+} from './repository-review-service.js'
 
 export type ReviewOperation =
   | 'update'
@@ -71,9 +77,26 @@ export interface ReviewHunk {
   newText: string
 }
 
-export interface ReviewListResult {
+export interface ReceiptReviewListResult {
   threadId: string
   changes: ReviewChange[]
+  lastTurnChanges: ReviewChange[]
+}
+
+export interface ReviewListResult extends ReceiptReviewListResult {
+  unstagedChanges: RepositoryUnstagedChange[]
+  scopes: {
+    unstaged: RepositoryReviewScope
+    lastTurn: LastTurnReviewScope
+  }
+}
+
+export interface LastTurnReviewScope {
+  id: 'last_turn'
+  source: 'runtime_receipts'
+  status: 'ready'
+  changeCount: number
+  capabilities: ReviewScopeCapabilities
 }
 
 export interface ReviewPreflightResult {
@@ -184,13 +207,60 @@ export interface ReviewBatchInput extends ReviewServiceInput {
   diffIds: string[]
 }
 
-export function listReviewChanges(input: ReviewServiceInput): ReviewListResult | null {
+export function listReviewChanges(input: ReviewServiceInput): ReceiptReviewListResult | null {
   const session = loadReviewSession(input)
   if (!session) return null
+  const changes = extractReviewChanges(session, input.projectRoot)
+  const lastTurnToolUseIds = collectLastTurnToolUseIds(session)
+  const lastTurnChanges = changes.filter(change => lastTurnToolUseIds.has(change.toolUseId))
   return {
     threadId: session.id,
-    changes: extractReviewChanges(session, input.projectRoot),
+    changes,
+    lastTurnChanges,
   }
+}
+
+export function listReviewChangesWithRepository(input: ReviewServiceInput): ReviewListResult | null {
+  const receiptChanges = listReviewChanges(input)
+  if (!receiptChanges) return null
+  const repository = listRepositoryUnstagedChanges({ projectRoot: input.projectRoot })
+  return {
+    ...receiptChanges,
+    unstagedChanges: repository.changes,
+    scopes: {
+      unstaged: repository.scope,
+      lastTurn: {
+        id: 'last_turn',
+        source: 'runtime_receipts',
+        status: 'ready',
+        changeCount: receiptChanges.lastTurnChanges.length,
+        capabilities: {
+          read: true,
+          stage: false,
+          unstage: false,
+          apply: true,
+          revert: true,
+          hunkApply: true,
+          hunkRevert: true,
+        },
+      },
+    },
+  }
+}
+
+function collectLastTurnToolUseIds(session: SessionFile): Set<string> {
+  let lastPromptIndex = -1
+  for (let index = session.turns.length - 1; index >= 0; index -= 1) {
+    const turn = session.turns[index]!
+    if (turn.role === 'user' && turn.content.some(block => block.type === 'text')) {
+      lastPromptIndex = index
+      break
+    }
+  }
+  const turns = lastPromptIndex === -1 ? session.turns : session.turns.slice(lastPromptIndex + 1)
+  return new Set(turns.flatMap(turn => turn.role === 'assistant'
+    ? turn.content.filter(isToolUseBlock).map(block => block.id)
+    : []))
 }
 
 export async function preflightReviewChange(input: ReviewChangeInput): Promise<ReviewPreflightResult | null> {

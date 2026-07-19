@@ -64,8 +64,13 @@ export function buildRequest(conversation: Conversation, stream = true): Anthrop
     req.tools = tools
   }
 
-  // Extended thinking mode (enabled via /thinking on|verbose)
-  if (conversation.options?.thinking) {
+  const reasoningEffort = conversation.options?.reasoningEffort
+  if (reasoningEffort) {
+    req.thinking = {
+      type: 'enabled',
+      budget_tokens: reasoningEffortBudget(reasoningEffort, conversation.maxTokens),
+    }
+  } else if (conversation.options?.thinking) {
     req.thinking = {
       type: 'enabled',
       budget_tokens: Math.min(conversation.maxTokens, 16384),
@@ -73,6 +78,11 @@ export function buildRequest(conversation: Conversation, stream = true): Anthrop
   }
 
   return req
+}
+
+function reasoningEffortBudget(effort: 'low' | 'medium' | 'high', maxTokens: number): number {
+  const requested = effort === 'low' ? 4096 : effort === 'medium' ? 8192 : 16384
+  return Math.min(maxTokens, requested)
 }
 
 function buildEffectiveSystemPrompt(conversation: Conversation): string {

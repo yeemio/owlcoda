@@ -2,6 +2,38 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.30] — 2026-07-18
+
+Native runtime reliability release for explainable approvals, resumable session
+truth, bounded context hygiene, and clearer terminal evidence.
+
+### Added
+
+- Added structured approval risk tiers, primary reasons, persistent-approval
+  demotion, and durable decision audit records.
+- Added App Server recovery and runtime-rail contracts that preserve thread,
+  turn, session, and interrupted-work identity across reconnects.
+- Added persisted usage totals and model-bound context denominators, including
+  explicit approximate status when the model limit is inferred.
+
+### Changed
+
+- Made interactive continuation opt-in by default and prevented synthetic
+  runtime or system turns from creating false unanswered work on resume.
+- Made rolling context hygiene use 90/75 hysteresis, protect six recent tool
+  results, aggregate notices, and provide concrete Read recovery hints.
+- Kept collapsed tool summaries bounded and deduplicated while retaining the
+  real command arguments needed for audit.
+
+### Fixed
+
+- Preserved Markdown bold state across line boundaries, accurate new-file diff
+  hunk counts, and the original case of displayed CWD and branch values.
+- Returned a small truthful stub for repeated identical reads after a real
+  filesystem read, without destabilizing read counters.
+- Kept resumed narration, exchange counts, transcript filtering, and runtime
+  status aligned with persisted session evidence.
+
 ## [0.15.29] — 2026-07-11
 
 Harness reliability release for unattended execution, evidence-backed

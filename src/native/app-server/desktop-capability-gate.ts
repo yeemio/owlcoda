@@ -73,8 +73,6 @@ export const DEFAULT_DESKTOP_CAPABILITY_GATE_POLICY: DesktopCapabilityGatePolicy
     'review/batchRevert',
     'review/hunkApply',
     'review/hunkRevert',
-    'proof/append',
-    'gate/confirm',
   ],
   forbiddenDebugOnlyMethods: [
     'diagnostic/health',

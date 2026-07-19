@@ -19,6 +19,7 @@ import type { ProvenanceLedgerData } from './write-provenance-types.js'
 import type { ResolvedPermissions } from './permission-rule-types.js'
 import type { OperatingModeState } from '../modes.js'
 import type { ProjectMapSnapshot } from './project-map-types.js'
+import type { ContextWindowConfidence, ContextWindowSource } from '../../model-capabilities.js'
 
 // Re-export for convenience
 export type {
@@ -35,6 +36,10 @@ export type {
 export interface ConversationTurn {
   role: 'user' | 'assistant'
   content: AnthropicContentBlock[]
+  /** Exact model bound to this visible turn. Older sessions may not have it. */
+  model?: string
+  /** Runtime-only turns remain in provider history but are not user transcript messages. */
+  audience?: 'user' | 'runtime'
   /** Timestamp when this turn was added */
   timestamp: number
 }
@@ -95,6 +100,20 @@ export interface ConversationModelIdentity {
   endpoint?: string
   contextWindow?: number
   supportsImages?: boolean
+}
+
+export interface ConversationUsageTotals {
+  inputTokens: number
+  outputTokens: number
+  requestCount: number
+  startedAt: number | null
+}
+
+export interface ConversationContextCapability {
+  model: string
+  contextWindow: number
+  source: ContextWindowSource
+  confidence: ContextWindowConfidence
 }
 
 export interface RuntimeRecoveryCheckpointRecord {
@@ -343,6 +362,8 @@ export interface TaskExecutionState {
 }
 
 /** Runtime options for conversation behavior. */
+export type ReasoningEffort = 'low' | 'medium' | 'high'
+
 export interface ConversationOptions {
   /** Enable extended thinking mode. */
   thinking?: boolean
@@ -356,8 +377,16 @@ export interface ConversationOptions {
   fast?: boolean
   /** Effort level: low, medium, high. */
   effort?: string
+  /** Provider-native reasoning effort selected for this conversation. */
+  reasoningEffort?: ReasoningEffort
   /** Model identity and declared capabilities captured when the session starts. */
   modelIdentity?: ConversationModelIdentity
+  /** Cumulative usage restored across native REPL process boundaries. */
+  usageTotals?: ConversationUsageTotals
+  /** Model-bound context denominator captured for stable resume rails. */
+  contextCapability?: ConversationContextCapability
+  /** Internal high/low-water state for rolling context hygiene. */
+  contextHygieneActive?: boolean
   /** Vim keybinding mode. */
   vimMode?: boolean
   /** Additional working directories. */

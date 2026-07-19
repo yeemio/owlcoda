@@ -452,6 +452,20 @@ console.log("hi")
 })
 
 describe('StreamingMarkdownRenderer', () => {
+  it('preserves bold styling across a newline without leaking literal delimiters', () => {
+    const renderer = new StreamingMarkdownRenderer()
+    const rendered = renderer.push('**第一行\n第二行**\n') + renderer.flush()
+    expect(stripAnsi(rendered)).toContain('第一行\n第二行')
+    expect(stripAnsi(rendered)).not.toContain('**')
+    expect(rendered.match(new RegExp(BOLD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))?.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('keeps CJK-adjacent and multiple inline bold pairs intact', () => {
+    expect(renderInline('前缀**组合**后缀 **x** / **y**')).toBe(
+      `前缀${BOLD}组合${RESET}后缀 ${BOLD}x${RESET} / ${BOLD}y${RESET}`,
+    )
+  })
+
   it('renders complete text identically to single-pass', () => {
     const md = '# Hello\n\nSome **bold** text.\n\n```ts\ncode()\n```\n'
     const renderer = new StreamingMarkdownRenderer()

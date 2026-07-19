@@ -1,0 +1,896 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/app-server-protocol.json",
+  "title": "OwlCoda App Server JSON-RPC Request",
+  "type": "object",
+  "properties": {
+    "jsonrpc": {
+      "const": "2.0"
+    },
+    "id": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        }
+      ]
+    },
+    "method": {
+      "type": "string",
+      "enum": [
+        "approval/list",
+        "approval/resolve",
+        "attachment/store",
+        "benchmark/providerEvalReport/read",
+        "client/initialize",
+        "diagnostic/health",
+        "event/snapshot",
+        "event/subscribe",
+        "interaction/list",
+        "interaction/respond",
+        "job/cancel",
+        "job/get",
+        "job/list",
+        "model/list",
+        "project/get",
+        "project/list",
+        "protocol/describe",
+        "review/apply",
+        "review/batchApply",
+        "review/batchPreflight",
+        "review/batchRevert",
+        "review/hunkApply",
+        "review/hunkRevert",
+        "review/list",
+        "review/preflight",
+        "review/revert",
+        "review/statusList",
+        "review/statusUpdate",
+        "runtimeFacts/read",
+        "runtimeRail/read",
+        "runtimeScorecard/read",
+        "runtimeTranscript/read",
+        "structuredOutputArtifacts/read",
+        "thread/list",
+        "thread/read",
+        "thread/resume",
+        "thread/start",
+        "turn/interrupt",
+        "turn/recover",
+        "turn/start",
+        "turn/status",
+        "workflowRun/list",
+        "workflowRun/read",
+        "workspace/cleanup",
+        "workspace/commit",
+        "workspace/create",
+        "workspace/handoff",
+        "workspace/keep",
+        "workspace/list",
+        "workspace/read",
+        "workspace/resume",
+        "workspace/status"
+      ]
+    },
+    "params": {
+      "oneOf": [
+        {
+          "type": "object"
+        },
+        {
+          "type": "array"
+        }
+      ]
+    }
+  },
+  "required": [
+    "jsonrpc",
+    "id",
+    "method"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "eventEnvelope": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": 1
+        },
+        "eventId": {
+          "type": "string"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "occurredAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "type": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "workspaceId": {
+          "type": "string"
+        },
+        "payload": {
+          "type": "object"
+        },
+        "artifactRefs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "eventId",
+        "sequence",
+        "occurredAt",
+        "type",
+        "projectId",
+        "workspaceId",
+        "payload",
+        "artifactRefs"
+      ],
+      "additionalProperties": true
+    }
+  },
+  "x-owlcoda-protocol-version": "v1",
+  "x-owlcoda-method-contracts": [
+    {
+      "method": "approval/list",
+      "group": "interaction",
+      "stability": "stable",
+      "requestType": "AppServerApprovalListInput",
+      "responseType": "AppServerApprovalListResult",
+      "requires": [],
+      "queryKeys": [
+        "threadId",
+        "projectId"
+      ]
+    },
+    {
+      "method": "approval/resolve",
+      "group": "interaction",
+      "stability": "stable",
+      "requestType": "AppServerApprovalResolveInput",
+      "responseType": "AppServerApprovalResolveResult",
+      "requires": [
+        "approvalId",
+        "decision"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId"
+      ]
+    },
+    {
+      "method": "attachment/store",
+      "group": "attachment",
+      "stability": "experimental",
+      "requestType": "AppServerAttachmentStoreInput",
+      "responseType": "PublicStoredAttachment",
+      "requires": [
+        "name",
+        "mediaType",
+        "dataBase64"
+      ],
+      "queryKeys": [
+        "projectId"
+      ]
+    },
+    {
+      "method": "benchmark/providerEvalReport/read",
+      "group": "benchmark",
+      "stability": "experimental",
+      "requestType": "AppServerProviderEvalReportReadInput",
+      "responseType": "AppServerProviderEvalReportReadResult",
+      "requires": [],
+      "queryKeys": [
+        "recordPath"
+      ],
+      "notes": "Reads local provider eval JSONL records and returns a local-only leaderboard/case matrix. It does not upload or train."
+    },
+    {
+      "method": "client/initialize",
+      "group": "client",
+      "stability": "stable",
+      "requestType": "AppServerClientInitializeInput",
+      "responseType": "AppServerClientInitializeResult",
+      "requires": [
+        "client",
+        "supportedProtocolVersions",
+        "expectedWorkspaceRealpath"
+      ],
+      "queryKeys": [
+        "client",
+        "supportedProtocolVersions",
+        "expectedRuntimeVersion",
+        "expectedWorkspaceRealpath",
+        "requestedCapabilities"
+      ],
+      "notes": "Authenticates runtime, protocol, and canonical workspace identity before a client attaches."
+    },
+    {
+      "method": "diagnostic/health",
+      "group": "diagnostic",
+      "stability": "debug-only",
+      "requestType": "Record<string, never>",
+      "responseType": "RuntimeHealthSnapshot",
+      "requires": [],
+      "queryKeys": [],
+      "notes": "Operator diagnostics. Do not treat as a long-term product UI contract."
+    },
+    {
+      "method": "event/snapshot",
+      "group": "event",
+      "stability": "experimental",
+      "requestType": "{ projectId?: string }",
+      "responseType": "AppServerEventSnapshotResult",
+      "requires": [],
+      "queryKeys": [
+        "projectId"
+      ]
+    },
+    {
+      "method": "event/subscribe",
+      "group": "event",
+      "stability": "experimental",
+      "requestType": "Record<string, never>",
+      "responseType": "AppServerEventSubscription",
+      "requires": [],
+      "queryKeys": []
+    },
+    {
+      "method": "interaction/list",
+      "group": "interaction",
+      "stability": "stable",
+      "requestType": "AppServerApprovalListInput",
+      "responseType": "AppServerInteractionListResult",
+      "requires": [],
+      "queryKeys": [
+        "threadId",
+        "projectId"
+      ]
+    },
+    {
+      "method": "interaction/respond",
+      "group": "interaction",
+      "stability": "stable",
+      "requestType": "AppServerInteractionRespondInput",
+      "responseType": "AppServerApprovalResolveResult",
+      "requires": [
+        "interactionId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId"
+      ]
+    },
+    {
+      "method": "job/cancel",
+      "group": "job",
+      "stability": "stable",
+      "requestType": "AppServerJobCancelInput",
+      "responseType": "AppServerJobCancelResult",
+      "requires": [
+        "jobId"
+      ],
+      "queryKeys": [
+        "jobId",
+        "reason"
+      ]
+    },
+    {
+      "method": "job/get",
+      "group": "job",
+      "stability": "stable",
+      "requestType": "AppServerJobGetInput",
+      "responseType": "AppServerJobGetResult",
+      "requires": [
+        "jobId"
+      ],
+      "queryKeys": [
+        "jobId"
+      ]
+    },
+    {
+      "method": "job/list",
+      "group": "job",
+      "stability": "stable",
+      "requestType": "AppServerJobListInput",
+      "responseType": "AppServerJobListResult",
+      "requires": [],
+      "queryKeys": [
+        "status",
+        "type",
+        "limit"
+      ]
+    },
+    {
+      "method": "model/list",
+      "group": "model",
+      "stability": "stable",
+      "requestType": "Record<string, never>",
+      "responseType": "AppServerModelListResult",
+      "requires": [],
+      "queryKeys": []
+    },
+    {
+      "method": "project/get",
+      "group": "project",
+      "stability": "stable",
+      "requestType": "{ projectId?: string }",
+      "responseType": "ProjectAggregateResult",
+      "requires": [],
+      "queryKeys": [
+        "projectId"
+      ]
+    },
+    {
+      "method": "project/list",
+      "group": "project",
+      "stability": "stable",
+      "requestType": "Record<string, never>",
+      "responseType": "ProjectListResult",
+      "requires": [],
+      "queryKeys": []
+    },
+    {
+      "method": "protocol/describe",
+      "group": "protocol",
+      "stability": "stable",
+      "requestType": "Record<string, never>",
+      "responseType": "AppServerProtocolDescription",
+      "requires": [],
+      "queryKeys": [],
+      "notes": "Authoritative method contract and stability discovery endpoint."
+    },
+    {
+      "method": "review/apply",
+      "group": "review",
+      "stability": "experimental",
+      "requestType": "{ threadId: string; diffId: string; projectId?: string }",
+      "responseType": "ReviewActionResult",
+      "requires": [
+        "threadId",
+        "diffId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "diffId"
+      ]
+    },
+    {
+      "method": "review/batchApply",
+      "group": "review",
+      "stability": "experimental",
+      "requestType": "{ threadId: string; diffIds: string[]; projectId?: string }",
+      "responseType": "ReviewBatchActionResult",
+      "requires": [
+        "threadId",
+        "diffIds"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "diffIds"
+      ]
+    },
+    {
+      "method": "review/batchPreflight",
+      "group": "review",
+      "stability": "experimental",
+      "requestType": "{ threadId: string; diffIds: string[]; projectId?: string }",
+      "responseType": "ReviewBatchPreflightResult",
+      "requires": [
+        "threadId",
+        "diffIds"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "diffIds"
+      ]
+    },
+    {
+      "method": "review/batchRevert",
+      "group": "review",
+      "stability": "experimental",
+      "requestType": "{ threadId: string; diffIds: string[]; projectId?: string }",
+      "responseType": "ReviewBatchActionResult",
+      "requires": [
+        "threadId",
+        "diffIds"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "diffIds"
+      ]
+    },
+    {
+      "method": "review/hunkApply",
+      "group": "review",
+      "stability": "experimental",
+      "requestType": "{ threadId: string; diffId: string; hunkId: string; projectId?: string }",
+      "responseType": "ReviewHunkActionResult",
+      "requires": [
+        "threadId",
+        "diffId",
+        "hunkId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "diffId",
+        "hunkId"
+      ]
+    },
+    {
+      "method": "review/hunkRevert",
+      "group": "review",
+      "stability": "experimental",
+      "requestType": "{ threadId: string; diffId: string; hunkId: string; projectId?: string }",
+      "responseType": "ReviewHunkActionResult",
+      "requires": [
+        "threadId",
+        "diffId",
+        "hunkId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "diffId",
+        "hunkId"
+      ]
+    },
+    {
+      "method": "review/list",
+      "group": "review",
+      "stability": "stable",
+      "requestType": "{ threadId: string; projectId?: string }",
+      "responseType": "ReviewListResult",
+      "requires": [
+        "threadId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId"
+      ],
+      "notes": "Returns independent repository-wide Unstaged Git worktree truth and receipt-backed Last Turn changes. Unstaged is read-only and fails closed when Git truth is unavailable."
+    },
+    {
+      "method": "review/preflight",
+      "group": "review",
+      "stability": "experimental",
+      "requestType": "{ threadId: string; diffId: string; projectId?: string }",
+      "responseType": "ReviewPreflightResult",
+      "requires": [
+        "threadId",
+        "diffId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "diffId"
+      ]
+    },
+    {
+      "method": "review/revert",
+      "group": "review",
+      "stability": "experimental",
+      "requestType": "{ threadId: string; diffId: string; projectId?: string }",
+      "responseType": "ReviewActionResult",
+      "requires": [
+        "threadId",
+        "diffId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "diffId"
+      ]
+    },
+    {
+      "method": "review/statusList",
+      "group": "review",
+      "stability": "stable",
+      "requestType": "{ threadId: string; projectId?: string }",
+      "responseType": "ReviewStatusListResult",
+      "requires": [
+        "threadId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId"
+      ]
+    },
+    {
+      "method": "review/statusUpdate",
+      "group": "review",
+      "stability": "stable",
+      "requestType": "AppServerReviewStatusUpdateInput",
+      "responseType": "ReviewStatusUpdateResult",
+      "requires": [
+        "threadId",
+        "diffId",
+        "status"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "diffId"
+      ]
+    },
+    {
+      "method": "runtimeFacts/read",
+      "group": "runtime",
+      "stability": "experimental",
+      "requestType": "AppServerRuntimeFactsReadInput",
+      "responseType": "AppServerRuntimeFactsReadResult",
+      "requires": [
+        "threadId",
+        "runId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "runId"
+      ]
+    },
+    {
+      "method": "runtimeRail/read",
+      "group": "runtime",
+      "stability": "experimental",
+      "requestType": "{ projectId?: string }",
+      "responseType": "RunKitRailState",
+      "requires": [],
+      "queryKeys": [
+        "projectId"
+      ],
+      "notes": "Read-only OwlCodaRunKitInspectSummaryV1 projection from project-owned .owlcoda/runkit truth; it grants no Git or release authority."
+    },
+    {
+      "method": "runtimeScorecard/read",
+      "group": "runtime",
+      "stability": "experimental",
+      "requestType": "AppServerRuntimeScorecardReadInput",
+      "responseType": "AppServerRuntimeScorecardReadResult",
+      "requires": [
+        "threadId",
+        "runId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "runId"
+      ],
+      "notes": "Generates a local scorecard and redacted trajectory from runtime facts. It does not upload or train."
+    },
+    {
+      "method": "runtimeTranscript/read",
+      "group": "runtime",
+      "stability": "stable",
+      "requestType": "{ threadId: string; projectId?: string }",
+      "responseType": "RuntimeTranscriptResult",
+      "requires": [
+        "threadId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId"
+      ],
+      "notes": "Desktop-facing transcript items omit provider hidden thinking; reasoning effort metadata does not expose chain-of-thought."
+    },
+    {
+      "method": "structuredOutputArtifacts/read",
+      "group": "runtime",
+      "stability": "experimental",
+      "requestType": "AppServerStructuredOutputArtifactsReadInput",
+      "responseType": "AppServerStructuredOutputArtifactsReadResult",
+      "requires": [
+        "threadId",
+        "runId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "runId",
+        "artifactId"
+      ],
+      "notes": "Reads local structured output artifacts, attempts, raw text, and rerun action metadata from RunWorkspace. It does not call models."
+    },
+    {
+      "method": "thread/list",
+      "group": "thread",
+      "stability": "stable",
+      "requestType": "{ projectId?: string }",
+      "responseType": "ThreadListResult",
+      "requires": [],
+      "queryKeys": [
+        "projectId"
+      ]
+    },
+    {
+      "method": "thread/read",
+      "group": "thread",
+      "stability": "stable",
+      "requestType": "AppServerThreadReadInput",
+      "responseType": "ThreadReadResult",
+      "requires": [
+        "threadId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "limit",
+        "cursor"
+      ]
+    },
+    {
+      "method": "thread/resume",
+      "group": "thread",
+      "stability": "stable",
+      "requestType": "{ threadId: string; projectId?: string; model?: string; reasoningEffort?: ReasoningEffort }",
+      "responseType": "ThreadResumeResult",
+      "requires": [
+        "threadId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "model",
+        "reasoningEffort"
+      ]
+    },
+    {
+      "method": "thread/start",
+      "group": "thread",
+      "stability": "stable",
+      "requestType": "ThreadStartInput",
+      "responseType": "ThreadStartResult",
+      "requires": [],
+      "queryKeys": [
+        "projectId",
+        "model",
+        "reasoningEffort",
+        "permissionMode",
+        "workspaceMode"
+      ]
+    },
+    {
+      "method": "turn/interrupt",
+      "group": "turn",
+      "stability": "experimental",
+      "requestType": "{ threadId: string; projectId?: string }",
+      "responseType": "TurnInterruptResult",
+      "requires": [
+        "threadId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId"
+      ]
+    },
+    {
+      "method": "turn/recover",
+      "group": "turn",
+      "stability": "experimental",
+      "requestType": "AppServerTurnRecoverInput",
+      "responseType": "AppServerTurnRecoverResult",
+      "requires": [
+        "threadId",
+        "action"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId"
+      ]
+    },
+    {
+      "method": "turn/start",
+      "group": "turn",
+      "stability": "experimental",
+      "requestType": "AppServerTurnStartInput",
+      "responseType": "TurnStartResult",
+      "requires": [
+        "threadId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId",
+        "retry",
+        "title"
+      ]
+    },
+    {
+      "method": "turn/status",
+      "group": "turn",
+      "stability": "experimental",
+      "requestType": "{ threadId: string; projectId?: string }",
+      "responseType": "AppServerTurnStatusResult",
+      "requires": [
+        "threadId"
+      ],
+      "queryKeys": [
+        "threadId",
+        "projectId"
+      ]
+    },
+    {
+      "method": "workflowRun/list",
+      "group": "runtime",
+      "stability": "experimental",
+      "requestType": "AppServerWorkflowRunListInput",
+      "responseType": "AppServerWorkflowRunListResult",
+      "requires": [],
+      "queryKeys": [
+        "projectId",
+        "workflowRoot",
+        "limit"
+      ],
+      "notes": "Lists local WorkflowRun receipts as WorkflowConsumerManifest summaries. It does not execute or resume workflows."
+    },
+    {
+      "method": "workflowRun/read",
+      "group": "runtime",
+      "stability": "experimental",
+      "requestType": "AppServerWorkflowRunReadInput",
+      "responseType": "WorkflowConsumerManifest",
+      "requires": [
+        "runId"
+      ],
+      "queryKeys": [
+        "projectId",
+        "workflowRoot",
+        "runId"
+      ],
+      "notes": "Reads one local WorkflowConsumerManifest by run id. It is read-only and does not call models."
+    },
+    {
+      "method": "workspace/cleanup",
+      "group": "workspace",
+      "stability": "experimental",
+      "requestType": "ManagedWorkspaceCleanupInput",
+      "responseType": "ManagedWorkspaceOperationResult",
+      "requires": [
+        "workspaceId",
+        "requestId",
+        "expectedHead",
+        "expectedStatusFingerprint",
+        "authorized"
+      ],
+      "queryKeys": [],
+      "notes": "Removes the worktree only after explicit current-state authorization; the branch is retained by default."
+    },
+    {
+      "method": "workspace/commit",
+      "group": "workspace",
+      "stability": "experimental",
+      "requestType": "ManagedWorkspaceCommitInput",
+      "responseType": "ManagedWorkspaceOperationResult",
+      "requires": [
+        "workspaceId",
+        "requestId",
+        "message",
+        "expectedHead",
+        "expectedStatusFingerprint",
+        "authorized"
+      ],
+      "queryKeys": [],
+      "notes": "Requires explicit authorization and exact current workspace state; exact request replay is idempotent."
+    },
+    {
+      "method": "workspace/create",
+      "group": "workspace",
+      "stability": "experimental",
+      "requestType": "ManagedWorkspaceCreateInput",
+      "responseType": "ManagedWorkspaceCreateResult",
+      "requires": [
+        "slug"
+      ],
+      "queryKeys": [
+        "slug",
+        "startingRef",
+        "allowUntracked"
+      ],
+      "notes": "Creates a managed worktree without changing the long-lived App Server process cwd."
+    },
+    {
+      "method": "workspace/handoff",
+      "group": "workspace",
+      "stability": "experimental",
+      "requestType": "ManagedWorkspaceHandoffInput",
+      "responseType": "ManagedWorkspaceOperationResult",
+      "requires": [
+        "workspaceId",
+        "threadId",
+        "direction",
+        "requestId",
+        "expectedHead",
+        "expectedStatusFingerprint",
+        "expectedProjectHead",
+        "expectedProjectStatusFingerprint",
+        "authorized"
+      ],
+      "queryKeys": [],
+      "notes": "Moves one persisted thread and its managed branch between Local and the same managed worktree after exact two-checkout authorization."
+    },
+    {
+      "method": "workspace/keep",
+      "group": "workspace",
+      "stability": "experimental",
+      "requestType": "ManagedWorkspaceAuthorizedInput",
+      "responseType": "ManagedWorkspaceOperationResult",
+      "requires": [
+        "workspaceId",
+        "requestId",
+        "expectedHead",
+        "expectedStatusFingerprint",
+        "authorized"
+      ],
+      "queryKeys": [],
+      "notes": "Keeps the managed worktree and records an explicit durable lifecycle receipt."
+    },
+    {
+      "method": "workspace/list",
+      "group": "workspace",
+      "stability": "experimental",
+      "requestType": "Record<string, never>",
+      "responseType": "ManagedWorkspaceListResult",
+      "requires": [],
+      "queryKeys": [],
+      "notes": "Lists only OwlCoda-managed, ledger-backed worktrees for the current Git repository."
+    },
+    {
+      "method": "workspace/read",
+      "group": "workspace",
+      "stability": "experimental",
+      "requestType": "ManagedWorkspaceLookupInput",
+      "responseType": "ManagedWorkspaceReadResult",
+      "requires": [
+        "workspaceId"
+      ],
+      "queryKeys": [
+        "workspaceId"
+      ]
+    },
+    {
+      "method": "workspace/resume",
+      "group": "workspace",
+      "stability": "experimental",
+      "requestType": "ManagedWorkspaceLookupInput",
+      "responseType": "ManagedWorkspaceResumeResult",
+      "requires": [
+        "workspaceId"
+      ],
+      "queryKeys": [
+        "workspaceId"
+      ],
+      "notes": "Fails closed unless ledger, path, branch, and base commit still match Git truth."
+    },
+    {
+      "method": "workspace/status",
+      "group": "workspace",
+      "stability": "experimental",
+      "requestType": "ManagedWorkspaceLookupInput",
+      "responseType": "ManagedWorkspaceStatusResult",
+      "requires": [
+        "workspaceId"
+      ],
+      "queryKeys": [
+        "workspaceId"
+      ],
+      "notes": "Returns the current HEAD and status fingerprint required by authorized lifecycle mutations."
+    }
+  ]
+}

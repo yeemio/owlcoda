@@ -124,23 +124,6 @@ describe('desktop runtime facts drilldown', () => {
           artifactCount: 1,
         },
       },
-      rail: {
-        projectId: 'project-1',
-        freshness: 'fresh',
-        packet: null,
-        gate: null,
-        claim: null,
-        proofs: [{
-          kind: 'verification',
-          title: 'Task proof',
-          status: 'recorded',
-          sourceRef: 'proof-1',
-          at: '2026-06-26T01:00:03.000Z',
-        }],
-        rejectedPaths: [],
-        nextAction: null,
-        source: 'project_truth_packet',
-      },
     })
 
     expect(drilldown).toMatchObject({
@@ -176,8 +159,6 @@ describe('desktop runtime facts drilldown', () => {
         })],
         proofs: [expect.objectContaining({
           proofId: 'proof-1',
-          title: 'Task proof',
-          status: 'recorded',
         })],
         checkpoints: [expect.objectContaining({
           checkpointId: 'checkpoint-1',

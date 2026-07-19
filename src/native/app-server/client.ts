@@ -7,6 +7,7 @@ import type {
   AppServerApprovalListInput,
   AppServerInteractionListResult,
   AppServerInteractionRespondInput,
+  AppServerInteractionRequest,
 } from './approval-service.js'
 import type {
   ReviewActionResult,
@@ -24,8 +25,8 @@ import type {
 import type { RuntimeTranscriptResult } from './runtime-transcript-service.js'
 import type { ProjectListResult, ProjectSummary } from './project-service.js'
 import type { RunKitRailState } from './runtime-rail-service.js'
-import type { ThreadListResult, ThreadResumeResult, ThreadStartResult, TurnStartResult } from './thread-service.js'
-import type { AppServerEvent } from './event-stream.js'
+import type { AppServerThread, ThreadListResult, ThreadReadResult, ThreadResumeResult, ThreadStartResult, TurnStartResult } from './thread-service.js'
+import type { AppServerEvent, AppServerEventCursor } from './event-stream.js'
 import type {
   AppServerProtocolDescription,
   AppServerProviderEvalReportReadInput,
@@ -42,33 +43,42 @@ import type {
   WorkflowConsumerManifest,
 } from './protocol-contract.js'
 import type {
+  AppServerClientInitializeInput,
+  AppServerClientInitializeResult,
+} from './runtime-identity.js'
+import {
+  classifyAppServerCompatibility,
+  isAppServerClientInitializeResult,
+} from './runtime-identity.js'
+import type {
   AppServerTurnRecoverResult,
   AppServerTurnRecoveryAction,
   AppServerTurnStatusResult,
 } from './turn-status-service.js'
-import type { RunKitGateConfirmResult, RunKitProofAppendResult } from './truth-gateway.js'
 import type { JobRecord, JobStatus, JobType } from '../job-supervisor.js'
 import type { JobSuggestedAction } from '../tools/job.js'
+import type {
+  ManagedWorkspaceAuthorizedInput,
+  ManagedWorkspaceCleanupInput,
+  ManagedWorkspaceCommitInput,
+  ManagedWorkspaceCreateInput,
+  ManagedWorkspaceDescriptor,
+  ManagedWorkspaceHandoffInput,
+  ManagedWorkspaceLookupInput,
+  ManagedWorkspaceOperationResult,
+  ManagedWorkspaceStatusResult,
+} from './managed-workspace-service.js'
 
 export interface AppServerClientOptions {
   baseUrl: string
   fetch?: typeof fetch
+  token?: string
+  headers?: HeadersInit
 }
 
-export interface AppServerProofAppendInput {
-  projectId?: string
-  kind: string
-  title: string
-  status?: string
-  detail?: string
-}
-
-export interface AppServerGateConfirmInput {
-  projectId?: string
-  gateId?: string
-  note?: string
-  confirmedBy?: string
-}
+export type AppServerCompatibilityCheckResult =
+  | AppServerClientInitializeResult
+  | { compatibility: 'protocol_mismatch' | 'unreachable' }
 
 export interface AppServerProjectGetInput {
   projectId?: string
@@ -91,13 +101,75 @@ export interface AppServerThreadStartInput {
   title?: string
   model?: string
   systemPrompt?: string
+  permissionMode?: 'plan' | 'normal' | 'auto' | 'yolo'
+  workspaceMode?: 'project' | 'managed'
+}
+
+export interface AppServerThreadReadInput {
+  threadId: string
+  projectId?: string
+  limit?: number
+  cursor?: string
 }
 
 export interface AppServerTurnStartInput {
-  threadId: string
-  input: string
-  projectId?: string
+	threadId: string
+	input?: string
+	content?: AppServerTurnContentBlock[]
+	projectId?: string
+	retry?: boolean
+	title?: string
 }
+
+export type AppServerTurnContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'localImage'; attachmentId: string }
+  | { type: 'fileRef'; path: string }
+
+export interface AppServerAttachmentStoreInput {
+  projectId?: string
+  name: string
+  mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+  dataBase64: string
+}
+
+export interface AppServerAttachmentStoreResult {
+  id: string
+  name: string
+  mediaType: string
+  size: number
+}
+
+export interface AppServerModelListResult {
+  defaultModelId: string | null
+  defaultPermissionMode: 'plan' | 'normal' | 'auto' | 'yolo'
+  permissionModes: Array<{ id: 'plan' | 'normal' | 'auto' | 'yolo'; label: string; detail: string }>
+  workspaceModes: Array<{ id: 'project' | 'managed'; available: boolean }>
+  models: Array<{
+    id: string
+    label: string
+    provider: string
+    tier: string
+    origin: 'cloud' | 'local' | 'unknown'
+    availability: 'available' | 'unavailable' | 'unknown'
+    isDefault: boolean
+    unavailableReason?: string
+    vision: { status: 'supported' | 'unsupported' | 'unknown'; inputImages: boolean; source: string; labels: string[]; reason?: string }
+  }>
+}
+
+export type AppServerManagedWorkspaceCreateInput = ManagedWorkspaceCreateInput
+export type AppServerManagedWorkspaceLookupInput = ManagedWorkspaceLookupInput
+export type AppServerManagedWorkspaceCommitInput = ManagedWorkspaceCommitInput
+export type AppServerManagedWorkspaceKeepInput = ManagedWorkspaceAuthorizedInput
+export type AppServerManagedWorkspaceCleanupInput = ManagedWorkspaceCleanupInput
+export type AppServerManagedWorkspaceHandoffInput = ManagedWorkspaceHandoffInput
+export interface AppServerManagedWorkspaceListResult { workspaces: ManagedWorkspaceDescriptor[] }
+export interface AppServerManagedWorkspaceCreateResult { workspace: ManagedWorkspaceDescriptor }
+export interface AppServerManagedWorkspaceReadResult { workspace: ManagedWorkspaceDescriptor }
+export interface AppServerManagedWorkspaceResumeResult { workspace: ManagedWorkspaceDescriptor; resumed: true }
+export type AppServerManagedWorkspaceStatusResult = ManagedWorkspaceStatusResult
+export type AppServerManagedWorkspaceOperationResult = ManagedWorkspaceOperationResult
 
 export interface AppServerThreadResumeInput {
   threadId: string
@@ -112,6 +184,16 @@ export interface AppServerEventSubscription {
   transport: 'sse'
   endpoint: string
   events: Array<AppServerEvent['type']>
+  cursor: AppServerEventCursor
+}
+
+export interface AppServerEventSnapshotResult {
+  schemaVersion: 1
+  projectId: string
+  workspaceId: string
+  threads: AppServerThread[]
+  interactions: AppServerInteractionRequest[]
+  cursor: AppServerEventCursor
 }
 
 export interface AppServerJobListInput {
@@ -179,15 +261,31 @@ export interface AppServerJobCancelResult {
 
 export interface AppServerClient {
   call<T = any>(method: AppServerMethod | string, params?: unknown[] | Record<string, unknown>): Promise<T>
+  eventStreamRequest(options?: { afterSequence?: number }): { url: string; headers: Headers }
   protocolDescribe(): Promise<AppServerProtocolDescription>
+  initialize(params: AppServerClientInitializeInput): Promise<AppServerClientInitializeResult>
+  checkCompatibility(params: AppServerClientInitializeInput): Promise<AppServerCompatibilityCheckResult>
   projectList(): Promise<ProjectListResult>
   projectGet(params?: AppServerProjectGetInput): Promise<AppServerProjectAggregateResult>
+  modelList(): Promise<AppServerModelListResult>
+  workspaceList(): Promise<AppServerManagedWorkspaceListResult>
+  workspaceCreate(params: AppServerManagedWorkspaceCreateInput): Promise<AppServerManagedWorkspaceCreateResult>
+  workspaceRead(params: AppServerManagedWorkspaceLookupInput): Promise<AppServerManagedWorkspaceReadResult>
+  workspaceResume(params: AppServerManagedWorkspaceLookupInput): Promise<AppServerManagedWorkspaceResumeResult>
+  workspaceStatus(params: AppServerManagedWorkspaceLookupInput): Promise<AppServerManagedWorkspaceStatusResult>
+  workspaceCommit(params: AppServerManagedWorkspaceCommitInput): Promise<AppServerManagedWorkspaceOperationResult>
+  workspaceKeep(params: AppServerManagedWorkspaceKeepInput): Promise<AppServerManagedWorkspaceOperationResult>
+  workspaceCleanup(params: AppServerManagedWorkspaceCleanupInput): Promise<AppServerManagedWorkspaceOperationResult>
+  workspaceHandoff(params: AppServerManagedWorkspaceHandoffInput): Promise<AppServerManagedWorkspaceOperationResult>
+  attachmentStore(params: AppServerAttachmentStoreInput): Promise<AppServerAttachmentStoreResult>
   threadList(params?: AppServerThreadListInput): Promise<ThreadListResult>
+  threadRead(params: AppServerThreadReadInput): Promise<ThreadReadResult>
   threadStart(params?: AppServerThreadStartInput): Promise<ThreadStartResult>
   turnStart(params: AppServerTurnStartInput): Promise<TurnStartResult>
   threadResume(params: AppServerThreadResumeInput): Promise<ThreadResumeResult>
   runtimeRailRead(params?: AppServerRuntimeRailReadInput): Promise<RunKitRailState>
   eventSubscribe(): Promise<AppServerEventSubscription>
+  eventSnapshot(params?: AppServerProjectGetInput): Promise<AppServerEventSnapshotResult>
   reviewList(params: { threadId: string; projectId?: string }): Promise<ReviewListResult>
   reviewPreflight(params: { threadId: string; diffId: string; projectId?: string }): Promise<ReviewPreflightResult>
   reviewApply(params: { threadId: string; diffId: string; projectId?: string }): Promise<ReviewActionResult>
@@ -212,8 +310,6 @@ export interface AppServerClient {
   approvalResolve(params: AppServerApprovalResolveInput): Promise<AppServerApprovalResolveResult>
   interactionList(params?: AppServerApprovalListInput): Promise<AppServerInteractionListResult>
   interactionRespond(params: AppServerInteractionRespondInput): Promise<AppServerApprovalResolveResult>
-  proofAppend(params: AppServerProofAppendInput): Promise<RunKitProofAppendResult>
-  gateConfirm(params: AppServerGateConfirmInput): Promise<RunKitGateConfirmResult>
   jobList(params?: AppServerJobListInput): Promise<AppServerJobListResult>
   jobGet(params: AppServerJobGetInput): Promise<AppServerJobGetResult>
   jobCancel(params: AppServerJobCancelInput): Promise<AppServerJobCancelResult>
@@ -234,13 +330,16 @@ export class AppServerClientError extends Error {
 export function createAppServerClient(options: AppServerClientOptions): AppServerClient {
   const baseUrl = options.baseUrl.replace(/\/+$/, '')
   const fetchImpl = options.fetch ?? fetch
+  const requestHeaders = new Headers(options.headers)
+  requestHeaders.set('content-type', 'application/json')
+  if (options.token) requestHeaders.set('authorization', `Bearer ${options.token}`)
   let nextId = 1
 
   const call = async <T = any>(method: AppServerMethod | string, params?: unknown[] | Record<string, unknown>): Promise<T> => {
     const id = nextId++
     const response = await fetchImpl(`${baseUrl}/rpc`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: requestHeaders,
       body: JSON.stringify({
         jsonrpc: '2.0',
         id,
@@ -249,24 +348,87 @@ export function createAppServerClient(options: AppServerClientOptions): AppServe
       }),
     })
 
-    const body = await response.json() as JsonRpcResponse<T>
+    if (response.status === 401) {
+      throw new AppServerClientError({ code: -32001, message: 'Unauthorized' })
+    }
+    if (response.status === 403) {
+      throw new AppServerClientError({ code: -32002, message: 'Origin or loopback policy rejected the request' })
+    }
+
+    const parsed = await response.json() as unknown
+    if (!isJsonRpcResponse<T>(parsed)) {
+      throw new Error('Invalid JSON-RPC response from App Server')
+    }
+    const body = parsed
+    if (body.id !== id) {
+      throw new Error(`Invalid JSON-RPC response id from App Server: expected ${id}, received ${String(body.id)}`)
+    }
     if ('error' in body) {
       throw new AppServerClientError(body.error)
     }
     return body.result
   }
 
+  const initialize = async (params: AppServerClientInitializeInput): Promise<AppServerClientInitializeResult> => {
+    const result = await call<unknown>('client/initialize', { ...params })
+    if (!isAppServerClientInitializeResult(result)) {
+      throw new Error('Invalid client/initialize result from App Server')
+    }
+    return result
+  }
+
+  const checkCompatibility = async (params: AppServerClientInitializeInput): Promise<AppServerCompatibilityCheckResult> => {
+    try {
+      const result = await initialize(params)
+      return {
+        ...result,
+        compatibility: classifyAppServerCompatibility(params, result),
+      }
+    } catch (error) {
+      if (error instanceof AppServerClientError) {
+        if (error.code === -32601) return { compatibility: 'protocol_mismatch' }
+        throw error
+      }
+      return { compatibility: 'unreachable' }
+    }
+  }
+
   return {
     call,
+    eventStreamRequest: (streamOptions = {}) => {
+      const headers = new Headers(requestHeaders)
+      const url = new URL(`${baseUrl}/events`)
+      if (streamOptions.afterSequence !== undefined) {
+        const value = String(streamOptions.afterSequence)
+        url.searchParams.set('afterSequence', value)
+        headers.set('last-event-id', value)
+      }
+      return { url: url.toString(), headers }
+    },
+    initialize,
+    checkCompatibility,
     protocolDescribe: () => call('protocol/describe', {}),
     projectList: () => call('project/list', {}),
     projectGet: params => call('project/get', params ? { ...params } : {}),
+    modelList: () => call('model/list', {}),
+    workspaceList: () => call('workspace/list', {}),
+    workspaceCreate: params => call('workspace/create', { ...params }),
+    workspaceRead: params => call('workspace/read', { ...params }),
+    workspaceResume: params => call('workspace/resume', { ...params }),
+    workspaceStatus: params => call('workspace/status', { ...params }),
+    workspaceCommit: params => call('workspace/commit', { ...params }),
+    workspaceKeep: params => call('workspace/keep', { ...params }),
+    workspaceCleanup: params => call('workspace/cleanup', { ...params }),
+    workspaceHandoff: params => call('workspace/handoff', { ...params }),
+    attachmentStore: params => call('attachment/store', { ...params }),
     threadList: params => call('thread/list', params ? { ...params } : {}),
+    threadRead: params => call('thread/read', { ...params }),
     threadStart: params => call('thread/start', params ? { ...params } : {}),
     turnStart: params => call('turn/start', { ...params }),
     threadResume: params => call('thread/resume', { ...params }),
     runtimeRailRead: params => call('runtimeRail/read', params ? { ...params } : {}),
     eventSubscribe: () => call('event/subscribe', {}),
+    eventSnapshot: params => call('event/snapshot', params ? { ...params } : {}),
     reviewList: params => call('review/list', params),
     reviewPreflight: params => call('review/preflight', params),
     reviewApply: params => call('review/apply', params),
@@ -291,12 +453,25 @@ export function createAppServerClient(options: AppServerClientOptions): AppServe
     approvalResolve: params => call('approval/resolve', { ...params }),
     interactionList: params => call('interaction/list', params ? { ...params } : {}),
     interactionRespond: params => call('interaction/respond', { ...params }),
-    proofAppend: params => call('proof/append', { ...params }),
-    gateConfirm: params => call('gate/confirm', { ...params }),
     jobList: params => call('job/list', params ? { ...params } : {}),
     jobGet: params => call('job/get', { ...params }),
     jobCancel: params => call('job/cancel', { ...params }),
   }
+}
+
+function isJsonRpcResponse<T>(value: unknown): value is JsonRpcResponse<T> {
+  if (!isRecord(value) || value.jsonrpc !== '2.0' || !('id' in value)) return false
+  const hasResult = 'result' in value
+  const hasError = 'error' in value
+  if (hasResult === hasError) return false
+  if (!hasError) return true
+  return isRecord(value.error)
+    && typeof value.error.code === 'number'
+    && typeof value.error.message === 'string'
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 export type { AppServerProtocolDescription }

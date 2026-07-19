@@ -346,7 +346,7 @@ export function readWelcomeMarkerOptions(cwd: string = process.cwd()): WelcomeMa
 export function formatWelcomeMarker(opts: WelcomeMarkerOptions): string {
   const parts = [`CWD ${formatCwd(canonicalizeCwdForDisplay(opts.cwd))}`]
   if (opts.branch) {
-    parts.push(`BRANCH ${opts.branch.toUpperCase()}`)
+    parts.push(`BRANCH ${opts.branch}`)
   }
   if (typeof opts.pendingChanges === 'number') {
     parts.push(opts.pendingChanges === 0

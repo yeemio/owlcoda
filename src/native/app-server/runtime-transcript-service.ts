@@ -4,11 +4,11 @@ import { loadSession, type SessionFile } from '../session.js'
 import type {
   AnthropicContentBlock,
   AnthropicTextBlock,
-  AnthropicThinkingBlock,
   AnthropicToolResultBlock,
   AnthropicToolUseBlock,
 } from '../../types.js'
 import type { ConversationTurn, RuntimeEventRecord } from '../protocol/types.js'
+import { isRuntimeTruthResumePromptTurn } from '../runtime-events.js'
 
 export type RuntimeTranscriptItemStatus = 'pending' | 'completed' | 'failed'
 
@@ -74,7 +74,6 @@ export interface RuntimeTranscriptReplayAssociations {
 
 export type RuntimeTranscriptItem =
   | RuntimeTranscriptMessageItem
-  | RuntimeTranscriptThinkingItem
   | RuntimeTranscriptToolCallItem
   | RuntimeTranscriptToolResultItem
 
@@ -82,16 +81,6 @@ export interface RuntimeTranscriptMessageItem {
   id: string
   kind: 'message'
   role: ConversationTurn['role']
-  text: string
-  timestamp: number
-  turnIndex: number
-  contentIndex: number
-}
-
-export interface RuntimeTranscriptThinkingItem {
-  id: string
-  kind: 'thinking'
-  role: 'assistant'
   text: string
   timestamp: number
   turnIndex: number
@@ -159,6 +148,7 @@ export function readRuntimeTranscript(input: RuntimeTranscriptReadInput): Runtim
   const items: RuntimeTranscriptItem[] = []
 
   session.turns.forEach((turn, turnIndex) => {
+    if (turn.audience === 'runtime' || isRuntimeTruthResumePromptTurn(turn)) return
     turn.content.forEach((block, contentIndex) => {
       if (isTextBlock(block)) {
         items.push({
@@ -172,18 +162,7 @@ export function readRuntimeTranscript(input: RuntimeTranscriptReadInput): Runtim
         })
         return
       }
-      if (isThinkingBlock(block)) {
-        items.push({
-          id: `turn:${turnIndex}:thinking:${contentIndex}`,
-          kind: 'thinking',
-          role: 'assistant',
-          text: block.thinking,
-          timestamp: turn.timestamp,
-          turnIndex,
-          contentIndex,
-        })
-        return
-      }
+      if (block.type === 'thinking') return
       if (isToolUseBlock(block)) {
         const result = toolResults.get(block.id)
         const anchor = runtimeAnchors.get(block.id)
@@ -254,7 +233,7 @@ function normalizeTranscriptCursor(cursor: number | undefined, itemCount: number
 }
 
 function sanitizeTranscriptItem(item: RuntimeTranscriptItem): RuntimeTranscriptItem {
-  if (item.kind === 'message' || item.kind === 'thinking') {
+  if (item.kind === 'message') {
     return { ...item, text: stripTerminalControlSequences(item.text) }
   }
   if (item.kind === 'tool_call' && item.result) {
@@ -433,10 +412,6 @@ function stringField(input: Record<string, unknown> | undefined, key: string): s
 
 function isTextBlock(block: AnthropicContentBlock): block is AnthropicTextBlock {
   return block.type === 'text'
-}
-
-function isThinkingBlock(block: AnthropicContentBlock): block is AnthropicThinkingBlock {
-  return block.type === 'thinking'
 }
 
 function isToolUseBlock(block: AnthropicContentBlock): block is AnthropicToolUseBlock {

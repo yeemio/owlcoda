@@ -6,13 +6,15 @@
  * Gate 3.7: Crash recovery (corrupted/partial session files handled gracefully)
  */
 
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest'
 import * as fs from 'node:fs'
+import * as os from 'node:os'
 import * as path from 'node:path'
 import {
   saveSession,
   loadSession,
   listSessions,
+  listSessionsForCwd,
   deleteSession,
   getSessionsDir,
 } from '../../src/native/session.js'
@@ -47,6 +49,21 @@ const cleanupIds: string[] = []
 /** Also track raw files written directly to session dir. */
 const cleanupFiles: string[] = []
 
+let previousOwlcodaHome: string | undefined
+let isolatedOwlcodaHome: string
+
+beforeAll(() => {
+  previousOwlcodaHome = process.env['OWLCODA_HOME']
+  isolatedOwlcodaHome = fs.mkdtempSync(path.join(os.tmpdir(), 'owlcoda-session-robustness-'))
+  process.env['OWLCODA_HOME'] = isolatedOwlcodaHome
+})
+
+afterAll(() => {
+  fs.rmSync(isolatedOwlcodaHome, { recursive: true, force: true })
+  if (previousOwlcodaHome === undefined) delete process.env['OWLCODA_HOME']
+  else process.env['OWLCODA_HOME'] = previousOwlcodaHome
+})
+
 afterEach(() => {
   for (const id of cleanupIds) deleteSession(id)
   cleanupIds.length = 0
@@ -71,6 +88,53 @@ function writeRawSessionFile(filename: string, content: string): string {
 // ===========================================================================
 
 describe('Long session stress (Gate 1.5)', () => {
+	it('lists only one project and observes newly created sessions without reparsing unrelated histories', () => {
+		const projectA = path.join(isolatedOwlcodaHome, 'project-a')
+		const projectB = path.join(isolatedOwlcodaHome, 'project-b')
+		const first = makeConv(`cwd-a-${Date.now()}`)
+		const unrelated = makeConv(`cwd-b-${Date.now()}`)
+		cleanupIds.push(first.id, unrelated.id)
+		saveSession(first, 'A1', { cwd: projectA })
+		saveSession(unrelated, 'B1', { cwd: projectB })
+
+		expect(listSessionsForCwd(projectA).map(session => session.id)).toEqual([first.id])
+
+		const second = makeConv(`cwd-a-new-${Date.now()}`)
+		cleanupIds.push(second.id)
+		saveSession(second, 'A2', { cwd: projectA })
+		expect(listSessionsForCwd(projectA).map(session => session.id)).toEqual([second.id, first.id])
+	})
+
+	it('invalidates a target cwd catalog when another process atomically moves a session without changing the directory mtime', () => {
+		const managedRoot = path.join(isolatedOwlcodaHome, 'managed-worktree')
+		const projectRoot = path.join(isolatedOwlcodaHome, 'project-root')
+		const conversation = makeConv(`cwd-external-handoff-${Date.now()}`)
+		cleanupIds.push(conversation.id)
+		saveSession(conversation, 'Managed task', { cwd: managedRoot })
+		const sessionsDir = getSessionsDir()
+		const fixedDirectoryTimeMs = Math.floor(Date.now() / 1000) * 1000
+		fs.utimesSync(sessionsDir, fixedDirectoryTimeMs / 1000, fixedDirectoryTimeMs / 1000)
+
+		expect(listSessionsForCwd(managedRoot).map(session => session.id)).toEqual([conversation.id])
+		expect(listSessionsForCwd(projectRoot)).toEqual([])
+
+		const directoryTimes = fs.statSync(sessionsDir)
+		const sessionFile = path.join(sessionsDir, `${conversation.id}.json`)
+		const temporaryFile = `${sessionFile}.external-handoff`
+		const persisted = loadSession(conversation.id)!
+		fs.writeFileSync(temporaryFile, JSON.stringify({
+			...persisted,
+			cwd: projectRoot,
+			updatedAt: persisted.updatedAt + 1,
+		}, null, 2), 'utf8')
+		fs.renameSync(temporaryFile, sessionFile)
+		fs.utimesSync(sessionsDir, directoryTimes.atimeMs / 1000, directoryTimes.mtimeMs / 1000)
+		expect(fs.statSync(sessionsDir).mtimeMs).toBe(directoryTimes.mtimeMs)
+
+		expect(listSessionsForCwd(projectRoot).map(session => session.id)).toEqual([conversation.id])
+		expect(listSessionsForCwd(managedRoot)).toEqual([])
+	})
+
   it('saves and reloads a conversation with 100+ turns', () => {
     const id = `stress-100-turns-${Date.now()}`
     cleanupIds.push(id)

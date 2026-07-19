@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 export type RunKitTruthFreshness = 'missing' | 'fresh' | 'error'
@@ -59,38 +59,6 @@ export interface RunKitTruthState {
   error: string | null
 }
 
-export interface RunKitProofAppendInput {
-  projectRoot: string
-  kind: string
-  title: string
-  status?: string
-  detail?: string
-  at?: string
-}
-
-export interface RunKitProofAppendResult {
-  status: 'appended'
-  proof: RunKitTruthProofSummary
-  proofPath: string
-  packetPath: string
-  readback: RunKitTruthState
-}
-
-export interface RunKitGateConfirmInput {
-  projectRoot: string
-  gateId?: string
-  note?: string
-  confirmedBy?: string
-  confirmedAt?: string
-}
-
-export interface RunKitGateConfirmResult {
-  status: 'confirmed'
-  gateId: string
-  gatePath: string
-  readback: RunKitTruthState
-}
-
 export function readRunKitTruth(projectRoot: string): RunKitTruthState {
   const root = resolve(projectRoot)
   const runkitRoot = join(root, '.owlrunkit')
@@ -123,110 +91,6 @@ export function readRunKitTruth(projectRoot: string): RunKitTruthState {
       packetPath,
       error: error instanceof Error ? error.message : 'Failed to read RunKit truth',
     }
-  }
-}
-
-export function appendRunKitProof(input: RunKitProofAppendInput): RunKitProofAppendResult {
-  const root = resolve(input.projectRoot)
-  const truth = readRunKitTruth(root)
-  if (truth.freshness !== 'fresh' || !truth.packetPath) {
-    throw new Error('RunKit truth packet is required before appending proof')
-  }
-  const at = input.at ?? new Date().toISOString()
-  const proofId = `proof-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  const sourceRef = `.owlrunkit/proofs/${proofId}.json`
-  const proofPath = join(root, sourceRef)
-  mkdirSync(join(root, '.owlrunkit', 'proofs'), { recursive: true })
-  const proofRecord = {
-    schema_version: '1.0',
-    id: proofId,
-    kind: input.kind,
-    title: input.title,
-    status: input.status ?? 'recorded',
-    source_ref: sourceRef,
-    at,
-    ...(input.detail ? { detail: input.detail } : {}),
-  }
-  writeFileSync(proofPath, JSON.stringify(proofRecord, null, 2), 'utf8')
-
-  const packet = readJsonObject(truth.packetPath)
-  const proofs = Array.isArray(packet['proofs']) ? [...packet['proofs']] : []
-  proofs.push(proofRecord)
-  packet['proofs'] = proofs
-  const provenance = recordField(packet, 'provenance') ?? {}
-  const proofRefs = stringArrayField(provenance, 'proof_refs')
-  if (!proofRefs.includes(sourceRef)) proofRefs.push(sourceRef)
-  provenance['proof_refs'] = proofRefs
-  packet['provenance'] = provenance
-  writeFileSync(truth.packetPath, JSON.stringify(packet, null, 2), 'utf8')
-
-  const readback = readRunKitTruth(root)
-  const proof = readback.proofs.find(item => item.sourceRef === sourceRef) ?? {
-    kind: input.kind,
-    title: input.title,
-    status: input.status ?? 'recorded',
-    sourceRef,
-    at,
-  }
-  return {
-    status: 'appended',
-    proof,
-    proofPath,
-    packetPath: truth.packetPath,
-    readback,
-  }
-}
-
-export function confirmRunKitGate(input: RunKitGateConfirmInput): RunKitGateConfirmResult {
-  const root = resolve(input.projectRoot)
-  const truth = readRunKitTruth(root)
-  if (truth.freshness !== 'fresh') {
-    throw new Error('RunKit truth packet is required before confirming a gate')
-  }
-  const gatePath = truth.gatePath ?? join(root, '.owlrunkit', 'state', 'governance-gate.json')
-  if (!existsSync(gatePath)) {
-    throw new Error('RunKit governance gate file is required before confirming a gate')
-  }
-  const gate = readJsonObject(gatePath)
-  const gateId = input.gateId ?? stringField(gate, 'current_gate')
-  if (!gateId) throw new Error('gateId is required')
-  const passedGates = stringArrayField(gate, 'passed_gates')
-  if (!passedGates.includes(gateId)) passedGates.push(gateId)
-
-  const gates = Array.isArray(gate['gates'])
-    ? gate['gates'].filter(isRecord)
-    : []
-  const currentIndex = gates.findIndex(item => stringField(item, 'id') === gateId)
-  const nextGate = currentIndex >= 0
-    ? gates.slice(currentIndex + 1).find(item => {
-        const id = stringField(item, 'id')
-        return id ? !passedGates.includes(id) : false
-      })
-    : null
-  const nextGateId = nextGate ? stringField(nextGate, 'id') : null
-  const confirmations = Array.isArray(gate['confirmations']) ? [...gate['confirmations']] : []
-  confirmations.push({
-    gate_id: gateId,
-    confirmed_by: input.confirmedBy ?? 'OwlCoda Desktop',
-    note: input.note ?? '',
-    confirmed_at: input.confirmedAt ?? new Date().toISOString(),
-    source_ref: '.owlrunkit/state/governance-gate.json',
-  })
-  gate['passed_gates'] = passedGates
-  gate['current_gate'] = nextGateId
-  gate['awaiting_human'] = Boolean(nextGateId)
-  gate['confirmations'] = confirmations
-  writeFileSync(gatePath, JSON.stringify(gate, null, 2), 'utf8')
-
-  const readback = readRunKitTruth(root)
-  if (!readback.gate?.passedGates.includes(gateId)) {
-    throw new Error('RunKit gate readback did not include confirmed gate')
-  }
-  return {
-    status: 'confirmed',
-    gateId,
-    gatePath,
-    readback,
   }
 }
 

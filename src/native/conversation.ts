@@ -1204,11 +1204,7 @@ export async function runConversationLoop(
     if (allResults.length === 0) return
     const resultBlocks = dispatcher.toContentBlocks(allResults)
     const truncated = truncateToolResultBlocks(resultBlocks, TOOL_OUTPUT_MAX_CHARS)
-    conversation.turns.push({
-      role: 'user',
-      content: truncated,
-      timestamp: Date.now(),
-    })
+    addRuntimeMessage(conversation, truncated)
   }
 
   while (iterations < maxIterations) {
@@ -1220,10 +1216,16 @@ export async function runConversationLoop(
       currentFocus: convergence.lastGap ?? convergence.dominantHypothesis,
       dominantGap: convergence.lastGap,
     })
-    const rollingCompaction = compactOlderToolResults(conversation, { iteration: iterations })
+    const rollingContextUsage = opts.contextWindow && opts.contextWindow > 0
+      ? buildContextBudgetSnapshot(conversation, opts.contextWindow).usageRatio
+      : 0
+    const rollingCompaction = compactOlderToolResults(conversation, {
+      iteration: iterations,
+      contextUsageRatio: rollingContextUsage,
+    })
     if (rollingCompaction.compactedResults > 0) {
       opts.callbacks?.onNotice?.(
-        `Context hygiene: compacted ${rollingCompaction.compactedResults} older tool result(s), omitting ${rollingCompaction.omittedChars} repeated characters from live context; raw artifacts remain retained.`,
+        `Context hygiene: compacted ${rollingCompaction.compactedResults} older tool result${rollingCompaction.compactedResults === 1 ? '' : 's'}, omitting ${rollingCompaction.omittedChars} characters from live context.`,
       )
     }
 
@@ -1233,7 +1235,7 @@ export async function runConversationLoop(
     // immediately continue so the model sees the nudge on the next request.
     if (isGateV2Enabled() && taskState.run.editNowNudgePending) {
       const pending = taskState.run.editNowNudgePending
-      addUserMessage(conversation, buildEditNowNudgePrompt(pending))
+      addRuntimeMessage(conversation, buildEditNowNudgePrompt(pending))
       recordRuntimeNudgePhaseEvent(taskState, taskState.run.lifetimeIterations ?? 0, 'edit_now')
       const nudgedList = taskState.run.editNowNudgedGrantTs ?? []
       if (!nudgedList.includes(pending.grantTs)) {
@@ -1281,18 +1283,11 @@ export async function runConversationLoop(
         const { distinctFiles } = getReadLedgerStats(taskState)
         if (distinctFiles >= PRODUCTION_GATE_DISTINCT_FILES) {
           const taskWriteScope = selectTrustedTaskWriteScope(taskState)
-          conversation.turns.push({
-            role: 'user',
-            content: [{
-              type: 'text',
-              text: buildProductionGatePrompt({
-                distinctFilesRead: distinctFiles,
-                lifetimeIterations: taskState.run.lifetimeIterations ?? 0,
-                taskWriteScope,
-              }),
-            }],
-            timestamp: Date.now(),
-          })
+          addRuntimeMessage(conversation, buildProductionGatePrompt({
+            distinctFilesRead: distinctFiles,
+            lifetimeIterations: taskState.run.lifetimeIterations ?? 0,
+            taskWriteScope,
+          }))
           taskState.run.productionGateFired = true
           appendRuntimeEvent(conversation, {
             kind: 'runtime_intervention',
@@ -1738,14 +1733,10 @@ export async function runConversationLoop(
       }
       if (fireThreshold !== null) {
         const totalTokens = compactDecision.totalTokens
-        conversation.turns.push({
-          role: 'user',
-          content: [{
-            type: 'text',
-            text: buildContextPressurePrompt(fireThreshold, usageRatio, totalTokens, opts.contextWindow),
-          }],
-          timestamp: Date.now(),
-        })
+        addRuntimeMessage(
+          conversation,
+          buildContextPressurePrompt(fireThreshold, usageRatio, totalTokens, opts.contextWindow),
+        )
         fired.add(fireThreshold)
         // Mark all thresholds <= the one we fired as also fired —
         // crossing 0.85 implies 0.6 was crossed too; no need to fire
@@ -2003,6 +1994,10 @@ export async function runConversationLoop(
     const runtimeTruthResumeReportPending = shouldEnforceRuntimeTruthResumeReportGate(conversation)
 
     if (runtimeTruthResumeReportPending) {
+      // The snapshot has already served its one outbound request. Remove it
+      // before processing the response so it cannot remain in later provider
+      // context or persisted history, regardless of whether the report passes.
+      discardRuntimeTruthResumePromptTurns(conversation)
       const runtimeTruthResumeCheckpointKind = runtimeTruthResumeCheckpointKindForId(
         runtimeTruthResumeReportPending.checkpointId,
       )
@@ -2451,14 +2446,11 @@ export async function runConversationLoop(
         const avgChars = Math.floor(
           recentOutputSizes.reduce((s, n) => s + n, 0) / recentOutputSizes.length,
         )
-        conversation.turns.push({
-          role: 'user',
-          content: [{
-            type: 'text',
-            text: buildOutputBloatPrompt(OUTPUT_BLOAT_WINDOW, avgChars),
-          }],
-          timestamp: Date.now(),
-        })
+        addRuntimeMessage(
+          conversation,
+          buildOutputBloatPrompt(OUTPUT_BLOAT_WINDOW, avgChars),
+          { supersedeLatestAssistant: true },
+        )
         opts.callbacks?.onNotice?.(
           `Output bloat (${OUTPUT_BLOAT_WINDOW}× ≥${(OUTPUT_BLOAT_CHARS / 1000).toFixed(0)}K chars): ` +
           `nudging the model to stop re-dumping inline content and emit a tool call or specific question.`,
@@ -2481,17 +2473,14 @@ export async function runConversationLoop(
       consecutiveMaxTokensTruncations += 1
       if (maxTokensContinuationInjectCount < MAX_TOKENS_CONTINUATION_LIMIT) {
         maxTokensContinuationInjectCount += 1
-        conversation.turns.push({
-          role: 'user',
-          content: [{
-            type: 'text',
-            text: buildMaxTokensContinuationPrompt(
-              effectiveResponse.text,
-              consecutiveMaxTokensTruncations,
-            ),
-          }],
-          timestamp: Date.now(),
-        })
+        addRuntimeMessage(
+          conversation,
+          buildMaxTokensContinuationPrompt(
+            effectiveResponse.text,
+            consecutiveMaxTokensTruncations,
+          ),
+          { supersedeLatestAssistant: true },
+        )
         appendRuntimeEvent(conversation, {
           kind: 'runtime_intervention',
           turnId: runtimeTurnId,
@@ -2678,11 +2667,7 @@ export async function runConversationLoop(
       if (createPlanNudge?.kind === 'create_plan') {
         consumeNudge(taskStepNudgeCounter, createPlanNudge.taskId, createPlanNudge.kind)
         recordRuntimeNudgePhaseEvent(taskState, taskState.run.lifetimeIterations ?? 0, createPlanNudge.kind)
-        conversation.turns.push({
-          role: 'user',
-          content: [{ type: 'text', text: createPlanNudge.text }],
-          timestamp: Date.now(),
-        })
+        addRuntimeMessage(conversation, createPlanNudge.text, { supersedeLatestAssistant: true })
         opts.callbacks?.onNotice?.(
           `Task-step nudge (${createPlanNudge.kind}): no structured execution plan is active — nudging the model to create one.`,
         )
@@ -2694,14 +2679,11 @@ export async function runConversationLoop(
         && shouldAutoContinueOpenTask(taskState, effectiveResponse.text, openTaskAutoContinueCount, latestSubstantiveUserText(conversation))
       ) {
         openTaskAutoContinueCount += 1
-        conversation.turns.push({
-          role: 'user',
-          content: [{
-            type: 'text',
-            text: buildTaskContinuePrompt(taskState, effectiveResponse.text),
-          }],
-          timestamp: Date.now(),
-        })
+        addRuntimeMessage(
+          conversation,
+          buildTaskContinuePrompt(taskState, effectiveResponse.text),
+          { supersedeLatestAssistant: true },
+        )
         opts.callbacks?.onNotice?.(`Continue-while-open: task still looks active, nudging the model to keep executing (${openTaskAutoContinueCount}/${OPEN_TASK_AUTO_CONTINUE_LIMIT})`)
         continue
       }
@@ -2730,14 +2712,11 @@ export async function runConversationLoop(
       ) {
         deliveryCheckInjections += 1
         recordRuntimeNudgePhaseEvent(taskState, taskState.run.lifetimeIterations ?? 0, 'delivery_check')
-        conversation.turns.push({
-          role: 'user',
-          content: [{
-            type: 'text',
-            text: buildDeliveryCheckPrompt(taskState, effectiveResponse.text),
-          }],
-          timestamp: Date.now(),
-        })
+        addRuntimeMessage(
+          conversation,
+          buildDeliveryCheckPrompt(taskState, effectiveResponse.text),
+          { supersedeLatestAssistant: true },
+        )
         opts.callbacks?.onNotice?.(
           `Delivery check: completion claim detected with ${taskState.contract.touchedPaths.length} touched path(s); nudging the model to call DeliveryAudit before concluding (${deliveryCheckInjections}/${DELIVERY_CHECK_INJECTION_LIMIT}).`,
         )
@@ -2758,14 +2737,11 @@ export async function runConversationLoop(
         && looksLikeGroupSummary(effectiveResponse.text)
       ) {
         probeCoverageInjections += 1
-        conversation.turns.push({
-          role: 'user',
-          content: [{
-            type: 'text',
-            text: buildProbeCoverageCheckPrompt(probeGaps),
-          }],
-          timestamp: Date.now(),
-        })
+        addRuntimeMessage(
+          conversation,
+          buildProbeCoverageCheckPrompt(probeGaps),
+          { supersedeLatestAssistant: true },
+        )
         opts.callbacks?.onNotice?.(
           `Probe coverage check: ${probeGaps.length} unsatisfied probe(s) — nudging the model to emit them before summary (${probeCoverageInjections}/${PROBE_COVERAGE_INJECTION_LIMIT}).`,
         )
@@ -2794,11 +2770,7 @@ export async function runConversationLoop(
         if (stepNudge) {
           consumeNudge(taskStepNudgeCounter, stepNudge.taskId, stepNudge.kind)
           recordRuntimeNudgePhaseEvent(taskState, taskState.run.lifetimeIterations ?? 0, stepNudge.kind)
-          conversation.turns.push({
-            role: 'user',
-            content: [{ type: 'text', text: stepNudge.text }],
-            timestamp: Date.now(),
-          })
+          addRuntimeMessage(conversation, stepNudge.text, { supersedeLatestAssistant: true })
           opts.callbacks?.onNotice?.(
             `Task-step nudge (${stepNudge.kind}): task ${stepNudge.taskId} has open required steps — nudging the model to continue.`,
           )
@@ -2927,11 +2899,7 @@ export async function runConversationLoop(
       if (allResults.length > 0) {
         const resultBlocks = dispatcher.toContentBlocks(allResults)
         const truncatedBlocks = truncateToolResultBlocks(resultBlocks, TOOL_OUTPUT_MAX_CHARS)
-        conversation.turns.push({
-          role: 'user',
-          content: truncatedBlocks,
-          timestamp: Date.now(),
-        })
+        addRuntimeMessage(conversation, truncatedBlocks)
       }
       break
     }
@@ -3007,11 +2975,7 @@ export async function runConversationLoop(
       ...toolPlan.runtimeBlocks,
       ...(shouldNudgeToolOnlyTurn ? [createToolOnlyNudgeBlock()] : []),
     ]
-    conversation.turns.push({
-      role: 'user',
-      content: turnContent,
-      timestamp: Date.now(),
-    })
+    addRuntimeMessage(conversation, turnContent)
     if (shouldNudgeToolOnlyTurn) {
       opts.callbacks?.onNotice?.('Nudge: requesting text summary after 3 consecutive tool-only turns')
     }
@@ -3137,6 +3101,10 @@ export async function runConversationLoop(
     }
   }
 
+  if (opts.signal?.aborted) {
+    lastStopReason = 'interrupted'
+  }
+
   if ((lastStopReason === null || lastStopReason === 'tool_use') && Number.isFinite(maxIterations) && iterations >= maxIterations) {
     lastStopReason = 'max_iterations'
   }
@@ -3217,7 +3185,7 @@ export async function runConversationLoop(
     markTaskGuardBlocked(taskState, 'The loop stalled before producing a durable next step.')
   } else if (lastStopReason === 'max_iterations' && taskState.run.status === 'open') {
     markTaskGuardBlocked(taskState, `The loop hit the iteration cap (${iterations}/${maxIterations}) before the task finished.`)
-  } else if (!finalText.trim() && taskState.run.status === 'open' && lastUserTurnHasSuccessfulToolResult(conversation.turns)) {
+  } else if (!opts.signal?.aborted && !finalText.trim() && taskState.run.status === 'open' && lastUserTurnHasSuccessfulToolResult(conversation.turns)) {
     markTaskGuardBlocked(taskState, 'The loop stopped after successful tool results before the assistant produced a durable next step.')
   }
 
@@ -3246,23 +3214,41 @@ export async function runConversationLoop(
     finalText = dedupeFinalReportLines(`${finalText.trimEnd()}\n\n${buildRunScopedTouchedFilesReceipt(taskState)}`)
   }
 
-  appendRuntimeEvent(conversation, {
-    kind: 'turn_completed',
-    turnId: runtimeTurnId,
-    payload: buildTurnCompletedPayload({
-      stop_reason: lastStopReason,
-      iterations,
-      usage: totalUsage,
-      finalText,
-      responseSummary: turnResponseSummary,
-      ...(runtimeClosureReason ? { closure_reason: runtimeClosureReason } : {}),
-      ...(runtimeClosureCheckpointId ? { runtime_truth_resume_checkpoint_id: runtimeClosureCheckpointId } : {}),
-      ...(runtimeFailure ? {
-        runtime_failure_kind: runtimeFailure.kind,
-        runtime_failure_phase: runtimeFailure.phase,
-      } : {}),
-    }),
-  })
+  if (opts.signal?.aborted) {
+    const lastEvent = conversation.options?.runtimeEventLog?.events.at(-1)
+    const alreadyInterrupted = lastEvent?.kind === 'runtime_intervention'
+      && lastEvent.payload?.['terminal_status'] === 'interrupted'
+    if (!alreadyInterrupted) {
+      appendRuntimeEvent(conversation, {
+        kind: 'runtime_intervention',
+        turnId: runtimeTurnId,
+        payload: {
+          intervention_kind: 'turn_interrupted',
+          action: 'stopped_by_user',
+          source: 'conversation_loop_abort',
+          terminal_status: 'interrupted',
+        },
+      })
+    }
+  } else {
+    appendRuntimeEvent(conversation, {
+      kind: 'turn_completed',
+      turnId: runtimeTurnId,
+      payload: buildTurnCompletedPayload({
+        stop_reason: lastStopReason,
+        iterations,
+        usage: totalUsage,
+        finalText,
+        responseSummary: turnResponseSummary,
+        ...(runtimeClosureReason ? { closure_reason: runtimeClosureReason } : {}),
+        ...(runtimeClosureCheckpointId ? { runtime_truth_resume_checkpoint_id: runtimeClosureCheckpointId } : {}),
+        ...(runtimeFailure ? {
+          runtime_failure_kind: runtimeFailure.kind,
+          runtime_failure_phase: runtimeFailure.phase,
+        } : {}),
+      }),
+    })
+  }
   return { conversation, finalText, iterations, stopReason: lastStopReason, usage: totalUsage, runtimeFailure }
 }
 
@@ -4068,6 +4054,12 @@ function isRuntimeGeneratedUserPrompt(text: string): boolean {
     || trimmed.startsWith('[Runtime blocked-task checkpoint]')
     || trimmed.startsWith('[Runtime child-run synthesis checkpoint]')
     || trimmed.startsWith('[Runtime ')
+}
+
+function discardRuntimeTruthResumePromptTurns(conversation: Conversation): void {
+  conversation.turns = conversation.turns.filter((turn) => !turn.content.some((block) =>
+    block.type === 'text' && block.text.trimStart().startsWith('[Runtime truth resume snapshot]'),
+  ))
 }
 
 function requestsToolFreeResumeReport(text: string): boolean {
@@ -9111,6 +9103,29 @@ export function resolveDefaultMaxOutputTokens(): number {
     return DEFAULT_MAX_OUTPUT_TOKENS
   }
   return Math.floor(parsed)
+}
+
+export function addRuntimeMessage(
+  conversation: Conversation,
+  text: string | AnthropicContentBlock[],
+  options: { supersedeLatestAssistant?: boolean } = {},
+): void {
+  if (options.supersedeLatestAssistant) {
+    for (let index = conversation.turns.length - 1; index >= 0; index -= 1) {
+      const turn = conversation.turns[index]
+      if (turn?.role !== 'assistant') continue
+      turn.audience = 'runtime'
+      break
+    }
+  }
+  conversation.turns.push({
+    role: 'user',
+    content: typeof text === 'string'
+      ? [{ type: 'text', text }]
+      : text.map(block => ({ ...block })),
+    audience: 'runtime',
+    timestamp: Date.now(),
+  })
 }
 
 /** Add a user message to the conversation. */

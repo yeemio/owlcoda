@@ -16,8 +16,11 @@ import { resolve } from 'node:path'
 import type { EnterWorktreeInput, NativeToolDef, ToolResult } from './types.js'
 import {
   assertMatchingLedger,
+  formatUntrackedWorktreePreflight,
   lifecycleLedgerPath,
+  listHighRiskUntrackedFiles,
   readLifecycleLedger,
+  validateWorktreeSlug,
   writeLifecycleLedger,
   type WorktreeLifecycleLedger,
 } from './worktree-lifecycle.js'
@@ -38,15 +41,6 @@ export interface WorktreeState {
   ledgerPath?: string
 }
 
-/** Validate worktree slug — letters, digits, dots, underscores, dashes; max 64 chars. */
-function validateSlug(slug: string): string | null {
-  if (slug.length > 64) return 'Slug must be 64 characters or fewer.'
-  if (!/^[a-zA-Z0-9._/-]+$/.test(slug)) {
-    return 'Slug may only contain letters, digits, dots, underscores, dashes, and slashes.'
-  }
-  return null
-}
-
 /** Generate a random slug for unnamed worktrees. */
 function randomSlug(): string {
   return `wt-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 8)}`
@@ -59,69 +53,6 @@ function findGitRoot(): string | null {
   } catch {
     return null
   }
-}
-
-const HIGH_RISK_UNTRACKED_FILES = new Set([
-  'package.json',
-  'package-lock.json',
-  'npm-shrinkwrap.json',
-  'pnpm-lock.yaml',
-  'yarn.lock',
-  'bun.lock',
-  'bun.lockb',
-  'deno.lock',
-  'requirements.txt',
-  'pyproject.toml',
-  'uv.lock',
-  'poetry.lock',
-  'Cargo.toml',
-  'Cargo.lock',
-  'go.mod',
-  'go.sum',
-  'Gemfile',
-  'Gemfile.lock',
-])
-
-const HIGH_RISK_UNTRACKED_PREFIXES = [
-  'src/',
-  'lib/',
-  'app/',
-  'packages/',
-]
-
-function listUntrackedFiles(gitRoot: string): string[] {
-  try {
-    const out = execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], {
-      cwd: gitRoot,
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
-    return out
-      .split(/\r?\n/)
-      .map((line) => line.trimEnd())
-      .filter((line) => line.startsWith('?? '))
-      .map((line) => line.slice(3).replace(/\\/g, '/'))
-      .filter(Boolean)
-      .sort()
-  } catch {
-    return []
-  }
-}
-
-function isHighRiskUntrackedFile(path: string): boolean {
-  if (HIGH_RISK_UNTRACKED_FILES.has(path)) return true
-  return HIGH_RISK_UNTRACKED_PREFIXES.some((prefix) => path.startsWith(prefix))
-}
-
-function formatUntrackedPreflightOutput(files: string[]): string {
-  const shown = files.slice(0, 12)
-  const more = files.length > shown.length ? `\n  ... and ${files.length - shown.length} more` : ''
-  return [
-    `EnterWorktree blocked: ${files.length} untracked dependency/source file${files.length === 1 ? '' : 's'} would be missing from the new worktree.`,
-    'Add or intentionally ignore these files before creating a worktree, or set allow_untracked=true if you explicitly want to bypass this preflight:',
-    ...shown.map((file) => `  - ${file}`),
-    more,
-  ].filter(Boolean).join('\n')
 }
 
 export function createEnterWorktreeTool(state: WorktreeState): NativeToolDef<EnterWorktreeInput> {
@@ -152,7 +83,7 @@ export function createEnterWorktreeTool(state: WorktreeState): NativeToolDef<Ent
       // Validate or generate slug
       const slug = input.name ?? randomSlug()
       if (input.name) {
-        const err = validateSlug(input.name)
+        const err = validateWorktreeSlug(input.name)
         if (err) return { output: err, isError: true }
       }
 
@@ -196,10 +127,10 @@ export function createEnterWorktreeTool(state: WorktreeState): NativeToolDef<Ent
         }
       }
 
-      const riskyUntrackedFiles = listUntrackedFiles(gitRoot).filter(isHighRiskUntrackedFile)
+      const riskyUntrackedFiles = listHighRiskUntrackedFiles(gitRoot)
       if (riskyUntrackedFiles.length > 0 && input.allow_untracked !== true) {
         return {
-          output: formatUntrackedPreflightOutput(riskyUntrackedFiles),
+          output: formatUntrackedWorktreePreflight(riskyUntrackedFiles),
           isError: true,
           metadata: {
             preflightFailure: 'untracked_dependency_or_source_files',

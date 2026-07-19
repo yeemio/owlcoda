@@ -1105,6 +1105,22 @@ export function renderInline(text: string): string {
  *   onText(chunk) { const out = renderer.push(chunk); if (out) write(out) }
  *   onEnd()       { const out = renderer.flush(); if (out) write(out) }
  */
+function countStreamingBoldDelimiters(line: string): number {
+  let count = 0
+  let inCode = false
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === '`' && line[i - 1] !== '\\') {
+      inCode = !inCode
+      continue
+    }
+    if (inCode || line[i] !== '*' || line[i + 1] !== '*') continue
+    if (line[i - 1] === '*' || line[i + 2] === '*' || line[i - 1] === '\\') continue
+    count += 1
+    i += 1
+  }
+  return count
+}
+
 export class StreamingMarkdownRenderer {
   // 0.13.90: routes through MarkdownBlockNormalizer + TokenRenderer so the
   // streaming path produces structurally identical output to the full-pass
@@ -1116,6 +1132,7 @@ export class StreamingMarkdownRenderer {
   private buffer = ''
   private normalizer = new MarkdownBlockNormalizer()
   private renderer = new TokenRenderer()
+  private boldContinuationOpen = false
 
   /**
    * Feed a text chunk. Returns rendered output for any complete lines.
@@ -1370,7 +1387,7 @@ export class StreamingMarkdownRenderer {
       for (const seg of segments) {
         const trimmed = seg.trim()
         if (trimmed === '') continue
-        const tokens = this.normalizer.feedLine(seg)
+        const tokens = this.normalizer.feedLine(this.prepareStreamingBoldLine(seg))
         parts.push(...this.renderer.render(tokens))
       }
       this.buffer = ''
@@ -1382,6 +1399,7 @@ export class StreamingMarkdownRenderer {
 
     // Drain renderer's pending table (if any).
     parts.push(...this.renderer.finalize())
+    this.boldContinuationOpen = false
 
     if (parts.length === 0) return ''
     return parts.join('\n') + '\n'
@@ -1390,6 +1408,7 @@ export class StreamingMarkdownRenderer {
   /** Reset state for a new response. */
   reset(): void {
     this.buffer = ''
+    this.boldContinuationOpen = false
     this.normalizer.reset()
     this.renderer.reset()
     resetListState()
@@ -1424,10 +1443,41 @@ export class StreamingMarkdownRenderer {
    *  Returns rendered text otherwise (may span multiple lines if the
    *  normalizer/renderer flushes a held block on this token). */
   private processLine(line: string): string | null {
-    const tokens = this.normalizer.feedLine(line)
+    const tokens = this.normalizer.feedLine(this.prepareStreamingBoldLine(line))
     const lines = this.renderer.render(tokens)
     if (lines.length === 0) return null
     return lines.join('\n')
+  }
+
+  private prepareStreamingBoldLine(line: string): string {
+    if (this.normalizer.isInCodeFence() || /^\s*(?:```|~~~)/.test(line)) return line
+    if (line.length === 0 && this.boldContinuationOpen) return line
+
+    const delimiterCount = countStreamingBoldDelimiters(line)
+    if (!this.boldContinuationOpen && delimiterCount % 2 === 0) return line
+
+    let inCode = false
+    let boldOpen = this.boldContinuationOpen
+    let rendered = boldOpen ? BOLD : ''
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i]!
+      if (char === '`' && line[i - 1] !== '\\') {
+        inCode = !inCode
+        rendered += char
+        continue
+      }
+      if (!inCode && char === '*' && line[i + 1] === '*'
+          && line[i - 1] !== '*' && line[i + 2] !== '*' && line[i - 1] !== '\\') {
+        boldOpen = !boldOpen
+        rendered += boldOpen ? BOLD : RESET
+        i += 1
+        continue
+      }
+      rendered += char
+    }
+    if (boldOpen) rendered += RESET
+    this.boldContinuationOpen = boldOpen
+    return rendered
   }
 
 }

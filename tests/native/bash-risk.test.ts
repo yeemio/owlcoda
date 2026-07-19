@@ -105,6 +105,15 @@ const NEEDS_APPROVAL_CASES: Case[] = [
   { input: 'node -e "fs.writeFileSync(\'x\', \'y\')"', level: 'needs_approval' },
 ]
 
+const SYSTEM_CASES: Case[] = [
+  { input: 'brew install tesseract poppler', level: 'system', reason: 'system package manager', mutates: true, network: true },
+  { input: 'apt-get upgrade', level: 'system', reason: 'system package manager', mutates: true, network: true },
+  { input: 'dnf remove ImageMagick', level: 'system', reason: 'system package manager', mutates: true, network: true },
+  { input: 'pip install --break-system-packages pypdf', level: 'system', reason: 'break-system-packages', mutates: true, network: true },
+  { input: 'launchctl bootstrap gui/501 ~/Library/LaunchAgents/example.plist', level: 'system', reason: 'launchctl', mutates: true },
+  { input: 'systemctl restart owlcoda.service', level: 'system', reason: 'systemctl', mutates: true },
+]
+
 const DANGEROUS_CASES: Case[] = [
   { input: 'rm -rf foo', level: 'dangerous', reason: 'rm -rf' },
   { input: 'rm -rf /', level: 'dangerous' },
@@ -199,6 +208,7 @@ function runTable(label: string, cases: Case[]): void {
 describe('classifyBashCommand — taxonomy', () => {
   runTable('safe_readonly examples', SAFE_READ_CASES)
   runTable('needs_approval examples', NEEDS_APPROVAL_CASES)
+  runTable('system examples', SYSTEM_CASES)
   runTable('dangerous examples', DANGEROUS_CASES)
   runTable('ADR-008 destructive deny-list examples', ADR008_DESTRUCTIVE_DENY_LIST_CASES)
   runTable('unknown / fail-closed examples', UNKNOWN_CASES)

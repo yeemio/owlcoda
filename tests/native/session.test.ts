@@ -10,6 +10,7 @@ import {
   restoreConversation,
   getSessionsDir,
 } from '../../src/native/session.js'
+import * as sessionPersistence from '../../src/native/session.js'
 import { createConversation, addUserMessage } from '../../src/native/conversation.js'
 import { ensureTaskExecutionState } from '../../src/native/task-state.js'
 import { createTaskVerifyTool } from '../../src/native/tools/task-verify.js'
@@ -99,6 +100,92 @@ describe('Native Session Persistence', { timeout: SESSION_IO_TEST_TIMEOUT_MS }, 
     expect(second.turns).toHaveLength(2)
     expect(second.createdAt).toBe(first.createdAt)
     expect(second.updatedAt).toBeGreaterThanOrEqual(first.updatedAt)
+  })
+
+  it('round-trips persisted usage totals and the model-bound context capability', () => {
+    const conv = createConversation({ system: 'test', model: 'runtime-model' })
+    ;(conv as any).id = testId
+    conv.options = {
+      ...conv.options,
+      usageTotals: {
+        inputTokens: 1200,
+        outputTokens: 300,
+        requestCount: 4,
+        startedAt: 1_700_000_000_000,
+      },
+      contextCapability: {
+        model: 'runtime-model',
+        contextWindow: 256_000,
+        source: 'runtime_discovered',
+        confidence: 'verified',
+      },
+    }
+
+    saveSession(conv)
+    const loaded = loadSession(testId)!
+    expect(loaded.usageTotals).toEqual(conv.options.usageTotals)
+    expect(loaded.contextCapability).toEqual(conv.options.contextCapability)
+
+    const restored = restoreConversation(loaded, [])
+    expect(restored.options?.usageTotals).toEqual(conv.options.usageTotals)
+    expect(restored.options?.contextCapability).toEqual(conv.options.contextCapability)
+  })
+
+  it('moves one persisted thread between managed and project workspace identities without changing its id', () => {
+    const conv = createConversation({ system: 'test', model: 'm' })
+    ;(conv as any).id = testId
+    const managed = {
+      mode: 'managed' as const,
+      workspaceId: 'managed:task-one',
+      projectRoot: '/repo/project',
+      workspacePath: '/repo/.owlcoda-worktrees/task-one',
+      branch: 'owlcoda/task-one',
+      baseCommit: '0123456789abcdef0123456789abcdef01234567',
+      ledgerPath: '/repo/project/.git/owlcoda/worktree-sessions/task-one.json',
+    }
+    const project = {
+      mode: 'project' as const,
+      projectRoot: '/repo/project',
+      workspacePath: '/repo/project',
+    }
+    saveSession(conv, 'Handoff thread', { cwd: managed.workspacePath, workspace: managed })
+
+    const handoffSessionWorkspace = (sessionPersistence as Record<string, unknown>)['handoffSessionWorkspace']
+    expect(handoffSessionWorkspace).toBeTypeOf('function')
+    const moved = (handoffSessionWorkspace as (input: unknown) => unknown)({
+      threadId: testId,
+      expectedWorkspace: managed,
+      targetWorkspace: project,
+    })
+
+    expect(moved).toMatchObject({ id: testId, cwd: project.workspacePath, workspace: project })
+    expect(loadSession(testId)).toMatchObject({ id: testId, cwd: project.workspacePath, workspace: project })
+  })
+
+  it('rejects a handoff when the persisted thread no longer has the reviewed workspace identity', () => {
+    const conv = createConversation({ system: 'test', model: 'm' })
+    ;(conv as any).id = testId
+    const managed = {
+      mode: 'managed' as const,
+      workspaceId: 'managed:task-one',
+      projectRoot: '/repo/project',
+      workspacePath: '/repo/.owlcoda-worktrees/task-one',
+      branch: 'owlcoda/task-one',
+      baseCommit: '0123456789abcdef0123456789abcdef01234567',
+      ledgerPath: '/repo/project/.git/owlcoda/worktree-sessions/task-one.json',
+    }
+    const project = { mode: 'project' as const, projectRoot: '/repo/project', workspacePath: '/repo/project' }
+    saveSession(conv, 'Stale handoff thread', { cwd: project.workspacePath, workspace: project })
+
+    const handoffSessionWorkspace = (sessionPersistence as unknown as {
+      handoffSessionWorkspace(input: unknown): unknown
+    }).handoffSessionWorkspace
+    expect(() => handoffSessionWorkspace({
+      threadId: testId,
+      expectedWorkspace: managed,
+      targetWorkspace: project,
+    })).toThrow(/changed before handoff/i)
+    expect(loadSession(testId)).toMatchObject({ cwd: project.workspacePath, workspace: project })
   })
 
   it('persists runtime recovery ledger independently of transcript turns', () => {

@@ -162,7 +162,6 @@ export async function loadDesktopProductShellViewModel(
         facts: runtimeFacts,
         scorecard: runtimeScorecard,
         scorecardError: runtimeScorecardError,
-        rail,
       })
     : null
   const approvals = await client.approvalList(scope)

@@ -10,6 +10,8 @@ import {
   markLongTaskRecoveryCheckpointResolved,
 } from '../../src/native/runtime-recovery-ledger.js'
 import {
+  applyRuntimeTruthResumeSnapshot,
+  appendRuntimeEvent,
   reconstructRuntimeTruthFromEvents,
 } from '../../src/native/runtime-events.js'
 import type { RuntimeRecoveryLedger } from '../../src/native/protocol/types.js'
@@ -64,6 +66,32 @@ function longTaskReplacementPayload(generatedAt: string) {
 }
 
 describe('runtime recovery ledger disposition', () => {
+  it('keeps injected runtime truth resume snapshots out of the user-visible transcript', () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    conv.turns.push({
+      role: 'user',
+      content: [{ type: 'text', text: 'Original visible task.' }],
+      timestamp: 1,
+    })
+    appendRuntimeEvent(conv, {
+      kind: 'runtime_intervention',
+      payload: {
+        intervention_kind: 'app_server_turn_failure',
+        runtime_failure_kind: 'provider_error',
+        runtime_failure_phase: 'request',
+        failure_category: 'provider',
+        retryable: true,
+      },
+    })
+
+    expect(applyRuntimeTruthResumeSnapshot(conv)).toBe(true)
+    expect(conv.turns.at(-1)).toMatchObject({
+      role: 'user',
+      audience: 'runtime',
+      content: [{ type: 'text', text: expect.stringContaining('[Runtime truth resume snapshot]') }],
+    })
+  })
+
   it('marks an older active checkpoint superseded when a newer checkpoint has the same identity', () => {
     const conv = createConversation({ system: 'test', model: 'test-model' })
 

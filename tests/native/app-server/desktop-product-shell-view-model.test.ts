@@ -40,7 +40,7 @@ describe('desktop product shell view model', () => {
       },
       runtimeRailRead: async (params: any) => {
         calls.push(`runtimeRail/read:${params.projectId}`)
-        return { projectId: params.projectId, freshness: 'missing', packet: null, gate: null, claim: null, proofs: [], rejectedPaths: [], nextAction: null, source: 'not_connected' }
+        return { projectId: params.projectId, freshness: 'missing', summary: null, source: 'not_connected' }
       },
       providerEvalReportRead: async () => {
         calls.push('benchmark/providerEvalReport/read')
@@ -391,7 +391,7 @@ describe('desktop product shell view model', () => {
         limit: 100,
         hasMore: false,
       }),
-      runtimeRailRead: async () => ({ projectId: 'project-1', freshness: 'missing', packet: null, gate: null, claim: null, proofs: [], rejectedPaths: [], nextAction: null, source: 'not_connected' }),
+      runtimeRailRead: async () => ({ projectId: 'project-1', freshness: 'missing', summary: null, source: 'not_connected' }),
       providerEvalReportRead: async () => ({ unavailable: true, message: 'not configured' }),
       runtimeTranscriptRead: async () => ({
         threadId: 'thread-1',

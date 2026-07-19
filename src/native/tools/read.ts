@@ -259,10 +259,13 @@ export function createReadTool(): NativeToolDef<ReadInput> {
             info.size,
           )
           if (nudge.prefix) {
-            result.output = `${nudge.prefix}\n${result.output}`
+            result.output = `${nudge.prefix}\n` +
+              `[unchanged since earlier read in this task: ${filePath} (${rangeKey}) — ` +
+              'refer to the earlier tool result; use offset/limit or startLine/endLine for a different range]'
             result.metadata = {
               ...(result.metadata ?? {}),
               readRepeatCount: nudge.count,
+              readRepeatStub: true,
             }
           }
         }

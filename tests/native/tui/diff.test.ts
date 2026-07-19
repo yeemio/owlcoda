@@ -112,7 +112,16 @@ describe('renderFileCreateLines', () => {
     const body = renderFileCreateLines(content, { maxLines: 10, termCols: 80 })
     // 1 hunk header + 10 lines + 1 truncation tail = 12.
     expect(body.length).toBe(12)
+    expect(stripAnsi(body[0]!)).toContain('@@ -0,0 +1,40 @@ new file')
     expect(stripAnsi(body[11]!)).toMatch(/\+\d+ more lines/)
+  })
+
+  it('reports the full new-file line count while keeping the preview bounded', () => {
+    const content = Array.from({ length: 400 }, (_, i) => `line ${i + 1}`).join('\n')
+    const body = renderFileCreateLines(content, { maxLines: 20, termCols: 100 })
+    expect(stripAnsi(body[0]!)).toContain('@@ -0,0 +1,400 @@ new file')
+    expect(body).toHaveLength(22)
+    expect(stripAnsi(body.at(-1)!)).toContain('+380 more lines')
   })
 })
 

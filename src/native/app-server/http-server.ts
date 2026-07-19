@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { URL } from 'node:url'
+import { isIP } from 'node:net'
 import {
   createJsonRpcFailure,
   JsonRpcError,
@@ -18,6 +19,8 @@ import { renderDesktopRenderer } from './desktop-renderer.js'
 export interface AppServerHttpOptions extends MethodRegistryOptions {
   maxBodyBytes?: number
   eventBus?: AppServerEventBus
+  managedToken?: string
+  allowedOrigins?: readonly string[]
 }
 
 export interface AppServerListenOptions {
@@ -25,15 +28,17 @@ export interface AppServerListenOptions {
   port: number
 }
 
-const DEFAULT_MAX_BODY_BYTES = 1_048_576
+const DEFAULT_MAX_BODY_BYTES = 12_582_912
 
 export function createAppServer(options: AppServerHttpOptions = {}): Server {
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES
   const eventBus = options.eventBus ?? createAppServerEventBus()
   const registry = createMethodRegistry({ ...options, eventBus })
+  const managedToken = options.managedToken ?? process.env['OWLCODA_APP_SERVER_TOKEN']
+  const allowedOrigins = new Set(options.allowedOrigins ?? [])
 
   return createServer((req, res) => {
-    void handleHttpRequest(req, res, { registry, maxBodyBytes, eventBus })
+    void handleHttpRequest(req, res, { registry, maxBodyBytes, eventBus, managedToken, allowedOrigins })
   })
 }
 
@@ -60,26 +65,37 @@ async function handleHttpRequest(
     registry: ReturnType<typeof createMethodRegistry>
     maxBodyBytes: number
     eventBus: AppServerEventBus
+    managedToken?: string
+    allowedOrigins: ReadonlySet<string>
   },
 ): Promise<void> {
-  setCorsHeaders(res)
+  const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+  if (url.pathname === '/healthz' && (req.method ?? '').toUpperCase() === 'GET') {
+    sendJson(res, 200, { status: 'ok' })
+    return
+  }
+
+  const origin = typeof req.headers.origin === 'string' ? req.headers.origin : undefined
+  const loopbackRequest = isLoopbackRequest(req)
+  if (!loopbackRequest && (!origin || context.managedToken)) {
+    sendJson(res, 403, { error: 'loopback_required' })
+    return
+  }
+  const allowlistedOrigin = origin ? context.allowedOrigins.has(origin) : false
+  const trustedManualSameOrigin = origin
+    && !context.managedToken
+    && loopbackRequest
+    && isLoopbackHost(req.headers.host)
+    && origin === requestOrigin(req)
+  if (origin && !allowlistedOrigin && !trustedManualSameOrigin) {
+    sendJson(res, 403, { error: 'origin_not_allowed' })
+    return
+  }
+  setCorsHeaders(res, allowlistedOrigin ? origin : undefined)
 
   if ((req.method ?? '').toUpperCase() === 'OPTIONS') {
     res.writeHead(204)
     res.end()
-    return
-  }
-
-  const url = new URL(req.url ?? '/', 'http://127.0.0.1')
-  if (url.pathname === '/healthz' && (req.method ?? '').toUpperCase() === 'GET') {
-    const response = await handleRequest(context.registry, {
-      jsonrpc: '2.0',
-      id: 'healthz',
-      method: 'diagnostic/health',
-      params: {},
-    })
-    const status = 'result' in response ? 200 : 500
-    sendJson(res, status, 'result' in response ? response.result : response)
     return
   }
 
@@ -89,7 +105,16 @@ async function handleHttpRequest(
   }
 
   if (url.pathname === '/events' && (req.method ?? '').toUpperCase() === 'GET') {
-    openEventStream(req, res, context.eventBus)
+    if (!hasManagedAuthorization(req, context.managedToken)) {
+      sendUnauthorized(res)
+      return
+    }
+    const afterSequence = parseAfterSequence(req, url)
+    if (afterSequence === null) {
+      sendJson(res, 400, { error: 'invalid_after_sequence' })
+      return
+    }
+    openEventStream(req, res, context.eventBus, afterSequence)
     return
   }
 
@@ -100,6 +125,11 @@ async function handleHttpRequest(
 
   if ((req.method ?? '').toUpperCase() !== 'POST') {
     sendJson(res, 405, createJsonRpcFailure(null, new JsonRpcError(-32600, 'App Server /rpc requires POST')))
+    return
+  }
+
+  if (!hasManagedAuthorization(req, context.managedToken)) {
+    sendUnauthorized(res)
     return
   }
 
@@ -135,17 +165,36 @@ async function handleHttpRequest(
   sendJson(res, httpStatusForJsonRpc(response), response)
 }
 
-function openEventStream(req: IncomingMessage, res: ServerResponse, eventBus: AppServerEventBus): void {
+function openEventStream(
+  req: IncomingMessage,
+  res: ServerResponse,
+  eventBus: AppServerEventBus,
+  afterSequence?: number,
+): void {
+  const replay = afterSequence === undefined ? null : eventBus.replay(afterSequence)
+  if (replay && !replay.available) {
+    sendJson(res, 409, { error: 'snapshot_required', cursor: replay.cursor })
+    return
+  }
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache',
     connection: 'keep-alive',
   })
   res.write(': connected\n\n')
+  for (const event of replay?.events ?? []) res.write(formatServerSentEvent(event))
   const unsubscribe = eventBus.subscribe(event => {
     res.write(formatServerSentEvent(event))
   })
   req.on('close', unsubscribe)
+}
+
+function parseAfterSequence(req: IncomingMessage, url: URL): number | undefined | null {
+  const value = url.searchParams.get('afterSequence') ?? req.headers['last-event-id']
+  if (value === undefined || value === null || value === '') return undefined
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 0) return null
+  return parsed
 }
 
 function httpStatusForJsonRpc(response: JsonRpcResponse): number {
@@ -173,16 +222,47 @@ function readRequestBody(req: IncomingMessage, maxBytes: number): Promise<string
   })
 }
 
-function setCorsHeaders(res: ServerResponse): void {
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization')
+function setCorsHeaders(res: ServerResponse, origin?: string): void {
+  if (origin) {
+    res.setHeader('Access-Control-Allow-Origin', origin)
+    res.setHeader('Vary', 'Origin')
+  }
+  res.setHeader('Access-Control-Allow-Headers', 'content-type, authorization, last-event-id')
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+}
+
+function hasManagedAuthorization(req: IncomingMessage, managedToken?: string): boolean {
+  if (!managedToken) return true
+  return req.headers.authorization === `Bearer ${managedToken}`
+}
+
+function isLoopbackRequest(req: IncomingMessage): boolean {
+  const address = req.socket.remoteAddress
+  return typeof address === 'string' && (
+    address === '::1'
+    || address.startsWith('127.')
+    || address.startsWith('::ffff:127.')
+  )
+}
+
+function isLoopbackHost(host: string | undefined): boolean {
+  if (!host) return false
+  try {
+    const hostname = new URL(`http://${host}`).hostname.replace(/^\[|\]$/g, '').toLowerCase()
+    if (hostname === 'localhost' || hostname === '::1') return true
+    return isIP(hostname) === 4 && hostname.split('.')[0] === '127'
+  } catch {
+    return false
+  }
 }
 
 function requestOrigin(req: IncomingMessage): string {
   const host = req.headers.host ?? '127.0.0.1'
-  const proto = typeof req.headers['x-forwarded-proto'] === 'string' ? req.headers['x-forwarded-proto'] : 'http'
-  return `${proto}://${host}`
+  return `http://${host}`
+}
+
+function sendUnauthorized(res: ServerResponse): void {
+  sendJson(res, 401, createJsonRpcFailure(null, new JsonRpcError(-32001, 'Unauthorized')))
 }
 
 function sendJson(res: ServerResponse, statusCode: number, body: JsonRpcResponse | JsonRpcErrorResponse | unknown): void {

@@ -130,7 +130,7 @@ const TEXT_DELIVERABLE_RE = /(?:写[^。！？\n.!?]{0,10}(?:技术|实施|详�
 
 // read_only_review signals: explicit read-only / review in chat
 // Note: Chinese patterns don't use \b — word boundaries don't apply to CJK characters
-const READ_ONLY_REVIEW_RE = /(?:只读评审|代码走读|技术评审|审视|只需要分析|只分析|分析一下|看下方案|结果在聊天里输出|不要求写文件|不要写文件|不要改代码|不改代码|不要创建\s*artifact|\bread[- ]?only\s+(?:review|audit)|\blook\s+at\s+(?:this|the)|\bwhat[''']?s\s+wrong\s+with|看看[^。！？\n.!?]{0,30}有什么问题|\btell\s+me\s+what\s+is\s+wrong)/i
+const READ_ONLY_REVIEW_RE = /(?:只读评审|代码走读|技术评审|审视|只需要分析|只分析|分析一下|看下方案|结果在聊天里输出|不要求写文件|不要写文件|不要改代码|不改代码|不要创建\s*artifact|\bread[- ]?only\s+(?:review|audit)|\b(?:do\s+not|don't)\s+(?:modify|write|change|edit|create)\s+(?:any\s+)?files?\b|\blook\s+at\s+(?:this|the)|\bwhat[''']?s\s+wrong\s+with|看看[^。！？\n.!?]{0,30}有什么问题|\btell\s+me\s+what\s+is\s+wrong)/i
 
 // Generic path-like (supporting signal only if no artifact suffix)
 const GENERIC_PATH_RE = /`(?:\.{0,2}\/|~\/|[A-Za-z0-9_.-]+\/)[^`]+`|(?:^|[\s(])(?:\.{0,2}\/|~\/)[^\s,;；。！？"'`]{4,}/gm
@@ -327,9 +327,17 @@ export function classifyDeliverableContract(
     signals.explicitArtifactVerb.length > 0           // e.g. "output to", "save to", "写入到"
     || signals.fileArtifact.includes('output_path')   // output/dist/build dir in path
   let effectiveModes = uniqueModes
+  const readOnlyDemotedArtifact = (
+    uniqueModes.includes('read_only_review')
+    && uniqueModes.includes('file_artifact_delivery')
+    && !highConfidenceFileArtifact
+  )
+  if (readOnlyDemotedArtifact) {
+    effectiveModes = effectiveModes.filter((mode) => mode !== 'file_artifact_delivery')
+  }
   if (
-    uniqueModes.includes('file_artifact_delivery')
-    && uniqueModes.includes('code_change')
+    effectiveModes.includes('file_artifact_delivery')
+    && effectiveModes.includes('code_change')
     && highConfidenceFileArtifact
     && hasOutputDestinationSignal
     && signals.codeChange.length > 0
@@ -343,7 +351,9 @@ export function classifyDeliverableContract(
   // Compound-intent: select highest priority mode
   const selectedMode = highestPriorityMode(effectiveModes)
   const reasons: string[] = [`selected ${selectedMode} from matched modes: ${uniqueModes.join(', ')}`]
-  if (effectiveModes.length !== uniqueModes.length) {
+  if (readOnlyDemotedArtifact) {
+    reasons.push('file_artifact_delivery demoted: file suffix is an inspection target under an explicit no-write request')
+  } else if (effectiveModes.length !== uniqueModes.length) {
     reasons.push('code_change demoted: explicit output path overrides weak code_change verb signal')
   }
 

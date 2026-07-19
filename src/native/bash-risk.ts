@@ -42,6 +42,7 @@
 export type BashRiskLevel =
   | 'safe_readonly'
   | 'needs_approval'
+  | 'system'
   | 'dangerous'
   | 'unknown'
 
@@ -147,8 +148,9 @@ function emptyClassification(
 const RANK: Record<BashRiskLevel, number> = {
   safe_readonly: 0,
   needs_approval: 1,
-  unknown: 2,
-  dangerous: 3,
+  system: 2,
+  unknown: 3,
+  dangerous: 4,
 }
 function rank(level: BashRiskLevel): number {
   return RANK[level]
@@ -245,6 +247,13 @@ const DANGEROUS_PATTERNS: Array<[RegExp, string]> = [
   [/>\s*~\/\.ssh\//, 'redirect into ~/.ssh/'],
 ]
 
+const SYSTEM_PATTERNS: Array<[RegExp, string, { mutates?: boolean; network?: boolean }?]> = [
+  [/\b(?:apt|apt-get|yum|dnf|brew)\s+(?:install|remove|update|upgrade)\b/, 'system package manager', { mutates: true, network: true }],
+  [/\bpip3?\s+install\b[^|;&]*\s--break-system-packages\b/, 'pip install --break-system-packages', { mutates: true, network: true }],
+  [/\blaunchctl\s+(?:bootstrap|bootout|enable|disable|kickstart|load|unload|submit)\b/, 'launchctl service state change', { mutates: true }],
+  [/\bsystemctl\s+(?:start|stop|restart|reload|enable|disable|mask|unmask|daemon-reload)\b/, 'systemctl service state change', { mutates: true }],
+]
+
 const NEEDS_APPROVAL_PATTERNS: Array<[RegExp, string, { mutates?: boolean; network?: boolean }?]> = [
   // File mutation (single-occurrence rm/mv/cp without recursive-force flags)
   [/\brm\s+/, 'rm (file deletion)', { mutates: true }],
@@ -298,6 +307,20 @@ function classifyChunk(chunk: string): ChunkVerdict {
   for (const [pattern, reason] of DANGEROUS_PATTERNS) {
     if (pattern.test(chunk)) {
       return { level: 'dangerous', reason, mutates: true }
+    }
+  }
+
+  // Machine-level mutation without privilege escalation. These commands
+  // require fresh consent even after a persistent "always allow bash" grant.
+  // `sudo` remains dangerous because that rule is evaluated above.
+  for (const [pattern, reason, flags] of SYSTEM_PATTERNS) {
+    if (pattern.test(chunk)) {
+      return {
+        level: 'system',
+        reason,
+        mutates: flags?.mutates ?? false,
+        network: flags?.network ?? false,
+      }
     }
   }
 

@@ -885,6 +885,16 @@ describe('runConversationLoop', () => {
     expect(JSON.stringify(thirdMessages)).toContain('[Runtime task-step]')
     expect(result.finalText).toBe('Done.')
     expect(result.conversation.options?.taskState?.run.status).toBe('drifted')
+    const runtimeNudges = result.conversation.turns.filter((turn) =>
+      turn.role === 'user'
+      && turn.content.some((block) => block.type === 'text' && block.text.includes('[Runtime task-step]')),
+    )
+    expect(runtimeNudges).toHaveLength(2)
+    expect(runtimeNudges.every((turn) => turn.audience === 'runtime')).toBe(true)
+    const assistantAudiences = result.conversation.turns
+      .filter((turn) => turn.role === 'assistant')
+      .map((turn) => turn.audience ?? 'user')
+    expect(assistantAudiences).toEqual(['runtime', 'runtime', 'user'])
   })
 
   it('does not continue after the real minimax dogfood final addendum shape', async () => {
@@ -1183,6 +1193,7 @@ describe('runConversationLoop', () => {
     expect(JSON.stringify(secondMessages)).toContain('Call TaskCreate')
     expect(result.finalText).toContain('Done.')
     expect(result.finalText).toContain('Run-scoped touched files receipt:')
+    expect(result.finalText).toContain(`current_run_touched_unknown: ${process.cwd()}/docs/contract.md`)
     expect(result.conversation.options?.taskState?.contract.touchedPaths).toContain(`${process.cwd()}/docs/contract.md`)
     expect(result.conversation.options?.taskState?.run.status).toBe('completed')
   })

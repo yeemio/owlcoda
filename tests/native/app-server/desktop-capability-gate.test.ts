@@ -39,8 +39,6 @@ describe('desktop capability gate', () => {
       ['review/batchRevert', 'experimental'],
       ['review/hunkApply', 'experimental'],
       ['review/hunkRevert', 'experimental'],
-      ['proof/append', 'experimental'],
-      ['gate/confirm', 'experimental'],
       ['event/subscribe', 'experimental'],
       ['diagnostic/health', 'debug-only'],
     ]))

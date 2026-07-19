@@ -10,9 +10,12 @@ import * as path from 'node:path'
 import * as os from 'node:os'
 import type {
   Conversation,
+  ConversationContextCapability,
   ConversationModelIdentity,
   ConversationTurn,
+  ConversationUsageTotals,
   PendingRetryState,
+  ReasoningEffort,
   RuntimeEventLog,
   RuntimeRecoveryLedger,
   TaskExecutionState,
@@ -34,6 +37,23 @@ import {
   type JobRegistrySnapshot,
 } from './job-supervisor.js'
 import { applyRuntimeTruthResumeSnapshot } from './runtime-events.js'
+import type { OperatingModeState } from './modes.js'
+
+export type SessionWorkspaceIdentity =
+  | {
+      mode: 'project'
+      projectRoot: string
+      workspacePath: string
+    }
+  | {
+      mode: 'managed'
+      workspaceId: string
+      projectRoot: string
+      workspacePath: string
+      branch: string
+      baseCommit: string
+      ledgerPath: string
+    }
 
 function getDefaultSessionsDir(): string {
   const home = process.env['OWLCODA_HOME']
@@ -61,11 +81,16 @@ export interface SessionFile {
   pendingRetry?: PendingRetryState
   taskState?: TaskExecutionState
   modelIdentity?: ConversationModelIdentity
+  usageTotals?: ConversationUsageTotals
+  contextCapability?: ConversationContextCapability
+  operatingModeState?: OperatingModeState
+  reasoningEffort?: ReasoningEffort
   runtimeRecoveryLedger?: RuntimeRecoveryLedger
   runtimeEventLog?: RuntimeEventLog
   taskStore?: TaskStoreSnapshot
   agentRunStore?: AgentRunHistorySnapshot
   jobRegistry?: JobRegistrySnapshot
+  workspace?: SessionWorkspaceIdentity
 }
 
 /** Ensure sessions directory exists. Returns true on success. */
@@ -79,6 +104,7 @@ function ensureDir(): boolean {
 }
 
 let sessionPersistenceWarned = false
+const cwdSessionCatalog = new Map<string, { catalogToken: string; ids: string[] }>()
 function warnPersistenceFailure(reason: string): void {
   if (sessionPersistenceWarned) return
   sessionPersistenceWarned = true
@@ -101,7 +127,11 @@ function sessionPath(id: string): string {
  *  A one-time warning is printed on the first failure; subsequent saves
  *  fail silently so the REPL isn't spammed every turn. The in-memory
  *  conversation is never affected by persistence failure. */
-export function saveSession(conversation: Conversation, title?: string, options: { cwd?: string } = {}): string {
+export function saveSession(
+  conversation: Conversation,
+  title?: string,
+  options: { cwd?: string; workspace?: SessionWorkspaceIdentity } = {},
+): string {
   if (!ensureDir()) {
     warnPersistenceFailure('could not create sessions directory')
     return ''
@@ -128,10 +158,15 @@ export function saveSession(conversation: Conversation, title?: string, options:
     pendingRetry: conversation.options?.pendingRetry,
     taskState: conversation.options?.taskState,
     modelIdentity: conversation.options?.modelIdentity,
+    usageTotals: conversation.options?.usageTotals,
+    contextCapability: conversation.options?.contextCapability,
+    operatingModeState: conversation.options?.operatingModeState,
+    reasoningEffort: conversation.options?.reasoningEffort,
     runtimeRecoveryLedger: conversation.options?.runtimeRecoveryLedger,
     runtimeEventLog: conversation.options?.runtimeEventLog,
     taskStore: snapshotTaskStore(conversation.id),
     jobRegistry: snapshotJobRegistry(),
+    workspace: options.workspace ?? existing?.workspace,
   }
   const agentRunStore = snapshotAgentRunHistory(conversation.id)
   if (agentRunStore.records.length > 0) {
@@ -141,6 +176,7 @@ export function saveSession(conversation: Conversation, title?: string, options:
   const filePath = sessionPath(conversation.id)
   try {
     fs.writeFileSync(filePath, JSON.stringify(session, null, 2), 'utf-8')
+    refreshCachedSessionMembership(session.id, session.cwd ?? process.cwd())
     return filePath
   } catch (err) {
     warnPersistenceFailure((err as Error).message)
@@ -176,6 +212,52 @@ export function loadSession(id: string): SessionFile | null {
   return match ?? null
 }
 
+export function handoffSessionWorkspace(input: {
+  threadId: string
+  expectedWorkspace: SessionWorkspaceIdentity
+  targetWorkspace: SessionWorkspaceIdentity
+}): SessionFile {
+  const session = loadSession(input.threadId)
+  if (
+    !session
+    || session.cwd !== input.expectedWorkspace.workspacePath
+    || !sameWorkspaceIdentity(session.workspace, input.expectedWorkspace)
+  ) {
+    throw new Error('Thread workspace changed before handoff')
+  }
+
+  const moved: SessionFile = {
+    ...session,
+    cwd: input.targetWorkspace.workspacePath,
+    workspace: input.targetWorkspace,
+    updatedAt: Date.now(),
+  }
+  const filePath = sessionPath(session.id)
+  const temporaryPath = `${filePath}.handoff-${process.pid}-${Date.now()}`
+  try {
+    fs.writeFileSync(temporaryPath, JSON.stringify(moved, null, 2), 'utf-8')
+    fs.renameSync(temporaryPath, filePath)
+  } finally {
+    if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath)
+  }
+  refreshCachedSessionMembership(moved.id, moved.cwd ?? process.cwd())
+  return moved
+}
+
+function sameWorkspaceIdentity(
+  actual: SessionWorkspaceIdentity | undefined,
+  expected: SessionWorkspaceIdentity,
+): boolean {
+  if (!actual || actual.mode !== expected.mode) return false
+  if (actual.projectRoot !== expected.projectRoot || actual.workspacePath !== expected.workspacePath) return false
+  if (actual.mode === 'project' && expected.mode === 'project') return true
+  if (actual.mode !== 'managed' || expected.mode !== 'managed') return false
+  return actual.workspaceId === expected.workspaceId
+    && actual.branch === expected.branch
+    && actual.baseCommit === expected.baseCommit
+    && actual.ledgerPath === expected.ledgerPath
+}
+
 /** Restore a Conversation object from a saved session. */
 export function restoreConversation(
   session: SessionFile,
@@ -206,6 +288,30 @@ export function restoreConversation(
     conversation.options = {
       ...conversation.options,
       modelIdentity: session.modelIdentity,
+    }
+  }
+  if (session.usageTotals) {
+    conversation.options = {
+      ...conversation.options,
+      usageTotals: session.usageTotals,
+    }
+  }
+  if (session.contextCapability) {
+    conversation.options = {
+      ...conversation.options,
+      contextCapability: session.contextCapability,
+    }
+  }
+  if (session.operatingModeState) {
+    conversation.options = {
+      ...conversation.options,
+      operatingModeState: session.operatingModeState,
+    }
+  }
+  if (session.reasoningEffort) {
+    conversation.options = {
+      ...conversation.options,
+      reasoningEffort: session.reasoningEffort,
     }
   }
   if (session.runtimeRecoveryLedger) {
@@ -252,11 +358,60 @@ export function listSessions(): SessionFile[] {
   return sessions.sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
+/** List sessions for one project without reparsing every unrelated history on each Desktop refresh. */
+export function listSessionsForCwd(cwd: string): SessionFile[] {
+  ensureDir()
+  const sessDir = getDefaultSessionsDir()
+  const catalogToken = readSessionCatalogToken(sessDir)
+  const cached = cwdSessionCatalog.get(cwd)
+  if (!cached || cached.catalogToken !== catalogToken) {
+    const sessions = listSessions().filter(session => session.cwd === cwd)
+    cwdSessionCatalog.set(cwd, {
+      catalogToken: readSessionCatalogToken(sessDir),
+      ids: sessions.map(session => session.id),
+    })
+    return sessions
+  }
+  return cached.ids
+    .map(id => loadSession(id))
+    .filter((session): session is SessionFile => session?.cwd === cwd)
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+}
+
+function readSessionCatalogToken(sessDir: string): string {
+  return fs.readdirSync(sessDir)
+    .filter(file => file.endsWith('.json'))
+    .sort()
+    .map(file => {
+      try {
+        const stat = fs.statSync(path.join(sessDir, file))
+        return `${file}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}:${stat.ino}`
+      } catch {
+        return `${file}:missing`
+      }
+    })
+    .join('|')
+}
+
+function refreshCachedSessionMembership(id: string, cwd: string): void {
+  const sessDir = getDefaultSessionsDir()
+  const catalogToken = readSessionCatalogToken(sessDir)
+  for (const [projectCwd, cached] of cwdSessionCatalog) {
+    const ids = cached.ids.filter(candidate => candidate !== id)
+    if (projectCwd === cwd) ids.unshift(id)
+    cwdSessionCatalog.set(projectCwd, { catalogToken, ids })
+  }
+}
+
 /** Delete a saved session. Returns true if deleted. */
 export function deleteSession(id: string): boolean {
   const filePath = sessionPath(id)
   if (!fs.existsSync(filePath)) return false
   fs.unlinkSync(filePath)
+  const catalogToken = readSessionCatalogToken(getDefaultSessionsDir())
+  for (const [cwd, cached] of cwdSessionCatalog) {
+    cwdSessionCatalog.set(cwd, { catalogToken, ids: cached.ids.filter(candidate => candidate !== id) })
+  }
   return true
 }
 

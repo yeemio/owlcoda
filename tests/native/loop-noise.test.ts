@@ -159,6 +159,25 @@ describe('loop-noise routing', () => {
     expect(routed.nextState).toEqual({ ...baseState, compactionCount: 1 })
   })
 
+  it('aggregates Context hygiene notices into one turn summary', () => {
+    const first = routeConversationNotice(
+      'Context hygiene: compacted 1 older tool result, omitting 1800 characters from live context.',
+      baseState,
+    )
+    const second = routeConversationNotice(
+      'Context hygiene: compacted 2 older tool results, omitting 3700 characters from live context.',
+      first.nextState,
+    )
+
+    expect(first.transcriptEntry).toBeNull()
+    expect(second.transcriptEntry).toBeNull()
+    expect(second.footerNotice).toContain('Context hygiene:')
+    const summary = summarizeLoopNoise(second.nextState)
+    expect(summary).toHaveLength(1)
+    expect(summary[0]).toContain('compacted 3 tool results')
+    expect(summary[0]).toContain('~5.5k characters')
+  })
+
   it('routes Production gate notices to the footer without writing them to the transcript', () => {
     const routed = routeConversationNotice(
       'Production gate: 3 distinct files read across 5 iterations under a durable-artifact task with 0 deliverables.',

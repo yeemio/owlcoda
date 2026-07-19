@@ -65,11 +65,28 @@ describe('UsageTracker', () => {
     expect(snap.totalOutputTokens).toBe(estimateTokens('this is the response text'))
   })
 
-  it('calculates estimated cost', () => {
+  it('does not present fictional price math as actual spend', () => {
     tracker.recordUsage({ inputTokens: 1000, outputTokens: 1000 })
     const snap = tracker.getSnapshot()
-    // $0.003/1K input + $0.015/1K output = $0.003 + $0.015 = $0.018
-    expect(snap.estimatedCostUsd).toBeCloseTo(0.018, 4)
+    expect(snap.estimatedCostUsd).toBeNull()
+    expect(tracker.formatUsage().replace(/\x1b\[[0-9;]*m/g, '')).toContain('Cost')
+    expect(tracker.formatUsage().replace(/\x1b\[[0-9;]*m/g, '')).toContain('n/a')
+  })
+
+  it('seeds persisted totals and continues accumulating after resume', () => {
+    tracker.seed({
+      inputTokens: 1200,
+      outputTokens: 300,
+      requestCount: 4,
+      startedAt: 1_700_000_000_000,
+    })
+    tracker.recordUsage({ inputTokens: 50, outputTokens: 25 })
+
+    const snap = tracker.getSnapshot()
+    expect(snap.totalInputTokens).toBe(1250)
+    expect(snap.totalOutputTokens).toBe(325)
+    expect(snap.requestCount).toBe(5)
+    expect(snap.startedAt).toBe(1_700_000_000_000)
   })
 
   it('resets all counters', () => {
@@ -89,7 +106,8 @@ describe('UsageTracker', () => {
     expect(formatted).toContain('3,000 out')
     expect(formatted).toContain('4,500 total')
     expect(formatted).toMatch(/Requests\s+1/)
-    expect(formatted).toContain('fictional')
+    expect(formatted).toContain('Cost')
+    expect(formatted).toContain('n/a')
   })
 
   it('tracks elapsed time', async () => {

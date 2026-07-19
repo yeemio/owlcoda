@@ -709,13 +709,17 @@ describe('ToolResultCollector', () => {
 
   it('flushes multiple items as collapsed summary', () => {
     const collector = new ToolResultCollector()
-    collector.add({ name: 'read', input: {}, output: 'a', isError: false, durationMs: 30 })
-    collector.add({ name: 'read', input: {}, output: 'b', isError: false, durationMs: 40 })
-    collector.add({ name: 'grep', input: {}, output: 'c', isError: false, durationMs: 50 })
+    collector.add({ name: 'read', input: { path: 'report.md' }, output: 'a', isError: false, durationMs: 30 })
+    collector.add({ name: 'read', input: { path: 'report.md' }, output: 'b', isError: false, durationMs: 40 })
+    collector.add({ name: 'grep', input: { pattern: 'owner boundary' }, output: 'c', isError: false, durationMs: 50 })
     const output = collector.flush()
     const plain = stripAnsi(output)
-    expect(plain).toContain('read 2 files')
-    expect(plain).toContain('searched 1 pattern')
+    expect(plain.trimStart()).toMatch(/^▸/)
+    expect(plain).toContain('read ×2')
+    expect(plain).toContain('report.md')
+    expect(plain.match(/report\.md/g)).toHaveLength(1)
+    expect(plain).toContain('grep ×1')
+    expect(plain).toContain('owner boundary')
     expect(plain).toContain('120ms')
   })
 
@@ -923,6 +927,17 @@ describe('renderComposerRail', () => {
     }))
     expect(out.length).toBeLessThanOrEqual(34)
     expect(out).toContain('ready')
+  })
+
+  it('marks non-configured context denominators as approximate', () => {
+    const out = stripAnsi(renderComposerRail({
+      ...base,
+      contextTokens: 42_000,
+      contextMax: 200_000,
+      contextApproximate: true,
+      columns: 120,
+    }))
+    expect(out).toMatch(/CTX\s+42k\/200k~/i)
   })
 
   it('YOLO indicator appears in second cell when yolo is on', () => {

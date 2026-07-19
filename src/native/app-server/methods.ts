@@ -1,4 +1,4 @@
-import { isAbsolute, join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve, sep } from 'node:path'
 import {
   createJsonRpcFailure,
   createJsonRpcSuccess,
@@ -8,7 +8,7 @@ import {
 } from './json-rpc.js'
 import { listProjects } from './project-service.js'
 import { readRuntimeRail } from './runtime-rail-service.js'
-import { interruptTurn, listThreads, resumeThread, startThread, startTurn } from './thread-service.js'
+import { interruptTurn, listThreads, readThread, resumeThread, startThread, startTurn } from './thread-service.js'
 import {
   applyReviewChange,
   applyReviewHunk,
@@ -16,6 +16,7 @@ import {
   batchPreflightReviewChanges,
   batchRevertReviewChanges,
   listReviewChanges,
+  listReviewChangesWithRepository,
   preflightReviewChange,
   revertReviewChange,
   revertReviewHunk,
@@ -37,10 +38,10 @@ import {
   createAppServerApprovalBroker,
   type AppServerApprovalBroker,
   type AppServerApprovalDecision,
+  type AppServerInteractionRequest,
 } from './approval-service.js'
 import { readRuntimeTranscript } from './runtime-transcript-service.js'
 import { recoverTurn, readTurnStatus, type AppServerTurnStatusResult } from './turn-status-service.js'
-import { appendRunKitProof, confirmRunKitGate } from './truth-gateway.js'
 import {
   APP_SERVER_PROTOCOL_VERSION,
   describeAppServerProtocol,
@@ -53,15 +54,22 @@ import {
   getBenchmarkProviderEvalPath,
   readBenchmarkProviderEvalRecords,
 } from '../../benchmark/provider-eval-store.js'
-import type { AppServerEventBus } from './event-stream.js'
+import { createAppServerEventBus, type AppServerEventBus } from './event-stream.js'
 import { runConversationLoop, type ConversationLoopOptions, type ToolRuntimeItemMetadata } from '../conversation.js'
 import { ToolDispatcher } from '../dispatch.js'
 import { buildNativeToolDefs } from '../tool-defs.js'
 import { loadSession, restoreConversation, saveSession, type SessionFile } from '../session.js'
-import type { Conversation, ConversationModelIdentity } from '../protocol/types.js'
+import type { Conversation, ConversationModelIdentity, ReasoningEffort } from '../protocol/types.js'
 import type { ToolProgressEvent } from '../tools/types.js'
 import type { OwlCodaConfig } from '../../config.js'
+import { resolveVisionCapability } from '../../model-capabilities.js'
+import { MODE_EFFECTS, MODE_SUMMARIES, OPERATING_MODES, parseOperatingMode } from '../modes.js'
+import { createImageBlockFromPath } from '../image-message.js'
+import { appendRuntimeEvent } from '../runtime-events.js'
+import type { AnthropicContentBlock } from '../../types.js'
+import { loadAttachment, publicAttachment, storeAttachment } from './attachment-service.js'
 import { resolveAppServerLoopConfig } from './loop-config.js'
+import { resolveAppServerModelOrigin, resolveAppServerProviderReadiness } from './provider-readiness-service.js'
 import { buildRuntimeHealthSnapshot } from '../runtime-health.js'
 import { listJobs } from '../job-supervisor.js'
 import { readArtifactLedger, type RunArtifactRecord } from '../run-workspace.js'
@@ -85,18 +93,47 @@ import {
 import type { ToolResult } from '../tools/types.js'
 import { canonicalizeProvenancePath, extractWriteTargets } from '../write-provenance.js'
 import type { BashSourceCaptureStatus, BashSourceRef } from './review-action-service.js'
+import {
+  initializeAppServerClient,
+  type AppServerClientInitializeInput,
+} from './runtime-identity.js'
+import {
+  findConfiguredAppServerModel,
+  parseReasoningEffort,
+  resolveReasoningEffortContract,
+  validateConfiguredAppServerModelSelection,
+} from './model-reasoning-contract.js'
+import { appServerProjectStatePath } from './project-state-service.js'
+import { createManagedWorkspaceService } from './managed-workspace-service.js'
+import { classifyToolRisk } from '../tool-risk.js'
+import { classifyBashCommand, primaryBashRiskReason } from '../bash-risk.js'
+import type { RiskClass } from '../protocol/task-permission-types.js'
 
 export const APP_SERVER_SCHEMA_VERSION = APP_SERVER_PROTOCOL_VERSION
 
 export type AppServerMethod =
   | 'benchmark/providerEvalReport/read'
+  | 'client/initialize'
   | 'protocol/describe'
   | 'diagnostic/health'
   | 'project/list'
   | 'project/get'
+  | 'model/list'
+  | 'workspace/list'
+  | 'workspace/create'
+  | 'workspace/read'
+  | 'workspace/resume'
+  | 'workspace/status'
+  | 'workspace/commit'
+  | 'workspace/keep'
+  | 'workspace/cleanup'
+  | 'workspace/handoff'
+  | 'attachment/store'
   | 'event/subscribe'
+  | 'event/snapshot'
   | 'thread/start'
   | 'thread/list'
+  | 'thread/read'
   | 'thread/resume'
   | 'turn/start'
   | 'turn/status'
@@ -106,8 +143,6 @@ export type AppServerMethod =
   | 'approval/resolve'
   | 'interaction/list'
   | 'interaction/respond'
-  | 'proof/append'
-  | 'gate/confirm'
   | 'review/list'
   | 'review/preflight'
   | 'review/apply'
@@ -159,6 +194,8 @@ export type AppServerLoopRunner = (
 
 interface ActiveTurn {
   abortController: AbortController
+  conversation: Conversation
+  sessionTitle?: string
 }
 
 type RuntimeStartResult =
@@ -176,10 +213,12 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
   const cwd = resolve(options.cwd ?? process.cwd())
   const projectRoot = resolve(options.projectRoot ?? cwd)
   const handlers = new Map<AppServerMethod, AppServerMethodHandler>()
+  const eventBus = options.eventBus ?? createAppServerEventBus()
   const activeTurns = new Map<string, ActiveTurn>()
   const loopRunner = options.loopRunner ?? runConversationLoop
   const dispatcherFactory = options.dispatcherFactory ?? (() => new ToolDispatcher())
   const toolDefs = buildNativeToolDefs(dispatcherFactory())
+  const managedWorkspaceService = createManagedWorkspaceService({ projectRoot })
   const resolvedLoopConfig = options.loopOptions
     ? null
     : options.config ? resolveAppServerLoopConfig(options.config, options.loopModelId) : null
@@ -271,6 +310,11 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
 
   handlers.set('protocol/describe', () => describeAppServerProtocol())
 
+  handlers.set('client/initialize', (params) => {
+    const input = parseClientInitializeInput(params)
+    return initializeAppServerClient(projectRoot, input)
+  })
+
   handlers.set('diagnostic/health', () => ({
     schemaVersion: APP_SERVER_SCHEMA_VERSION,
     status: 'ok',
@@ -302,9 +346,177 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
     }
   })
 
+  handlers.set('workspace/list', () => managedWorkspaceCall(() => managedWorkspaceService.list()))
+
+  handlers.set('workspace/create', (params) => managedWorkspaceCall(() => {
+    const slug = extractStringParam(params, 'slug')
+    if (!slug) throw new JsonRpcError(-32602, 'slug is required')
+    const allowUntracked = isRecord(params) && params['allowUntracked'] === true
+    return managedWorkspaceService.create({
+      slug,
+      startingRef: extractStringParam(params, 'startingRef') ?? undefined,
+      ...(allowUntracked ? { allowUntracked: true } : {}),
+    })
+  }))
+
+  handlers.set('workspace/read', (params) => managedWorkspaceCall(() => {
+    const workspaceId = extractStringParam(params, 'workspaceId')
+    if (!workspaceId) throw new JsonRpcError(-32602, 'workspaceId is required')
+    return managedWorkspaceService.read({ workspaceId })
+  }))
+
+  handlers.set('workspace/resume', (params) => managedWorkspaceCall(() => {
+    const workspaceId = extractStringParam(params, 'workspaceId')
+    if (!workspaceId) throw new JsonRpcError(-32602, 'workspaceId is required')
+    return managedWorkspaceService.resume({ workspaceId })
+  }))
+
+  handlers.set('workspace/status', (params) => managedWorkspaceCall(() => {
+    const workspaceId = extractStringParam(params, 'workspaceId')
+    if (!workspaceId) throw new JsonRpcError(-32602, 'workspaceId is required')
+    return managedWorkspaceService.status({ workspaceId })
+  }))
+
+  handlers.set('workspace/commit', (params) => managedWorkspaceCall(() => {
+    const workspaceId = extractStringParam(params, 'workspaceId')
+    const requestId = extractStringParam(params, 'requestId')
+    const message = extractStringParam(params, 'message')
+    const expectedHead = extractStringParam(params, 'expectedHead')
+    const expectedStatusFingerprint = extractStringParam(params, 'expectedStatusFingerprint')
+    if (!workspaceId || !requestId || !message || !expectedHead || !expectedStatusFingerprint) {
+      throw new JsonRpcError(-32602, 'workspaceId, requestId, message, expectedHead, and expectedStatusFingerprint are required')
+    }
+    return managedWorkspaceService.commit({
+      workspaceId,
+      requestId,
+      message,
+      expectedHead,
+      expectedStatusFingerprint,
+      authorized: isRecord(params) && params['authorized'] === true,
+    })
+  }))
+
+  handlers.set('workspace/keep', (params) => managedWorkspaceCall(() => {
+    const workspaceId = extractStringParam(params, 'workspaceId')
+    const requestId = extractStringParam(params, 'requestId')
+    const expectedHead = extractStringParam(params, 'expectedHead')
+    const expectedStatusFingerprint = extractStringParam(params, 'expectedStatusFingerprint')
+    if (!workspaceId || !requestId || !expectedHead || !expectedStatusFingerprint) {
+      throw new JsonRpcError(-32602, 'workspaceId, requestId, expectedHead, and expectedStatusFingerprint are required')
+    }
+    return managedWorkspaceService.keep({
+      workspaceId,
+      requestId,
+      expectedHead,
+      expectedStatusFingerprint,
+      authorized: isRecord(params) && params['authorized'] === true,
+    })
+  }))
+
+  handlers.set('workspace/cleanup', (params) => managedWorkspaceCall(() => {
+    const workspaceId = extractStringParam(params, 'workspaceId')
+    const requestId = extractStringParam(params, 'requestId')
+    const expectedHead = extractStringParam(params, 'expectedHead')
+    const expectedStatusFingerprint = extractStringParam(params, 'expectedStatusFingerprint')
+    if (!workspaceId || !requestId || !expectedHead || !expectedStatusFingerprint) {
+      throw new JsonRpcError(-32602, 'workspaceId, requestId, expectedHead, and expectedStatusFingerprint are required')
+    }
+    return managedWorkspaceService.cleanup({
+      workspaceId,
+      requestId,
+      expectedHead,
+      expectedStatusFingerprint,
+      authorized: isRecord(params) && params['authorized'] === true,
+      ...(isRecord(params) && params['discardChanges'] === true ? { discardChanges: true } : {}),
+    })
+  }))
+
+  handlers.set('workspace/handoff', (params) => managedWorkspaceCall(() => {
+    const workspaceId = extractStringParam(params, 'workspaceId')
+    const threadId = extractStringParam(params, 'threadId')
+    const direction = extractStringParam(params, 'direction')
+    const requestId = extractStringParam(params, 'requestId')
+    const expectedHead = extractStringParam(params, 'expectedHead')
+    const expectedStatusFingerprint = extractStringParam(params, 'expectedStatusFingerprint')
+    const expectedProjectHead = extractStringParam(params, 'expectedProjectHead')
+    const expectedProjectStatusFingerprint = extractStringParam(params, 'expectedProjectStatusFingerprint')
+    if (
+      !workspaceId
+      || !threadId
+      || (direction !== 'to_project' && direction !== 'to_managed')
+      || !requestId
+      || !expectedHead
+      || !expectedStatusFingerprint
+      || !expectedProjectHead
+      || !expectedProjectStatusFingerprint
+    ) {
+      throw new JsonRpcError(
+        -32602,
+        'workspaceId, threadId, direction, requestId, expectedHead, expectedStatusFingerprint, expectedProjectHead, and expectedProjectStatusFingerprint are required',
+      )
+    }
+    if (activeTurns.has(threadId)) {
+      throw new JsonRpcError(-32602, 'Cannot hand off a workspace while the thread has an active turn')
+    }
+    return managedWorkspaceService.handoff({
+      workspaceId,
+      threadId,
+      direction,
+      requestId,
+      expectedHead,
+      expectedStatusFingerprint,
+      expectedProjectHead,
+      expectedProjectStatusFingerprint,
+      authorized: isRecord(params) && params['authorized'] === true,
+    })
+  }))
+
+  handlers.set('model/list', () => {
+    const models = options.config?.models ?? []
+    const readiness = resolveAppServerProviderReadiness(options.config)
+    return {
+      defaultModelId: readiness.defaultModelId,
+      defaultPermissionMode: options.config?.mode ?? 'normal',
+      permissionModes: OPERATING_MODES.map(id => ({ id, label: MODE_SUMMARIES[id], detail: MODE_EFFECTS[id] })),
+      workspaceModes: [
+        { id: 'project', available: true },
+        { id: 'managed', available: managedWorkspaceService.capability().available },
+      ],
+      models: models.map(model => {
+        const reasoningEffort = resolveReasoningEffortContract(options.config, model)
+        const providerReadiness = readiness.models.find(candidate => candidate.id === model.id)
+        return {
+          id: model.id,
+          label: model.label,
+          provider: model.provider ?? 'unknown',
+          tier: model.tier,
+          origin: resolveAppServerModelOrigin(options.config, model),
+          availability: providerReadiness?.availability ?? 'unknown',
+          isDefault: model.id === readiness.defaultModelId,
+          ...(providerReadiness?.unavailableReason ? { unavailableReason: providerReadiness.unavailableReason } : {}),
+          vision: resolveVisionCapability(model),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+        }
+      }),
+    }
+  })
+
+  handlers.set('attachment/store', (params) => {
+    const project = resolveProject(projectRoot, params)
+    const name = extractStringParam(params, 'name')
+    const mediaType = extractStringParam(params, 'mediaType')
+    const dataBase64 = extractStringParam(params, 'dataBase64')
+    if (!name || !mediaType || !dataBase64) throw new JsonRpcError(-32602, 'name, mediaType, and dataBase64 are required')
+    try {
+      return publicAttachment(storeAttachment({ projectRoot: project.root, name, mediaType, dataBase64 }))
+    } catch (error) {
+      throw new JsonRpcError(-32602, error instanceof Error ? error.message : 'Attachment could not be stored')
+    }
+  })
+
   handlers.set('runtimeRail/read', async (params) => {
-    const projectId = extractProjectId(params) ?? listProjects(projectRoot).projects[0]?.id ?? 'workspace'
-    return readRuntimeRail({ projectId, projectRoot })
+    const project = resolveProject(projectRoot, params)
+    return readRuntimeRail({ projectId: project.id, projectRoot: project.root })
   })
 
   handlers.set('runtimeTranscript/read', (params) => {
@@ -432,7 +644,11 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
   })
 
   handlers.set('job/list', async (params) => {
-    const result = await jobListTool.execute(isRecord(params) ? params : {})
+    const project = resolveProject(projectRoot, params)
+    const result = await jobListTool.execute({
+      ...(isRecord(params) ? params : {}),
+      cwd: project.root,
+    })
     return appServerToolResult(result)
   })
 
@@ -458,6 +674,7 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
   handlers.set('event/subscribe', () => ({
     transport: 'sse',
     endpoint: '/events',
+      cursor: eventBus.cursor(),
       events: [
         'runtimeRail.updated',
         'project.updated',
@@ -479,16 +696,42 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
         'approval.resolved',
         'interaction.requested',
         'interaction.resolved',
-        'proof.appended',
-        'gate.confirmed',
         'review.batchCompleted',
         'review.statusUpdated',
       ],
   }))
 
+  handlers.set('event/snapshot', (params) => {
+    const project = resolveProject(projectRoot, params)
+    const cursor = eventBus.cursor()
+    const threads = listThreads({ project, limit: 200 }).threads
+    const interactions = approvalBroker.listInteractions({ projectId: project.id }).interactions
+    return {
+      schemaVersion: 1,
+      projectId: project.id,
+      workspaceId: project.id,
+      threads,
+      interactions,
+      cursor,
+    }
+  })
+
   handlers.set('thread/start', (params) => {
     const project = resolveProject(projectRoot, params)
     const model = extractStringParam(params, 'model') ?? (resolvedLoopConfig?.ok ? resolvedLoopConfig.model : undefined)
+    validateRequestedModel(options.config, model)
+    const reasoningEffort = resolveRequestedReasoningEffort(params, options.config, model)
+    const requestedPermissionMode = extractStringParam(params, 'permissionMode')
+    const permissionMode = requestedPermissionMode ? parseOperatingMode(requestedPermissionMode) : options.config?.mode ?? 'normal'
+    if (!permissionMode) throw new JsonRpcError(-32602, 'permissionMode must be plan, normal, auto, or yolo')
+    const workspaceMode = extractStringParam(params, 'workspaceMode') ?? 'project'
+    if (workspaceMode !== 'project' && workspaceMode !== 'managed') {
+      throw new JsonRpcError(-32602, 'workspaceMode must be project or managed')
+    }
+    const managedWorkspace = managedWorkspaceService.currentWorkspace()
+    if (workspaceMode === 'managed' && !managedWorkspace) {
+      throw new JsonRpcError(-32602, 'Managed threads must start from the managed workspace App Server')
+    }
     const result = startThread({
       project,
       title: extractStringParam(params, 'title'),
@@ -496,6 +739,24 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
       modelIdentity: resolveConfiguredModelIdentity(options.config, model),
       systemPrompt: extractStringParam(params, 'systemPrompt'),
       tools: toolDefs,
+      permissionMode,
+      workspaceMode,
+      workspace: workspaceMode === 'managed' && managedWorkspace
+        ? {
+            mode: 'managed',
+            workspaceId: managedWorkspace.workspaceId,
+            projectRoot: managedWorkspace.projectRoot,
+            workspacePath: managedWorkspace.worktreePath,
+            branch: managedWorkspace.branch,
+            baseCommit: managedWorkspace.baseCommit,
+            ledgerPath: managedWorkspace.ledgerPath,
+          }
+        : {
+            mode: 'project',
+            projectRoot: project.root,
+            workspacePath: project.root,
+          },
+      reasoningEffort,
     })
     options.eventBus?.publish({
       type: 'thread.updated',
@@ -529,13 +790,52 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
     }
   })
 
+  handlers.set('thread/read', (params) => {
+    const project = resolveProject(projectRoot, params)
+    const threadId = extractThreadId(params)
+    if (!threadId) throw new JsonRpcError(-32602, 'threadId is required')
+    let result
+    try {
+      result = readThread({
+        project,
+        threadId,
+        limit: extractNumberParam(params, 'limit'),
+        cursor: extractStringParam(params, 'cursor'),
+      })
+    } catch (error) {
+      throw new JsonRpcError(-32602, error instanceof Error ? error.message : 'Invalid thread cursor')
+    }
+    if (!result) throw new JsonRpcError(-32602, 'Thread not found for project')
+    return result
+  })
+
   handlers.set('thread/resume', (params) => {
     const project = resolveProject(projectRoot, params)
     const threadId = extractThreadId(params)
     if (!threadId) {
       throw new JsonRpcError(-32602, 'threadId is required')
     }
-    const result = resumeThread({ project, threadId })
+    const model = extractStringParam(params, 'model')
+    validateRequestedModel(options.config, model)
+    const existingSession = loadSession(threadId)
+    const effectiveModel = model ?? existingSession?.model
+    const requestedReasoningEffort = resolveRequestedReasoningEffort(params, options.config, effectiveModel)
+    const modelReasoningContract = resolveReasoningEffortContract(
+      options.config,
+      findConfiguredAppServerModel(options.config, effectiveModel),
+    )
+    const reasoningEffort = hasOwnParam(params, 'reasoningEffort')
+      ? requestedReasoningEffort
+      : model && existingSession?.reasoningEffort && !modelReasoningContract
+        ? null
+        : undefined
+    const result = resumeThread({
+      project,
+      threadId,
+      model,
+      modelIdentity: resolveConfiguredModelIdentity(options.config, model),
+      reasoningEffort,
+    })
     if (!result) {
       throw new JsonRpcError(-32602, 'Thread not found for project')
     }
@@ -607,20 +907,38 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
   handlers.set('turn/start', (params) => {
     const project = resolveProject(projectRoot, params)
     const threadId = extractThreadId(params)
-    const input = extractStringParam(params, 'input')?.trim()
     if (!threadId) {
       throw new JsonRpcError(-32602, 'threadId is required')
     }
-    if (!input) {
-      throw new JsonRpcError(-32602, 'input is required')
+    if (isRecord(params) && Object.prototype.hasOwnProperty.call(params, 'retry') && typeof params.retry !== 'boolean') {
+      throw new JsonRpcError(-32602, 'retry must be a boolean')
     }
+    const retry = isRecord(params) && params.retry === true
     if (loopConfigError) {
       throw new JsonRpcError(-32001, loopConfigError.message, { reason: loopConfigError.reason })
     }
     if (loopOptions && activeTurns.has(threadId)) {
       throw new JsonRpcError(-32000, 'Turn already running')
     }
-    const result = startTurn({ project, threadId, input, tools: toolDefs })
+    if (retry) {
+      approvalBroker.discardRestoredInteractions({ projectId: project.id, threadId })
+    }
+    const preparedInput = prepareTurnInput(
+      retry && !extractStringParam(params, 'input') && (!isRecord(params) || !Array.isArray(params.content) || params.content.length === 0)
+        ? { ...params, input: 'Retry the latest saved user task without duplicating the visible prompt.' }
+        : params,
+      project.root,
+      threadId,
+    )
+    const result = startTurn({
+      project,
+      threadId,
+      input: preparedInput.blocks,
+		attachments: preparedInput.attachments,
+		tools: toolDefs,
+		retry,
+		title: extractStringParam(params, 'title'),
+	})
     if (!result) {
       throw new JsonRpcError(-32602, 'Thread not found for project')
     }
@@ -669,6 +987,8 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
     }
     const active = activeTurns.get(threadId)
     if (active) {
+      appendAppServerTurnInterrupted(active.conversation)
+      saveSession(active.conversation, active.sessionTitle, { cwd: project.root })
       active.abortController.abort()
       const result = {
         projectId: project.id,
@@ -716,6 +1036,8 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
     if (!decision) {
       throw new JsonRpcError(-32602, 'decision must be approve or deny')
     }
+    const interaction = approvalBroker.listInteractions().interactions.find(item => item.id === approvalId)
+    assertInteractionCanBeApproved(interaction, decision, projectRoot)
     const result = approvalBroker.resolveApproval({ approvalId, decision })
     if (!result) {
       throw new JsonRpcError(-32602, 'Approval request not found')
@@ -735,9 +1057,12 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
     if (!interactionId) {
       throw new JsonRpcError(-32602, 'interactionId is required')
     }
+    const decision = extractApprovalDecision(params) ?? undefined
+    const interaction = approvalBroker.listInteractions().interactions.find(item => item.id === interactionId)
+    assertInteractionCanBeApproved(interaction, decision, projectRoot)
     const result = approvalBroker.respondInteraction({
       interactionId,
-      decision: extractApprovalDecision(params) ?? undefined,
+      decision,
       answer: extractStringParam(params, 'answer') ?? undefined,
     })
     if (!result) {
@@ -746,70 +1071,13 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
     return result
   })
 
-  handlers.set('proof/append', async (params) => {
-    const project = resolveProject(projectRoot, params)
-    const kind = extractStringParam(params, 'kind')?.trim()
-    const title = extractStringParam(params, 'title')?.trim()
-    if (!kind) {
-      throw new JsonRpcError(-32602, 'kind is required')
-    }
-    if (!title) {
-      throw new JsonRpcError(-32602, 'title is required')
-    }
-    const result = appendRunKitProof({
-      projectRoot: project.root,
-      kind,
-      title,
-      status: extractStringParam(params, 'status')?.trim(),
-      detail: extractStringParam(params, 'detail'),
-    })
-    const readback = await readRuntimeRail({ projectId: project.id, projectRoot: project.root })
-    options.eventBus?.publish({
-      type: 'proof.appended',
-      projectId: project.id,
-      proof: result.proof,
-    })
-    publishRuntimeRailUpdated(options.eventBus, project.id, readback)
-    return {
-      status: result.status,
-      proof: result.proof,
-      proofPath: result.proofPath,
-      packetPath: result.packetPath,
-      readback,
-    }
-  })
-
-  handlers.set('gate/confirm', async (params) => {
-    const project = resolveProject(projectRoot, params)
-    const result = confirmRunKitGate({
-      projectRoot: project.root,
-      gateId: extractStringParam(params, 'gateId')?.trim(),
-      note: extractStringParam(params, 'note'),
-      confirmedBy: extractStringParam(params, 'confirmedBy')?.trim(),
-    })
-    const readback = await readRuntimeRail({ projectId: project.id, projectRoot: project.root })
-    options.eventBus?.publish({
-      type: 'gate.confirmed',
-      projectId: project.id,
-      gateId: result.gateId,
-      gate: readback.gate,
-    })
-    publishRuntimeRailUpdated(options.eventBus, project.id, readback)
-    return {
-      status: result.status,
-      gateId: result.gateId,
-      gatePath: result.gatePath,
-      readback,
-    }
-  })
-
   handlers.set('review/list', (params) => {
     const project = resolveProject(projectRoot, params)
     const threadId = extractThreadId(params)
     if (!threadId) {
       throw new JsonRpcError(-32602, 'threadId is required')
     }
-    const result = listReviewChanges({ projectRoot: project.root, threadId })
+    const result = listReviewChangesWithRepository({ projectRoot: project.root, threadId })
     if (!result) {
       throw new JsonRpcError(-32602, 'Thread not found for project')
     }
@@ -1187,8 +1455,9 @@ function maybeStartConversationLoop(input: {
   }
 
   const abortController = new AbortController()
-  input.activeTurns.set(input.threadId, { abortController })
   const conversation = restoreConversation(session, input.toolDefs)
+  input.activeTurns.set(input.threadId, { abortController, conversation, sessionTitle: session.title })
+  const generatedTurnStart = conversation.turns.length
   const dispatcher = input.dispatcherFactory()
   const toolProgressTotals = new Map<string, number>()
   const toolInputsByRuntimeIdentity = new Map<string, {
@@ -1307,22 +1576,18 @@ function maybeStartConversationLoop(input: {
       },
       onError: message => {
         input.loopOptions?.callbacks?.onError?.(message)
-        input.eventBus?.publish({
-          type: 'turn.failed',
-          projectId: input.project.id,
-          threadId: input.threadId,
-          message,
-        })
       },
       onToolApproval: async (toolName, toolInput) => {
         if (input.loopOptions?.callbacks?.onToolApproval) {
           return input.loopOptions.callbacks.onToolApproval(toolName, toolInput)
         }
+        const risk = approvalRiskMetadata(toolName, toolInput)
         return input.approvalBroker.requestApproval({
           projectId: input.project.id,
           threadId: input.threadId,
           toolName,
           toolInput,
+          ...risk,
           signal: abortController.signal,
         })
       },
@@ -1330,11 +1595,13 @@ function maybeStartConversationLoop(input: {
         if (input.loopOptions?.callbacks?.onTaskScopeApproval) {
           return input.loopOptions.callbacks.onTaskScopeApproval(request)
         }
+        const risk = approvalRiskMetadata(request.toolName, request.input)
         return input.approvalBroker.requestTaskScopeApproval({
           projectId: input.project.id,
           threadId: input.threadId,
           toolName: request.toolName,
           toolInput: request.input,
+          ...risk,
           taskScope: {
             attemptedPath: request.attemptedPath,
             attemptedPaths: request.attemptedPaths,
@@ -1359,16 +1626,46 @@ function maybeStartConversationLoop(input: {
       },
     },
   }).then(result => {
-    saveSession(result.conversation, session.title, { cwd: input.project.root })
+    for (const turn of result.conversation.turns.slice(generatedTurnStart)) {
+      if (turn.role === 'assistant' && !turn.model) turn.model = result.conversation.model
+    }
+    input.activeTurns.delete(input.threadId)
+    if (abortController.signal.aborted) {
+      appendAppServerTurnInterrupted(result.conversation)
+      saveSession(result.conversation, session.title, { cwd: input.project.root })
+      return
+    }
     if (result.runtimeFailure) {
+      const failureCategory = classifyDesktopFailure(result.runtimeFailure)
+      appendRuntimeEvent(result.conversation, {
+        kind: 'runtime_intervention',
+        payload: {
+          intervention_kind: 'app_server_turn_failure',
+          runtime_failure_kind: result.runtimeFailure.kind,
+          runtime_failure_phase: result.runtimeFailure.phase,
+          failure_category: failureCategory,
+          retryable: result.runtimeFailure.retryable,
+          ...(result.runtimeFailure.diagnostic?.provider
+            ? { failure_provider: result.runtimeFailure.diagnostic.provider }
+            : {}),
+          ...(result.runtimeFailure.diagnostic?.model
+            ? { failure_model: result.runtimeFailure.diagnostic.model }
+            : {}),
+        },
+      })
+      saveSession(result.conversation, session.title, { cwd: input.project.root })
       input.eventBus?.publish({
         type: 'turn.failed',
         projectId: input.project.id,
         threadId: input.threadId,
         message: result.runtimeFailure.message,
+        failureKind: result.runtimeFailure.kind,
+        failureCategory,
+        retryable: result.runtimeFailure.retryable,
       })
       return
     }
+    saveSession(result.conversation, session.title, { cwd: input.project.root })
     input.eventBus?.publish({
       type: 'turn.completed',
       projectId: input.project.id,
@@ -1379,6 +1676,8 @@ function maybeStartConversationLoop(input: {
       runtimeStarted: true,
     })
   }).catch(error => {
+    input.activeTurns.delete(input.threadId)
+    if (abortController.signal.aborted) return
     input.eventBus?.publish({
       type: 'turn.failed',
       projectId: input.project.id,
@@ -1390,6 +1689,55 @@ function maybeStartConversationLoop(input: {
   })
 
   return { runtimeStarted: true, runtimeStatus: 'running' }
+}
+
+function appendAppServerTurnInterrupted(conversation: Conversation): void {
+  const lastEvent = conversation.options?.runtimeEventLog?.events.at(-1)
+  if (lastEvent?.kind === 'runtime_intervention' && lastEvent.payload?.['terminal_status'] === 'interrupted') return
+  appendRuntimeEvent(conversation, {
+    kind: 'runtime_intervention',
+    payload: {
+      intervention_kind: 'app_server_turn_interrupted',
+      action: 'stopped_by_user',
+      source: 'turn/interrupt',
+      terminal_status: 'interrupted',
+    },
+  })
+}
+
+function approvalRiskMetadata(toolName: string, toolInput: Record<string, unknown>): { riskClass: RiskClass; riskReason: string } {
+  const riskClass = classifyToolRisk(toolName, toolInput)
+  const command = toolInput['command']
+  if ((toolName.toLowerCase() === 'bash' || toolName === 'TaskCreate') && typeof command === 'string') {
+    return { riskClass, riskReason: primaryBashRiskReason(classifyBashCommand(command)) }
+  }
+  if (['edit', 'write', 'NotebookEdit'].includes(toolName)) {
+    return { riskClass, riskReason: `${toolName.toLowerCase()} changes workspace files` }
+  }
+  const reasonByClass: Record<RiskClass, string> = {
+    safe: 'read-only action',
+    safe_readonly_local: 'read-only local diagnostic',
+    internal_state: 'changes OwlCoda session state',
+    mutating: 'changes workspace state',
+    destructive: 'can destroy or overwrite data',
+    external_effect: 'affects an external system',
+  }
+  return { riskClass, riskReason: reasonByClass[riskClass] }
+}
+
+function classifyDesktopFailure(failure: {
+  kind: string
+  message: string
+  diagnostic?: { status?: number; provider?: string; model?: string; detail?: string }
+}): 'quota' | 'rate_limit' | 'offline' | 'timeout' | 'provider' | 'unknown' {
+  const message = failure.message.toLowerCase()
+  const detail = `${message} ${failure.diagnostic?.detail ?? ''}`.toLowerCase()
+  if (failure.diagnostic?.status === 402 || /usage limit|quota|insufficient (?:balance|credit)|credits? exhausted|余额不足|额度不足|配额/.test(detail)) return 'quota'
+  if (failure.diagnostic?.status === 429 || message.includes('rate limit') || /\b429\b/.test(message)) return 'rate_limit'
+  if (failure.kind.includes('timeout')) return 'timeout'
+  if (/network|offline|unreachable|econn|dns|fetch failed/.test(message)) return 'offline'
+  if (failure.kind === 'provider_error' || failure.diagnostic?.status) return 'provider'
+  return 'unknown'
 }
 
 function runtimeStatusForThread(input: {
@@ -1485,19 +1833,6 @@ function publishReviewStatusEvent(
     status: result.status.status,
     updatedBy: result.status.updatedBy,
     reviewStatus: result.status,
-  })
-}
-
-function publishRuntimeRailUpdated(
-  eventBus: AppServerEventBus | undefined,
-  projectId: string,
-  rail: Awaited<ReturnType<typeof readRuntimeRail>>,
-): void {
-  eventBus?.publish({
-    type: 'runtimeRail.updated',
-    projectId,
-    freshness: rail.freshness,
-    source: rail.source,
   })
 }
 
@@ -1777,6 +2112,11 @@ function numberField(value: unknown, key: string): number | undefined {
   return typeof field === 'number' ? field : undefined
 }
 
+function stringArrayField(value: unknown, key: string): string[] {
+  if (!isRecord(value) || !Array.isArray(value[key])) return []
+  return value[key].filter((item): item is string => typeof item === 'string' && item.length > 0)
+}
+
 function appServerToolResult(result: ToolResult): Record<string, unknown> {
   return {
     ...(result.metadata ?? {}),
@@ -1809,7 +2149,36 @@ function latestAssistantText(session: SessionFile): string {
 }
 
 function defaultInteractionStoragePath(projectRoot: string): string {
-  return join(projectRoot, '.owlcoda', 'app-server', 'approvals.json')
+  return appServerProjectStatePath(projectRoot, 'approvals.json')
+}
+
+function parseClientInitializeInput(params: unknown): AppServerClientInitializeInput {
+  if (!isRecord(params) || !isRecord(params.client)) {
+    throw new JsonRpcError(-32602, 'client identity is required')
+  }
+  const clientName = stringField(params.client, 'name')
+  const clientVersion = stringField(params.client, 'version')
+  const supportedProtocolVersions = stringArrayField(params, 'supportedProtocolVersions')
+  const expectedWorkspaceRealpath = stringField(params, 'expectedWorkspaceRealpath')
+  if (!clientName || !clientVersion) {
+    throw new JsonRpcError(-32602, 'client name and version are required')
+  }
+  if (!supportedProtocolVersions.length) {
+    throw new JsonRpcError(-32602, 'supportedProtocolVersions is required')
+  }
+  if (!expectedWorkspaceRealpath) {
+    throw new JsonRpcError(-32602, 'expectedWorkspaceRealpath is required')
+  }
+  const requestedCapabilities = isRecord(params.requestedCapabilities)
+    ? Object.fromEntries(Object.entries(params.requestedCapabilities).filter((entry): entry is [string, boolean] => typeof entry[1] === 'boolean'))
+    : {}
+  return {
+    client: { name: clientName, version: clientVersion },
+    supportedProtocolVersions,
+    expectedRuntimeVersion: stringField(params, 'expectedRuntimeVersion') || undefined,
+    expectedWorkspaceRealpath,
+    requestedCapabilities,
+  }
 }
 
 function toolProgressDelta(
@@ -1879,6 +2248,66 @@ function reviewBatchEventItemFromPreflight(result: ReviewPreflightResult) {
   }
 }
 
+function prepareTurnInput(
+  params: unknown,
+  projectRoot: string,
+  threadId: string,
+): {
+  blocks: string | AnthropicContentBlock[]
+  attachments: Array<{ id: string; mediaType: string; size: number; status: 'attached' }>
+} {
+  const textInput = extractStringParam(params, 'input')?.trim()
+  if (textInput) return { blocks: textInput, attachments: [] }
+  if (!isRecord(params) || !Array.isArray(params.content) || params.content.length === 0) {
+    throw new JsonRpcError(-32602, 'input or content is required')
+  }
+  const session = loadSession(threadId)
+  if (!session || session.cwd !== projectRoot) throw new JsonRpcError(-32602, 'Thread not found for project')
+  const blocks: AnthropicContentBlock[] = []
+  const stored: Array<ReturnType<typeof loadAttachment> extends infer T ? Exclude<T, null> : never> = []
+  for (const raw of params.content) {
+    if (!isRecord(raw) || typeof raw.type !== 'string') throw new JsonRpcError(-32602, 'Invalid turn content block')
+    if (raw.type === 'text') {
+      if (typeof raw.text !== 'string' || !raw.text.trim()) throw new JsonRpcError(-32602, 'Text content must not be empty')
+      blocks.push({ type: 'text', text: raw.text })
+      continue
+    }
+    if (raw.type === 'localImage') {
+      if (typeof raw.attachmentId !== 'string') throw new JsonRpcError(-32602, 'localImage attachmentId is required')
+      const attachment = loadAttachment(projectRoot, raw.attachmentId)
+      if (!attachment) throw new JsonRpcError(-32602, 'Attachment not found for project')
+      stored.push(attachment)
+      continue
+    }
+    if (raw.type === 'fileRef') {
+      if (typeof raw.path !== 'string' || !raw.path.trim()) throw new JsonRpcError(-32602, 'fileRef path is required')
+      blocks.push({ type: 'text', text: `[File reference: ${raw.path.trim()}]` })
+      continue
+    }
+    if (raw.type === 'image') {
+      throw new JsonRpcError(-32602, 'Direct image blocks are not accepted; store the image and use localImage')
+    }
+    throw new JsonRpcError(-32602, `Unsupported turn content block: ${raw.type}`)
+  }
+  if (stored.length > 0) {
+    const identity = session.modelIdentity ?? { id: session.model, backendModel: session.model }
+    const vision = resolveVisionCapability(identity)
+    if (!vision.inputImages) {
+      throw new JsonRpcError(-32012, vision.reason ?? 'Selected model cannot receive image input', {
+        reason: vision.status === 'unsupported' ? 'model_vision_unsupported' : 'model_vision_unknown',
+        modelId: session.model,
+        vision,
+      })
+    }
+    blocks.push(...stored.map(item => createImageBlockFromPath(item.path)))
+  }
+  if (blocks.length === 0) throw new JsonRpcError(-32602, 'Turn content is empty')
+  return {
+    blocks,
+    attachments: stored.map(item => ({ id: item.id, mediaType: item.mediaType, size: item.size, status: 'attached' as const })),
+  }
+}
+
 export async function handleRequest(
   registry: AppServerMethodRegistry,
   request: JsonRpcRequest,
@@ -1899,6 +2328,15 @@ export async function handleRequest(
       request.id,
       new JsonRpcError(-32603, error instanceof Error ? error.message : 'Internal error'),
     )
+  }
+}
+
+function managedWorkspaceCall<T>(operation: () => T): T {
+  try {
+    return operation()
+  } catch (error) {
+    if (error instanceof JsonRpcError) throw error
+    throw new JsonRpcError(-32602, error instanceof Error ? error.message : 'Managed workspace operation failed')
   }
 }
 
@@ -1990,6 +2428,26 @@ function extractApprovalDecision(params: unknown): AppServerApprovalDecision | n
   return value === 'approve' || value === 'deny' ? value : null
 }
 
+function isPathInsideWorkspace(candidate: string, workspaceRoot: string): boolean {
+  const workspace = resolve(workspaceRoot)
+  const target = resolve(workspace, candidate)
+  const pathFromWorkspace = relative(workspace, target)
+  return pathFromWorkspace === ''
+    || (pathFromWorkspace !== '..' && !pathFromWorkspace.startsWith(`..${sep}`) && !isAbsolute(pathFromWorkspace))
+}
+
+function assertInteractionCanBeApproved(
+  interaction: AppServerInteractionRequest | undefined,
+  decision: AppServerApprovalDecision | undefined,
+  workspaceRoot: string,
+): void {
+  if (decision !== 'approve' || interaction?.kind !== 'task_scope_approval') return
+  if (!interaction.taskScope?.attemptedPaths.some(path => !isPathInsideWorkspace(path, workspaceRoot))) return
+  throw new JsonRpcError(-32012, 'A target outside the project workspace cannot be approved', {
+    reason: 'target_outside_workspace',
+  })
+}
+
 function resolveProject(projectRoot: string, params: unknown) {
   const projects = listProjects(projectRoot).projects
   const requestedProjectId = extractProjectId(params)
@@ -2012,6 +2470,43 @@ function extractNumberParam(params: unknown, key: string): number | undefined {
   if (typeof value === 'number') return value
   if (typeof value === 'string' && value.trim()) return Number(value)
   return undefined
+}
+
+function resolveRequestedReasoningEffort(
+  params: unknown,
+  config: OwlCodaConfig | undefined,
+  modelId: string | undefined,
+): ReasoningEffort | undefined {
+  if (!hasOwnParam(params, 'reasoningEffort')) return undefined
+  const raw = isRecord(params) ? params['reasoningEffort'] : undefined
+  const reasoningEffort = parseReasoningEffort(raw)
+  if (!reasoningEffort) {
+    throw new JsonRpcError(-32602, 'reasoningEffort must be low, medium, or high')
+  }
+  const contract = resolveReasoningEffortContract(
+    config,
+    findConfiguredAppServerModel(config, modelId),
+  )
+  if (!contract?.options.includes(reasoningEffort)) {
+    throw new JsonRpcError(-32602, 'reasoningEffort is not supported by the selected model and runtime route')
+  }
+  return reasoningEffort
+}
+
+function validateRequestedModel(config: OwlCodaConfig | undefined, modelId: string | undefined): void {
+  const validation = validateConfiguredAppServerModelSelection(config, modelId)
+  if (validation.ok) return
+  throw new JsonRpcError(
+    -32602,
+    validation.reason === 'model_unavailable'
+      ? 'The selected model is unavailable'
+      : 'The selected model is not configured',
+    { reason: validation.reason, modelId },
+  )
+}
+
+function hasOwnParam(params: unknown, key: string): boolean {
+  return isRecord(params) && Object.prototype.hasOwnProperty.call(params, key)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

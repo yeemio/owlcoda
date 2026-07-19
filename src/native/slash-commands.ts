@@ -2726,7 +2726,7 @@ ${isModesEnabled() ? `    /mode [mode]      Approval mode (${OPERATING_MODES.joi
       console.log(`  Tool uses:   ${toolUses}`)
       console.log(`  Input tokens:  ${snap.totalInputTokens.toLocaleString()}`)
       console.log(`  Output tokens: ${snap.totalOutputTokens.toLocaleString()}`)
-      if (snap.estimatedCostUsd > 0) {
+      if (typeof snap.estimatedCostUsd === 'number' && snap.estimatedCostUsd > 0) {
         console.log(`  Estimated cost: $${snap.estimatedCostUsd.toFixed(4)}`)
       }
       console.log(`  Model: ${conversation.model}`)

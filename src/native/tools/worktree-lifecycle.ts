@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 
@@ -20,20 +20,112 @@ export interface WorktreeLifecycleLedger {
     commits: number
     discardChanges: boolean
     discardCommits: boolean
+    branchRetained?: boolean
+  }
+  operations?: WorktreeLifecycleOperationRecord[]
+  handoff?: {
+    branchOwner: 'managed' | 'project'
+    threadId: string
+    projectReturnBranch?: string
+    projectReturnHead?: string
   }
   error?: string
 }
 
-export function lifecycleLedgerPath(gitRoot: string, slug: string): string {
+export interface WorktreeLifecycleOperationRecord {
+  requestId: string
+  requestSha256: string
+  receipt: unknown
+}
+
+const HIGH_RISK_UNTRACKED_FILES = new Set([
+  'package.json',
+  'package-lock.json',
+  'npm-shrinkwrap.json',
+  'pnpm-lock.yaml',
+  'yarn.lock',
+  'bun.lock',
+  'bun.lockb',
+  'deno.lock',
+  'requirements.txt',
+  'pyproject.toml',
+  'uv.lock',
+  'poetry.lock',
+  'Cargo.toml',
+  'Cargo.lock',
+  'go.mod',
+  'go.sum',
+  'Gemfile',
+  'Gemfile.lock',
+])
+
+const HIGH_RISK_UNTRACKED_PREFIXES = ['src/', 'lib/', 'app/', 'packages/']
+
+export function validateWorktreeSlug(slug: string): string | null {
+  if (slug.length > 64) return 'Slug must be 64 characters or fewer.'
+  if (!/^[a-zA-Z0-9._/-]+$/.test(slug)) {
+    return 'Slug may only contain letters, digits, dots, underscores, dashes, and slashes.'
+  }
+  return null
+}
+
+export function listHighRiskUntrackedFiles(gitRoot: string): string[] {
+  let output: string
+  try {
+    output = execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all'], {
+      cwd: gitRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+  } catch {
+    return []
+  }
+  return output
+    .split(/\r?\n/)
+    .map(line => line.trimEnd())
+    .filter(line => line.startsWith('?? '))
+    .map(line => line.slice(3).replace(/\\/g, '/'))
+    .filter(path => HIGH_RISK_UNTRACKED_FILES.has(path) || HIGH_RISK_UNTRACKED_PREFIXES.some(prefix => path.startsWith(prefix)))
+    .sort()
+}
+
+export function formatUntrackedWorktreePreflight(files: string[]): string {
+  const shown = files.slice(0, 12)
+  const more = files.length > shown.length ? `\n  ... and ${files.length - shown.length} more` : ''
+  return [
+    `EnterWorktree blocked: ${files.length} untracked dependency/source file${files.length === 1 ? '' : 's'} would be missing from the new worktree.`,
+    'Add or intentionally ignore these files before creating a worktree, or set allow_untracked=true if you explicitly want to bypass this preflight:',
+    ...shown.map(file => `  - ${file}`),
+    more,
+  ].filter(Boolean).join('\n')
+}
+
+export function resolveGitCommonDirectory(gitRoot: string): string {
   const commonDirRaw = execFileSync('git', ['rev-parse', '--git-common-dir'], {
     cwd: gitRoot,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   }).trim()
-  const commonDir = resolve(gitRoot, commonDirRaw)
+  return resolve(gitRoot, commonDirRaw)
+}
+
+export function lifecycleLedgerDirectory(gitRoot: string): string {
+  return resolve(resolveGitCommonDirectory(gitRoot), 'owlcoda', 'worktree-sessions')
+}
+
+export function listLifecycleLedgerPaths(gitRoot: string): string[] {
+  const directory = lifecycleLedgerDirectory(gitRoot)
+  if (!existsSync(directory)) return []
+  return readdirSync(directory)
+    .filter(name => name.endsWith('.json'))
+    .sort()
+    .map(name => resolve(directory, name))
+}
+
+export function lifecycleLedgerPath(gitRoot: string, slug: string): string {
   const safeSlug = slug.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 48) || 'worktree'
   const hash = createHash('sha256').update(slug).digest('hex').slice(0, 16)
-  return resolve(commonDir, 'owlcoda', 'worktree-sessions', `${safeSlug}-${hash}.json`)
+  return resolve(lifecycleLedgerDirectory(gitRoot), `${safeSlug}-${hash}.json`)
 }
 
 export function writeLifecycleLedger(path: string, ledger: WorktreeLifecycleLedger): void {

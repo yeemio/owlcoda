@@ -669,8 +669,6 @@ export function renderDesktopRenderer(options: DesktopRendererOptions): string {
       if (event.type === 'approval.resolved') return (event.toolName || 'tool') + ' ' + event.status;
       if (event.type === 'interaction.requested') return event.kind + ' waiting';
       if (event.type === 'interaction.resolved') return event.kind + ' ' + event.status;
-      if (event.type === 'proof.appended') return 'proof · ' + (event.proof && event.proof.title ? event.proof.title : 'appended');
-      if (event.type === 'gate.confirmed') return 'gate · ' + event.gateId + ' confirmed';
       if (event.type === 'review.batchCompleted') return event.action + ' ' + event.status + ' · ' + (event.diffIds || []).length + ' changes';
       if (event.type === 'thread.updated') return 'thread updated · ' + event.turnCount + ' turns';
       if (event.type === 'runtimeRail.updated') return event.freshness || event.source || 'rail updated';
@@ -1086,59 +1084,94 @@ export function renderDesktopRenderer(options: DesktopRendererOptions): string {
         el('railSurface').innerHTML = '<div class="empty">No rail</div>';
         return;
       }
-      const packet = rail.packet || {};
-      const gate = rail.gate || {};
+      const summary = rail.summary;
+      const current = summary && summary.currentExecution ? summary.currentExecution : {};
+      const closeout = summary && summary.latestIndexedCloseout ? summary.latestIndexedCloseout : null;
+      const source = summary && summary.source ? summary.source : {};
+      const leases = summary && summary.leases ? summary.leases : { activeCount: 0, holders: [] };
+      const evidence = summary && summary.evidence ? summary.evidence : {};
+      const resourcePreflight = summary && summary.resourcePreflight ? summary.resourcePreflight : null;
+      const gap = summary && summary.dominantGap ? summary.dominantGap : {};
+      const leaseHolders = (leases.holders || []).map((holder) => holder.runId + '/' + holder.workItemId);
       el('railSurface').innerHTML =
-        '<section class="rail-block"><h3>Project</h3><div class="rail-list">' +
-          '<div class="row-sub">' + escapeHtml(rail.projectId) + '</div>' +
-          '<div class="row-sub">' + escapeHtml(rail.source) + '</div>' +
+        '<section class="rail-block" data-surface="runkit-context-summary"><h3>RunKit</h3><div class="rail-list">' +
+          '<div class="row-sub">' + escapeHtml(rail.projectId) + ' · ' + escapeHtml(rail.source) + '</div>' +
+          '<div class="status ' + escapeHtml(rail.freshness) + '">' + escapeHtml(rail.freshness) + '</div>' +
+          (rail.error ? '<div class="row-sub">' + escapeHtml(rail.error) + '</div>' : '') +
         '</div></section>' +
-        '<section class="rail-block"><h3>Gate</h3><div class="rail-list">' +
-          '<div class="status ' + escapeHtml(gate.status || rail.freshness) + '">' + escapeHtml(gate.status || rail.freshness) + '</div>' +
-          '<div class="row-sub">' + escapeHtml(gate.currentGate || gate.reason || packet.truthFingerprint || 'no gate') + '</div>' +
+        '<section class="rail-block"><h3>Current execution</h3><div class="rail-list">' +
+          '<div class="row-title">' + escapeHtml(current.selectedRunId || 'none') + '</div>' +
+          '<div class="row-sub">' + escapeHtml((current.state || 'not_connected') + ' · open ' + (current.openCount || 0)) + '</div>' +
+          '<div class="row-sub">' + escapeHtml((current.activeRunIds || []).join(', ') || 'no active executions') + '</div>' +
+        '</div></section>' +
+        '<section class="rail-block"><h3>Latest closeout</h3><div class="rail-list">' +
+          '<div class="row-title">' + escapeHtml(closeout ? closeout.runId : 'none') + '</div>' +
+          '<div class="row-sub">' + escapeHtml(closeout ? closeout.decision + ' · ' + closeout.trustLevel : 'none') + '</div>' +
+        '</div></section>' +
+        '<section class="rail-block"><h3>Source and leases</h3><div class="rail-list">' +
+          '<div class="row-title">' + escapeHtml(source.status || 'none') + '</div>' +
+          '<div class="row-sub">' + escapeHtml(source.sourceFingerprint || 'no fingerprint') + '</div>' +
+          '<div class="row-sub">Active leases: ' + escapeHtml(leases.activeCount || 0) + '</div>' +
+          '<div class="row-sub">' + escapeHtml(leaseHolders.length ? leaseHolders.join(', ') : 'no lease holders') + '</div>' +
+        '</div></section>' +
+        '<section class="rail-block"><h3>Evidence</h3><div class="rail-list">' +
+          '<div class="row-title">' + escapeHtml(evidence.status || 'none') + '</div>' +
+          '<div class="row-sub">' + escapeHtml([evidence.decision, evidence.trustLevel].filter(Boolean).join(' · ') || 'none') + '</div>' +
+          '<div class="row-sub">' + escapeHtml(evidence.activeReceiptSha256 || 'no active receipt') + '</div>' +
+        '</div></section>' +
+        '<section class="rail-block" data-surface="runkit-resource-preflight"><h3>Model resources</h3>' + renderResourcePreflight(resourcePreflight) + '</section>' +
+        '<section class="rail-block"><h3>Dominant gap</h3><div class="rail-list">' +
+          '<div class="row-title">' + escapeHtml(gap.code || 'connect_runkit') + '</div>' +
+          '<div class="row-sub">' + escapeHtml((gap.reasons || []).join(' · ') || 'none') + '</div>' +
+        '</div></section>' +
+        '<section class="rail-block"><h3>Next allowed action</h3><div class="rail-list">' +
+          '<div class="row-title">' + escapeHtml(summary ? summary.nextAllowedAction : (rail.repairAction || 'connect_runkit')) + '</div>' +
+          '<div class="row-sub">Git authorization: ' + escapeHtml(summary ? summary.gitAuthorization : false) + '</div>' +
+          '<div class="row-sub">Release authorization: ' + escapeHtml(summary ? summary.releaseAuthorization : false) + '</div>' +
         '</div></section>' +
         '<section class="rail-block" data-surface="runtime-facts-summary"><h3>Runtime Facts</h3>' + renderRuntimeFactsSummary(state.runtimeFacts) + '</section>' +
         '<section class="rail-block" data-surface="structured-output-artifacts"><h3>Structured Output</h3>' + renderStructuredOutputArtifacts(state.structuredOutputArtifacts) + '</section>' +
-        '<section class="rail-block"><h3>Claims</h3>' + renderRailClaim(rail.claim) + '</section>' +
-        '<section class="rail-block"><h3>Proofs</h3>' + renderRailList(rail.proofs || []) + '</section>' +
         '<section class="rail-block" data-surface="model-comparison-panel"><h3>Model Comparison</h3>' + renderModelComparisonPanel(state.providerEvalReport) + '</section>' +
-        '<section class="rail-block" data-surface="provider-eval-report"><h3>Provider Eval</h3>' + renderProviderEvalReport(state.providerEvalReport) + '</section>' +
-        '<section class="rail-block" data-surface="runkit-truth-actions"><h3>Actions</h3>' +
-          '<div class="approval-actions">' +
-            '<button id="confirmGate" class="primary" ' + (!gate.currentGate ? 'disabled' : '') + '>Confirm Gate</button>' +
-            '<button id="appendProof">Append Proof</button>' +
-          '</div>' +
-        '</section>';
-      const confirmGateButton = el('confirmGate');
-      if (confirmGateButton) confirmGateButton.addEventListener('click', confirmCurrentGate);
-      const appendProofButton = el('appendProof');
-      if (appendProofButton) appendProofButton.addEventListener('click', appendManualProof);
+        '<section class="rail-block" data-surface="provider-eval-report"><h3>Provider Eval</h3>' + renderProviderEvalReport(state.providerEvalReport) + '</section>';
     }
 
-    function renderRailClaim(claim) {
-      if (!claim) return '<div class="row-sub">none</div>';
+    function renderResourcePreflight(preflight) {
+      if (!preflight || preflight.status === 'none') {
+        return '<div class="rail-list"><div class="row-title">not evaluated</div><div class="row-sub">RunKit has no model resource preflight for this execution.</div></div>';
+      }
+      const estimate = preflight.estimate || {};
+      const cost = estimate.cost || {};
+      const costLabel = cost.status === 'known'
+        ? '$' + Number(cost.valueUsd || 0).toFixed(4)
+        : '$' + Number(cost.knownSubtotalUsd || 0).toFixed(4) + ' known + unknown';
+      const resources = (preflight.resources || []).map((resource) => {
+        const quota = resource.quota || {};
+        const demand = resource.demand || {};
+        return '<div class="rail-list">' +
+          '<div class="row-title">' + escapeHtml(resource.providerId + '/' + resource.modelId) + '</div>' +
+          '<div class="row-sub">availability: ' + escapeHtml(resource.availability && resource.availability.status || 'unknown') + '</div>' +
+          '<div class="row-sub">remaining calls: ' + escapeHtml(renderTypedResourceValue(quota.remainingCalls)) + '</div>' +
+          '<div class="row-sub">remaining tokens: ' + escapeHtml(renderTypedResourceValue(quota.remainingTokens)) + '</div>' +
+          '<div class="row-sub">reset: ' + escapeHtml(renderTypedResourceValue(quota.resetAt)) + '</div>' +
+          '<div class="row-sub">demand: ' + escapeHtml((demand.calls || 0) + ' calls · ' + (demand.totalTokens || 0) + ' tokens') + '</div>' +
+        '</div>';
+      }).join('');
       return '<div class="rail-list">' +
-        '<div class="item" style="padding:8px;"><div class="row-title">' + escapeHtml(claim.goalId || claim.agent || 'claim') + '</div>' +
-        '<div class="row-sub">' + escapeHtml([claim.status, claim.agent, claim.sourceRef].filter(Boolean).join(' · ')) + '</div></div>' +
+        '<div class="row-title">' + escapeHtml(preflight.status + (preflight.decision ? ' · ' + preflight.decision : '')) + '</div>' +
+        '<div class="row-sub">' + escapeHtml(preflight.preflightId || 'no preflight id') + '</div>' +
+        '<div class="row-sub">estimate: ' + escapeHtml((estimate.calls || 0) + ' calls · ' + (estimate.totalTokens || 0) + ' tokens · ' + (estimate.elapsedMs || 0) + ' ms · ' + costLabel) + '</div>' +
+        '<div class="row-sub">receipt reuse: ' + escapeHtml((preflight.receiptReuse && preflight.receiptReuse.appliedCount || 0) + '/' + (preflight.receiptReuse && preflight.receiptReuse.reusableCount || 0)) + '</div>' +
+        '<div class="row-sub">valid until: ' + escapeHtml(preflight.validUntil || 'not declared') + '</div>' +
+        (preflight.blockers || []).map((item) => '<div class="row-sub">blocked: ' + escapeHtml(item) + '</div>').join('') +
+        (preflight.warnings || []).map((item) => '<div class="row-sub">warning: ' + escapeHtml(item) + '</div>').join('') +
+        resources +
       '</div>';
     }
 
-    function renderRailList(items) {
-      if (!items.length) return '<div class="row-sub">none</div>';
-      return '<div class="rail-list">' + items.slice(0, 6).map((item) => (
-        '<div class="item" style="padding:8px;"><div class="row-title">' + escapeHtml(railItemTitle(item)) + '</div>' +
-        '<div class="row-sub">' + escapeHtml(railItemSubtitle(item)) + '</div></div>'
-      )).join('') + '</div>';
-    }
-
-    function railItemTitle(item) {
-      if (typeof item === 'string') return item;
-      return item.title || item.kind || item.id || item.sourceRef || 'item';
-    }
-
-    function railItemSubtitle(item) {
-      if (typeof item === 'string') return '';
-      return [item.status, item.sourceRef || item.id, item.at].filter(Boolean).join(' · ');
+    function renderTypedResourceValue(value) {
+      if (!value) return 'unknown';
+      if (value.status === 'known') return String(value.value);
+      return 'unknown' + (value.reason ? ' (' + value.reason + ')' : '');
     }
 
     function latestRunIdFromTranscript(transcript) {
@@ -1268,42 +1301,6 @@ export function renderDesktopRenderer(options: DesktopRendererOptions): string {
       }
     }
 
-    async function confirmCurrentGate() {
-      if (!state.project || !state.rail || !state.rail.gate || !state.rail.gate.currentGate) return;
-      const note = window.prompt('Gate note', '') || '';
-      try {
-        await rpc('gate/confirm', {
-          projectId: state.project.id,
-          gateId: state.rail.gate.currentGate,
-          note
-        });
-        await refreshShell();
-      } catch (error) {
-        showToast(error.message || 'Gate confirmation failed');
-        await refreshShell();
-      }
-    }
-
-    async function appendManualProof() {
-      if (!state.project) return;
-      const title = window.prompt('Proof title', 'Manual proof');
-      if (!title) return;
-      const detail = window.prompt('Proof detail', '') || '';
-      try {
-        await rpc('proof/append', {
-          projectId: state.project.id,
-          kind: 'manual_note',
-          title,
-          status: 'recorded',
-          detail
-        });
-        await refreshShell();
-      } catch (error) {
-        showToast(error.message || 'Proof append failed');
-        await refreshShell();
-      }
-    }
-
     function showToast(message) {
       const node = el('toast');
       node.textContent = message;
@@ -1334,8 +1331,6 @@ export function renderDesktopRenderer(options: DesktopRendererOptions): string {
       events.addEventListener('approval.resolved', (event) => handleLiveServerEvent(event, { refresh: true }));
       events.addEventListener('interaction.requested', (event) => handleLiveServerEvent(event, { refresh: true }));
       events.addEventListener('interaction.resolved', (event) => handleLiveServerEvent(event, { refresh: true }));
-      events.addEventListener('proof.appended', (event) => handleLiveServerEvent(event, { refresh: true }));
-      events.addEventListener('gate.confirmed', (event) => handleLiveServerEvent(event, { refresh: true }));
       events.addEventListener('review.batchCompleted', (event) => handleLiveServerEvent(event, { refresh: true }));
       events.addEventListener('turn.completed', (event) => handleLiveServerEvent(event, { refresh: true }));
       events.addEventListener('turn.failed', (event) => handleLiveServerEvent(event, { refresh: true }));

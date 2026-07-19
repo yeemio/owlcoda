@@ -54,29 +54,18 @@ describe('truth-gateway read adapter', () => {
     expect(truth.nextAction).toBe('Generate packet before UI expansion.')
   })
 
-  it('maps real truth into runtimeRail/read without opening write paths', async () => {
+  it('does not map legacy truth packets into the OwlCoda RunKit contextual rail', async () => {
     const root = await createRunKitProjectFixture()
 
     const rail = await readRuntimeRail({ projectId: 'owlrunkit', projectRoot: root })
 
-    expect(rail.freshness).toBe('fresh')
-    expect(rail.packet?.truthFingerprint).toBe('abc123')
-    expect(rail.gate?.currentGate).toBe('confirm-flow')
-    expect(rail.claim?.agent).toBe('Codex')
-    expect(rail.proofs).toEqual([{
-      kind: 'verification',
-      title: 'Desktop smoke passed',
-      status: 'passed',
-      sourceRef: '.owlrunkit/proofs/desktop-smoke.md',
-      at: '2026-06-01T13:42:00Z',
-    }])
-    expect(rail.rejectedPaths).toEqual([{
-      decisionId: 'D20260601-009',
-      path: 'Do not make RunKit an agent memory database',
-      sourceRef: '.owlrunkit/decisions/D20260601-009.md',
-    }])
-    expect(rail.nextAction).toBe('Generate packet before UI expansion.')
-    expect(rail.source).toBe('project_truth_packet')
+    expect(rail).toEqual({
+      projectId: 'owlrunkit',
+      freshness: 'missing',
+      summary: null,
+      executionHistory: [],
+      source: 'not_connected',
+    })
   })
 })
 

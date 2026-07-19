@@ -231,6 +231,32 @@ afterEach(() => {
 })
 
 describe('runtime event envelope', () => {
+  it('records an aborted loop as durable interrupted truth without a completion event', async () => {
+    const conv = createConversation({ system: 'test', model: 'test-model' })
+    addUserMessage(conv, 'Stop before the provider request starts.')
+    const controller = new AbortController()
+    controller.abort()
+
+    const result = await runConversationLoop(conv, new ToolDispatcher(), {
+      apiBaseUrl: 'http://localhost:0',
+      apiKey: 'test',
+      maxIterations: 1,
+      signal: controller.signal,
+    })
+
+    const events = result.conversation.options?.runtimeEventLog?.events ?? []
+    expect(result.stopReason).toBe('interrupted')
+    expect(events.some(event => event.kind === 'turn_completed')).toBe(false)
+    expect(events.at(-1)).toMatchObject({
+      kind: 'runtime_intervention',
+      payload: {
+        intervention_kind: 'turn_interrupted',
+        action: 'stopped_by_user',
+        terminal_status: 'interrupted',
+      },
+    })
+  })
+
   it('records turn and tool item lifecycle events in the conversation runtime log', async () => {
     const conv = createConversation({ system: 'test', model: 'test-model' })
     addUserMessage(conv, 'Call the probe tool and then report completion.')
@@ -4373,6 +4399,12 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
       conv,
       'No tools. From runtime truth only, report checkpoint_id, input_history_digest, intervention kinds, unresolved checkpoint id, inspect command, and stale transcript trust.',
     )
+    conv.turns.push({
+      role: 'user',
+      audience: 'runtime',
+      content: [{ type: 'text', text: '[Runtime truth resume snapshot]\n{"checkpoint_id":"context_replacement_checkpoint-1"}' }],
+      timestamp: Date.now(),
+    })
 
     vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
       textResponse('checkpoint_id=context_replacement_checkpoint-1; stale transcript is not trusted.'))
@@ -4394,6 +4426,9 @@ describe('native conversation tool loop guard SOFT intercept (0.13.55 default)',
     expect(result.finalText).toContain('LongTaskAwait longTaskId=task:resume-validator timeoutMs=5000')
     expect(result.finalText).toContain('verification_repair_checkpoint-1')
     expect((conv.options as any)?.runtimeTruthResume?.reportGate).toBe('satisfied')
+    expect(conv.turns.some((turn) => turn.content.some((block) =>
+      block.type === 'text' && block.text.startsWith('[Runtime truth resume snapshot]'),
+    ))).toBe(false)
 
     const events = result.conversation.options?.runtimeEventLog?.events ?? []
     const intervention = events.find((event) =>
@@ -7312,6 +7347,7 @@ describe('task execution nudge wiring (Slice 4)', () => {
 
   it.each([
     ['read_only_review', 'Review the scheduler code and tell me what is wrong. Do not modify files.'],
+    ['read_only_file_inspection', 'Read package.json and report the package name and version. Do not modify any files.'],
     ['text_deliverable', 'Write a technical plan in chat for how to approach scheduler behavior.'],
   ])('does not inject create-plan task-step nudges for %s deliverables', async (_mode, prompt) => {
     const conv = createConversation({ system: 'test', model: 'test-model' })

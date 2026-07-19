@@ -12,6 +12,8 @@ export type AppServerTurnStatus =
   | 'running'
   | 'waiting_for_interaction'
   | 'completed'
+  | 'interrupted'
+  | 'failed'
   | 'recovered'
   | 'stale'
 
@@ -20,7 +22,11 @@ export type AppServerTurnStatusReason =
   | 'runtime_not_started'
   | 'active_loop'
   | 'pending_interaction'
+  | 'restored_interaction_without_continuation'
   | 'turn_completed'
+  | 'turn_interrupted'
+  | 'runtime_failure'
+  | 'runtime_no_result'
   | 'app_server_mark_recovered'
   | 'runtime_event_unclosed'
 
@@ -74,7 +80,17 @@ export interface AppServerTurnStatusResult {
   lastTurn?: AppServerTurnStatusLastTurn
   lastRuntimeEvent?: AppServerTurnStatusRuntimeEvent
   lastInteraction?: AppServerTurnStatusInteraction
+  failure?: AppServerTurnStatusFailure
   resumeHint: AppServerTurnStatusResumeHint
+}
+
+export interface AppServerTurnStatusFailure {
+  kind: string
+  phase?: string
+  category?: 'quota' | 'rate_limit' | 'offline' | 'timeout' | 'provider' | 'unknown'
+  retryable: boolean
+  provider?: string
+  model?: string
 }
 
 export interface AppServerTurnStatusLastTurn {
@@ -116,6 +132,15 @@ export function recoverTurn(input: AppServerTurnRecoverInput): AppServerTurnReco
   const previousStatus = readTurnStatus(input)
   if (!previousStatus) return null
 
+  if (previousStatus.reason === 'restored_interaction_without_continuation') {
+    return {
+      ok: false,
+      status: previousStatus,
+      reason: previousStatus.reason,
+      suggestedAction: 'turn/start',
+      message: 'Retry the latest saved task to replace the restored interaction with a live continuation.',
+    }
+  }
   if (previousStatus.status === 'waiting_for_interaction') {
     return {
       ok: false,
@@ -192,6 +217,8 @@ export function readTurnStatus(input: AppServerTurnStatusInput): AppServerTurnSt
     turnCount: session.turns.length,
     runtimeActive,
     pendingInteractionCount: pendingInteractions.length,
+    restoredInteractionCount: pendingInteractions.filter(interaction => interaction.source === 'restored').length,
+    interruptedEvent: latestInterruptedEvent(events),
     lastRuntimeEvent,
   })
 
@@ -208,6 +235,7 @@ export function readTurnStatus(input: AppServerTurnStatusInput): AppServerTurnSt
     ...(lastTurn(session) ? { lastTurn: lastTurn(session)! } : {}),
     ...(lastRuntimeEvent ? { lastRuntimeEvent: runtimeEventSummary(lastRuntimeEvent) } : {}),
     ...(pendingInteractions.length > 0 ? { lastInteraction: interactionSummary(pendingInteractions.at(-1)!) } : {}),
+    ...(status.failure ? { failure: status.failure } : {}),
     resumeHint: resumeHintForStatus(status.status),
   }
 }
@@ -216,13 +244,33 @@ function classifyTurnStatus(input: {
   turnCount: number
   runtimeActive: boolean
   pendingInteractionCount: number
+  restoredInteractionCount: number
+  interruptedEvent?: RuntimeEventRecord
   lastRuntimeEvent?: RuntimeEventRecord
-}): { status: AppServerTurnStatus; reason: AppServerTurnStatusReason } {
+}): { status: AppServerTurnStatus; reason: AppServerTurnStatusReason; failure?: AppServerTurnStatusFailure } {
+  if (input.restoredInteractionCount > 0) {
+    return {
+      status: 'stale',
+      reason: 'restored_interaction_without_continuation',
+      failure: {
+        kind: 'restored_interaction_without_continuation',
+        category: 'unknown',
+        retryable: true,
+      },
+    }
+  }
   if (input.pendingInteractionCount > 0) {
     return { status: 'waiting_for_interaction', reason: 'pending_interaction' }
   }
   if (input.runtimeActive) {
     return { status: 'running', reason: 'active_loop' }
+  }
+  if (input.interruptedEvent) {
+    return {
+      status: 'interrupted',
+      reason: 'turn_interrupted',
+      failure: { kind: 'user_interrupted', category: 'unknown', retryable: true },
+    }
   }
   if (input.turnCount === 0) {
     return { status: 'idle', reason: 'no_turns' }
@@ -230,7 +278,18 @@ function classifyTurnStatus(input: {
   if (!input.lastRuntimeEvent) {
     return { status: 'saved_only', reason: 'runtime_not_started' }
   }
+  const runtimeFailure = runtimeFailureFromEvent(input.lastRuntimeEvent)
+  if (runtimeFailure) {
+    return { status: 'failed', reason: 'runtime_failure', failure: runtimeFailure }
+  }
   if (input.lastRuntimeEvent.kind === 'turn_completed') {
+    if (isEmptyTerminalTurn(input.lastRuntimeEvent)) {
+      return {
+        status: 'failed',
+        reason: 'runtime_no_result',
+        failure: { kind: 'no_runtime_result', retryable: true },
+      }
+    }
     return { status: 'completed', reason: 'turn_completed' }
   }
   if (isAppServerRecoveryEvent(input.lastRuntimeEvent)) {
@@ -266,6 +325,16 @@ function resumeHintForStatus(status: AppServerTurnStatus): AppServerTurnStatusRe
         action: 'none',
         message: 'The latest runtime turn completed.',
       }
+    case 'interrupted':
+      return {
+        action: 'start_turn',
+        message: 'The previous runtime turn was stopped by the user. Start a new turn when ready.',
+      }
+    case 'failed':
+      return {
+        action: 'inspect_transcript_before_retry',
+        message: 'The runtime turn ended without a usable result. Inspect the saved transcript before retrying.',
+      }
     case 'recovered':
       return {
         action: 'start_turn',
@@ -277,6 +346,47 @@ function resumeHintForStatus(status: AppServerTurnStatus): AppServerTurnStatusRe
         message: 'The persisted runtime event log has an unclosed turn and no active loop in this process.',
       }
   }
+}
+
+function latestInterruptedEvent(events: readonly RuntimeEventRecord[]): RuntimeEventRecord | undefined {
+  let turnStartIndex = -1
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index]?.kind === 'turn_started') {
+      turnStartIndex = index
+      break
+    }
+  }
+  for (let index = events.length - 1; index > turnStartIndex; index -= 1) {
+    const event = events[index]
+    if (event?.kind === 'runtime_intervention' && event.payload?.['terminal_status'] === 'interrupted') return event
+  }
+  return undefined
+}
+
+function runtimeFailureFromEvent(event: RuntimeEventRecord): AppServerTurnStatusFailure | null {
+  const kind = event.payload?.['runtime_failure_kind']
+  if (typeof kind !== 'string' || kind.length === 0) return null
+  const phase = event.payload?.['runtime_failure_phase']
+  const category = event.payload?.['failure_category']
+  const retryable = event.payload?.['retryable']
+  const provider = event.payload?.['failure_provider']
+  const model = event.payload?.['failure_model']
+  return {
+    kind,
+    ...(typeof phase === 'string' && phase.length > 0 ? { phase } : {}),
+    ...(category === 'quota' || category === 'rate_limit' || category === 'offline' || category === 'timeout' || category === 'provider' || category === 'unknown' ? { category } : {}),
+    retryable: typeof retryable === 'boolean' ? retryable : true,
+    ...(typeof provider === 'string' && provider.length > 0 ? { provider } : {}),
+    ...(typeof model === 'string' && model.length > 0 ? { model } : {}),
+  }
+}
+
+function isEmptyTerminalTurn(event: RuntimeEventRecord): boolean {
+  const payload = event.payload
+  return payload?.['request_count'] === 0
+    && payload?.['assistant_response_count'] === 0
+    && payload?.['tool_use_count'] === 0
+    && payload?.['final_text_chars'] === 0
 }
 
 function loadStatusSession(input: AppServerTurnStatusInput): SessionFile | null {

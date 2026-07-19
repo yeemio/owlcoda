@@ -12,6 +12,8 @@ export interface LoopNoiseState {
   fallbackSynthesisCount: number
   hardStopCount: number
   constrainedContinuationCount: number
+  hygieneResultCount?: number
+  hygieneOmittedChars?: number
 }
 
 export interface RoutedConversationNotice {
@@ -174,6 +176,20 @@ export function routeConversationNotice(
     }
   }
 
+  const hygieneMatch = message.match(/^Context hygiene: compacted (\d+) older tool results?, omitting (\d+) characters/i)
+  if (hygieneMatch) {
+    return {
+      footerNotice: dim(message),
+      transcriptEntry: null,
+      nextState: {
+        ...state,
+        compactionCount: state.compactionCount + 1,
+        hygieneResultCount: (state.hygieneResultCount ?? 0) + Number(hygieneMatch[1]),
+        hygieneOmittedChars: (state.hygieneOmittedChars ?? 0) + Number(hygieneMatch[2]),
+      },
+    }
+  }
+
   if (/^Targeted check:/i.test(message)) {
     return {
       footerNotice: dim(message),
@@ -316,7 +332,12 @@ export function summarizeLoopNoise(state: LoopNoiseState): string[] {
   // Conversation repair is an internal request-shape cleanup. Showing a
   // durable transcript line for it after every failed resend makes recovery
   // look worse than the underlying provider error, so it stays footer-only.
-  if (state.compactionCount > 0) {
+  if ((state.hygieneResultCount ?? 0) > 0) {
+    lines.push(formatPlatformEvent(
+      'session',
+      `Context hygiene compacted ${state.hygieneResultCount} tool results, freed ~${formatApproxChars(state.hygieneOmittedChars ?? 0)} characters`,
+    ))
+  } else if (state.compactionCount > 0) {
     lines.push(formatPlatformEvent('session', 'Context compaction ran in the background during this turn'))
   }
   if (state.targetedCheckCount > 0) {
@@ -336,4 +357,10 @@ export function summarizeLoopNoise(state: LoopNoiseState): string[] {
   }
 
   return lines
+}
+
+function formatApproxChars(value: number): string {
+  if (value < 1000) return String(value)
+  const thousands = Math.round(value / 100) / 10
+  return `${Number.isInteger(thousands) ? thousands.toFixed(0) : thousands.toFixed(1)}k`
 }

@@ -1,21 +1,24 @@
 import { afterAll, afterEach, beforeAll, describe, it, expect } from 'vitest'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import {
   createMethodRegistry,
   handleRequest,
 } from '../../../src/native/app-server/methods.js'
+import { createAppServerApprovalBroker } from '../../../src/native/app-server/approval-service.js'
 import { createAppServerEventBus, type AppServerEvent } from '../../../src/native/app-server/event-stream.js'
 import { listProjects } from '../../../src/native/app-server/project-service.js'
 import { APP_SERVER_METHOD_CONTRACTS } from '../../../src/native/app-server/protocol-contract.js'
 import { createConversation } from '../../../src/native/conversation.js'
+import { buildRequest } from '../../../src/native/protocol/request.js'
 import { appendRuntimeRecoveryCheckpoint } from '../../../src/native/runtime-recovery-ledger.js'
 import { appendRuntimeEvent } from '../../../src/native/runtime-events.js'
-import { deleteSession, getSessionsDir, loadSession, saveSession } from '../../../src/native/session.js'
+import { deleteSession, getSessionsDir, loadSession, restoreConversation, saveSession } from '../../../src/native/session.js'
 import { createJob, resetJobSupervisor, startJob } from '../../../src/native/job-supervisor.js'
 import { createRunWorkspace, readArtifactLedger, recordArtifact } from '../../../src/native/run-workspace.js'
-import type { OwlCodaConfig } from '../../../src/config.js'
+import { appendBuiltinEndpointModels, type OwlCodaConfig } from '../../../src/config.js'
 import type { BenchmarkProviderEvalStoreRecord } from '../../../src/benchmark/index.js'
 
 const createdSessions: string[] = []
@@ -46,6 +49,38 @@ afterAll(() => {
 })
 
 describe('method registry', () => {
+  it('describes a stable canonical runtime identity through client/initialize', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const workspaceAlias = `${projectRoot}-alias`
+    symlinkSync(projectRoot, workspaceAlias)
+    temporaryProjectRoots.push(workspaceAlias)
+    const registry = createMethodRegistry({ projectRoot: workspaceAlias })
+    const response = await handleRequest(registry, {
+      jsonrpc: '2.0',
+      id: 'initialize-1',
+      method: 'client/initialize',
+      params: {
+        client: { name: 'owlcoda-desktop', version: '0.1.0' },
+        supportedProtocolVersions: ['v1'],
+        expectedRuntimeVersion: '0.15.30',
+        expectedWorkspaceRealpath: realpathSync(projectRoot),
+        requestedCapabilities: { review: true, eventReplay: true },
+      },
+    })
+
+    expect(response).toMatchObject({
+      result: {
+        runtimeVersion: '0.15.30',
+        protocolVersion: 'v1',
+        workspaceRealpath: realpathSync(projectRoot),
+        compatibility: 'compatible',
+        capabilities: { review: true, eventReplay: true, imageInput: true },
+      },
+    })
+    expect((response as any).result.runtimeBuild).toEqual(expect.any(String))
+    expect((response as any).result.workspaceId).toEqual(expect.any(String))
+  })
+
   const registry = createMethodRegistry()
 
   it('exposes diagnostic/health', async () => {
@@ -86,8 +121,10 @@ describe('method registry', () => {
     expect(res.result.methods).toContain('project/get')
     expect(res.result.methods).toContain('runtimeRail/read')
     expect(res.result.methods).toContain('event/subscribe')
+    expect(res.result.methods).toContain('event/snapshot')
     expect(res.result.methods).toContain('thread/start')
     expect(res.result.methods).toContain('thread/list')
+    expect(res.result.methods).toContain('thread/read')
     expect(res.result.methods).toContain('thread/resume')
     expect(res.result.methods).toContain('turn/start')
     expect(res.result.methods).toContain('turn/status')
@@ -97,8 +134,8 @@ describe('method registry', () => {
     expect(res.result.methods).toContain('approval/resolve')
     expect(res.result.methods).toContain('interaction/list')
     expect(res.result.methods).toContain('interaction/respond')
-    expect(res.result.methods).toContain('proof/append')
-    expect(res.result.methods).toContain('gate/confirm')
+    expect(res.result.methods).not.toContain('proof/append')
+    expect(res.result.methods).not.toContain('gate/confirm')
     expect(res.result.methods).toContain('review/list')
     expect(res.result.methods).toContain('review/preflight')
     expect(res.result.methods).toContain('review/apply')
@@ -199,6 +236,12 @@ describe('method registry', () => {
       expect.objectContaining({
         method: 'thread/start',
         stability: 'stable',
+        queryKeys: ['projectId', 'model', 'reasoningEffort', 'permissionMode', 'workspaceMode'],
+      }),
+      expect.objectContaining({
+        method: 'thread/resume',
+        stability: 'stable',
+        queryKeys: ['threadId', 'projectId', 'model', 'reasoningEffort'],
       }),
       expect.objectContaining({
         method: 'runtimeRail/read',
@@ -273,6 +316,11 @@ describe('method registry', () => {
     expect(res.result).toEqual({
       transport: 'sse',
       endpoint: '/events',
+      cursor: {
+        oldestAvailableSequence: 1,
+        latestSequence: 0,
+        afterSequence: 0,
+      },
       events: [
         'runtimeRail.updated',
         'project.updated',
@@ -294,8 +342,6 @@ describe('method registry', () => {
         'approval.resolved',
         'interaction.requested',
         'interaction.resolved',
-        'proof.appended',
-        'gate.confirmed',
         'review.batchCompleted',
         'review.statusUpdated',
       ],
@@ -345,6 +391,7 @@ describe('method registry', () => {
       jobId: 'job:api:app-server',
       type: 'api',
       stage: 'queued',
+	  cwd: process.cwd(),
       tool: 'JudgeBackendProbe',
       provider: 'models',
       command: 'GET /v1/models',
@@ -414,6 +461,24 @@ describe('method registry', () => {
     })
   })
 
+  it('scopes Desktop job supervision to the current project and optional thread', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const scopedRegistry = createMethodRegistry({ projectRoot })
+    createJob({ jobId: 'job:project:thread-a', type: 'command', cwd: projectRoot, threadId: 'thread-a' })
+    createJob({ jobId: 'job:project:thread-b', type: 'command', cwd: projectRoot, threadId: 'thread-b' })
+    createJob({ jobId: 'job:other-project', type: 'command', cwd: makeTemporaryProjectRoot(), threadId: 'thread-a' })
+
+    const listed = await handleRequest(scopedRegistry, {
+      jsonrpc: '2.0',
+      id: 73,
+      method: 'job/list',
+      params: { threadId: 'thread-a', limit: 20 },
+    })
+
+    expect(listed.result.jobs.map((job: { jobId: string }) => job.jobId)).toEqual(['job:project:thread-a'])
+    expect(listed.result.filters).toMatchObject({ cwd: projectRoot, threadId: 'thread-a' })
+  })
+
   it('starts a durable thread session bound to the project root', async () => {
     const res = await handleRequest(registry, {
       jsonrpc: '2.0',
@@ -472,6 +537,453 @@ describe('method registry', () => {
       backendModel: 'backend-model',
       supportsImages: true,
     })
+  })
+
+  it('lists sanitized model readiness and honest image capabilities for Desktop', async () => {
+    const modelRegistry = createMethodRegistry({
+      config: testConfig({
+        mode: 'normal',
+        models: [
+          {
+            id: 'vision-model',
+            label: 'Vision Model',
+            backendModel: 'vision-backend',
+            aliases: ['vision'],
+            provider: 'test',
+            tier: 'local',
+            default: true,
+            availability: 'available',
+            supportsImages: true,
+            apiKey: 'must-not-leak',
+            endpoint: 'http://must-not-leak.test',
+          },
+          {
+            id: 'text-model',
+            label: 'Text Model',
+            backendModel: 'text-backend',
+            aliases: [],
+            provider: 'test',
+            tier: 'local',
+            availability: 'unknown',
+            supportsImages: false,
+          },
+        ],
+      }),
+    } as any)
+
+    const response = await handleRequest(modelRegistry, {
+      jsonrpc: '2.0',
+      id: 804,
+      method: 'model/list',
+      params: {},
+    })
+
+    expect(response.result).toMatchObject({
+      defaultModelId: 'vision-model',
+      defaultPermissionMode: 'normal',
+      workspaceModes: [{ id: 'project', available: true }, { id: 'managed', available: true }],
+    })
+    expect(response.result.models).toEqual([
+      expect.objectContaining({ id: 'vision-model', label: 'Vision Model', origin: 'cloud', availability: 'available', isDefault: true, vision: expect.objectContaining({ status: 'supported', inputImages: true }) }),
+      expect.objectContaining({ id: 'text-model', label: 'Text Model', origin: 'unknown', availability: 'unknown', isDefault: false, vision: expect.objectContaining({ status: 'unsupported', inputImages: false }) }),
+    ])
+    expect(JSON.stringify(response.result)).not.toContain('must-not-leak')
+  })
+
+  it('marks the real environment-appended endpoint model available without leaking route secrets', async () => {
+    const envNames = [
+      'KIMI_API_KEY',
+      'MOONSHOT_API_KEY',
+      'OWLCODA_KIMI_ENDPOINT',
+      'OWLCODA_KIMI_USER_AGENT',
+      'OWLCODA_KIMI_PLATFORM',
+    ] as const
+    const previous = Object.fromEntries(envNames.map(name => [name, process.env[name]]))
+    const secretKey = 'run002-provider-secret-key'
+    const secretEndpoint = 'https://run002-secret-endpoint.invalid/coding/v1'
+    const secretHeader = 'run002-secret-user-agent'
+    const secretPlatform = 'run002-secret-platform'
+    try {
+      process.env['KIMI_API_KEY'] = secretKey
+      delete process.env['MOONSHOT_API_KEY']
+      process.env['OWLCODA_KIMI_ENDPOINT'] = secretEndpoint
+      process.env['OWLCODA_KIMI_USER_AGENT'] = secretHeader
+      process.env['OWLCODA_KIMI_PLATFORM'] = secretPlatform
+      const config = testConfig()
+      appendBuiltinEndpointModels(config)
+      const response = await handleRequest(createMethodRegistry({ config } as any), {
+        jsonrpc: '2.0',
+        id: 'provider-readiness-builtin-endpoint',
+        method: 'model/list',
+        params: {},
+      })
+
+      expect(response.result.defaultModelId).toBe('kimi-code')
+      expect(response.result.models).toEqual([
+        expect.objectContaining({
+          id: 'kimi-code',
+          provider: 'kimi',
+          origin: 'cloud',
+          availability: 'available',
+          isDefault: true,
+        }),
+      ])
+      const serialized = JSON.stringify(response.result)
+      for (const secret of [secretKey, secretEndpoint, secretHeader, secretPlatform]) {
+        expect(serialized).not.toContain(secret)
+      }
+      expect(serialized).not.toMatch(/"(?:apiKey|apiKeyEnv|apiKeySource|endpoint|headers|token|secret)"/i)
+    } finally {
+      for (const name of envNames) {
+        const value = previous[name]
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
+    }
+  })
+
+  it('preserves explicit readiness and selects the first route-ready fallback when the explicit default is unavailable', async () => {
+    const response = await handleRequest(createMethodRegistry({
+      config: testConfig({
+        localRuntimeProtocol: 'auto',
+        models: [
+          {
+            id: 'offline-default', label: 'Offline Default', backendModel: 'offline-default', aliases: [], provider: 'test', tier: 'cloud', default: true, availability: 'unavailable', endpoint: 'https://offline.invalid/v1',
+          },
+          {
+            id: 'endpoint-ready', label: 'Endpoint Ready', backendModel: 'endpoint-ready', aliases: [], provider: 'openai', tier: 'cloud', endpoint: 'https://provider.invalid/v1/chat/completions',
+          },
+          {
+            id: 'explicit-ready', label: 'Explicit Ready', backendModel: 'explicit-ready', aliases: [], provider: 'test', tier: 'local', availability: 'available',
+          },
+          {
+            id: 'router-unresolved', label: 'Router Unresolved', backendModel: 'router-unresolved', aliases: [], provider: 'test', tier: 'local',
+          },
+        ],
+      }),
+    } as any), {
+      jsonrpc: '2.0', id: 'provider-readiness-default-fallback', method: 'model/list', params: {},
+    })
+
+    expect(response.result.defaultModelId).toBe('endpoint-ready')
+    expect(response.result.models).toEqual([
+      expect.objectContaining({ id: 'offline-default', availability: 'unavailable', isDefault: false, unavailableReason: 'Unavailable by configuration.' }),
+      expect.objectContaining({ id: 'endpoint-ready', availability: 'available', isDefault: true }),
+      expect.objectContaining({ id: 'explicit-ready', availability: 'available', isDefault: false }),
+      expect.objectContaining({ id: 'router-unresolved', availability: 'unknown', isDefault: false, unavailableReason: 'Runtime route is not configured.' }),
+    ])
+  })
+
+  it('keeps an available explicit default ahead of other route-ready models', async () => {
+    const response = await handleRequest(createMethodRegistry({
+      config: testConfig({
+        models: [
+          {
+            id: 'first-endpoint', label: 'First Endpoint', backendModel: 'first-endpoint', aliases: [], provider: 'openai', tier: 'cloud', endpoint: 'https://first.invalid/v1/chat/completions',
+          },
+          {
+            id: 'chosen-default', label: 'Chosen Default', backendModel: 'chosen-default', aliases: [], provider: 'openai', tier: 'cloud', endpoint: 'https://chosen.invalid/v1/chat/completions', default: true,
+          },
+        ],
+      }),
+    } as any), {
+      jsonrpc: '2.0', id: 'provider-readiness-explicit-default', method: 'model/list', params: {},
+    })
+
+    expect(response.result.defaultModelId).toBe('chosen-default')
+    expect(response.result.models.map((model: any) => [model.id, model.availability, model.isDefault])).toEqual([
+      ['first-endpoint', 'available', false],
+      ['chosen-default', 'available', true],
+    ])
+  })
+
+  it('returns no default when every configured route is unresolved or explicitly unavailable', async () => {
+    const response = await handleRequest(createMethodRegistry({
+      config: testConfig({
+        models: [
+          {
+            id: 'unresolved-default', label: 'Unresolved Default', backendModel: 'unresolved-default', aliases: [], provider: 'test', tier: 'local', default: true,
+          },
+          {
+            id: 'explicit-offline', label: 'Explicit Offline', backendModel: 'explicit-offline', aliases: [], provider: 'test', tier: 'local', availability: 'unavailable',
+          },
+        ],
+      }),
+    } as any), {
+      jsonrpc: '2.0', id: 'provider-readiness-no-default', method: 'model/list', params: {},
+    })
+
+    expect(response.result.defaultModelId).toBeNull()
+    expect(response.result.models.every((model: any) => model.isDefault === false)).toBe(true)
+  })
+
+  it('lists reasoning effort options only when the provider model and runtime route support them', async () => {
+    const modelRegistry = createMethodRegistry({
+      config: testConfig({
+        localRuntimeProtocol: 'anthropic_messages',
+        models: [
+          {
+            id: 'claude-sonnet-4-20250514',
+            label: 'Claude Sonnet 4',
+            backendModel: 'claude-sonnet-4-20250514',
+            aliases: ['sonnet'],
+            provider: 'anthropic',
+            tier: 'cloud',
+            default: true,
+            availability: 'available',
+          },
+          {
+            id: 'plain-model',
+            label: 'Plain Model',
+            backendModel: 'plain-model',
+            aliases: [],
+            provider: 'test',
+            tier: 'local',
+            availability: 'available',
+          },
+        ],
+      }),
+    } as any)
+
+    const response = await handleRequest(modelRegistry, {
+      jsonrpc: '2.0',
+      id: 'reasoning-model-list',
+      method: 'model/list',
+      params: {},
+    })
+
+    expect(response.result.models[0]).toMatchObject({
+      id: 'claude-sonnet-4-20250514',
+      reasoningEffort: {
+        default: 'medium',
+        options: ['low', 'medium', 'high'],
+      },
+    })
+    expect(response.result.models[1]).not.toHaveProperty('reasoningEffort')
+  })
+
+  it('persists reasoning effort across start and resume and applies it to later provider requests', async () => {
+    const providerRequests: Array<ReturnType<typeof buildRequest>> = []
+    const reasoningRegistry = createMethodRegistry({
+      config: testConfig({
+        localRuntimeProtocol: 'anthropic_messages',
+        models: [{
+          id: 'claude-sonnet-4-20250514',
+          label: 'Claude Sonnet 4',
+          backendModel: 'claude-sonnet-4-20250514',
+          aliases: ['sonnet'],
+          provider: 'anthropic',
+          tier: 'cloud',
+          default: true,
+          availability: 'available',
+        }],
+      }),
+      loopRunner: async (conversation: any) => {
+        providerRequests.push(buildRequest(conversation))
+        return {
+          conversation,
+          finalText: '',
+          iterations: 0,
+          stopReason: 'end_turn',
+          usage: { inputTokens: 0, outputTokens: 0, requestCount: 0 },
+          runtimeFailure: null,
+        }
+      },
+    } as any)
+
+    const started = await handleRequest(reasoningRegistry, {
+      jsonrpc: '2.0',
+      id: 'reasoning-start',
+      method: 'thread/start',
+      params: {
+        title: 'Reasoning thread',
+        model: 'claude-sonnet-4-20250514',
+        reasoningEffort: 'low',
+      },
+    })
+    createdSessions.push(started.result.thread.id)
+    expect(started.result.thread.reasoningEffort).toBe('low')
+    expect(loadSession(started.result.thread.id)?.reasoningEffort).toBe('low')
+
+    await handleRequest(reasoningRegistry, {
+      jsonrpc: '2.0',
+      id: 'reasoning-turn-low',
+      method: 'turn/start',
+      params: { threadId: started.result.thread.id, input: 'Use low reasoning.' },
+    })
+    await waitFor(() => providerRequests.length === 1)
+    expect(providerRequests[0]?.thinking).toEqual({ type: 'enabled', budget_tokens: 4096 })
+    await waitFor(async () => {
+      const status = await handleRequest(reasoningRegistry, {
+        jsonrpc: '2.0', id: 'reasoning-status-low', method: 'turn/status', params: { threadId: started.result.thread.id },
+      })
+      return status.result?.runtimeActive === false
+    })
+
+    const resumed = await handleRequest(reasoningRegistry, {
+      jsonrpc: '2.0',
+      id: 'reasoning-resume',
+      method: 'thread/resume',
+      params: { threadId: started.result.thread.id, reasoningEffort: 'high' },
+    })
+    expect(resumed.result.thread.reasoningEffort).toBe('high')
+    expect(loadSession(started.result.thread.id)?.reasoningEffort).toBe('high')
+
+    await handleRequest(reasoningRegistry, {
+      jsonrpc: '2.0',
+      id: 'reasoning-turn-high',
+      method: 'turn/start',
+      params: { threadId: started.result.thread.id, input: 'Use high reasoning.' },
+    })
+    await waitFor(() => providerRequests.length === 2)
+    expect(providerRequests[1]?.thinking).toEqual({ type: 'enabled', budget_tokens: 16384 })
+  })
+
+  it('fails closed for unknown or unsupported reasoning effort selections', async () => {
+    const reasoningRegistry = createMethodRegistry({
+      config: testConfig({
+        localRuntimeProtocol: 'anthropic_messages',
+        models: [
+          {
+            id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', backendModel: 'claude-sonnet-4-20250514', aliases: [], provider: 'anthropic', tier: 'cloud', default: true,
+          },
+          {
+            id: 'plain-model', label: 'Plain Model', backendModel: 'plain-model', aliases: [], provider: 'test', tier: 'local',
+          },
+        ],
+      }),
+    } as any)
+
+    const unknown = await handleRequest(reasoningRegistry, {
+      jsonrpc: '2.0', id: 'reasoning-unknown', method: 'thread/start',
+      params: { model: 'claude-sonnet-4-20250514', reasoningEffort: 'ultra' },
+    })
+    expect(unknown.error).toMatchObject({ code: -32602 })
+
+    const unsupported = await handleRequest(reasoningRegistry, {
+      jsonrpc: '2.0', id: 'reasoning-unsupported', method: 'thread/start',
+      params: { model: 'plain-model', reasoningEffort: 'low' },
+    })
+    expect(unsupported.error).toMatchObject({ code: -32602 })
+
+    const wrongType = await handleRequest(reasoningRegistry, {
+      jsonrpc: '2.0', id: 'reasoning-wrong-type', method: 'thread/start',
+      params: { model: 'claude-sonnet-4-20250514', reasoningEffort: 2 },
+    })
+    expect(wrongType.error).toMatchObject({ code: -32602 })
+  })
+
+  it('fails closed for unknown and unavailable configured model selections', async () => {
+    const configuredRegistry = createMethodRegistry({
+      config: testConfig({
+        models: [
+          {
+            id: 'available-model', label: 'Available Model', backendModel: 'available-model', aliases: [], provider: 'test', tier: 'local', default: true, availability: 'available',
+          },
+          {
+            id: 'offline-model', label: 'Offline Model', backendModel: 'offline-model', aliases: [], provider: 'test', tier: 'local', availability: 'unavailable',
+          },
+        ],
+      }),
+    } as any)
+
+    const unknown = await handleRequest(configuredRegistry, {
+      jsonrpc: '2.0', id: 'unknown-model-start', method: 'thread/start', params: { model: 'missing-model' },
+    })
+    expect(unknown.error).toMatchObject({ code: -32602 })
+
+    const unavailable = await handleRequest(configuredRegistry, {
+      jsonrpc: '2.0', id: 'unavailable-model-start', method: 'thread/start', params: { model: 'offline-model' },
+    })
+    expect(unavailable.error).toMatchObject({ code: -32602 })
+
+    const started = await handleRequest(configuredRegistry, {
+      jsonrpc: '2.0', id: 'available-model-start', method: 'thread/start', params: { model: 'available-model' },
+    })
+    createdSessions.push(started.result.thread.id)
+    const invalidResume = await handleRequest(configuredRegistry, {
+      jsonrpc: '2.0', id: 'unknown-model-resume', method: 'thread/resume',
+      params: { threadId: started.result.thread.id, model: 'missing-model' },
+    })
+
+    expect(invalidResume.error).toMatchObject({ code: -32602 })
+    expect(loadSession(started.result.thread.id)?.model).toBe('available-model')
+  })
+
+  it('persists the selected permission and workspace modes on a new Desktop thread', async () => {
+    const response = await handleRequest(registry, {
+      jsonrpc: '2.0',
+      id: 805,
+      method: 'thread/start',
+      params: { title: 'Plan thread', model: 'test-model', permissionMode: 'plan', workspaceMode: 'project' },
+    })
+    createdSessions.push(response.result.thread.id)
+
+    expect(response.result.thread).toMatchObject({ permissionMode: 'plan', workspaceMode: 'project' })
+    expect(loadSession(response.result.thread.id)?.operatingModeState).toEqual({ mode: 'plan' })
+  })
+
+  it('stores a private image attachment and starts a content-block turn for a vision model', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const visionRegistry = createMethodRegistry({
+      projectRoot,
+      config: testConfig({
+        models: [{
+          id: 'vision-model', label: 'Vision Model', backendModel: 'vision-backend', aliases: [], provider: 'test', tier: 'local', default: true, supportsImages: true,
+        }],
+      }),
+    } as any)
+    const started = await handleRequest(visionRegistry, {
+      jsonrpc: '2.0', id: 806, method: 'thread/start', params: { title: 'Image turn', model: 'vision-model' },
+    })
+    createdSessions.push(started.result.thread.id)
+    const stored = await handleRequest(visionRegistry, {
+      jsonrpc: '2.0', id: 807, method: 'attachment/store', params: {
+        name: 'pasted.png', mediaType: 'image/png', dataBase64: Buffer.from('private-image').toString('base64'),
+      },
+    })
+
+    expect(stored.result).toMatchObject({ id: expect.stringMatching(/^attachment-/), name: 'pasted.png', mediaType: 'image/png', size: 13 })
+    expect(JSON.stringify(stored.result)).not.toContain(projectRoot)
+    const turn = await handleRequest(visionRegistry, {
+      jsonrpc: '2.0', id: 808, method: 'turn/start', params: {
+        threadId: started.result.thread.id,
+        content: [{ type: 'text', text: 'Inspect this image.' }, { type: 'localImage', attachmentId: stored.result.id }],
+      },
+    })
+
+    expect(turn.result.attachments).toEqual([expect.objectContaining({ id: stored.result.id, status: 'attached' })])
+    expect(loadSession(started.result.thread.id)?.turns[0]?.content.map(block => block.type)).toEqual(['text', 'image'])
+  })
+
+  it('rejects image content before appending when the selected model does not support images', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const textRegistry = createMethodRegistry({
+      projectRoot,
+      config: testConfig({
+        models: [{
+          id: 'text-model', label: 'Text Model', backendModel: 'text-backend', aliases: [], provider: 'test', tier: 'local', default: true, supportsImages: false,
+        }],
+      }),
+    } as any)
+    const started = await handleRequest(textRegistry, {
+      jsonrpc: '2.0', id: 809, method: 'thread/start', params: { title: 'Text-only turn', model: 'text-model' },
+    })
+    createdSessions.push(started.result.thread.id)
+    const stored = await handleRequest(textRegistry, {
+      jsonrpc: '2.0', id: 810, method: 'attachment/store', params: {
+        name: 'blocked.png', mediaType: 'image/png', dataBase64: Buffer.from('private-image').toString('base64'),
+      },
+    })
+    const turn = await handleRequest(textRegistry, {
+      jsonrpc: '2.0', id: 811, method: 'turn/start', params: {
+        threadId: started.result.thread.id,
+        content: [{ type: 'text', text: 'Inspect this image.' }, { type: 'localImage', attachmentId: stored.result.id }],
+      },
+    })
+
+    expect(turn.error).toMatchObject({ code: -32012, data: { reason: 'model_vision_unsupported', modelId: 'text-model' } })
+    expect(loadSession(started.result.thread.id)?.turns).toEqual([])
   })
 
   it('starts desktop threads with native OwlCoda tool definitions', async () => {
@@ -619,6 +1131,130 @@ describe('method registry', () => {
     })
   }, 15000)
 
+  it('reads durable thread history with an opaque snapshot cursor and no resume side effect', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const pagedRegistry = createMethodRegistry({ projectRoot })
+    const conversation = createConversation({ system: 'history', model: 'desktop-model' })
+    for (let index = 0; index < 5; index += 1) {
+      conversation.turns.push({
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        timestamp: index + 1,
+        content: [{ type: 'text', text: `turn-${index}` }],
+      })
+    }
+    saveSession(conversation, 'Paged history', { cwd: projectRoot })
+    createdSessions.push(conversation.id)
+
+    const first = await handleRequest(pagedRegistry, {
+      jsonrpc: '2.0',
+      id: 1013,
+      method: 'thread/read',
+      params: { threadId: conversation.id, limit: 2 },
+    })
+
+    expect(first).toHaveProperty('result')
+    expect(first.result.thread.id).toBe(conversation.id)
+    expect(first.result.items.map((item: { id: string }) => item.id)).toEqual([
+      `${conversation.id}:turn:0`,
+      `${conversation.id}:turn:1`,
+    ])
+    expect(first.result.page).toMatchObject({
+      startIndex: 0,
+      limit: 2,
+      totalCount: 5,
+      hasMore: true,
+      nextCursor: expect.any(String),
+    })
+    expect(first.result.snapshotCursor).toEqual(expect.any(String))
+
+    const second = await handleRequest(pagedRegistry, {
+      jsonrpc: '2.0',
+      id: 1014,
+      method: 'thread/read',
+      params: { threadId: conversation.id, limit: 2, cursor: first.result.page.nextCursor },
+    })
+
+    expect(second.result.snapshotCursor).toBe(first.result.snapshotCursor)
+    expect(second.result.items.map((item: { id: string }) => item.id)).toEqual([
+      `${conversation.id}:turn:2`,
+      `${conversation.id}:turn:3`,
+    ])
+    expect(second.result.page).toMatchObject({ startIndex: 2, totalCount: 5, hasMore: true })
+  })
+
+  it('returns a project thread snapshot with an event replay cursor', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const eventBus = createAppServerEventBus()
+    const snapshotRegistry = createMethodRegistry({ projectRoot, eventBus })
+    const started = await handleRequest(snapshotRegistry, {
+      jsonrpc: '2.0',
+      id: 1015,
+      method: 'thread/start',
+      params: { title: 'Snapshot thread', model: 'desktop-model' },
+    })
+    createdSessions.push(started.result.thread.id)
+
+    const snapshot = await handleRequest(snapshotRegistry, {
+      jsonrpc: '2.0',
+      id: 1016,
+      method: 'event/snapshot',
+      params: {},
+    })
+
+    expect(snapshot).toHaveProperty('result')
+    expect(snapshot.result).toMatchObject({
+      schemaVersion: 1,
+      projectId: started.result.thread.projectId,
+      workspaceId: started.result.thread.projectId,
+      threads: [expect.objectContaining({ id: started.result.thread.id })],
+      interactions: [],
+      cursor: {
+        oldestAvailableSequence: 1,
+        latestSequence: 1,
+        afterSequence: 1,
+      },
+    })
+  })
+
+  it('restores pending interactions into the reconnect snapshot', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const interactionStoragePath = join(projectRoot, '.owlcoda', 'app-server', 'approvals.json')
+    mkdirSync(join(projectRoot, '.owlcoda', 'app-server'), { recursive: true })
+    const projectId = listProjects(projectRoot).projects[0]!.id
+    writeFileSync(interactionStoragePath, JSON.stringify({
+      schemaVersion: '1.0',
+      interactions: [{
+        id: 'interaction-restart-1',
+        kind: 'user_question',
+        source: 'live',
+        projectId,
+        threadId: 'thread-restart-1',
+        toolName: 'ask_user_question',
+        input: { question: 'Which package should be changed?' },
+        question: 'Which package should be changed?',
+        status: 'pending',
+        createdAt: 1783701000000,
+      }],
+    }, null, 2), 'utf8')
+    const restoredRegistry = createMethodRegistry({ projectRoot, interactionStoragePath })
+
+    const snapshot = await handleRequest(restoredRegistry, {
+      jsonrpc: '2.0',
+      id: 1017,
+      method: 'event/snapshot',
+      params: {},
+    })
+
+    expect(snapshot.result.interactions).toEqual([
+      expect.objectContaining({
+        id: 'interaction-restart-1',
+        kind: 'user_question',
+        source: 'restored',
+        status: 'pending',
+      }),
+    ])
+  })
+
   it('resumes a durable thread session bound to the project root', async () => {
     const started = await handleRequest(registry, {
       jsonrpc: '2.0',
@@ -645,6 +1281,212 @@ describe('method registry', () => {
       cwd: process.cwd(),
       turnCount: 0,
     })
+  })
+
+  it('switches the durable thread model when Desktop resumes with a selected model', async () => {
+    const started = await handleRequest(registry, {
+      jsonrpc: '2.0',
+      id: 'model-switch-start',
+      method: 'thread/start',
+      params: { title: 'Switch model', model: 'model-a' },
+    })
+    createdSessions.push(started.result.thread.id)
+
+    const resumed = await handleRequest(registry, {
+      jsonrpc: '2.0',
+      id: 'model-switch-resume',
+      method: 'thread/resume',
+      params: { threadId: started.result.thread.id, model: 'model-b' },
+    })
+
+    expect(resumed.result.thread.model).toBe('model-b')
+    expect(loadSession(started.result.thread.id)?.model).toBe('model-b')
+  })
+
+  it('preserves the selected model on each visible turn across Desktop model switches', async () => {
+    const started = await handleRequest(registry, {
+      jsonrpc: '2.0', id: 'model-provenance-start', method: 'thread/start',
+      params: { title: 'Model provenance', model: 'model-a' },
+    })
+    createdSessions.push(started.result.thread.id)
+
+    await handleRequest(registry, {
+      jsonrpc: '2.0', id: 'model-provenance-turn-a', method: 'turn/start',
+      params: { threadId: started.result.thread.id, input: 'first model' },
+    })
+    await handleRequest(registry, {
+      jsonrpc: '2.0', id: 'model-provenance-resume-b', method: 'thread/resume',
+      params: { threadId: started.result.thread.id, model: 'model-b' },
+    })
+    await handleRequest(registry, {
+      jsonrpc: '2.0', id: 'model-provenance-turn-b', method: 'turn/start',
+      params: { threadId: started.result.thread.id, input: 'second model' },
+    })
+    const read = await handleRequest(registry, {
+      jsonrpc: '2.0', id: 'model-provenance-read', method: 'thread/read',
+      params: { threadId: started.result.thread.id },
+    })
+
+    expect(read.result.items).toEqual([
+      expect.objectContaining({ role: 'user', model: 'model-a' }),
+      expect.objectContaining({ role: 'user', model: 'model-b' }),
+    ])
+  })
+
+  it('stamps the effective model on assistant turns produced by the Desktop runtime loop', async () => {
+    const events: AppServerEvent[] = []
+    const eventBus = createAppServerEventBus()
+    eventBus.subscribe(event => events.push(event))
+    const modelRegistry = createMethodRegistry({
+      eventBus,
+      loopOptions: { apiBaseUrl: 'http://model-provenance.test', apiKey: 'test-key' },
+      loopRunner: async (conversation: any) => {
+        conversation.turns.push({
+          role: 'assistant',
+          content: [{ type: 'text', text: 'model-bound answer' }],
+          timestamp: Date.now(),
+        })
+        return {
+          conversation,
+          finalText: 'model-bound answer',
+          iterations: 1,
+          stopReason: 'end_turn',
+          usage: { inputTokens: 1, outputTokens: 1, requestCount: 1 },
+          runtimeFailure: null,
+        }
+      },
+    } as any)
+    const started = await handleRequest(modelRegistry, {
+      jsonrpc: '2.0', id: 'assistant-model-start', method: 'thread/start',
+      params: { title: 'Assistant model provenance', model: 'assistant-model' },
+    })
+    createdSessions.push(started.result.thread.id)
+    await handleRequest(modelRegistry, {
+      jsonrpc: '2.0', id: 'assistant-model-turn', method: 'turn/start',
+      params: { threadId: started.result.thread.id, input: 'answer with provenance' },
+    })
+    await waitFor(() => events.some(event => event.type === 'turn.completed'))
+    const read = await handleRequest(modelRegistry, {
+      jsonrpc: '2.0', id: 'assistant-model-read', method: 'thread/read',
+      params: { threadId: started.result.thread.id },
+    })
+
+    expect(read.result.items).toEqual([
+      expect.objectContaining({ role: 'user', model: 'assistant-model' }),
+      expect.objectContaining({ role: 'assistant', model: 'assistant-model' }),
+    ])
+  })
+
+  it('clears persisted reasoning effort when resume switches to a model that cannot honor it', async () => {
+    const reasoningRegistry = createMethodRegistry({
+      config: testConfig({
+        localRuntimeProtocol: 'anthropic_messages',
+        models: [
+          {
+            id: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', backendModel: 'claude-sonnet-4-20250514', aliases: [], provider: 'anthropic', tier: 'cloud', default: true,
+          },
+          {
+            id: 'plain-model', label: 'Plain Model', backendModel: 'plain-model', aliases: [], provider: 'test', tier: 'local',
+          },
+        ],
+      }),
+    } as any)
+    const started = await handleRequest(reasoningRegistry, {
+      jsonrpc: '2.0', id: 'reasoning-clear-start', method: 'thread/start',
+      params: { model: 'claude-sonnet-4-20250514', reasoningEffort: 'medium' },
+    })
+    createdSessions.push(started.result.thread.id)
+
+    const resumed = await handleRequest(reasoningRegistry, {
+      jsonrpc: '2.0', id: 'reasoning-clear-resume', method: 'thread/resume',
+      params: { threadId: started.result.thread.id, model: 'plain-model' },
+    })
+
+    expect(resumed.result.thread).not.toHaveProperty('reasoningEffort')
+    expect(loadSession(started.result.thread.id)?.reasoningEffort).toBeUndefined()
+  })
+
+  it('does not expose hidden thinking blocks through thread/read', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const conversation = createConversation({ system: 'private reasoning system', model: 'private-reasoning-model' })
+    conversation.turns.push({
+      role: 'assistant',
+      timestamp: 1,
+      content: [
+        { type: 'thinking', thinking: 'private chain of thought' },
+        { type: 'text', text: 'Visible final answer' },
+      ],
+    })
+    saveSession(conversation, 'Private reasoning thread', { cwd: projectRoot })
+    createdSessions.push(conversation.id)
+    const privateRegistry = createMethodRegistry({ projectRoot })
+
+    const response = await handleRequest(privateRegistry, {
+      jsonrpc: '2.0', id: 'private-reasoning-read', method: 'thread/read',
+      params: { threadId: conversation.id },
+    })
+
+    expect(response.result.items[0].content).toEqual([{ type: 'text', text: 'Visible final answer' }])
+    expect(JSON.stringify(response.result)).not.toContain('private chain of thought')
+
+    const transcript = await handleRequest(privateRegistry, {
+      jsonrpc: '2.0', id: 'private-reasoning-transcript', method: 'runtimeTranscript/read',
+      params: { threadId: conversation.id },
+    })
+    expect(transcript.result.items).toEqual([
+      expect.objectContaining({ kind: 'message', text: 'Visible final answer' }),
+    ])
+    expect(JSON.stringify(transcript.result)).not.toContain('private chain of thought')
+  })
+
+  it('does not expose runtime-only conversation turns through thread/read', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const conversation = createConversation({ system: 'runtime audience system', model: 'runtime-audience-model' })
+    conversation.turns.push(
+      {
+        role: 'user',
+        timestamp: 1,
+        content: [{ type: 'text', text: 'Visible user prompt' }],
+      },
+      {
+        role: 'assistant',
+        audience: 'runtime',
+        timestamp: 2,
+        content: [{ type: 'text', text: 'Superseded assistant answer' }],
+      },
+      {
+        role: 'user',
+        audience: 'runtime',
+        timestamp: 3,
+        content: [{ type: 'text', text: '[Runtime task-step] internal instruction' }],
+      },
+      {
+        role: 'user',
+        timestamp: 3.5,
+        content: [{ type: 'text', text: '[Runtime truth resume snapshot]\nLegacy persisted runtime recovery context.' }],
+      },
+      {
+        role: 'assistant',
+        timestamp: 4,
+        content: [{ type: 'text', text: 'Visible final answer' }],
+      },
+    )
+    saveSession(conversation, 'Runtime audience thread', { cwd: projectRoot })
+    createdSessions.push(conversation.id)
+    const runtimeAudienceRegistry = createMethodRegistry({ projectRoot })
+
+    const response = await handleRequest(runtimeAudienceRegistry, {
+      jsonrpc: '2.0', id: 'runtime-audience-read', method: 'thread/read',
+      params: { threadId: conversation.id },
+    })
+
+    expect(response.result.items.map((item: { content: Array<{ text?: string }> }) => item.content[0]?.text)).toEqual([
+      'Visible user prompt',
+      'Visible final answer',
+    ])
+    expect(JSON.stringify(response.result)).not.toContain('[Runtime task-step]')
+    expect(JSON.stringify(response.result)).not.toContain('[Runtime truth resume snapshot]')
+    expect(JSON.stringify(response.result)).not.toContain('Superseded assistant answer')
   })
 
   it('rejects resume for missing or foreign project sessions', async () => {
@@ -1339,6 +2181,141 @@ describe('method registry', () => {
     })
   })
 
+  it('keeps Desktop retry continuation internal while rerunning the saved thread', async () => {
+    const started = await handleRequest(registry, {
+      jsonrpc: '2.0',
+      id: 'retry-hidden-start',
+      method: 'thread/start',
+      params: { title: 'Retry visibility thread', model: 'turn-model' },
+    })
+    createdSessions.push(started.result.thread.id)
+
+    await handleRequest(registry, {
+      jsonrpc: '2.0',
+      id: 'retry-visible-prompt',
+      method: 'turn/start',
+      params: { threadId: started.result.thread.id, input: 'Original visible task' },
+    })
+    const retried = await handleRequest(registry, {
+      jsonrpc: '2.0',
+      id: 'retry-hidden-continuation',
+      method: 'turn/start',
+      params: { threadId: started.result.thread.id, input: 'continue', retry: true },
+    })
+    const saved = loadSession(started.result.thread.id)
+    const read = await handleRequest(registry, {
+      jsonrpc: '2.0',
+      id: 'retry-hidden-read',
+      method: 'thread/read',
+      params: { threadId: started.result.thread.id },
+    })
+
+    expect(retried.result.thread.turnCount).toBe(1)
+    expect(saved!.turns.at(-1)).toMatchObject({
+      role: 'user',
+      audience: 'runtime',
+      content: [{ type: 'text', text: 'continue' }],
+    })
+    expect(read.result.items).toHaveLength(1)
+    expect(JSON.stringify(read.result)).not.toContain('continue')
+  })
+
+  it('retries the latest saved task without requiring a second visible prompt', async () => {
+    const started = await handleRequest(registry, {
+      jsonrpc: '2.0',
+      id: 'retry-without-input-start',
+      method: 'thread/start',
+      params: { title: 'Retry without duplicate prompt', model: 'turn-model' },
+    })
+    createdSessions.push(started.result.thread.id)
+
+    await handleRequest(registry, {
+      jsonrpc: '2.0',
+      id: 'retry-without-input-visible-prompt',
+      method: 'turn/start',
+      params: { threadId: started.result.thread.id, input: 'Original visible task' },
+    })
+    const retried = await handleRequest(registry, {
+      jsonrpc: '2.0',
+      id: 'retry-without-input',
+      method: 'turn/start',
+      params: { threadId: started.result.thread.id, retry: true },
+    })
+    const saved = loadSession(started.result.thread.id)
+    const read = await handleRequest(registry, {
+      jsonrpc: '2.0',
+      id: 'retry-without-input-read',
+      method: 'thread/read',
+      params: { threadId: started.result.thread.id },
+    })
+
+    expect(retried.result.thread.turnCount).toBe(1)
+    expect(saved!.turns.at(-1)).toMatchObject({ role: 'user', audience: 'runtime' })
+    expect(read.result.items).toHaveLength(1)
+    expect(JSON.stringify(read.result)).toContain('Original visible task')
+    expect(JSON.stringify(read.result)).not.toContain('Retry the latest saved user task')
+  })
+
+  it('clears restored interactions before retrying the latest saved task', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const interactionStoragePath = join(projectRoot, '.owlcoda', 'app-server', 'approvals.json')
+    const initialRegistry = createMethodRegistry({ projectRoot })
+    const started = await handleRequest(initialRegistry, {
+      jsonrpc: '2.0',
+      id: 'restored-retry-start',
+      method: 'thread/start',
+      params: { title: 'Restored retry thread', model: 'turn-model' },
+    })
+    createdSessions.push(started.result.thread.id)
+    await handleRequest(initialRegistry, {
+      jsonrpc: '2.0',
+      id: 'restored-retry-visible',
+      method: 'turn/start',
+      params: { threadId: started.result.thread.id, input: 'Original visible task' },
+    })
+    mkdirSync(join(projectRoot, '.owlcoda', 'app-server'), { recursive: true })
+    writeFileSync(interactionStoragePath, JSON.stringify({
+      schemaVersion: '1.0',
+      interactions: [{
+        id: 'approval-restored-retry',
+        kind: 'tool_approval',
+        source: 'live',
+        projectId: started.result.thread.projectId,
+        threadId: started.result.thread.id,
+        toolName: 'bash',
+        input: { command: 'npm test' },
+        status: 'pending',
+        createdAt: 1,
+      }],
+    }, null, 2), 'utf8')
+    const restoredRegistry = createMethodRegistry({ projectRoot, interactionStoragePath })
+
+    const retried = await handleRequest(restoredRegistry, {
+      jsonrpc: '2.0',
+      id: 'restored-retry',
+      method: 'turn/start',
+      params: { threadId: started.result.thread.id, retry: true },
+    })
+    const snapshot = await handleRequest(restoredRegistry, {
+      jsonrpc: '2.0',
+      id: 'restored-retry-snapshot',
+      method: 'event/snapshot',
+      params: {},
+    })
+    const read = await handleRequest(restoredRegistry, {
+      jsonrpc: '2.0',
+      id: 'restored-retry-read',
+      method: 'thread/read',
+      params: { threadId: started.result.thread.id },
+    })
+
+    expect(retried).toHaveProperty('result')
+    expect(snapshot.result.interactions).toEqual([])
+    expect(JSON.parse(readFileSync(interactionStoragePath, 'utf8'))).toMatchObject({ interactions: [] })
+    expect(JSON.stringify(read.result)).toContain('Original visible task')
+    expect(JSON.stringify(read.result)).not.toContain('Retry the latest saved user task')
+  })
+
   it('reports saved-only turn status for durable desktop recovery', async () => {
     const started = await handleRequest(registry, {
       jsonrpc: '2.0',
@@ -1445,7 +2422,87 @@ describe('method registry', () => {
     })
   })
 
-  it('reports waiting_for_interaction from restored pending interactions', async () => {
+  it('never reports a failed or empty terminal runtime turn as completed', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const cases = [
+      {
+        title: 'Explicit runtime failure',
+        payload: {
+          stop_reason: null,
+          iterations: 1,
+          request_count: 1,
+          input_tokens: 0,
+          output_tokens: 0,
+          assistant_response_count: 0,
+          assistant_text_chars: 0,
+          final_text_chars: 0,
+          tool_use_count: 0,
+          executed_tool_count: 0,
+          empty_response_count: 0,
+          runtime_failure_kind: 'network',
+          runtime_failure_phase: 'provider_request',
+        },
+        reason: 'runtime_failure',
+        failure: { kind: 'network', phase: 'provider_request', retryable: true },
+      },
+      {
+        title: 'Empty terminal runtime turn',
+        payload: {
+          stop_reason: null,
+          iterations: 1,
+          request_count: 0,
+          input_tokens: 0,
+          output_tokens: 0,
+          assistant_response_count: 0,
+          assistant_text_chars: 0,
+          final_text_chars: 0,
+          tool_use_count: 0,
+          executed_tool_count: 0,
+          empty_response_count: 0,
+        },
+        reason: 'runtime_no_result',
+        failure: { kind: 'no_runtime_result', retryable: true },
+      },
+    ] as const
+
+    for (const [index, entry] of cases.entries()) {
+      const conversation = createConversation({ system: 'failed status system', model: 'failed-model' })
+      conversation.turns.push({
+        role: 'user',
+        timestamp: index + 1,
+        content: [{ type: 'text', text: 'run a failing turn' }],
+      })
+      appendRuntimeEvent(conversation, {
+        kind: 'turn_completed',
+        at: `2026-06-23T02:10:0${index}.000Z`,
+        turnId: `runtime-turn-failed-${index}`,
+        payload: entry.payload,
+      })
+      saveSession(conversation, entry.title, { cwd: projectRoot })
+      createdSessions.push(conversation.id)
+      const registry = createMethodRegistry({ projectRoot })
+
+      const status = await handleRequest(registry, {
+        jsonrpc: '2.0',
+        id: 1610 + index,
+        method: 'turn/status',
+        params: { threadId: conversation.id },
+      })
+
+      expect(status.result).toMatchObject({
+        threadId: conversation.id,
+        status: 'failed',
+        reason: entry.reason,
+        failure: entry.failure,
+        resumeHint: {
+          action: 'inspect_transcript_before_retry',
+        },
+      })
+      expect(status.result.status).not.toBe('completed')
+    }
+  })
+
+  it('reports stale recovery truth from restored pending interactions', async () => {
     const projectRoot = makeTemporaryProjectRoot()
     const interactionStoragePath = join(projectRoot, '.owlcoda', 'app-server', 'approvals.json')
     mkdirSync(join(projectRoot, '.owlcoda', 'app-server'), { recursive: true })
@@ -1489,8 +2546,8 @@ describe('method registry', () => {
     expect(status).toHaveProperty('result')
     expect(status.result).toMatchObject({
       threadId: conversation.id,
-      status: 'waiting_for_interaction',
-      reason: 'pending_interaction',
+      status: 'stale',
+      reason: 'restored_interaction_without_continuation',
       pendingInteractionCount: 1,
       lastInteraction: {
         id: 'approval-1',
@@ -1498,8 +2555,12 @@ describe('method registry', () => {
         source: 'restored',
         toolName: 'bash',
       },
+      failure: {
+        kind: 'restored_interaction_without_continuation',
+        retryable: true,
+      },
       resumeHint: {
-        action: 'resolve_pending_interaction',
+        action: 'inspect_transcript_before_retry',
       },
     })
   })
@@ -1624,9 +2685,9 @@ describe('method registry', () => {
     expect(recovered).toHaveProperty('error')
     expect(recovered.error.code).toBe(-32011)
     expect(recovered.error.data).toMatchObject({
-      reason: 'pending_interaction',
-      status: 'waiting_for_interaction',
-      suggestedAction: 'interaction/respond',
+      reason: 'restored_interaction_without_continuation',
+      status: 'stale',
+      suggestedAction: 'turn/start',
     })
   })
 
@@ -1672,6 +2733,38 @@ describe('method registry', () => {
       }),
     ])
     expect(loadSession(started.result.thread.id)!.turns).toHaveLength(1)
+  })
+
+  it('persists a first-prompt title only while the new thread still has its default title', async () => {
+    const titleRegistry = createMethodRegistry()
+    const started = await handleRequest(titleRegistry, {
+      jsonrpc: '2.0',
+      id: 'first-prompt-title-start',
+      method: 'thread/start',
+      params: { model: 'desktop-model' },
+    })
+    createdSessions.push(started.result.thread.id)
+
+    const firstTurn = await handleRequest(titleRegistry, {
+      jsonrpc: '2.0',
+      id: 'first-prompt-title-turn',
+      method: 'turn/start',
+      params: {
+        threadId: started.result.thread.id,
+        input: 'Inspect the adapter without changing files.',
+        title: 'Inspect the adapter without changing files.',
+      },
+    })
+    expect(firstTurn.result.thread.title).toBe('Inspect the adapter without changing files.')
+    expect(loadSession(started.result.thread.id)?.title).toBe('Inspect the adapter without changing files.')
+
+    const secondTurn = await handleRequest(titleRegistry, {
+      jsonrpc: '2.0',
+      id: 'first-prompt-title-second-turn',
+      method: 'turn/start',
+      params: { threadId: started.result.thread.id, input: 'Continue.', title: 'Must not replace the first title' },
+    })
+    expect(secondTurn.result.thread.title).toBe('Inspect the adapter without changing files.')
   })
 
   it('rejects invalid turn/start inputs', async () => {
@@ -1955,6 +3048,175 @@ describe('method registry', () => {
     ]))
   })
 
+  it('emits one structured retryable rate-limit failure for Desktop supervision', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const eventBus = createAppServerEventBus()
+    const events: AppServerEvent[] = []
+    eventBus.subscribe(event => events.push(event))
+    const failureRegistry = createMethodRegistry({
+      projectRoot,
+      eventBus,
+      loopOptions: { apiBaseUrl: 'http://loop.test', apiKey: 'test-key' },
+      loopRunner: async (conversation: any, _dispatcher: unknown, opts: any) => {
+        opts.callbacks.onError('Provider returned 429 rate limit')
+        return {
+          conversation,
+          finalText: '',
+          iterations: 1,
+          stopReason: null,
+          usage: { inputTokens: 0, outputTokens: 0, requestCount: 1 },
+          runtimeFailure: {
+            kind: 'provider_error',
+            phase: 'request',
+            message: 'Provider returned 429 rate limit',
+            retryable: true,
+            diagnostic: { status: 429 },
+          },
+        }
+      },
+    } as any)
+    const started = await handleRequest(failureRegistry, {
+      jsonrpc: '2.0', id: 2401, method: 'thread/start', params: { title: 'Rate limit failure' },
+    })
+    createdSessions.push(started.result.thread.id)
+    await handleRequest(failureRegistry, {
+      jsonrpc: '2.0', id: 2402, method: 'turn/start', params: { threadId: started.result.thread.id, input: 'Run a task' },
+    })
+    await waitFor(() => events.some(event => event.type === 'turn.failed' && 'failureKind' in event))
+
+    expect(events.filter(event => event.type === 'turn.failed')).toEqual([
+      expect.objectContaining({
+        type: 'turn.failed',
+        threadId: started.result.thread.id,
+        failureKind: 'provider_error',
+        failureCategory: 'rate_limit',
+        retryable: true,
+      }),
+    ])
+  })
+
+  it('classifies exhausted provider quota and preserves it in durable turn status', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const eventBus = createAppServerEventBus()
+    const events: AppServerEvent[] = []
+    eventBus.subscribe(event => events.push(event))
+    const failureRegistry = createMethodRegistry({
+      projectRoot,
+      eventBus,
+      loopOptions: { apiBaseUrl: 'http://loop.test', apiKey: 'test-key' },
+      loopRunner: async (conversation: any) => ({
+        conversation,
+        finalText: '',
+        iterations: 1,
+        stopReason: null,
+        usage: { inputTokens: 0, outputTokens: 0, requestCount: 1 },
+        runtimeFailure: {
+          kind: 'http_error',
+          phase: 'request',
+          message: 'kimi request failed: upstream 403 from provider',
+          retryable: false,
+          diagnostic: {
+            provider: 'kimi',
+            model: 'kimi',
+            kind: 'http_4xx',
+            status: 403,
+            detail: "You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle.",
+          },
+        },
+      }),
+    } as any)
+    const started = await handleRequest(failureRegistry, {
+      jsonrpc: '2.0', id: 'quota-failure-start', method: 'thread/start', params: { title: 'Quota failure' },
+    })
+    createdSessions.push(started.result.thread.id)
+    await handleRequest(failureRegistry, {
+      jsonrpc: '2.0', id: 'quota-failure-turn', method: 'turn/start', params: { threadId: started.result.thread.id, input: 'Run a task' },
+    })
+    await waitFor(() => events.some(event => event.type === 'turn.failed' && 'failureCategory' in event))
+    const status = await handleRequest(failureRegistry, {
+      jsonrpc: '2.0', id: 'quota-failure-status', method: 'turn/status', params: { threadId: started.result.thread.id },
+    })
+
+    expect(events.filter(event => event.type === 'turn.failed')).toEqual([
+      expect.objectContaining({
+        type: 'turn.failed',
+        failureCategory: 'quota',
+        retryable: false,
+      }),
+    ])
+    expect(status.result).toMatchObject({
+      status: 'failed',
+      failure: {
+        kind: 'http_error',
+        category: 'quota',
+        retryable: false,
+        provider: 'kimi',
+        model: 'kimi',
+      },
+    })
+    const persistedFailure = loadSession(started.result.thread.id)?.runtimeEventLog?.events
+      .find(event => event.kind === 'runtime_intervention' && event.payload.intervention_kind === 'app_server_turn_failure')
+    expect(persistedFailure?.payload).toMatchObject({
+      failure_provider: 'kimi',
+      failure_model: 'kimi',
+    })
+    expect(persistedFailure?.payload).not.toHaveProperty('detail')
+    expect(persistedFailure?.payload).not.toHaveProperty('api_key')
+    expect(persistedFailure?.payload).not.toHaveProperty('url')
+    expect(persistedFailure?.payload).not.toHaveProperty('request_id')
+  })
+
+  it('reports a terminal turn status when the completion event becomes observable', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const eventBus = createAppServerEventBus()
+    let statusAtCompletion: Promise<any> | undefined
+    let completionRegistry: ReturnType<typeof createMethodRegistry>
+    eventBus.subscribe(event => {
+      if (event.type === 'turn.completed') {
+        statusAtCompletion = handleRequest(completionRegistry, {
+          jsonrpc: '2.0', id: 2413, method: 'turn/status', params: { threadId: event.threadId },
+        })
+      }
+    })
+    completionRegistry = createMethodRegistry({
+      projectRoot,
+      eventBus,
+      loopOptions: { apiBaseUrl: 'http://loop.test', apiKey: 'test-key' },
+      loopRunner: async (conversation: any) => {
+        conversation.turns.push({ role: 'assistant', timestamp: Date.now(), content: [{ type: 'text', text: 'done' }] })
+        appendRuntimeEvent(conversation, {
+          kind: 'turn_completed',
+          at: new Date().toISOString(),
+          turnId: 'completion-ordering-turn',
+          runId: 'completion-ordering-run',
+          payload: {
+            stop_reason: 'end_turn', iterations: 1, request_count: 1,
+            input_tokens: 1, output_tokens: 1, assistant_response_count: 1,
+            assistant_text_chars: 4, final_text_chars: 4, tool_use_count: 0,
+            executed_tool_count: 0, empty_response_count: 0,
+          },
+        })
+        return {
+          conversation,
+          finalText: 'done',
+          iterations: 1,
+          stopReason: 'end_turn',
+          usage: { inputTokens: 1, outputTokens: 1, requestCount: 1 },
+        }
+      },
+    } as any)
+    const started = await handleRequest(completionRegistry, {
+      jsonrpc: '2.0', id: 2411, method: 'thread/start', params: { title: 'Completion ordering' },
+    })
+    createdSessions.push(started.result.thread.id)
+    await handleRequest(completionRegistry, {
+      jsonrpc: '2.0', id: 2412, method: 'turn/start', params: { threadId: started.result.thread.id, input: 'Finish once' },
+    })
+    await waitFor(() => Boolean(statusAtCompletion))
+
+    expect(await statusAtCompletion).toMatchObject({ result: { status: 'completed' } })
+  })
+
   it('bridges tool approval requests through App Server approval methods', async () => {
     const eventBus = createAppServerEventBus()
     const events: AppServerEvent[] = []
@@ -1962,7 +3224,7 @@ describe('method registry', () => {
     let approvalResult: boolean | null = null
     let runnerFinished = false
     const loopRunner = async (conversation: any, _dispatcher: unknown, opts: any) => {
-      approvalResult = await opts.callbacks.onToolApproval('bash', { command: 'npm test' })
+      approvalResult = await opts.callbacks.onToolApproval('bash', { command: 'curl https://example.com/health' })
       runnerFinished = true
       return {
         conversation,
@@ -2009,7 +3271,9 @@ describe('method registry', () => {
       projectId: started.result.thread.projectId,
       threadId: started.result.thread.id,
       toolName: 'bash',
-      input: { command: 'npm test' },
+      input: { command: 'curl https://example.com/health' },
+      riskClass: 'mutating',
+      riskReason: 'curl (network)',
       status: 'pending',
     })
     expect(events).toEqual(expect.arrayContaining([
@@ -2057,6 +3321,7 @@ describe('method registry', () => {
       params: { threadId: started.result.thread.id },
     })
     expect(listedAfterResolve.result.approvals).toEqual([])
+    expect(existsSync(join(loopRegistry.projectRoot, '.owlcoda', 'app-server'))).toBe(false)
   })
 
   it('bridges task-scope approval and user questions through App Server interactions', async () => {
@@ -2198,26 +3463,102 @@ describe('method registry', () => {
     ]))
   })
 
+  it('refuses to approve a live task-scope target outside the project workspace', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const projectId = listProjects(projectRoot).projects[0]!.id
+    const approvalBroker = createAppServerApprovalBroker()
+    const pending = approvalBroker.requestTaskScopeApproval({
+      projectId,
+      threadId: 'thread-outside-workspace',
+      toolName: 'write',
+      toolInput: { path: join(projectRoot, '..', 'outside-secret.txt') },
+      riskClass: 'external_effect',
+      riskReason: 'write targets a path outside the workspace',
+      taskScope: {
+        attemptedPath: join(projectRoot, '..', 'outside-secret.txt'),
+        attemptedPaths: [join(projectRoot, '..', 'outside-secret.txt')],
+        allowedPaths: [join(projectRoot, 'src')],
+        message: 'write outside the workspace',
+      },
+    })
+    const interaction = approvalBroker.listInteractions().interactions[0]!
+    const outsideRegistry = createMethodRegistry({ projectRoot, approvalBroker })
+
+    const response = await handleRequest(outsideRegistry, {
+      jsonrpc: '2.0',
+      id: 'outside-workspace-approval',
+      method: 'interaction/respond',
+      params: { interactionId: interaction.id, decision: 'approve' },
+    })
+
+    expect(response).toHaveProperty('error')
+    expect(response.error).toMatchObject({
+      code: -32012,
+      message: expect.stringMatching(/outside.*workspace/i),
+    })
+    expect(approvalBroker.listInteractions().interactions).toHaveLength(1)
+    approvalBroker.respondInteraction({ interactionId: interaction.id, decision: 'deny' })
+    await expect(pending).resolves.toBe(false)
+  })
+
+  it('applies the same outside-workspace guard to legacy approval/resolve', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const projectId = listProjects(projectRoot).projects[0]!.id
+    const approvalBroker = createAppServerApprovalBroker()
+    const pending = approvalBroker.requestTaskScopeApproval({
+      projectId,
+      threadId: 'thread-legacy-outside-workspace',
+      toolName: 'bash',
+      toolInput: { command: `cp source.txt ${join(projectRoot, '..', 'outside-secret.txt')}` },
+      riskClass: 'mutating',
+      riskReason: 'cp (file copy)',
+      taskScope: {
+        attemptedPath: join(projectRoot, '..', 'outside-secret.txt'),
+        attemptedPaths: [join(projectRoot, '..', 'outside-secret.txt')],
+        allowedPaths: [join(projectRoot, 'src')],
+        message: 'bash write outside the workspace',
+      },
+    })
+    const interaction = approvalBroker.listInteractions().interactions[0]!
+    const outsideRegistry = createMethodRegistry({ projectRoot, approvalBroker })
+
+    const response = await handleRequest(outsideRegistry, {
+      jsonrpc: '2.0',
+      id: 'legacy-outside-workspace-approval',
+      method: 'approval/resolve',
+      params: { approvalId: interaction.id, decision: 'approve' },
+    })
+
+    expect(response).toHaveProperty('error')
+    expect(response.error).toMatchObject({
+      code: -32012,
+      message: expect.stringMatching(/outside.*workspace/i),
+    })
+    expect(approvalBroker.listInteractions().interactions).toHaveLength(1)
+    approvalBroker.respondInteraction({ interactionId: interaction.id, decision: 'deny' })
+    await expect(pending).resolves.toBe(false)
+  })
+
   it('interrupts an active injected conversation loop by aborting its signal', async () => {
     const eventBus = createAppServerEventBus()
     const events: AppServerEvent[] = []
     eventBus.subscribe(event => events.push(event))
     let activeSignal: AbortSignal | null = null
+    let runnerFinished = false
     let releaseRunner!: () => void
     const loopRunner = async (conversation: any, _dispatcher: unknown, opts: any) => {
       activeSignal = opts.signal
       await new Promise<void>(resolve => {
         releaseRunner = resolve
       })
+      runnerFinished = true
       return {
         conversation,
-        finalText: '',
-        iterations: 0,
-        stopReason: activeSignal?.aborted ? 'abort' : 'end_turn',
+        finalText: 'done',
+        iterations: 1,
+        stopReason: 'end_turn',
         usage: { inputTokens: 0, outputTokens: 0, requestCount: 0 },
-        runtimeFailure: activeSignal?.aborted
-          ? { kind: 'abort', phase: 'request', message: 'aborted', retryable: false }
-          : null,
+        runtimeFailure: null,
       }
     }
     const loopRegistry = createMethodRegistry({
@@ -2257,9 +3598,50 @@ describe('method registry', () => {
     expect(activeSignal!.aborted).toBe(true)
     releaseRunner()
     await turnPromise
+    await waitFor(() => runnerFinished)
+    await new Promise(resolve => setTimeout(resolve, 0))
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'turn.interrupted', threadId: started.result.thread.id, status: 'interrupted' }),
     ]))
+    expect(events.some(event => event.type === 'turn.completed' && event.threadId === started.result.thread.id)).toBe(false)
+
+    const saved = loadSession(started.result.thread.id)!
+    expect(saved.runtimeEventLog?.events.at(-1)).toMatchObject({
+      kind: 'runtime_intervention',
+      payload: {
+        intervention_kind: 'app_server_turn_interrupted',
+        terminal_status: 'interrupted',
+      },
+    })
+    const restored = restoreConversation(saved, saved.tools ?? [])
+    appendRuntimeEvent(restored, {
+      kind: 'turn_completed',
+      turnId: 'runtime-turn-injected',
+      payload: {
+        stop_reason: 'end_turn',
+        iterations: 1,
+        request_count: 1,
+        input_tokens: 1,
+        output_tokens: 1,
+        assistant_response_count: 1,
+        assistant_text_chars: 4,
+        final_text_chars: 4,
+        tool_use_count: 0,
+        executed_tool_count: 0,
+        empty_response_count: 0,
+      },
+    })
+    saveSession(restored, saved.title, { cwd: saved.cwd })
+    expect(loadSession(started.result.thread.id)?.runtimeEventLog?.events.at(-1)?.kind).toBe('turn_completed')
+    const status = await handleRequest(loopRegistry, {
+      jsonrpc: '2.0', id: 32, method: 'turn/status', params: { threadId: started.result.thread.id },
+    })
+    expect(status.result).toMatchObject({
+      status: 'interrupted',
+      reason: 'turn_interrupted',
+      failure: { kind: 'user_interrupted', retryable: true },
+      resumeHint: { action: 'start_turn' },
+    })
   })
 
   it('rejects concurrent turn/start on the same active thread without appending another user turn', async () => {
@@ -2472,6 +3854,7 @@ describe('method registry', () => {
     })
     expect(listed).toHaveProperty('result')
     expect(listed.result.changes).toHaveLength(1)
+    expect(listed.result.lastTurnChanges).toHaveLength(1)
     expect(listed.result.changes[0]).toMatchObject({
       id: 'edit:edit-1',
       threadId: conversation.id,
@@ -2527,6 +3910,95 @@ describe('method registry', () => {
       },
     })
     expect(readFileSync(targetPath, 'utf8')).toBe('alpha\nbeta\nomega\n')
+  })
+
+  it('lists repository-wide unstaged changes separately from receipt-backed last-turn changes', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const receiptPath = join(projectRoot, 'receipt-only.txt')
+    const repositoryPath = join(projectRoot, 'repository-only.txt')
+    writeFileSync(receiptPath, 'receipt baseline\n', 'utf8')
+    writeFileSync(repositoryPath, 'repository baseline\n', 'utf8')
+    initializeGitRepository(projectRoot)
+    writeFileSync(repositoryPath, 'repository changed\n', 'utf8')
+
+    const conversation = createConversation({ system: 'dual review scope system', model: 'review-model' })
+    conversation.turns.push({
+      role: 'assistant',
+      timestamp: 1,
+      content: [{
+        type: 'tool_use',
+        id: 'receipt-edit-1',
+        name: 'edit',
+        input: {
+          path: receiptPath,
+          oldStr: 'receipt baseline',
+          newStr: 'receipt changed',
+        },
+      }],
+    })
+    conversation.turns.push({
+      role: 'user',
+      timestamp: 2,
+      content: [{
+        type: 'tool_result',
+        tool_use_id: 'receipt-edit-1',
+        content: `Edited ${receiptPath}`,
+        is_error: false,
+      }],
+    })
+    saveSession(conversation, 'Dual review scope session', { cwd: projectRoot })
+    createdSessions.push(conversation.id)
+
+    const listed = await handleRequest(createMethodRegistry({ projectRoot }), {
+      jsonrpc: '2.0',
+      id: 340,
+      method: 'review/list',
+      params: { threadId: conversation.id },
+    })
+
+    expect(listed.result.lastTurnChanges.map((change: any) => change.path)).toEqual([receiptPath])
+    expect(listed.result.unstagedChanges).toEqual([
+      expect.objectContaining({
+        path: 'repository-only.txt',
+        operation: 'modified',
+        binary: false,
+      }),
+    ])
+    expect(listed.result.unstagedChanges.map((change: any) => change.path))
+      .not.toEqual(listed.result.lastTurnChanges.map((change: any) => change.path))
+    expect(listed.result.scopes).toEqual({
+      unstaged: {
+        id: 'unstaged',
+        source: 'git_worktree',
+        status: 'ready',
+        changeCount: 1,
+        excludedCount: 0,
+        capabilities: {
+          read: true,
+          stage: false,
+          unstage: false,
+          apply: false,
+          revert: false,
+          hunkApply: false,
+          hunkRevert: false,
+        },
+      },
+      lastTurn: {
+        id: 'last_turn',
+        source: 'runtime_receipts',
+        status: 'ready',
+        changeCount: 1,
+        capabilities: {
+          read: true,
+          stage: false,
+          unstage: false,
+          apply: true,
+          revert: true,
+          hunkApply: true,
+          hunkRevert: true,
+        },
+      },
+    })
   })
 
   it('applies and reverts a single review hunk with proof and hunk-scoped status', async () => {
@@ -2855,6 +4327,7 @@ describe('method registry', () => {
         }),
       ],
     })
+    expect(existsSync(join(projectRoot, '.owlcoda', 'app-server'))).toBe(false)
   })
 
   it('rejects review status updates for unknown changes', async () => {
@@ -3732,126 +5205,20 @@ describe('method registry', () => {
     expect(readFileSync(targetPath, 'utf8')).toBe('bash should stay\n')
   })
 
-  it('appends proof through proof/append and exposes readback on runtime rail', async () => {
+  it('does not expose legacy RunKit truth-writer methods', async () => {
     const projectRoot = makeTemporaryProjectRoot()
-    createRunKitTruthFixture(projectRoot)
-    const eventBus = createAppServerEventBus()
-    const events: AppServerEvent[] = []
-    eventBus.subscribe(event => events.push(event))
-    const truthRegistry = createMethodRegistry({ projectRoot, eventBus })
+    const truthRegistry = createMethodRegistry({ projectRoot })
 
-    const appended = await handleRequest(truthRegistry, {
-      jsonrpc: '2.0',
-      id: 57,
-      method: 'proof/append',
-      params: {
-        kind: 'test_result',
-        title: 'App Server tests passed',
-        status: 'passed',
-        detail: 'npm test -- tests/native/app-server',
-      },
-    })
-
-    expect(appended).toHaveProperty('result')
-    expect(appended.result).toMatchObject({
-      status: 'appended',
-      proof: {
-        kind: 'test_result',
-        title: 'App Server tests passed',
-        status: 'passed',
-        sourceRef: expect.stringMatching(/^\.owlrunkit\/proofs\/proof-/),
-      },
-      readback: {
-        freshness: 'fresh',
-      },
-    })
-    const rail = await handleRequest(truthRegistry, {
-      jsonrpc: '2.0',
-      id: 58,
-      method: 'runtimeRail/read',
-      params: {},
-    })
-    expect(rail.result.proofs).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        title: 'Existing proof',
-        sourceRef: '.owlrunkit/proofs/existing-proof.json',
-      }),
-      expect.objectContaining({
-        title: 'App Server tests passed',
-        status: 'passed',
-      }),
-    ]))
-    expect(events).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: 'proof.appended',
-        projectId: expect.any(String),
-        proof: expect.objectContaining({ title: 'App Server tests passed' }),
-      }),
-      expect.objectContaining({
-        type: 'runtimeRail.updated',
-        freshness: 'fresh',
-        source: 'project_truth_packet',
-      }),
-    ]))
-  })
-
-  it('confirms a RunKit gate through gate/confirm and verifies readback', async () => {
-    const projectRoot = makeTemporaryProjectRoot()
-    createRunKitTruthFixture(projectRoot)
-    const eventBus = createAppServerEventBus()
-    const events: AppServerEvent[] = []
-    eventBus.subscribe(event => events.push(event))
-    const truthRegistry = createMethodRegistry({ projectRoot, eventBus })
-
-    const confirmed = await handleRequest(truthRegistry, {
-      jsonrpc: '2.0',
-      id: 59,
-      method: 'gate/confirm',
-      params: {
-        gateId: 'confirm-flow',
-        note: '流程真源已确认',
-        confirmedBy: 'Codex Desktop',
-      },
-    })
-
-    expect(confirmed).toHaveProperty('result')
-    expect(confirmed.result).toMatchObject({
-      status: 'confirmed',
-      gateId: 'confirm-flow',
-      readback: {
-        freshness: 'fresh',
-        gate: {
-          currentGate: null,
-          passedGates: ['confirm-architecture', 'confirm-flow'],
-          awaitingHuman: false,
-        },
-      },
-    })
-    const gateFile = JSON.parse(readFileSync(join(projectRoot, '.owlrunkit', 'state', 'governance-gate.json'), 'utf8')) as {
-      passed_gates: string[]
-      awaiting_human: boolean
-      confirmations: Array<{ gate_id: string; confirmed_by: string; note: string }>
+    for (const [id, method] of [[57, 'proof/append'], [58, 'gate/confirm']] as const) {
+      const response = await handleRequest(truthRegistry, {
+        jsonrpc: '2.0',
+        id,
+        method,
+        params: {},
+      })
+      expect(response).toHaveProperty('error')
+      expect(response.error).toMatchObject({ code: -32601 })
     }
-    expect(gateFile.passed_gates).toEqual(['confirm-architecture', 'confirm-flow'])
-    expect(gateFile.awaiting_human).toBe(false)
-    expect(gateFile.confirmations).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        gate_id: 'confirm-flow',
-        confirmed_by: 'Codex Desktop',
-        note: '流程真源已确认',
-      }),
-    ]))
-    expect(events).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: 'gate.confirmed',
-        gateId: 'confirm-flow',
-      }),
-      expect.objectContaining({
-        type: 'runtimeRail.updated',
-        freshness: 'fresh',
-        source: 'project_truth_packet',
-      }),
-    ]))
   })
 
   it('returns error for unknown method', async () => {
@@ -3870,6 +5237,14 @@ function makeTemporaryProjectRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'owlcoda-review-'))
   temporaryProjectRoots.push(root)
   return root
+}
+
+function initializeGitRepository(projectRoot: string): void {
+  execFileSync('git', ['init', '--quiet'], { cwd: projectRoot })
+  execFileSync('git', ['config', 'user.name', 'OwlCoda Test'], { cwd: projectRoot })
+  execFileSync('git', ['config', 'user.email', 'owlcoda-test@example.invalid'], { cwd: projectRoot })
+  execFileSync('git', ['add', '--all'], { cwd: projectRoot })
+  execFileSync('git', ['commit', '--quiet', '-m', 'test baseline'], { cwd: projectRoot })
 }
 
 function createRunKitTruthFixture(projectRoot: string): void {

@@ -12,8 +12,6 @@ describe('desktop product shell smoke', () => {
       taskInput: 'smoke task',
       reviewAction: 'apply',
       reviewDiffIds: ['diff-1'],
-      appendSmokeProof: true,
-      gateId: 'gate-1',
       fetch: async (_url, init) => {
         const request = JSON.parse(String(init?.body ?? '{}')) as { id: unknown; method: string; params: any }
         calls.push(request.method)
@@ -39,8 +37,6 @@ describe('desktop product shell smoke', () => {
       'turn/start',
       'review/batchApply',
       'turn/status',
-      'proof/append',
-      'gate/confirm',
     ])
     expect(result).toMatchObject({
       surface: 'desktop-product-shell-smoke',
@@ -55,7 +51,7 @@ describe('desktop product shell smoke', () => {
         submitTask: true,
         reviewTransaction: true,
         statusRecovery: true,
-        proofGate: true,
+        readOnlyRunKitRail: true,
         debugBoundary: true,
       },
       debugBoundary: {
@@ -86,16 +82,6 @@ describe('desktop product shell smoke', () => {
       },
       turnStatus: {
         status: 'completed',
-      },
-      proofAppend: {
-        proof: {
-          id: 'proof-1',
-        },
-      },
-      gateConfirm: {
-        gate: {
-          id: 'gate-1',
-        },
       },
     })
     expect(result.errors).toEqual([])
@@ -141,14 +127,9 @@ function responseForMethod(method: string, params: any): unknown {
   if (method === 'runtimeRail/read') {
     return {
       projectId: 'project-1',
-      freshness: 'fresh',
-      packet: null,
-      gate: { id: 'gate-1', status: 'pending' },
-      claim: null,
-      proofs: [{ id: 'proof-existing', title: 'existing proof', status: 'passed' }],
-      rejectedPaths: [],
-      nextAction: null,
-      source: 'runkit_truth',
+      freshness: 'missing',
+      summary: null,
+      source: 'not_connected',
     }
   }
   if (method === 'benchmark/providerEvalReport/read') return { unavailable: true, message: 'not configured' }
@@ -264,18 +245,6 @@ function responseForMethod(method: string, params: any): unknown {
       pendingInteractionCount: 0,
       resumeHint: { action: 'none', message: 'No recovery needed.' },
     }
-  }
-  if (method === 'proof/append') {
-    expect(params).toMatchObject({
-      projectId: 'project-1',
-      kind: 'desktop_smoke',
-      title: 'Desktop product shell smoke',
-    })
-    return { ok: true, proof: { id: 'proof-1', title: 'Desktop product shell smoke', status: 'passed' } }
-  }
-  if (method === 'gate/confirm') {
-    expect(params).toMatchObject({ projectId: 'project-1', gateId: 'gate-1' })
-    return { ok: true, gate: { id: 'gate-1', status: 'confirmed' } }
   }
   throw new Error(`unexpected method ${method}`)
 }

@@ -1,6 +1,5 @@
 import type {
   AppServerEventSubscription,
-  AppServerProofAppendInput,
   AppServerTurnStartInput,
 } from './client.js'
 import {
@@ -15,15 +14,12 @@ import {
 } from './desktop-product-shell-view-model.js'
 import type { ReviewBatchActionResult } from './review-action-service.js'
 import type { AppServerTurnRecoverResult, AppServerTurnStatusResult } from './turn-status-service.js'
-import type { RunKitGateConfirmResult, RunKitProofAppendResult } from './truth-gateway.js'
 import type { TurnStartResult } from './thread-service.js'
 
 export interface DesktopProductShellSmokeOptions extends DesktopProductShellBootstrapOptions, DesktopProductShellViewModelParams {
   taskInput?: string
   reviewAction?: 'apply' | 'revert' | 'none'
   reviewDiffIds?: string[]
-  appendSmokeProof?: boolean
-  gateId?: string
   recoverStaleTurn?: boolean
 }
 
@@ -43,7 +39,7 @@ export interface DesktopProductShellSmokeChecks {
   submitTask: boolean
   reviewTransaction: boolean
   statusRecovery: boolean
-  proofGate: boolean
+  readOnlyRunKitRail: boolean
   debugBoundary: boolean
 }
 
@@ -60,8 +56,6 @@ export interface DesktopProductShellSmokeResult {
   reviewBatch: ReviewBatchActionResult | null
   turnStatus: AppServerTurnStatusResult | null
   recovery: AppServerTurnRecoverResult | null
-  proofAppend: RunKitProofAppendResult | null
-  gateConfirm: RunKitGateConfirmResult | null
   checks: DesktopProductShellSmokeChecks
   debugBoundary: DesktopProductShellSmokeDebugBoundary
   errors: string[]
@@ -81,8 +75,6 @@ export async function runDesktopProductShellSmoke(
   let reviewBatch: ReviewBatchActionResult | null = null
   let turnStatus: AppServerTurnStatusResult | null = null
   let recovery: AppServerTurnRecoverResult | null = null
-  let proofAppend: RunKitProofAppendResult | null = null
-  let gateConfirm: RunKitGateConfirmResult | null = null
 
   if (bootstrap.ready) {
     viewModel = await loadDesktopProductShellViewModel(bootstrap.client, {
@@ -124,28 +116,14 @@ export async function runDesktopProductShellSmoke(
       }
     }
 
-    if (projectId && options.appendSmokeProof) {
-      const proofInput: AppServerProofAppendInput = {
-        projectId,
-        kind: 'desktop_smoke',
-        title: 'Desktop product shell smoke',
-        status: 'passed',
-        detail: 'Product shell smoke reached bootstrap, view-model, live events, review, status, proof, and gate surfaces.',
-      }
-      proofAppend = await bootstrap.client.proofAppend(proofInput)
-    }
-
-    if (projectId && options.gateId) {
-      gateConfirm = await bootstrap.client.gateConfirm({
-        projectId,
-        gateId: options.gateId,
-        note: 'desktop product shell smoke',
-      })
-    }
   }
 
   const projectId = viewModel?.project?.id ?? options.projectId
   const threadId = viewModel?.thread?.id ?? options.threadId
+  const exposedMethods = new Set<string>([
+    ...bootstrap.stableMethods,
+    ...bootstrap.experimentalMethods,
+  ])
   const checks = {
     bootstrap: bootstrap.ready,
     viewModel: viewModel?.status === 'ready',
@@ -155,7 +133,9 @@ export async function runDesktopProductShellSmoke(
       ? true
       : Boolean(reviewBatch?.transaction?.transactionId && reviewBatch.proof?.kind === 'review_batch_transaction'),
     statusRecovery: Boolean(turnStatus && (!options.recoverStaleTurn || recovery || (turnStatus.status !== 'stale' && turnStatus.status !== 'saved_only'))),
-    proofGate: (!options.appendSmokeProof || Boolean(proofAppend)) && (!options.gateId || Boolean(gateConfirm)),
+    readOnlyRunKitRail: Boolean(viewModel?.rail)
+      && !exposedMethods.has('proof/append')
+      && !exposedMethods.has('gate/confirm'),
     debugBoundary: debugBoundary.productShellUsesDebugOnlyMethods === false,
   }
 
@@ -183,8 +163,6 @@ export async function runDesktopProductShellSmoke(
     reviewBatch,
     turnStatus,
     recovery,
-    proofAppend,
-    gateConfirm,
     checks,
     debugBoundary,
     errors,

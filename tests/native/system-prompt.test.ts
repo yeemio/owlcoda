@@ -125,6 +125,13 @@ describe('buildSystemPrompt', () => {
     expect(prompt).toMatch(/repair the artifact/i)
   })
 
+  it('keeps read-only questions in chat instead of forcing file delivery or RunWorkspace', () => {
+    const prompt = buildSystemPrompt()
+    expect(prompt).toMatch(/read-only reviews and direct questions.*answer in chat/i)
+    expect(prompt).toMatch(/must not create a RunWorkspace/i)
+    expect(prompt).toMatch(/only when the user explicitly requests a durable file/i)
+  })
+
   // 0.13.59 retry discipline. Pre-0.13.59 the rule was just "If an
   // approach fails, diagnose root cause before switching. No identical
   // retries." — too soft. The sieracMes-AI dogfood showed the model

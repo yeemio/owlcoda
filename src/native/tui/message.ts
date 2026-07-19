@@ -821,38 +821,38 @@ export class ToolResultCollector {
 
 /** Render a collapsed group of tool results as a summary line. */
 function renderCollapsedGroup(entries: CollapsedToolEntry[]): string {
-  const counts: Record<string, number> = {}
+  const grouped = new Map<string, CollapsedToolEntry[]>()
   let totalMs = 0
   let hasError = false
 
   for (const e of entries) {
-    counts[e.name] = (counts[e.name] ?? 0) + 1
+    const group = grouped.get(e.name) ?? []
+    group.push(e)
+    grouped.set(e.name, group)
     totalMs += e.durationMs
     if (e.isError) hasError = true
   }
 
-  // Build summary: "Read 3 files, searched 2 patterns"
   const parts: string[] = []
-  for (const [tool, count] of Object.entries(counts)) {
-    switch (tool) {
-      case 'read':
-        parts.push(`read ${count} file${count > 1 ? 's' : ''}`)
-        break
-      case 'glob':
-        parts.push(`listed ${count} pattern${count > 1 ? 's' : ''}`)
-        break
-      case 'grep':
-        parts.push(`searched ${count} pattern${count > 1 ? 's' : ''}`)
-        break
-      case 'WebFetch':
-        parts.push(`fetched ${count} URL${count > 1 ? 's' : ''}`)
-        break
-      case 'WebSearch':
-        parts.push(`searched ${count} quer${count > 1 ? 'ies' : 'y'}`)
-        break
-      default:
-        parts.push(`${tool} ×${count}`)
-    }
+  for (const [tool, toolEntries] of grouped) {
+    const values = Array.from(new Set(toolEntries.flatMap(entry => {
+      const value = tool === 'read'
+        ? entry.input['path']
+        : tool === 'glob' || tool === 'grep'
+          ? entry.input['pattern']
+          : tool === 'WebFetch'
+            ? entry.input['url']
+            : tool === 'WebSearch'
+              ? entry.input['query']
+              : undefined
+      return typeof value === 'string' && value.trim() ? [value.trim()] : []
+    })))
+    const shown = values.slice(0, 3).map(value => truncate(value, 48))
+    const omitted = values.length - shown.length
+    const argumentSummary = shown.length > 0
+      ? ` — ${shown.join(', ')}${omitted > 0 ? `, +${omitted}` : ''}`
+      : ''
+    parts.push(`${tool} ×${toolEntries.length}${argumentSummary}`)
   }
 
   const icon = hasError
@@ -863,7 +863,7 @@ function renderCollapsedGroup(entries: CollapsedToolEntry[]): string {
     : `${(totalMs / 1000).toFixed(1)}s`
 
   const summary = parts.join(', ')
-  return `${dim(TREE_PREFIX)}${icon} ${summary}${sgr.reset} ${dim(`(${dur})`)}`
+  return `  ${themeColor('owl')}▸${sgr.reset} ${icon} ${summary}${sgr.reset} ${dim(`(${dur})`)}`
 }
 
 // ─── Message formatting ───────────────────────────────────────
@@ -1280,6 +1280,8 @@ export interface ComposerRailOptions {
   readonly queued: number
   readonly contextTokens: number
   readonly contextMax: number
+  /** Marks a context denominator inferred from non-configured capability truth. */
+  readonly contextApproximate?: boolean
   readonly draftChars: number
   /**
    * Low-churn terminals can render a stable draft-presence cell instead of
@@ -1371,7 +1373,8 @@ export function renderComposerRail(opts: ComposerRailOptions): string {
     })
   }
   if (opts.contextMax > 0) {
-    cells.push({ kind: 'kv', label: 'ctx', value: formatContextPressure(opts.contextTokens, opts.contextMax) })
+    const contextValue = formatContextPressure(opts.contextTokens, opts.contextMax)
+    cells.push({ kind: 'kv', label: 'ctx', value: `${contextValue}${opts.contextApproximate ? '~' : ''}` })
   }
   if (typeof opts.cost === 'number' && opts.cost > 0) {
     cells.push({ kind: 'kv', label: 'cost', value: formatRailCost(opts.cost) })

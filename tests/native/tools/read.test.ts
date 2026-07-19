@@ -279,7 +279,7 @@ describe('Native Read tool', () => {
       expect(result.output).not.toContain('[Runtime read-repeat')
     })
 
-    it('second read of the same unchanged file prepends a notice', async () => {
+    it('second read of the same unchanged file returns a stub instead of the body', async () => {
       const path = join(dir, 'nudge-second.txt')
       await writeFile(path, 'one\ntwo\nthree\n')
       const conv = createConversation({ system: 'test', model: 'm' })
@@ -296,8 +296,8 @@ describe('Native Read tool', () => {
       expect(second.output).toContain(`You already read this file earlier in this task: ${real}`)
       expect(second.output).toContain('same mtime, same size, same range')
       expect(second.output).toContain('stop reading and produce the draft/write tool')
-      // Body still contains the actual file content — read is not blocked.
-      expect(second.output).toContain('1\tone')
+      expect(second.output).toContain('refer to the earlier tool result')
+      expect(second.output).not.toContain('1\tone')
       expect(second.metadata?.readRepeatCount).toBe(2)
     })
 
@@ -314,6 +314,7 @@ describe('Native Read tool', () => {
       expect(third.output).toContain('[Runtime read-repeat warning]')
       expect(third.output).toContain('This is the 3rd read of the same unchanged file')
       expect(third.output).toContain('narrow to a line range, grep a specific symbol, or write the deliverable')
+      expect(third.output).not.toContain('1\ta')
       expect(third.metadata?.readRepeatCount).toBe(3)
 
       const fourth = await read.execute({ path }, { taskState })
@@ -405,7 +406,8 @@ describe('Native Read tool', () => {
       await read.execute({ path, offset: 0, limit: 5 }, { taskState })
       const second = await read.execute({ path, offset: 0, limit: 5 }, { taskState })
       expect(second.output).toContain('[Runtime read-repeat notice]')
-      expect(second.output).toContain('abcde')
+      expect(second.output).toContain('refer to the earlier tool result')
+      expect(second.output).not.toContain('abcde')
     })
 
     // Direct unit test on the helper, bypassing fs IO. Locks down

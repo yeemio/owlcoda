@@ -335,7 +335,7 @@ export function renderFileCreateLines(
     out.push(
       renderHunkHeader({
         oldStart: 0, oldLen: 0,
-        newStart: 1, newLen: shown.length,
+        newStart: 1, newLen: allLines.length,
         context: 'new file',
         width: cols, indent,
       }),

@@ -6,7 +6,6 @@ import type {
   AppServerApprovalResolveResult,
   AppServerInteractionKind,
 } from './approval-service.js'
-import type { RunKitTruthGateSummary, RunKitTruthProofSummary } from './truth-gateway.js'
 
 export interface ReviewBatchEventItem {
   diffId: string
@@ -182,6 +181,9 @@ export type AppServerEvent =
       projectId: string
       threadId: string
       message: string
+      failureKind?: string
+      failureCategory?: 'quota' | 'rate_limit' | 'offline' | 'timeout' | 'provider' | 'unknown'
+      retryable?: boolean
     }
   | {
       type: 'turn.interrupted'
@@ -229,17 +231,6 @@ export type AppServerEvent =
       resolvedAt: number
     }
   | {
-      type: 'proof.appended'
-      projectId: string
-      proof: RunKitTruthProofSummary
-    }
-  | {
-      type: 'gate.confirmed'
-      projectId: string
-      gateId: string
-      gate: RunKitTruthGateSummary | null
-    }
-  | {
       type: 'review.batchCompleted'
       projectId: string
       threadId: string
@@ -259,20 +250,62 @@ export type AppServerEvent =
       reviewStatus: ReviewStatusRecord
     }
 
-export type AppServerEventListener = (event: AppServerEvent) => void
+export interface AppServerEventCursor {
+  oldestAvailableSequence: number
+  latestSequence: number
+  afterSequence: number
+}
+
+export type AppServerEventEnvelope = AppServerEvent & {
+  schemaVersion: 1
+  eventId: string
+  sequence: number
+  occurredAt: string
+  workspaceId: string
+  payload: Record<string, unknown>
+  artifactRefs: string[]
+}
+
+export interface AppServerEventReplay {
+  available: boolean
+  events: AppServerEventEnvelope[]
+  cursor: AppServerEventCursor
+}
+
+export interface AppServerEventBusOptions {
+  maxRetainedEvents?: number
+  now?: () => string
+}
+
+export type AppServerEventListener = (event: AppServerEventEnvelope) => void
 
 export interface AppServerEventBus {
   publish(event: AppServerEvent): void
   subscribe(listener: AppServerEventListener): () => void
+  replay(afterSequence: number): AppServerEventReplay
+  cursor(): AppServerEventCursor
 }
 
-export function createAppServerEventBus(): AppServerEventBus {
+export function createAppServerEventBus(options: AppServerEventBusOptions = {}): AppServerEventBus {
   const listeners = new Set<AppServerEventListener>()
+  const retained: AppServerEventEnvelope[] = []
+  const maxRetainedEvents = Math.max(1, Math.floor(options.maxRetainedEvents ?? 1_000))
+  const now = options.now ?? (() => new Date().toISOString())
+  let nextSequence = 1
+
+  const cursor = (): AppServerEventCursor => ({
+    oldestAvailableSequence: retained[0]?.sequence ?? nextSequence,
+    latestSequence: nextSequence - 1,
+    afterSequence: nextSequence - 1,
+  })
 
   return {
     publish(event) {
+      const envelope = envelopeEvent(event, nextSequence++, now())
+      retained.push(envelope)
+      if (retained.length > maxRetainedEvents) retained.splice(0, retained.length - maxRetainedEvents)
       for (const listener of [...listeners]) {
-        listener(event)
+        listener(envelope)
       }
     },
     subscribe(listener) {
@@ -281,14 +314,54 @@ export function createAppServerEventBus(): AppServerEventBus {
         listeners.delete(listener)
       }
     },
+    replay(afterSequence) {
+      const current = cursor()
+      const available = Number.isSafeInteger(afterSequence)
+        && afterSequence >= current.oldestAvailableSequence - 1
+        && afterSequence <= current.latestSequence
+      return {
+        available,
+        events: available ? retained.filter(event => event.sequence > afterSequence) : [],
+        cursor: current,
+      }
+    },
+    cursor,
   }
 }
 
-export function formatServerSentEvent(event: AppServerEvent): string {
+export function formatServerSentEvent(event: AppServerEventEnvelope): string {
   return [
+    `id: ${event.sequence}`,
     `event: ${event.type}`,
     `data: ${JSON.stringify(event)}`,
     '',
     '',
   ].join('\n')
+}
+
+function envelopeEvent(event: AppServerEvent, sequence: number, occurredAt: string): AppServerEventEnvelope {
+  const source = event as AppServerEvent & Record<string, unknown>
+  const {
+    type,
+    projectId,
+    threadId: _threadId,
+    turnId: _turnId,
+    itemId: _itemId,
+    artifactRefs: sourceArtifactRefs,
+    ...payload
+  } = source
+  const artifactRefs = Array.isArray(sourceArtifactRefs)
+    ? sourceArtifactRefs.filter((value): value is string => typeof value === 'string')
+    : []
+  const workspaceId = projectId
+  return {
+    ...event,
+    schemaVersion: 1,
+    eventId: `${workspaceId}:${sequence}`,
+    sequence,
+    occurredAt,
+    workspaceId,
+    payload,
+    artifactRefs,
+  } as AppServerEventEnvelope
 }

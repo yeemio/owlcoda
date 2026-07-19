@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, expectTypeOf } from 'vitest'
+import { readFileSync } from 'node:fs'
 
 vi.mock('../../src/warmup.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/warmup.js')>()
@@ -62,11 +63,17 @@ import {
   type ThinkingState,
   type TranscriptItem,
 } from '../../src/native/repl.js'
-import { detectEmittedButUnexecutedToolCall } from '../../src/native/repl-shared.js'
+import {
+  decideResumeContinuationAction,
+  detectEmittedButUnexecutedToolCall,
+  summarizePendingResumeUserMessage,
+} from '../../src/native/repl-shared.js'
+import { buildResumedTranscriptEntries } from '../../src/native/ink-repl.js'
 import { createConversation, addUserMessage } from '../../src/native/conversation.js'
 import { ToolDispatcher } from '../../src/native/dispatch.js'
 import { UsageTracker } from '../../src/native/usage.js'
 import { ToolResultCollector } from '../../src/native/tui/message.js'
+import { stripAnsi } from '../../src/native/tui/colors.js'
 import {
   createReplRuntimeState,
   startReplTask,
@@ -1457,6 +1464,74 @@ describe('failed continuation submit handling', () => {
         { role: 'user' },
         { role: 'user' },
       ])).toBe(true)
+    })
+
+    it('ignores a runtime snapshot appended after a completed assistant turn', () => {
+      expect(conversationEndsAwaitingAssistant([
+        { role: 'user', content: [{ type: 'text', text: 'finish the task' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'done' }] },
+        {
+          role: 'user',
+          audience: 'runtime',
+          content: [{ type: 'text', text: '[Runtime truth resume snapshot]\n{"events":[]}' }],
+        },
+      ])).toBe(false)
+    })
+
+    it('ignores runtime snapshots and system nudges while preserving a real unanswered user turn', () => {
+      expect(conversationEndsAwaitingAssistant([
+        { role: 'assistant', content: [{ type: 'text', text: 'previous response' }] },
+        { role: 'user', content: [{ type: 'text', text: 'please continue this specific task' }] },
+        { role: 'user', content: [{ type: 'text', text: '[System: summarize before continuing]' }] },
+        { role: 'user', content: [{ type: 'text', text: '[Runtime truth resume snapshot]\n{}' }] },
+      ])).toBe(true)
+    })
+
+    it('treats an unconsumed tool result as pending work', () => {
+      expect(conversationEndsAwaitingAssistant([
+        { role: 'assistant', content: [{ type: 'text', text: 'calling tool' }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'result' }] },
+      ])).toBe(true)
+    })
+  })
+
+  describe('resume continuation confirmation', () => {
+    it('defaults interactive resumes to a confirmation prompt and an empty answer to pause', () => {
+      expect(decideResumeContinuationAction({ pending: true })).toBe('prompt')
+      expect(decideResumeContinuationAction({ pending: true, confirmationAnswer: '' })).toBe('pause')
+      expect(decideResumeContinuationAction({ pending: true, confirmationAnswer: 'n' })).toBe('pause')
+    })
+
+    it('continues only after an affirmative answer or the explicit unattended opt-in', () => {
+      expect(decideResumeContinuationAction({ pending: true, confirmationAnswer: 'y' })).toBe('continue')
+      expect(decideResumeContinuationAction({ pending: true, confirmationAnswer: '1' })).toBe('continue')
+      expect(decideResumeContinuationAction({
+        pending: true,
+        autoContinueEnv: '1',
+      })).toBe('continue')
+      expect(decideResumeContinuationAction({
+        pending: false,
+        autoContinueEnv: '1',
+      })).toBe('none')
+    })
+
+    it('summarizes the last real pending user message without exposing runtime prompts', () => {
+      expect(summarizePendingResumeUserMessage([
+        { role: 'assistant', content: [{ type: 'text', text: 'previous response' }] },
+        { role: 'user', content: [{ type: 'text', text: 'Inspect the saved receipt and report the blocker.' }] },
+        { role: 'user', content: [{ type: 'text', text: '[Runtime truth resume snapshot]\nsecret runtime JSON' }] },
+      ])).toBe('Inspect the saved receipt and report the blocker.')
+    })
+
+    it('wires the mount path through the existing question prompt with default No', () => {
+      const source = readFileSync(new URL('../../src/native/ink-repl.tsx', import.meta.url), 'utf8')
+      const start = source.indexOf('// Resume continuation (resume bug fix)')
+      const end = source.indexOf('const handleOverlaySelect', start)
+      const block = source.slice(start, end)
+      expect(block).toContain("process.env['OWLCODA_RESUME_AUTO_CONTINUE']")
+      expect(block).toContain('requestUserQuestion(')
+      expect(block).toContain("defaultAnswer: 'n'")
+      expect(block).toContain("kind: 'resume_continuation'")
     })
   })
 
@@ -4176,5 +4251,40 @@ describe('MAX_VISIBLE_ITEMS_CAP (D-4)', () => {
     expect(splitTranscriptForScrollback(mk(5), 20).visible.length).toBe(5)
     expect(splitTranscriptForScrollback(mk(20), 20).visible.length).toBe(20)
     expect(splitTranscriptForScrollback(mk(500), 20).visible.length).toBe(20)
+  })
+})
+
+describe('Harness transcript ordering and resumed replay', () => {
+  it('flushes buffered tools before committing the final assistant narration', () => {
+    const source = readFileSync(new URL('../../src/native/ink-repl.tsx', import.meta.url), 'utf8')
+    const start = source.indexOf('// Normal completion must drain the composer')
+    const end = source.indexOf('if (shouldShowNoResponseFallback', start)
+    const block = source.slice(start, end)
+    expect(block.indexOf('toolCollectorRef.current.flush()')).toBeGreaterThanOrEqual(0)
+    expect(block.indexOf('toolCollectorRef.current.flush()')).toBeLessThan(
+      block.indexOf('flushBufferedAssistantResponse()'),
+    )
+  })
+
+  it('replays assistant text with narration chrome and counts real user exchanges', () => {
+    const conversation = createConversation({ system: 'test', model: 'm' })
+    addUserMessage(conversation, 'real question')
+    conversation.turns.push({
+      role: 'assistant',
+      content: [{ type: 'text', text: 'first line\nsecond line' }],
+      timestamp: Date.now(),
+    })
+    conversation.turns.push({
+      role: 'user',
+      content: [{ type: 'text', text: '[Runtime truth resume snapshot]\ninternal only' }],
+      audience: 'runtime',
+      timestamp: Date.now(),
+    })
+
+    const plain = stripAnsi(buildResumedTranscriptEntries(conversation, 80).map(item => item.text).join('\n'))
+    expect(plain).toContain('Resumed session (1 exchange)')
+    expect(plain).toContain('● first line')
+    expect(plain).not.toContain('⎿ first line')
+    expect(plain).not.toContain('Runtime truth resume snapshot')
   })
 })

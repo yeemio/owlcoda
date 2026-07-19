@@ -10,9 +10,13 @@ export type AppServerMethodStability = 'stable' | 'experimental' | 'debug-only'
 
 export type AppServerMethodGroup =
   | 'benchmark'
+  | 'client'
   | 'protocol'
   | 'diagnostic'
   | 'project'
+  | 'model'
+  | 'workspace'
+  | 'attachment'
   | 'event'
   | 'thread'
   | 'turn'
@@ -38,6 +42,13 @@ export interface AppServerProtocolDescription {
   protocolVersion: typeof APP_SERVER_PROTOCOL_VERSION
   methods: AppServerMethodContract[]
 }
+
+export type {
+  AppServerClientIdentity,
+  AppServerClientInitializeInput,
+  AppServerClientInitializeResult,
+  AppServerCompatibility,
+} from './runtime-identity.js'
 
 export interface AppServerRuntimeFactsReadInput {
   threadId: string
@@ -191,6 +202,22 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     queryKeys: ['recordPath'],
     notes: 'Reads local provider eval JSONL records and returns a local-only leaderboard/case matrix. It does not upload or train.',
   },
+  'client/initialize': {
+    method: 'client/initialize',
+    group: 'client',
+    stability: 'stable',
+    requestType: 'AppServerClientInitializeInput',
+    responseType: 'AppServerClientInitializeResult',
+    requires: ['client', 'supportedProtocolVersions', 'expectedWorkspaceRealpath'],
+    queryKeys: [
+      'client',
+      'supportedProtocolVersions',
+      'expectedRuntimeVersion',
+      'expectedWorkspaceRealpath',
+      'requestedCapabilities',
+    ],
+    notes: 'Authenticates runtime, protocol, and canonical workspace identity before a client attaches.',
+  },
   'protocol/describe': {
     method: 'protocol/describe',
     group: 'protocol',
@@ -229,6 +256,123 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     requires: [],
     queryKeys: ['projectId'],
   },
+  'model/list': {
+    method: 'model/list',
+    group: 'model',
+    stability: 'stable',
+    requestType: 'Record<string, never>',
+    responseType: 'AppServerModelListResult',
+    requires: [],
+    queryKeys: [],
+  },
+  'workspace/list': {
+    method: 'workspace/list',
+    group: 'workspace',
+    stability: 'experimental',
+    requestType: 'Record<string, never>',
+    responseType: 'ManagedWorkspaceListResult',
+    requires: [],
+    queryKeys: [],
+    notes: 'Lists only OwlCoda-managed, ledger-backed worktrees for the current Git repository.',
+  },
+  'workspace/create': {
+    method: 'workspace/create',
+    group: 'workspace',
+    stability: 'experimental',
+    requestType: 'ManagedWorkspaceCreateInput',
+    responseType: 'ManagedWorkspaceCreateResult',
+    requires: ['slug'],
+    queryKeys: ['slug', 'startingRef', 'allowUntracked'],
+    notes: 'Creates a managed worktree without changing the long-lived App Server process cwd.',
+  },
+  'workspace/read': {
+    method: 'workspace/read',
+    group: 'workspace',
+    stability: 'experimental',
+    requestType: 'ManagedWorkspaceLookupInput',
+    responseType: 'ManagedWorkspaceReadResult',
+    requires: ['workspaceId'],
+    queryKeys: ['workspaceId'],
+  },
+  'workspace/resume': {
+    method: 'workspace/resume',
+    group: 'workspace',
+    stability: 'experimental',
+    requestType: 'ManagedWorkspaceLookupInput',
+    responseType: 'ManagedWorkspaceResumeResult',
+    requires: ['workspaceId'],
+    queryKeys: ['workspaceId'],
+    notes: 'Fails closed unless ledger, path, branch, and base commit still match Git truth.',
+  },
+  'workspace/status': {
+    method: 'workspace/status',
+    group: 'workspace',
+    stability: 'experimental',
+    requestType: 'ManagedWorkspaceLookupInput',
+    responseType: 'ManagedWorkspaceStatusResult',
+    requires: ['workspaceId'],
+    queryKeys: ['workspaceId'],
+    notes: 'Returns the current HEAD and status fingerprint required by authorized lifecycle mutations.',
+  },
+  'workspace/commit': {
+    method: 'workspace/commit',
+    group: 'workspace',
+    stability: 'experimental',
+    requestType: 'ManagedWorkspaceCommitInput',
+    responseType: 'ManagedWorkspaceOperationResult',
+    requires: ['workspaceId', 'requestId', 'message', 'expectedHead', 'expectedStatusFingerprint', 'authorized'],
+    queryKeys: [],
+    notes: 'Requires explicit authorization and exact current workspace state; exact request replay is idempotent.',
+  },
+  'workspace/keep': {
+    method: 'workspace/keep',
+    group: 'workspace',
+    stability: 'experimental',
+    requestType: 'ManagedWorkspaceAuthorizedInput',
+    responseType: 'ManagedWorkspaceOperationResult',
+    requires: ['workspaceId', 'requestId', 'expectedHead', 'expectedStatusFingerprint', 'authorized'],
+    queryKeys: [],
+    notes: 'Keeps the managed worktree and records an explicit durable lifecycle receipt.',
+  },
+  'workspace/cleanup': {
+    method: 'workspace/cleanup',
+    group: 'workspace',
+    stability: 'experimental',
+    requestType: 'ManagedWorkspaceCleanupInput',
+    responseType: 'ManagedWorkspaceOperationResult',
+    requires: ['workspaceId', 'requestId', 'expectedHead', 'expectedStatusFingerprint', 'authorized'],
+    queryKeys: [],
+    notes: 'Removes the worktree only after explicit current-state authorization; the branch is retained by default.',
+  },
+  'workspace/handoff': {
+    method: 'workspace/handoff',
+    group: 'workspace',
+    stability: 'experimental',
+    requestType: 'ManagedWorkspaceHandoffInput',
+    responseType: 'ManagedWorkspaceOperationResult',
+    requires: [
+      'workspaceId',
+      'threadId',
+      'direction',
+      'requestId',
+      'expectedHead',
+      'expectedStatusFingerprint',
+      'expectedProjectHead',
+      'expectedProjectStatusFingerprint',
+      'authorized',
+    ],
+    queryKeys: [],
+    notes: 'Moves one persisted thread and its managed branch between Local and the same managed worktree after exact two-checkout authorization.',
+  },
+  'attachment/store': {
+    method: 'attachment/store',
+    group: 'attachment',
+    stability: 'experimental',
+    requestType: 'AppServerAttachmentStoreInput',
+    responseType: 'PublicStoredAttachment',
+    requires: ['name', 'mediaType', 'dataBase64'],
+    queryKeys: ['projectId'],
+  },
   'event/subscribe': {
     method: 'event/subscribe',
     group: 'event',
@@ -238,6 +382,15 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     requires: [],
     queryKeys: [],
   },
+  'event/snapshot': {
+    method: 'event/snapshot',
+    group: 'event',
+    stability: 'experimental',
+    requestType: '{ projectId?: string }',
+    responseType: 'AppServerEventSnapshotResult',
+    requires: [],
+    queryKeys: ['projectId'],
+  },
   'thread/start': {
     method: 'thread/start',
     group: 'thread',
@@ -245,7 +398,7 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     requestType: 'ThreadStartInput',
     responseType: 'ThreadStartResult',
     requires: [],
-    queryKeys: ['projectId'],
+    queryKeys: ['projectId', 'model', 'reasoningEffort', 'permissionMode', 'workspaceMode'],
   },
   'thread/list': {
     method: 'thread/list',
@@ -256,23 +409,32 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     requires: [],
     queryKeys: ['projectId'],
   },
+  'thread/read': {
+    method: 'thread/read',
+    group: 'thread',
+    stability: 'stable',
+    requestType: 'AppServerThreadReadInput',
+    responseType: 'ThreadReadResult',
+    requires: ['threadId'],
+    queryKeys: ['threadId', 'projectId', 'limit', 'cursor'],
+  },
   'thread/resume': {
     method: 'thread/resume',
     group: 'thread',
     stability: 'stable',
-    requestType: '{ threadId: string; projectId?: string }',
+    requestType: '{ threadId: string; projectId?: string; model?: string; reasoningEffort?: ReasoningEffort }',
     responseType: 'ThreadResumeResult',
     requires: ['threadId'],
-    queryKeys: ['threadId', 'projectId'],
+    queryKeys: ['threadId', 'projectId', 'model', 'reasoningEffort'],
   },
   'turn/start': {
     method: 'turn/start',
     group: 'turn',
     stability: 'experimental',
-    requestType: '{ threadId: string; input: string; projectId?: string }',
+    requestType: 'AppServerTurnStartInput',
     responseType: 'TurnStartResult',
-    requires: ['threadId', 'input'],
-    queryKeys: ['threadId', 'projectId'],
+    requires: ['threadId'],
+		queryKeys: ['threadId', 'projectId', 'retry', 'title'],
   },
   'turn/status': {
     method: 'turn/status',
@@ -337,24 +499,6 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     requires: ['interactionId'],
     queryKeys: ['threadId', 'projectId'],
   },
-  'proof/append': {
-    method: 'proof/append',
-    group: 'evidence',
-    stability: 'experimental',
-    requestType: 'AppServerProofAppendInput',
-    responseType: 'RunKitProofAppendResult',
-    requires: ['kind', 'title'],
-    queryKeys: ['projectId'],
-  },
-  'gate/confirm': {
-    method: 'gate/confirm',
-    group: 'evidence',
-    stability: 'experimental',
-    requestType: 'AppServerGateConfirmInput',
-    responseType: 'RunKitGateConfirmResult',
-    requires: [],
-    queryKeys: ['projectId', 'gateId'],
-  },
   'review/list': {
     method: 'review/list',
     group: 'review',
@@ -363,6 +507,7 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     responseType: 'ReviewListResult',
     requires: ['threadId'],
     queryKeys: ['threadId', 'projectId'],
+    notes: 'Returns independent repository-wide Unstaged Git worktree truth and receipt-backed Last Turn changes. Unstaged is read-only and fails closed when Git truth is unavailable.',
   },
   'review/preflight': {
     method: 'review/preflight',
@@ -462,7 +607,7 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     responseType: 'RunKitRailState',
     requires: [],
     queryKeys: ['projectId'],
-    notes: 'Current implementation reads RunKit truth rail; Runtime Truth rail expansion is P0-D/P1 work.',
+    notes: 'Read-only OwlCodaRunKitInspectSummaryV1 projection from project-owned .owlcoda/runkit truth; it grants no Git or release authority.',
   },
   'runtimeTranscript/read': {
     method: 'runtimeTranscript/read',
@@ -472,6 +617,7 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     responseType: 'RuntimeTranscriptResult',
     requires: ['threadId'],
     queryKeys: ['threadId', 'projectId'],
+    notes: 'Desktop-facing transcript items omit provider hidden thinking; reasoning effort metadata does not expose chain-of-thought.',
   },
   'runtimeFacts/read': {
     method: 'runtimeFacts/read',

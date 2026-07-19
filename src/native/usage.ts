@@ -23,8 +23,8 @@ export interface UsageSnapshot {
   requestCount: number
   /** Total tokens (input + output) */
   totalTokens: number
-  /** Estimated cost in USD (fictional — local models are free) */
-  estimatedCostUsd: number
+  /** Estimated cost in USD when backed by a real price source. */
+  estimatedCostUsd: number | null
   /** Time of first request */
   startedAt: number | null
   /** Elapsed time in ms since first request */
@@ -206,6 +206,21 @@ export class UsageTracker {
   private requestCount = 0
   private startedAt: number | null = null
 
+  /** Restore cumulative usage from a persisted session snapshot. */
+  seed(totals: {
+    inputTokens: number
+    outputTokens: number
+    requestCount: number
+    startedAt: number | null
+  }): void {
+    this.inputTokens = Math.max(0, Math.floor(totals.inputTokens))
+    this.outputTokens = Math.max(0, Math.floor(totals.outputTokens))
+    this.requestCount = Math.max(0, Math.floor(totals.requestCount))
+    this.startedAt = typeof totals.startedAt === 'number' && Number.isFinite(totals.startedAt)
+      ? totals.startedAt
+      : null
+  }
+
   /** Record usage from one API response. */
   recordUsage(usage: TokenUsage): void {
     if (!this.startedAt) {
@@ -232,8 +247,7 @@ export class UsageTracker {
       totalOutputTokens: this.outputTokens,
       requestCount: this.requestCount,
       totalTokens,
-      // Fictional pricing: $0.003/1K input, $0.015/1K output (like Sonnet 4)
-      estimatedCostUsd: (this.inputTokens * 0.003 + this.outputTokens * 0.015) / 1000,
+      estimatedCostUsd: null,
       startedAt: this.startedAt,
       elapsedMs: this.startedAt ? Date.now() - this.startedAt : 0,
     }
@@ -259,8 +273,7 @@ export class UsageTracker {
       pairs.push(['Duration', `${(snap.elapsedMs / 1000).toFixed(1)}s`])
     }
 
-    // Estimated cost (fictional for local models)
-    pairs.push(['Est. cost', `$${snap.estimatedCostUsd.toFixed(4)} (fictional — local models are free)`])
+    pairs.push(['Cost', snap.estimatedCostUsd === null ? 'n/a (no verified price source)' : `$${snap.estimatedCostUsd.toFixed(4)}`])
 
     return renderKeyValue(pairs)
   }

@@ -241,6 +241,7 @@ When in doubt, write the draft now with what you have and tag the gap as a Known
 // expectation so the model isn't surprised when they fire.
 const TASK_EXECUTION_MODE = `# Task execution mode
 When a TaskCreate plan with steps is active, follow the step sequence exactly:
+0. Read-only reviews and direct questions must answer in chat. They must not create a RunWorkspace or request a writable artifact. Use file delivery only when the user explicitly requests a durable file.
 1. For artifact-heavy tasks, call SkillRoutePreview before planning when a learned or curated skill may apply.
 2. Create or use the RunWorkspace before the first durable artifact write; keep drafts in stage/, final deliverables in final/, supporting files in assets/scripts/evidence/notes, and record produced files plus checkpoints in its ledger.
 3. TaskUpdate(stepStatus="in_progress") at step start.

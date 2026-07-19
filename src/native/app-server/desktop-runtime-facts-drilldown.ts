@@ -2,7 +2,6 @@ import type {
   AppServerRuntimeFactsReadResult,
   AppServerRuntimeScorecardReadResult,
 } from './protocol-contract.js'
-import type { RunKitRailState } from './runtime-rail-service.js'
 import type { ScorecardVerdict, AntiCheatStatus } from '../scorecard.js'
 
 export type DesktopRuntimeFactsDrilldownScorecardStatus = 'ready' | 'unavailable' | 'missing'
@@ -11,7 +10,6 @@ export interface DesktopRuntimeFactsDrilldownInput {
   facts: AppServerRuntimeFactsReadResult
   scorecard?: AppServerRuntimeScorecardReadResult | null
   scorecardError?: string
-  rail?: RunKitRailState | null
 }
 
 export interface DesktopRuntimeFactsDrilldown {
@@ -164,17 +162,7 @@ export function buildDesktopRuntimeFactsDrilldown(
         jobId: artifact.jobId ?? artifact.factRefs?.jobId,
         proofId: artifact.proofId ?? artifact.factRefs?.proofId,
       })),
-      proofs: facts.proofIds.map(proofId => {
-        const proof = input.rail?.proofs.find(item => item.sourceRef === proofId)
-        return {
-          proofId,
-          kind: proof?.kind,
-          title: proof?.title,
-          status: proof?.status,
-          sourceRef: proof?.sourceRef,
-          at: proof?.at,
-        }
-      }),
+      proofs: facts.proofIds.map(proofId => ({ proofId })),
       checkpoints: facts.checkpoints.map(checkpoint => ({
         checkpointId: checkpoint.id,
         kind: checkpoint.kind,

@@ -12,11 +12,14 @@ import {
 } from '../job-supervisor.js'
 import { stopTask } from './task-store.js'
 import type { NativeToolDef, ToolResult } from './types.js'
+import { resolve, sep } from 'node:path'
 
 export interface JobListInput {
   limit?: number
   status?: JobStatus | string
   type?: JobType | string
+  cwd?: string
+  threadId?: string
 }
 
 export interface JobGetInput {
@@ -52,6 +55,8 @@ export function createJobListTool(): NativeToolDef<JobListInput> {
       const jobs = listJobs()
         .filter((job) => !filters.status || job.status === filters.status)
         .filter((job) => !filters.type || job.type === filters.type)
+        .filter((job) => !filters.cwd || isWithinCwd(job.cwd, filters.cwd))
+        .filter((job) => !filters.threadId || job.threadId === filters.threadId)
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
         .slice(0, limit)
 
@@ -188,11 +193,19 @@ function cancelSupervisorOnlyJob(
   return getJob(jobId)
 }
 
-function jobFilters(input: JobListInput): { status?: string; type?: string } {
+function jobFilters(input: JobListInput): { status?: string; type?: string; cwd?: string; threadId?: string } {
   return {
     ...(normalizeOptionalString(input.status) ? { status: normalizeOptionalString(input.status)! } : {}),
     ...(normalizeOptionalString(input.type) ? { type: normalizeOptionalString(input.type)! } : {}),
+    ...(normalizeOptionalString(input.cwd) ? { cwd: resolve(normalizeOptionalString(input.cwd)!) } : {}),
+    ...(normalizeOptionalString(input.threadId) ? { threadId: normalizeOptionalString(input.threadId)! } : {}),
   }
+}
+
+function isWithinCwd(candidate: string | undefined, root: string): boolean {
+  if (!candidate) return false
+  const resolved = resolve(candidate)
+  return resolved === root || resolved.startsWith(`${root}${sep}`)
 }
 
 function formatJobSummary(job: JobRecord): string {

@@ -1,12 +1,14 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import type { Server } from 'node:http'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
 import { createAppServer, listenAppServer } from '../../../src/native/app-server/http-server.js'
 import { createAppServerClient, AppServerClientError } from '../../../src/native/app-server/client.js'
 import { createConversation } from '../../../src/native/conversation.js'
 import { deleteSession, loadSession, saveSession } from '../../../src/native/session.js'
+import { runCli as runRunKitCore } from '../../../scripts/runkit-contract/runkit-cli.mjs'
 
 const servers: Server[] = []
 const createdSessions: string[] = []
@@ -37,6 +39,247 @@ afterAll(() => {
 })
 
 describe('app-server client adapter', () => {
+  it('initializes an exact runtime identity as compatible with bearer auth', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const token = 'desktop-client-token'
+    const client = createAppServerClient({
+      baseUrl: baseUrl(await startServer(projectRoot, { managedToken: token })),
+      token,
+    })
+
+    await expect(client.checkCompatibility({
+      client: { name: 'owlcoda-desktop', version: '0.1.0' },
+      supportedProtocolVersions: ['v1'],
+      expectedRuntimeVersion: '0.15.30',
+      expectedWorkspaceRealpath: realpathSync(projectRoot),
+      requestedCapabilities: { review: true },
+    })).resolves.toMatchObject({
+      compatibility: 'compatible',
+      runtimeVersion: '0.15.30',
+      protocolVersion: 'v1',
+      workspaceRealpath: realpathSync(projectRoot),
+      capabilities: { review: true },
+    })
+  })
+
+  it.each([
+    ['workspace_mismatch', { expectedWorkspaceRealpath: '/definitely/not/the/runtime/workspace' }],
+    ['protocol_mismatch', { supportedProtocolVersions: ['v999'] }],
+    ['version_mismatch', { expectedRuntimeVersion: '999.0.0' }],
+  ] as const)('classifies %s without attaching', async (compatibility, override) => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const client = createAppServerClient({ baseUrl: baseUrl(await startServer(projectRoot)) })
+    const result = await client.checkCompatibility({
+      client: { name: 'owlcoda-desktop', version: '0.1.0' },
+      supportedProtocolVersions: ['v1'],
+      expectedRuntimeVersion: '0.15.30',
+      expectedWorkspaceRealpath: realpathSync(projectRoot),
+      requestedCapabilities: {},
+      ...override,
+    })
+
+    expect(result.compatibility).toBe(compatibility)
+  })
+
+  it('classifies an unreachable runtime without throwing', async () => {
+    const client = createAppServerClient({
+      baseUrl: 'http://app-server.test',
+      fetch: async () => { throw new TypeError('fetch failed') },
+    })
+
+    await expect(client.checkCompatibility({
+      client: { name: 'owlcoda-desktop', version: '0.1.0' },
+      supportedProtocolVersions: ['v1'],
+      expectedWorkspaceRealpath: process.cwd(),
+      requestedCapabilities: {},
+    })).resolves.toEqual({ compatibility: 'unreachable' })
+  })
+
+  it('classifies a non-JSON-RPC response as unreachable', async () => {
+    const client = createAppServerClient({
+      baseUrl: 'http://wrong-service.test',
+      fetch: async () => new Response('{}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    })
+
+    await expect(client.checkCompatibility({
+      client: { name: 'owlcoda-desktop', version: '0.1.0' },
+      supportedProtocolVersions: ['v1'],
+      expectedWorkspaceRealpath: process.cwd(),
+      requestedCapabilities: {},
+    })).resolves.toEqual({ compatibility: 'unreachable' })
+  })
+
+  it('rejects a JSON-RPC response whose id does not match the request id', async () => {
+    const client = createAppServerClient({
+      baseUrl: 'http://wrong-response.test',
+      fetch: async () => jsonRpcResult(999, { status: 'ok' }),
+    })
+
+    await expect(client.call('diagnostic/health', {})).rejects.toThrow('response id')
+  })
+
+  it('does not attach when compatible is missing runtime identity fields', async () => {
+    const client = createAppServerClient({
+      baseUrl: 'http://incomplete-runtime.test',
+      fetch: async (_url, init) => {
+        const request = JSON.parse(String(init?.body ?? '{}')) as { id: unknown }
+        return jsonRpcResult(request.id, { compatibility: 'compatible' })
+      },
+    })
+
+    await expect(client.checkCompatibility({
+      client: { name: 'owlcoda-desktop', version: '0.1.0' },
+      supportedProtocolVersions: ['v1'],
+      expectedRuntimeVersion: '0.15.30',
+      expectedWorkspaceRealpath: process.cwd(),
+      requestedCapabilities: {},
+    })).resolves.toEqual({ compatibility: 'unreachable' })
+  })
+
+  it.each([
+    ['protocol_mismatch', { protocolVersion: 'v999', compatibility: 'compatible' }],
+    ['version_mismatch', { runtimeVersion: '999.0.0', compatibility: 'compatible' }],
+    ['workspace_mismatch', {
+      workspaceRealpath: '/definitely/not/the/runtime/workspace',
+      workspaceId: workspaceId('/definitely/not/the/runtime/workspace'),
+      compatibility: 'compatible',
+    }],
+    ['compatible', { compatibility: 'workspace_mismatch' }],
+  ] as const)('locally derives %s when returned identity contradicts server compatibility', async (compatibility, override) => {
+    const expectedWorkspaceRealpath = realpathSync(process.cwd())
+    const client = createAppServerClient({
+      baseUrl: 'http://contradictory-runtime.test',
+      fetch: async (_url, init) => {
+        const request = JSON.parse(String(init?.body ?? '{}')) as { id: unknown }
+        return jsonRpcResult(request.id, initializeResult(expectedWorkspaceRealpath, override))
+      },
+    })
+
+    const result = await client.checkCompatibility({
+      client: { name: 'owlcoda-desktop', version: '0.1.0' },
+      supportedProtocolVersions: ['v1'],
+      expectedRuntimeVersion: '0.15.30',
+      expectedWorkspaceRealpath,
+      requestedCapabilities: {},
+    })
+
+    expect(result.compatibility).toBe(compatibility)
+  })
+
+  it('classifies a legacy runtime without client/initialize as protocol_mismatch', async () => {
+    const client = createAppServerClient({
+      baseUrl: 'http://legacy-app-server.test',
+      fetch: async (_url, init) => {
+        const request = JSON.parse(String(init?.body ?? '{}')) as { id: unknown }
+        return new Response(JSON.stringify({
+          jsonrpc: '2.0',
+          id: request.id,
+          error: { code: -32601, message: 'Method not found: client/initialize' },
+        }), { status: 404, headers: { 'content-type': 'application/json' } })
+      },
+    })
+
+    await expect(client.checkCompatibility({
+      client: { name: 'owlcoda-desktop', version: '0.1.0' },
+      supportedProtocolVersions: ['v1'],
+      expectedWorkspaceRealpath: process.cwd(),
+      requestedCapabilities: {},
+    })).resolves.toEqual({ compatibility: 'protocol_mismatch' })
+  })
+
+  it('preserves managed authentication errors instead of reporting unreachable', async () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const client = createAppServerClient({
+      baseUrl: baseUrl(await startServer(projectRoot, { managedToken: 'correct-token' })),
+      token: 'wrong-token',
+    })
+
+    await expect(client.checkCompatibility({
+      client: { name: 'owlcoda-desktop', version: '0.1.0' },
+      supportedProtocolVersions: ['v1'],
+      expectedWorkspaceRealpath: realpathSync(projectRoot),
+      requestedCapabilities: {},
+    })).rejects.toMatchObject({ name: 'AppServerClientError', code: -32001 })
+  })
+
+  it('provides token and custom headers for a managed event stream consumer', () => {
+    const client = createAppServerClient({
+      baseUrl: 'http://app-server.test/',
+      token: 'desktop-client-token',
+      headers: { 'x-owlcoda-client': 'desktop' },
+    })
+
+    const request = client.eventStreamRequest({ afterSequence: 41 })
+
+    expect(request.url).toBe('http://app-server.test/events?afterSequence=41')
+    expect(request.headers.get('authorization')).toBe('Bearer desktop-client-token')
+    expect(request.headers.get('x-owlcoda-client')).toBe('desktop')
+    expect(request.headers.get('last-event-id')).toBe('41')
+  })
+
+  it('reads thread history and event snapshots through typed helpers', async () => {
+    const methods: string[] = []
+    const client = createAppServerClient({
+      baseUrl: 'http://app-server.test',
+      fetch: async (_url, init) => {
+        const request = JSON.parse(String(init?.body ?? '{}')) as { id: unknown; method: string; params: any }
+        methods.push(request.method)
+        if (request.method === 'thread/read') {
+          expect(request.params).toEqual({ threadId: 'thread-1', limit: 20, cursor: 'cursor-1' })
+          return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+            thread: { id: 'thread-1' }, items: [], snapshotCursor: 'snapshot-1',
+            page: { startIndex: 0, limit: 20, totalCount: 0, hasMore: false, nextCursor: null },
+          } }), { status: 200, headers: { 'content-type': 'application/json' } })
+        }
+        expect(request.params).toEqual({ projectId: 'project-1' })
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+          schemaVersion: 1, projectId: 'project-1', workspaceId: 'project-1', threads: [],
+          cursor: { oldestAvailableSequence: 1, latestSequence: 0, afterSequence: 0 },
+        } }), { status: 200, headers: { 'content-type': 'application/json' } })
+      },
+    })
+
+    await expect(client.threadRead({ threadId: 'thread-1', limit: 20, cursor: 'cursor-1' })).resolves.toMatchObject({
+      snapshotCursor: 'snapshot-1',
+    })
+    await expect(client.eventSnapshot({ projectId: 'project-1' })).resolves.toMatchObject({
+      cursor: { afterSequence: 0 },
+    })
+    expect(methods).toEqual(['thread/read', 'event/snapshot'])
+  })
+
+  it('uses typed helpers for model readiness, attachment storage, and content-block turns', async () => {
+    const requests: Array<{ method: string; params: unknown }> = []
+    const client = createAppServerClient({
+      baseUrl: 'http://app-server.test',
+      fetch: async (_url, init) => {
+        const request = JSON.parse(String(init?.body ?? '{}')) as { id: unknown; method: string; params: unknown }
+        requests.push({ method: request.method, params: request.params })
+        return jsonRpcResult(request.id, request.method === 'model/list'
+          ? { models: [], defaultModelId: null }
+          : request.method === 'attachment/store'
+            ? { id: 'attachment-1', name: 'image.png', mediaType: 'image/png', size: 4 }
+            : { status: 'accepted', attachments: [{ id: 'attachment-1', status: 'attached' }] })
+      },
+    })
+
+    await client.modelList()
+    await client.attachmentStore({ name: 'image.png', mediaType: 'image/png', dataBase64: 'aW1n' })
+    await client.turnStart({
+      threadId: 'thread-1',
+      content: [{ type: 'text', text: 'Inspect' }, { type: 'localImage', attachmentId: 'attachment-1' }],
+    })
+
+    expect(requests).toEqual([
+      { method: 'model/list', params: {} },
+      { method: 'attachment/store', params: { name: 'image.png', mediaType: 'image/png', dataBase64: 'aW1n' } },
+      { method: 'turn/start', params: { threadId: 'thread-1', content: [{ type: 'text', text: 'Inspect' }, { type: 'localImage', attachmentId: 'attachment-1' }] } },
+    ])
+  })
+
   it('calls diagnostic/health through typed JSON-RPC client', async () => {
     const client = createAppServerClient({ baseUrl: baseUrl(await startServer()) })
     const health = await client.call('diagnostic/health', {})
@@ -94,6 +337,52 @@ describe('app-server client adapter', () => {
         expect.objectContaining({ method: 'thread/start', stability: 'stable' }),
         expect.objectContaining({ method: 'diagnostic/health', stability: 'debug-only' }),
       ],
+    })
+  })
+
+  it('hands a managed workspace through a typed client helper', async () => {
+    const methods: string[] = []
+    const params = {
+      workspaceId: 'workspace-1',
+      threadId: 'thread-1',
+      direction: 'to_project' as const,
+      requestId: 'handoff-1',
+      expectedHead: 'a'.repeat(40),
+      expectedStatusFingerprint: 'status-managed',
+      expectedProjectHead: 'b'.repeat(40),
+      expectedProjectStatusFingerprint: 'status-project',
+      authorized: true,
+    }
+    const client = createAppServerClient({
+      baseUrl: 'http://app-server.test',
+      fetch: async (_url, init) => {
+        const request = JSON.parse(String(init?.body ?? '{}')) as { id: unknown; method: string; params: unknown }
+        methods.push(request.method)
+        expect(request.params).toEqual(params)
+        return jsonRpcResult(request.id, {
+          receipt: {
+            schemaVersion: 1,
+            action: 'handoff',
+            requestId: params.requestId,
+            workspaceId: params.workspaceId,
+            direction: params.direction,
+            threadId: params.threadId,
+            branchOwnerBefore: 'managed',
+            branchOwnerAfter: 'project',
+            authorizationConfirmed: true,
+          },
+        })
+      },
+    })
+
+    const result = await client.workspaceHandoff(params)
+
+    expect(methods).toEqual(['workspace/handoff'])
+    expect(result.receipt).toMatchObject({
+      action: 'handoff',
+      direction: 'to_project',
+      threadId: 'thread-1',
+      branchOwnerAfter: 'project',
     })
   })
 
@@ -393,22 +682,31 @@ describe('app-server client adapter', () => {
     })
   })
 
-  it('calls runtimeRail/read and preserves missing truth status', async () => {
-    const client = createAppServerClient({ baseUrl: baseUrl(await startServer()) })
+  it('calls runtimeRail/read and returns the project-owned RunKit summary', async () => {
+    const projectRoot = await makeInitializedRunKitProject()
+    const client = createAppServerClient({ baseUrl: baseUrl(await startServer(projectRoot)) })
     const rail = await client.call('runtimeRail/read', { projectId: 'owlcoda' })
 
-    expect(rail.projectId).toBe('owlcoda')
-    expect(rail.freshness).toBe('missing')
-    expect(rail.source).toBe('not_connected')
+    expect(rail.projectId).toBeTruthy()
+    expect(rail.freshness).toBe('fresh')
+    expect(rail.source).toBe('owlcoda_runkit_inspect_summary')
+    expect(rail.summary).toMatchObject({
+      schemaVersion: 'OwlCodaRunKitInspectSummaryV1',
+      authorizationGranted: false,
+      gitAuthorization: false,
+      releaseAuthorization: false,
+    })
   })
 
   it('calls project/get aggregate through typed JSON-RPC client', async () => {
-    const client = createAppServerClient({ baseUrl: baseUrl(await startServer()) })
+    const projectRoot = await makeInitializedRunKitProject()
+    const client = createAppServerClient({ baseUrl: baseUrl(await startServer(projectRoot)) })
     const aggregate = await client.call('project/get', {})
 
     expect(aggregate.project.id).toBeTruthy()
     expect(aggregate.rail.projectId).toBe(aggregate.project.id)
-    expect(aggregate.rail.freshness).toBe('missing')
+    expect(aggregate.rail.freshness).toBe('fresh')
+    expect(aggregate.rail.summary?.schemaVersion).toBe('OwlCodaRunKitInspectSummaryV1')
   })
 
   it('uses typed client helpers for product shell project, thread, and rail reads', async () => {
@@ -428,7 +726,7 @@ describe('app-server client adapter', () => {
           expect(request.params).toEqual({ projectId: 'project-1' })
           return jsonRpcResult(request.id, {
             project: { id: 'project-1', name: 'OwlCoda', root: '/repo/owlcoda', source: 'cwd' },
-            rail: { projectId: 'project-1', freshness: 'missing', packet: null, gate: null, claim: null, proofs: [], rejectedPaths: [], nextAction: null, source: 'not_connected' },
+            rail: { projectId: 'project-1', freshness: 'missing', summary: null, source: 'not_connected' },
           })
         }
         if (request.method === 'thread/list') {
@@ -446,12 +744,7 @@ describe('app-server client adapter', () => {
           return jsonRpcResult(request.id, {
             projectId: 'project-1',
             freshness: 'missing',
-            packet: null,
-            gate: null,
-            claim: null,
-            proofs: [],
-            rejectedPaths: [],
-            nextAction: null,
+            summary: null,
             source: 'not_connected',
           })
         }
@@ -1146,63 +1439,13 @@ describe('app-server client adapter', () => {
     expect(methods).toEqual(['job/list', 'job/get', 'job/cancel'])
   })
 
-  it('uses typed client helpers for truth writer actions', async () => {
-    const methods: string[] = []
+  it('does not expose RunKit truth-writer client helpers', () => {
     const client = createAppServerClient({
       baseUrl: 'http://app-server.test',
-      fetch: async (_url, init) => {
-        const request = JSON.parse(String(init?.body ?? '{}')) as {
-          id: unknown
-          method: string
-          params: Record<string, unknown>
-        }
-        methods.push(request.method)
-        const result = request.method === 'proof/append'
-          ? {
-              status: 'appended',
-              proof: {
-                kind: request.params.kind,
-                title: request.params.title,
-                status: request.params.status,
-                sourceRef: '.owlrunkit/proofs/proof-1.json',
-              },
-              readback: { freshness: 'fresh' },
-            }
-          : {
-              status: 'confirmed',
-              gateId: request.params.gateId,
-              readback: {
-                freshness: 'fresh',
-                gate: { currentGate: null, passedGates: [request.params.gateId] },
-              },
-            }
-        return new Response(JSON.stringify({
-          jsonrpc: '2.0',
-          id: request.id,
-          result,
-        }), { status: 200, headers: { 'content-type': 'application/json' } })
-      },
     })
 
-    await expect(client.proofAppend({
-      projectId: 'project-1',
-      kind: 'manual_note',
-      title: 'Proof note',
-      status: 'recorded',
-    })).resolves.toMatchObject({
-      status: 'appended',
-      proof: { title: 'Proof note' },
-    })
-    await expect(client.gateConfirm({
-      projectId: 'project-1',
-      gateId: 'confirm-flow',
-      note: 'ok',
-    })).resolves.toMatchObject({
-      status: 'confirmed',
-      gateId: 'confirm-flow',
-    })
-
-    expect(methods).toEqual(['proof/append', 'gate/confirm'])
+    expect(client).not.toHaveProperty('proofAppend')
+    expect(client).not.toHaveProperty('gateConfirm')
   })
 
   it('raises structured errors for unknown methods', async () => {
@@ -1236,8 +1479,11 @@ describe('app-server client adapter', () => {
   })
 })
 
-async function startServer(projectRoot = process.cwd()): Promise<Server> {
-  const server = createAppServer({ projectRoot })
+async function startServer(
+  projectRoot = process.cwd(),
+  options: Parameters<typeof createAppServer>[0] = {},
+): Promise<Server> {
+  const server = createAppServer({ projectRoot, ...options })
   await listenAppServer(server, { host: '127.0.0.1', port: 0 })
   servers.push(server)
   return server
@@ -1246,6 +1492,12 @@ async function startServer(projectRoot = process.cwd()): Promise<Server> {
 function makeTemporaryProjectRoot(): string {
   const root = mkdtempSync(join(tmpdir(), 'owlcoda-client-review-'))
   temporaryProjectRoots.push(root)
+  return root
+}
+
+async function makeInitializedRunKitProject(): Promise<string> {
+  const root = makeTemporaryProjectRoot()
+  expect((await runRunKitCore(['init', '--workspace', root])).exitCode).toBe(0)
   return root
 }
 
@@ -1263,6 +1515,23 @@ function jsonRpcResult(id: unknown, result: unknown): Response {
     id,
     result,
   }), { status: 200, headers: { 'content-type': 'application/json' } })
+}
+
+function initializeResult(workspaceRealpath: string, override: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    runtimeVersion: '0.15.30',
+    runtimeBuild: 'test-build',
+    protocolVersion: 'v1',
+    workspaceId: workspaceId(workspaceRealpath),
+    workspaceRealpath,
+    capabilities: { review: true },
+    compatibility: 'compatible',
+    ...override,
+  }
+}
+
+function workspaceId(workspaceRealpath: string): string {
+  return createHash('sha256').update(workspaceRealpath).digest('hex')
 }
 
 void AppServerClientError

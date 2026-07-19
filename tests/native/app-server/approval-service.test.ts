@@ -20,6 +20,8 @@ describe('app-server interaction broker persistence', () => {
       threadId: 'thread-1',
       toolName: 'bash',
       toolInput: { command: 'npm test' },
+      riskClass: 'mutating',
+      riskReason: 'npm test requires explicit approval',
     })
     const liveApproval = broker.listApprovals().approvals[0]
 
@@ -30,6 +32,8 @@ describe('app-server interaction broker persistence', () => {
       threadId: 'thread-1',
       toolName: 'bash',
       input: { command: 'npm test' },
+      riskClass: 'mutating',
+      riskReason: 'npm test requires explicit approval',
       status: 'pending',
     })
 
@@ -39,9 +43,14 @@ describe('app-server interaction broker persistence', () => {
         id: liveApproval.id,
         kind: 'tool_approval',
         source: 'restored',
+        riskClass: 'mutating',
+        riskReason: 'npm test requires explicit approval',
         status: 'pending',
       }),
     ])
+    expect(restoredBroker.resolveApproval({ approvalId: liveApproval.id, decision: 'approve' })).toBeNull()
+    expect(restoredBroker.respondInteraction({ interactionId: liveApproval.id, decision: 'approve' })).toBeNull()
+    expect(restoredBroker.listInteractions().interactions).toHaveLength(1)
 
     const resolved = broker.resolveApproval({ approvalId: liveApproval.id, decision: 'approve' })
     await expect(pending).resolves.toBe(true)
@@ -52,6 +61,37 @@ describe('app-server interaction broker persistence', () => {
       source: 'live',
     })
     expect(JSON.parse(readFileSync(storagePath, 'utf8'))).toMatchObject({ interactions: [] })
+  })
+
+  it('records a denied user question as denied while cancelling the waiting tool', async () => {
+    const resolved: unknown[] = []
+    const broker = createAppServerApprovalBroker({
+      onResolved: result => resolved.push(result),
+    })
+
+    const pending = broker.requestUserQuestion({
+      projectId: 'project-1',
+      threadId: 'thread-1',
+      toolName: 'AskUserQuestion',
+      question: 'Continue?',
+    })
+    const interaction = broker.listInteractions().interactions[0]!
+
+    expect(broker.respondInteraction({
+      interactionId: interaction.id,
+      decision: 'deny',
+    })).toMatchObject({
+      interactionId: interaction.id,
+      kind: 'user_question',
+      status: 'denied',
+    })
+    await expect(pending).resolves.toBe('')
+    expect(resolved).toEqual([
+      expect.objectContaining({
+        interactionId: interaction.id,
+        status: 'denied',
+      }),
+    ])
   })
 })
 

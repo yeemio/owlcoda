@@ -17,13 +17,13 @@
  *   - `SAFE_TOOLS` membership is by-construction safe (read, glob, grep,
  *     ToolSearch, …) — bypass.
  *   - The persistent "always allow this tool" memory is honored ONLY
- *     when the call is not a dangerous bash/TaskCreate command. Anything
- *     the classifier flags as `dangerous` falls through to a prompt.
+ *     when the call is not a system or dangerous bash/TaskCreate command.
+ *     Either elevated tier falls through to a fresh prompt.
  *   - `needs_approval` and `unknown` levels are NOT treated as dangerous
  *     here on purpose: they already prompt under the default no-allow
  *     state, and a user who flipped on "always allow bash" usually meant
- *     to skip those low-stakes prompts. Only the `dangerous` tier
- *     (rm -rf, force-push, sudo, dd, mkfs, curl|sh) overrides.
+ *     to skip those low-stakes prompts. The `system` tier (package/service
+ *     state) and `dangerous` tier (rm -rf, sudo, dd, curl|sh) override.
  */
 
 import { classifyBashCommand, type BashRiskClassification } from './bash-risk.js'
@@ -47,7 +47,7 @@ export interface TuiApprovalInputs {
 
 export type TuiApprovalDecision =
   | { action: 'allow'; reason: 'auto-approve' | 'batch-all' | 'safe-tool' | 'persistent-allow' }
-  | { action: 'prompt'; reason: 'no-consent' | 'dangerous-override'; bashRisk?: BashRiskClassification }
+  | { action: 'prompt'; reason: 'no-consent' | 'system-override' | 'dangerous-override'; bashRisk?: BashRiskClassification }
 
 export type TuiTaskScopeApprovalDecision =
   | { action: 'allow'; reason: 'batch-all' }
@@ -67,15 +67,20 @@ export function decideTuiToolApproval(opts: TuiApprovalInputs): TuiApprovalDecis
       bashRisk = classifyBashCommand(cmd)
     }
   }
+  const systemCommand = bashRisk?.level === 'system'
   const dangerousCommand = bashRisk?.level === 'dangerous'
+  const requiresFreshConsent = systemCommand || dangerousCommand
 
   if (opts.autoApprove) return { action: 'allow', reason: 'auto-approve' }
   if (opts.batchApproveAll) return { action: 'allow', reason: 'batch-all' }
   if (opts.safeTools.has(toolName)) return { action: 'allow', reason: 'safe-tool' }
-  if (opts.perToolApprove.has(toolName) && !dangerousCommand) {
+  if (opts.perToolApprove.has(toolName) && !requiresFreshConsent) {
     return { action: 'allow', reason: 'persistent-allow' }
   }
 
+  if (systemCommand && opts.perToolApprove.has(toolName)) {
+    return { action: 'prompt', reason: 'system-override', bashRisk }
+  }
   if (dangerousCommand && opts.perToolApprove.has(toolName)) {
     return { action: 'prompt', reason: 'dangerous-override', bashRisk }
   }

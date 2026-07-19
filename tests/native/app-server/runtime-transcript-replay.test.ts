@@ -33,6 +33,48 @@ afterAll(() => {
 })
 
 describe('runtime transcript replay model', () => {
+  it('omits runtime-only prompt and superseded answer text from the user transcript', () => {
+    const projectRoot = makeTemporaryProjectRoot()
+    const conversation = createConversation({ system: 'runtime replay system', model: 'replay-model' })
+    conversation.turns.push({
+      role: 'user',
+      timestamp: 1,
+      content: [{ type: 'text', text: 'Read package.json.' }],
+    })
+    conversation.turns.push({
+      role: 'assistant',
+      timestamp: 2,
+      content: [{ type: 'text', text: 'Premature answer.' }],
+      audience: 'runtime',
+    })
+    conversation.turns.push({
+      role: 'user',
+      timestamp: 3,
+      content: [{ type: 'text', text: '[Runtime task-step] Continue the internal workflow.' }],
+      audience: 'runtime',
+    })
+    conversation.turns.push({
+      role: 'user',
+      timestamp: 3.5,
+      content: [{ type: 'text', text: '[Runtime truth resume snapshot]\nLegacy persisted runtime recovery context.' }],
+    })
+    conversation.turns.push({
+      role: 'assistant',
+      timestamp: 4,
+      content: [{ type: 'text', text: 'Final answer.' }],
+    })
+    saveSession(conversation, 'Runtime-only transcript session', { cwd: projectRoot })
+    createdSessions.push(conversation.id)
+
+    const transcript = readRuntimeTranscript({ projectRoot, threadId: conversation.id })
+
+    expect(transcript?.itemCount).toBe(2)
+    expect(transcript?.items.map(item => item.kind === 'message' ? `${item.role}:${item.text}` : item.kind)).toEqual([
+      'user:Read package.json.',
+      'assistant:Final answer.',
+    ])
+  })
+
   it('builds a complete replay model with stable runtime associations', () => {
     const projectRoot = makeTemporaryProjectRoot()
     const targetPath = join(projectRoot, 'target.txt')

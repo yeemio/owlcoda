@@ -14,6 +14,37 @@ import type { QueuedSubmission } from './submission-queue.js'
 import type { SubmissionQueue } from './submission-queue.js'
 import type { PickerItem } from './tui/picker.js'
 
+export interface PermissionDecisionAuditInput {
+  decision: 'allow' | 'deny' | 'always' | 'all'
+  toolName: string
+  input: Record<string, unknown>
+  downgraded?: boolean
+}
+
+function permissionAuditTarget(input: Record<string, unknown>): string {
+  const raw = input['command'] ?? input['path'] ?? input['url'] ?? ''
+  const normalized = String(raw).replace(/\s+/g, ' ').trim()
+  if (normalized.length <= 72) return normalized
+  return `${Array.from(normalized).slice(0, 71).join('')}…`
+}
+
+export function formatPermissionDecisionAudit({
+  decision,
+  toolName,
+  input,
+  downgraded = false,
+}: PermissionDecisionAuditInput): string {
+  const verb = decision === 'allow'
+    ? (downgraded ? 'Allowed once (persistent choice demoted)' : 'Allowed')
+    : decision === 'deny'
+      ? 'Denied'
+      : decision === 'always'
+        ? 'Allowed (always for this tool)'
+        : 'Allowed (rest of this turn)'
+  const target = permissionAuditTarget(input)
+  return `↳ ${verb}: ${toolName}${target ? ` — ${target}` : ''}`
+}
+
 export type FailedContinuationSubmitAction =
   | 'submit_text'
   | 'retry_failed_continuation'
@@ -307,10 +338,77 @@ export function recoverGuardRejectedSubmission(
  * On resume the REPL must offer to continue that pending work instead of
  * sitting silent. Only the role of the final turn decides this.
  */
-export function conversationEndsAwaitingAssistant(
-  turns: ReadonlyArray<{ role: 'user' | 'assistant' }>,
-): boolean {
-  return turns[turns.length - 1]?.role === 'user'
+type ResumeTurn = {
+  role: 'user' | 'assistant'
+  audience?: 'user' | 'runtime'
+  content?: ReadonlyArray<{ type: string; text?: string }>
+}
+
+function resumeTurnText(turn: ResumeTurn): string {
+  return (turn.content ?? [])
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text ?? '')
+    .join('\n')
+    .trim()
+}
+
+function isSyntheticResumeTurn(turn: ResumeTurn): boolean {
+  if (turn.audience === 'runtime') return true
+  const text = resumeTurnText(turn).trimStart()
+  return text.startsWith('[Runtime truth resume snapshot]')
+    || text.startsWith('[System:')
+}
+
+function userTurnAwaitsAssistant(turn: ResumeTurn): boolean {
+  if (turn.content === undefined) return true
+  return turn.content.some((block) =>
+    block.type === 'tool_result'
+    || (block.type === 'text' && (block.text ?? '').trim().length > 0),
+  )
+}
+
+export function conversationEndsAwaitingAssistant(turns: ReadonlyArray<ResumeTurn>): boolean {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index]
+    if (!turn || isSyntheticResumeTurn(turn)) continue
+    if (turn.role === 'assistant') return false
+    if (userTurnAwaitsAssistant(turn)) return true
+  }
+  return false
+}
+
+export type ResumeContinuationAction = 'none' | 'prompt' | 'continue' | 'pause'
+
+export function decideResumeContinuationAction(input: {
+  pending: boolean
+  autoContinueEnv?: string
+  confirmationAnswer?: string
+}): ResumeContinuationAction {
+  if (!input.pending) return 'none'
+  if (input.autoContinueEnv?.trim() === '1') return 'continue'
+  if (input.confirmationAnswer === undefined) return 'prompt'
+  const answer = input.confirmationAnswer.trim().toLowerCase()
+  return new Set(['1', 'y', 'yes', 'continue', '继续', '是']).has(answer)
+    ? 'continue'
+    : 'pause'
+}
+
+export function summarizePendingResumeUserMessage(
+  turns: ReadonlyArray<ResumeTurn>,
+  maxLength = 120,
+): string {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index]
+    if (!turn || isSyntheticResumeTurn(turn)) continue
+    if (turn.role === 'assistant') break
+    const text = resumeTurnText(turn).replace(/\s+/g, ' ').trim()
+    if (!text) continue
+    const chars = Array.from(text)
+    return chars.length <= maxLength
+      ? text
+      : `${chars.slice(0, Math.max(1, maxLength - 1)).join('')}…`
+  }
+  return 'A restored tool result is awaiting an assistant response.'
 }
 
 export type EscapeKeyAction =
