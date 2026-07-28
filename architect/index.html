@@ -107,13 +107,15 @@
     <div class="card left">
       <div>
         <span class="badge b-prev">● 开发者预览 (Developer Preview)</span>
+        <span class="badge" style="margin-left:6px">历史快照 · 2026-06-13</span>
       </div>
       <h1 style="margin-top:14px">🦉 OwlCoda</h1>
+      <p style="margin:0 0 12px;color:var(--faint);font-size:12.5px">本页保留 R24 架构评估的历史口径，不代表当前版本或发布状态；当前信息请以首页与 Changelog 为准。</p>
       <div class="tagline">装在你自己电脑里的 AI 编程助手。像 Claude Code，但<b style="color:var(--ink)">模型、工具、数据全在本地</b>——不登录、不上云。</div>
       <div class="kpis">
         <div class="kpi"><b>38</b><small>高频发版轮次</small></div>
-        <div class="kpi"><b style="color:var(--owl2)">0.15.3</b><small>当前 npm latest</small></div>
-        <div class="kpi"><b style="color:var(--good)">v0.15.3</b><small>GPL 源码 tag · 同号</small></div>
+        <div class="kpi"><b style="color:var(--owl2)">0.15.3</b><small>R24 时 npm latest</small></div>
+        <div class="kpi"><b style="color:var(--good)">v0.15.3</b><small>R24 时 GPL tag</small></div>
         <div class="kpi"><b style="color:var(--good)">R24</b><small>双线收敛 · showcase</small></div>
       </div>
     </div>
@@ -245,13 +247,13 @@
   </div>
 
   <div class="card" style="margin-top:16px;border-color:rgba(63,185,143,.35)">
-    <h2 style="color:var(--good)">🔗 双线已收敛同号 · npm 与源码线怎么读（本轮更新）</h2>
+    <h2 style="color:var(--good)">🔗 R24 快照 · 当时的 npm 与源码线</h2>
     <p style="margin:0 0 8px;color:var(--dim);font-size:13.5px">
       OwlCoda 现在是<b style="color:var(--ink)"> npm 安装 + GPL 源码可审计</b>的双线结构，且两条线<b style="color:var(--ink)">逐版同号</b>。npm 给用户装；公仓 tag 给源码、许可证和对应源码义务对账——同一个版本号能在两边对上。
     </p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:12.5px;color:var(--dim)">
       <div style="flex:1;min-width:200px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px">
-        <b style="color:var(--ink)">npm runtime line</b><br>当前 latest 是 <b style="color:var(--good)">0.15.3</b>。开源后主线进入 0.15.x；0.15.2/0.15.3 上 npm dist，0.15.0/0.15.1 为源码-only tag。
+        <b style="color:var(--ink)">npm runtime line</b><br>R24 时 latest 是 <b style="color:var(--good)">0.15.3</b>。开源后主线进入 0.15.x；0.15.2/0.15.3 上 npm dist，0.15.0/0.15.1 为源码-only tag。
       </div>
       <div style="flex:1;min-width:200px;background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px">
         <b style="color:var(--ink)">GPL source line</b><br>公仓 tag <b style="color:var(--good)">v0.15.3</b> 与 npm 同号。0.15.0/1/2/3 逐版对应 SOURCE.md 对应源码义务，映射已记录可对账。
@@ -263,7 +265,7 @@
   </div>
 
   <footer>
-    数据来源：<code>KANBAN.md</code> / <code>ASSESSMENT-2026-05-30.md</code>（R24 · 2026-06-13 · npm 0.15.3 · GPL source v0.15.3 双线同号）· 公仓 tag <code>v0.15.3</code><br>
+    历史快照，不代表当前发布状态。数据来源：<code>KANBAN.md</code> / <code>ASSESSMENT-2026-05-30.md</code>（R24 · 2026-06-13 · npm 0.15.3 · GPL source v0.15.3 双线同号）· 公仓 tag <code>v0.15.3</code><br>
     口径：健康度=6 维加权均分（≈3.7）· source-open 是定位/信任里程碑，不直接宣传 SWE clean score · 仅供架构跟踪，非对外宣传数字<br>
     本轮（R24）：双线收敛同号 + 首个公开 showcase + 贡献治理闸。<b>评分维持 3.7：source-open 从可读走到可演示+可治理+可对账，但破高原三门槛仍未 ship。下一跳不是再堆小修，是 fitness 补全、显式状态机或 clean SWE 证据。</b>
   </footer>
