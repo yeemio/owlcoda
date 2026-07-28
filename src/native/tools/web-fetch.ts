@@ -6,7 +6,242 @@
  * Avoids remote domain-check dependencies and secondary model calls.
  */
 
+import { lookup } from 'node:dns/promises'
+import * as http from 'node:http'
+import * as https from 'node:https'
+import { BlockList, isIP, type LookupFunction } from 'node:net'
 import type { NativeToolDef, ToolResult } from './types.js'
+
+export interface ResolvedAddress {
+  address: string
+  family: 4 | 6
+}
+
+export interface SafeFetchInit {
+  method: 'GET' | 'HEAD'
+  headers: Record<string, string>
+  signal: AbortSignal
+}
+
+export type HostResolver = (hostname: string) => Promise<ResolvedAddress[]>
+export type PinnedRequest = (
+  url: URL,
+  addresses: ResolvedAddress[],
+  init: SafeFetchInit,
+) => Promise<Response>
+export type NodeRequestTransport = (
+  url: URL,
+  options: http.RequestOptions,
+  onResponse: (incoming: http.IncomingMessage) => void,
+) => http.ClientRequest
+
+export interface SafeFetchDependencies {
+  resolveHost?: HostResolver
+  request?: PinnedRequest
+}
+
+export interface SafeFetchResult {
+  response: Response
+  finalUrl: string
+}
+
+const MAX_REDIRECTS = 10
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
+const BLOCKED_IPV4 = createBlockList('ipv4', [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.0.2.0', 24],
+  ['192.88.99.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+])
+const PUBLIC_IPV6 = createBlockList('ipv6', [['2000::', 3]])
+const BLOCKED_IPV6 = createBlockList('ipv6', [
+  ['2001::', 23],
+  ['2001:db8::', 32],
+  ['2002::', 16],
+  ['2620:4f:8000::', 48],
+  ['3fff::', 20],
+])
+
+export class NetworkTargetBlockedError extends Error {
+  override name = 'NetworkTargetBlockedError'
+}
+
+export async function fetchWithNetworkBoundary(
+  input: string,
+  init: SafeFetchInit,
+  dependencies: SafeFetchDependencies = {},
+): Promise<SafeFetchResult> {
+  const resolveHost = dependencies.resolveHost ?? resolveHostWithDns
+  const request = dependencies.request ?? requestPinned
+  let current = new URL(input)
+
+  for (let redirects = 0; ; redirects += 1) {
+    assertHttpProtocol(current)
+    const addresses = await resolvePublicAddresses(current, resolveHost)
+    const response = await request(current, addresses, init)
+    const location = response.headers.get('location')
+
+    if (!REDIRECT_STATUSES.has(response.status) || !location) {
+      return { response, finalUrl: redirects === 0 ? input : current.href }
+    }
+    if (redirects >= MAX_REDIRECTS) {
+      throw new Error(`too many redirects fetching ${input}`)
+    }
+
+    current = new URL(location, current)
+  }
+}
+
+async function resolveHostWithDns(hostname: string): Promise<ResolvedAddress[]> {
+  const addresses = await lookup(hostname, { all: true, verbatim: true })
+  return addresses.map(entry => ({
+    address: entry.address,
+    family: entry.family as 4 | 6,
+  }))
+}
+
+async function resolvePublicAddresses(url: URL, resolveHost: HostResolver): Promise<ResolvedAddress[]> {
+  const hostname = stripIpv6Brackets(url.hostname)
+  const literalFamily = isIP(hostname)
+  const addresses = literalFamily
+    ? [{ address: hostname, family: literalFamily as 4 | 6 }]
+    : await resolveHost(hostname)
+
+  if (addresses.length === 0) {
+    throw new Error(`DNS lookup returned no addresses for ${hostname}`)
+  }
+
+  return addresses.map(entry => {
+    const family = isIP(entry.address)
+    if (family !== 4 && family !== 6) {
+      throw new NetworkTargetBlockedError(
+        `network target is not allowed: ${hostname} resolved to an invalid IP address`,
+      )
+    }
+    if (!isPublicIpAddress(entry.address, family)) {
+      throw new NetworkTargetBlockedError(
+        `network target is not allowed: ${hostname} resolved to ${entry.address}`,
+      )
+    }
+    return { address: entry.address, family: family as 4 | 6 }
+  })
+}
+
+export function createPinnedLookup(addresses: ResolvedAddress[]): LookupFunction {
+  return (_hostname, options, callback) => {
+    const requestedFamily = typeof options === 'object' ? options.family : 0
+    const eligible = requestedFamily === 4 || requestedFamily === 6
+      ? addresses.filter(entry => entry.family === requestedFamily)
+      : addresses
+
+    if (eligible.length === 0) {
+      const error = Object.assign(new Error('no vetted address for requested family'), {
+        code: 'ENOTFOUND',
+      })
+      callback(error, '', 0)
+      return
+    }
+
+    if (typeof options === 'object' && options.all) {
+      callback(null, eligible)
+      return
+    }
+
+    const selected = eligible[0]!
+    callback(null, selected.address, selected.family)
+  }
+}
+
+export function requestPinned(
+  url: URL,
+  addresses: ResolvedAddress[],
+  init: SafeFetchInit,
+  transportOverride?: NodeRequestTransport,
+): Promise<Response> {
+  const transport: NodeRequestTransport = transportOverride
+    ?? (url.protocol === 'https:' ? https.request : http.request)
+  const pinnedLookup = createPinnedLookup(addresses)
+
+  return new Promise<Response>((resolve, reject) => {
+    const request = transport(url, {
+      method: init.method,
+      headers: init.headers,
+      signal: init.signal,
+      agent: false,
+      lookup: pinnedLookup,
+    }, incoming => {
+      const chunks: Buffer[] = []
+      incoming.on('data', chunk => {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+      })
+      incoming.on('error', reject)
+      incoming.on('end', () => {
+        const headers = new Headers()
+        for (const [name, value] of Object.entries(incoming.headers)) {
+          if (Array.isArray(value)) {
+            for (const item of value) headers.append(name, item)
+          } else if (value !== undefined) {
+            headers.set(name, value)
+          }
+        }
+
+        const status = incoming.statusCode ?? 500
+        const body = init.method === 'HEAD' || status === 204 || status === 205 || status === 304
+          ? null
+          : Buffer.concat(chunks)
+        resolve(new Response(body, {
+          status,
+          statusText: incoming.statusMessage,
+          headers,
+        }))
+      })
+    })
+
+    request.on('error', reject)
+    request.end()
+  })
+}
+
+function assertHttpProtocol(url: URL): void {
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new NetworkTargetBlockedError(
+      `network target is not allowed: redirect uses ${url.protocol}`,
+    )
+  }
+}
+
+function stripIpv6Brackets(hostname: string): string {
+  return hostname.startsWith('[') && hostname.endsWith(']')
+    ? hostname.slice(1, -1)
+    : hostname
+}
+
+function isPublicIpAddress(address: string, family: 4 | 6): boolean {
+  if (family === 4) return !BLOCKED_IPV4.check(address, 'ipv4')
+  return PUBLIC_IPV6.check(address, 'ipv6') && !BLOCKED_IPV6.check(address, 'ipv6')
+}
+
+function createBlockList(
+  type: 'ipv4' | 'ipv6',
+  subnets: ReadonlyArray<readonly [network: string, prefix: number]>,
+): BlockList {
+  const blockList = new BlockList()
+  for (const [network, prefix] of subnets) {
+    blockList.addSubnet(network, prefix, type)
+  }
+  return blockList
+}
 
 export interface WebFetchInput {
   /** The URL to fetch */
@@ -195,16 +430,22 @@ function scoreLlmsTxtCandidate(candidate: URL, original: URL): number {
   return score
 }
 
-async function tryLlmsTxtFallback(originalUrl: string, originalParsed: URL, prompt?: string): Promise<ToolResult | null> {
+async function tryLlmsTxtFallback(
+  originalUrl: string,
+  originalParsed: URL,
+  prompt: string | undefined,
+  dependencies: SafeFetchDependencies,
+): Promise<ToolResult | null> {
   const llmsTxtUrl = new URL('/llms.txt', originalParsed.origin)
 
   let llmsTxtRes: Response
   try {
-    llmsTxtRes = await fetch(llmsTxtUrl.href, {
+    const result = await fetchWithNetworkBoundary(llmsTxtUrl.href, {
+      method: 'GET',
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: fetchHeaders(),
-      redirect: 'follow',
-    })
+    }, dependencies)
+    llmsTxtRes = result.response
   } catch {
     return null
   }
@@ -220,18 +461,19 @@ async function tryLlmsTxtFallback(originalUrl: string, originalParsed: URL, prom
 
   for (const { candidate } of rankedCandidates) {
     try {
-      const candidateRes = await fetch(candidate.href, {
+      const result = await fetchWithNetworkBoundary(candidate.href, {
+        method: 'GET',
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         headers: fetchHeaders(),
-        redirect: 'follow',
-      })
+      }, dependencies)
+      const candidateRes = result.response
 
       if (!candidateRes.ok) continue
 
       const contentType = candidateRes.headers.get('content-type') ?? ''
       const raw = await candidateRes.text()
       return renderFetchedContent({
-        responseUrl: candidate.href,
+        responseUrl: result.finalUrl,
         contentType,
         raw,
         prompt,
@@ -245,7 +487,9 @@ async function tryLlmsTxtFallback(originalUrl: string, originalParsed: URL, prom
   return null
 }
 
-export function createWebFetchTool(): NativeToolDef<WebFetchInput> {
+export function createWebFetchTool(
+  dependencies: SafeFetchDependencies = {},
+): NativeToolDef<WebFetchInput> {
   return {
     name: 'WebFetch',
     description:
@@ -275,16 +519,16 @@ export function createWebFetchTool(): NativeToolDef<WebFetchInput> {
       }
 
       try {
-        const res = await fetch(url, {
+        const result = await fetchWithNetworkBoundary(url, {
           method,
           signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
           headers: fetchHeaders(),
-          redirect: 'follow',
-        })
+        }, dependencies)
+        const res = result.response
 
         if (!res.ok) {
           if (res.status === 404 && method === 'GET') {
-            const fallback = await tryLlmsTxtFallback(url, parsed, prompt)
+            const fallback = await tryLlmsTxtFallback(url, parsed, prompt, dependencies)
             if (fallback) return fallback
           }
 
@@ -323,7 +567,7 @@ export function createWebFetchTool(): NativeToolDef<WebFetchInput> {
 
         const contentType = res.headers.get('content-type') ?? ''
         const raw = method === 'HEAD' ? '' : await res.text()
-        return renderFetchedContent({ responseUrl: url, contentType, raw, prompt })
+        return renderFetchedContent({ responseUrl: result.finalUrl, contentType, raw, prompt })
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err)
         if (msg.includes('TimeoutError') || msg.includes('abort')) {

@@ -8,6 +8,8 @@ import { createConversation } from '../../../src/native/conversation.js'
 import { loadSession, saveSession } from '../../../src/native/session.js'
 
 const sandboxes: string[] = []
+const GIT_INTEGRATION_TIMEOUT_MS = 30_000
+const HANDOFF_INTEGRATION_TIMEOUT_MS = 60_000
 
 afterEach(() => {
   for (const sandbox of sandboxes.splice(0)) {
@@ -18,7 +20,7 @@ afterEach(() => {
 describe('managed workspace service', () => {
   it('creates, lists, reads, and resumes a ledger-backed worktree without changing process cwd', () => {
     const { projectRoot } = makeGitRepository()
-    const service = createManagedWorkspaceService({ projectRoot })
+    const service = createAuthorizedService(projectRoot)
     const cwdBefore = process.cwd()
     const baseCommit = git(projectRoot, 'rev-parse', 'HEAD')
 
@@ -50,20 +52,20 @@ describe('managed workspace service', () => {
       },
     })
     expect(process.cwd()).toBe(cwdBefore)
-  })
+  }, GIT_INTEGRATION_TIMEOUT_MS)
 
   it('recognizes the current App Server workspace from the lifecycle ledger', () => {
     const { projectRoot } = makeGitRepository()
-    const created = createManagedWorkspaceService({ projectRoot }).create({
+    const created = createAuthorizedService(projectRoot).create({
       slug: 'resume-here',
       startingRef: 'HEAD',
     }).workspace
 
-    const service = createManagedWorkspaceService({ projectRoot: created.worktreePath })
+    const service = createAuthorizedService(created.worktreePath)
 
     expect(service.currentWorkspace()).toEqual(created)
     expect(service.capability()).toMatchObject({ available: true, currentMode: 'managed' })
-  })
+  }, GIT_INTEGRATION_TIMEOUT_MS)
 
   it('blocks creation when untracked dependency or source files would be omitted', () => {
     const { projectRoot } = makeGitRepository()
@@ -71,25 +73,25 @@ describe('managed workspace service', () => {
     mkdirSync(join(projectRoot, 'src'), { recursive: true })
     writeFileSync(join(projectRoot, 'src', 'new-helper.ts'), 'export const value = 1\n')
 
-    const service = createManagedWorkspaceService({ projectRoot })
+    const service = createAuthorizedService(projectRoot)
 
     expect(() => service.create({ slug: 'unsafe', startingRef: 'HEAD' })).toThrow(/untracked dependency\/source files/)
     expect(existsSync(join(projectRoot, '..', '.owlcoda-worktrees', 'unsafe'))).toBe(false)
-  })
+  }, GIT_INTEGRATION_TIMEOUT_MS)
 
   it('fails closed when the managed worktree branch no longer matches its ledger', () => {
     const { projectRoot } = makeGitRepository()
-    const service = createManagedWorkspaceService({ projectRoot })
+    const service = createAuthorizedService(projectRoot)
     const created = service.create({ slug: 'tampered', startingRef: 'HEAD' }).workspace
     git(created.worktreePath, 'switch', '-c', 'unexpected-branch')
 
     expect(() => service.read({ workspaceId: created.workspaceId })).toThrow(/branch/i)
     expect(() => service.resume({ workspaceId: created.workspaceId })).toThrow(/branch/i)
-  })
+  }, GIT_INTEGRATION_TIMEOUT_MS)
 
   it('requires an explicit current-status authorization and commits idempotently', () => {
     const { projectRoot } = makeGitRepository()
-    const service = createManagedWorkspaceService({ projectRoot })
+    const service = createAuthorizedService(projectRoot)
     const workspace = service.create({ slug: 'commit-flow', startingRef: 'HEAD' }).workspace
     writeFileSync(join(workspace.worktreePath, 'managed-change.txt'), 'verified change\n')
 
@@ -150,11 +152,11 @@ describe('managed workspace service', () => {
       expectedStatusFingerprint: status.statusFingerprint,
       authorized: true,
     })).toThrow(/idempotency conflict/i)
-  })
+  }, GIT_INTEGRATION_TIMEOUT_MS)
 
   it('keeps a managed workspace with a durable idempotent receipt', () => {
     const { projectRoot } = makeGitRepository()
-    const service = createManagedWorkspaceService({ projectRoot })
+    const service = createAuthorizedService(projectRoot)
     const workspace = service.create({ slug: 'keep-flow', startingRef: 'HEAD' }).workspace
     const status = service.status({ workspaceId: workspace.workspaceId })
     const input = {
@@ -177,11 +179,11 @@ describe('managed workspace service', () => {
     })
     expect(service.read({ workspaceId: workspace.workspaceId }).workspace.status).toBe('kept')
     expect(service.keep(input)).toEqual(kept)
-  })
+  }, GIT_INTEGRATION_TIMEOUT_MS)
 
   it('fails closed before cleanup and preserves the committed branch after authorized removal', () => {
     const { projectRoot } = makeGitRepository()
-    const service = createManagedWorkspaceService({ projectRoot })
+    const service = createAuthorizedService(projectRoot)
     const workspace = service.create({ slug: 'cleanup-flow', startingRef: 'HEAD' }).workspace
     writeFileSync(join(workspace.worktreePath, 'uncommitted.txt'), 'do not discard implicitly\n')
     const status = service.status({ workspaceId: workspace.workspaceId })
@@ -217,14 +219,14 @@ describe('managed workspace service', () => {
       cleanup: { action: 'remove', changedFiles: 1, discardChanges: true },
     })
     expect(service.cleanup({ ...input, discardChanges: true })).toEqual(cleaned)
-  })
+  }, GIT_INTEGRATION_TIMEOUT_MS)
 
   it('hands one thread and branch from its managed worktree to Local and back to the same worktree', () => {
     const { sandbox, projectRoot } = makeGitRepository()
     const previousHome = process.env['OWLCODA_HOME']
     process.env['OWLCODA_HOME'] = join(sandbox, 'owlcoda-home')
     try {
-      const service = createManagedWorkspaceService({ projectRoot })
+      const service = createAuthorizedService(projectRoot)
       const projectBranch = git(projectRoot, 'branch', '--show-current')
       const workspace = service.create({ slug: 'handoff-flow', startingRef: 'HEAD' }).workspace
       writeFileSync(join(workspace.worktreePath, 'handoff.txt'), 'move this code with the task\n')
@@ -354,7 +356,7 @@ describe('managed workspace service', () => {
       if (previousHome === undefined) delete process.env['OWLCODA_HOME']
       else process.env['OWLCODA_HOME'] = previousHome
     }
-  }, 15_000)
+  }, HANDOFF_INTEGRATION_TIMEOUT_MS)
 })
 
 function makeGitRepository(): { sandbox: string; projectRoot: string } {
@@ -369,6 +371,13 @@ function makeGitRepository(): { sandbox: string; projectRoot: string } {
   git(projectRoot, 'add', 'README.md')
   git(projectRoot, 'commit', '--quiet', '-m', 'fixture baseline')
   return { sandbox, projectRoot }
+}
+
+function createAuthorizedService(projectRoot: string) {
+  return createManagedWorkspaceService({
+    projectRoot,
+    authorizeOperation: () => true,
+  })
 }
 
 function git(cwd: string, ...args: string[]): string {

@@ -2,6 +2,33 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.15.31] — 2026-07-28
+
+Security and reliability patch for project-controlled inputs, local service
+authorization, network isolation, and packaged CLI startup.
+
+### Security
+
+- Prevented project MCP configuration, shared permission rules, and model
+  configuration tools from expanding host or user authority.
+- Hardened project instruction loading against symlink and path-boundary
+  escapes, and constrained WebFetch across private addresses, DNS resolution,
+  redirects, and discovery candidates.
+- Replaced client-asserted managed-workspace authorization with a trusted-host
+  decision bound to the current workspace state and exact request.
+- Removed secrets and internal runtime metadata from public health responses,
+  strengthened admin authentication and redaction, and moved pull-request CI
+  away from persistent self-hosted runners.
+
+### Fixed
+
+- Made packaged App Server smoke authentication fail closed when configured
+  tokens are blank and ensured owned runtime processes are cleaned up.
+- Isolated Desktop preview compilation from caller-owned directories and
+  preserved public RunKit package boundaries.
+- Improved path-token scanning and special-purpose IPv4/IPv6 filtering without
+  weakening existing authorization or network policies.
+
 ## [0.15.30] — 2026-07-18
 
 Native runtime reliability release for explainable approvals, resumable session

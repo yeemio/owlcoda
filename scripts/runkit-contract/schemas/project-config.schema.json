@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/project-config-v1.json",
+  "title": "OwlCoda RunKit Project Config V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "core", "authorizationPolicy"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitConfigV1" },
+    "core": { "$ref": "engine-pin.schema.json" },
+    "authorizationPolicy": { "const": "external_explicit_authority_required" }
+  }
+}

@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { OwlCodaConfig, ConfiguredModel } from './config.js'
 import type { PlatformCatalog } from './models/catalog.js'
 import { getOwlcodaConfigLabel } from './paths.js'
@@ -13,7 +14,7 @@ import {
   type UpdateRuntimeSettingsPatch,
 } from './model-config-mutator.js'
 import type { ModelTruthSnapshot } from './model-truth.js'
-import { createOneShotAdminToken, getAdminBearerToken, verifyOneShotAdminToken } from './admin-delivery.js'
+import { createOneShotAdminToken, getAdminBearerToken } from './admin-delivery.js'
 import { VERSION } from './version.js'
 
 const defaultEndpointHealthCache = new EndpointHealthCache()
@@ -59,6 +60,7 @@ interface RouteMatch {
     | 'bind-discovered'
     | 'test-model'
     | 'test-connection'
+    | 'auth-issue'
     | 'auth-exchange'
     | 'bulk-patch'
     | 'bulk-bind-discovered'
@@ -86,19 +88,20 @@ interface AdminSession {
 }
 
 export class AdminAuthManager {
-  private readonly bearerToken: string
+  private readonly bearerToken: string | null
   private readonly sessionTtlMs: number
   private readonly oneShotTtlMs: number
   private readonly sessions = new Map<string, AdminSession>()
   private readonly oneShotTokens = new Map<string, number>()
 
-  constructor(bearerToken: string, options: { sessionTtlMs?: number, oneShotTtlMs?: number } = {}) {
-    this.bearerToken = bearerToken
+  constructor(bearerToken: string | null, options: { sessionTtlMs?: number, oneShotTtlMs?: number } = {}) {
+    this.bearerToken = bearerToken?.trim() || null
     this.sessionTtlMs = options.sessionTtlMs ?? 86_400_000
     this.oneShotTtlMs = options.oneShotTtlMs ?? 300_000
   }
 
   issueOneShotToken(): string {
+    if (!this.bearerToken) throw new Error('Admin bearer is not configured')
     const token = createOneShotAdminToken(this.bearerToken)
     this.oneShotTokens.set(token, Date.now() + this.oneShotTtlMs)
     return token
@@ -107,8 +110,7 @@ export class AdminAuthManager {
   exchangeOneShotToken(token: string): { sessionId: string, csrfToken: string } | null {
     this.pruneExpired()
     const expiresAt = this.oneShotTokens.get(token)
-    const validStatelessToken = verifyOneShotAdminToken(this.bearerToken, token, { maxAgeMs: this.oneShotTtlMs })
-    if ((!expiresAt || expiresAt < Date.now()) && !validStatelessToken) {
+    if (!expiresAt || expiresAt < Date.now()) {
       this.oneShotTokens.delete(token)
       return null
     }
@@ -134,7 +136,10 @@ export class AdminAuthManager {
   } {
     this.pruneExpired()
     const auth = req.headers['authorization']
-    if (auth === `Bearer ${this.bearerToken}`) {
+    const providedBearer = typeof auth === 'string'
+      ? auth.match(/^Bearer\s+(.+)$/i)?.[1]?.trim()
+      : undefined
+    if (this.bearerToken && providedBearer && secureTokenEqual(providedBearer, this.bearerToken)) {
       return { ok: true }
     }
 
@@ -161,7 +166,7 @@ export class AdminAuthManager {
 
     if (options.requireCsrf) {
       const csrf = req.headers['x-owlcoda-token']
-      if (csrf !== session.csrfToken) {
+      if (typeof csrf !== 'string' || !secureTokenEqual(csrf, session.csrfToken)) {
         return {
           ok: false,
           status: 403,
@@ -206,6 +211,19 @@ export async function handleAdminApiRequest(
   const route = matchRoute(method, url)
   if (!route) {
     sendAdminError(res, 404, 'not_found', 'Admin API route not found')
+    return true
+  }
+
+  if (route.action === 'auth-issue') {
+    const auth = deps.auth.authenticate(req)
+    if (!auth.ok) {
+      sendAdminError(res, auth.status ?? 401, auth.code ?? 'authentication_error', auth.message ?? 'Unauthorized')
+      return true
+    }
+    sendAdminJson(res, 200, {
+      schemaVersion: ADMIN_API_SCHEMA_VERSION,
+      token: deps.auth.issueOneShotToken(),
+    })
     return true
   }
 
@@ -494,8 +512,11 @@ export async function handleAdminApiRequest(
   }
 }
 
-export function createAdminAuthManager(config: OwlCodaConfig): AdminAuthManager {
-  return new AdminAuthManager(getAdminBearerToken(config))
+export function createAdminAuthManager(
+  config: OwlCodaConfig,
+  runtimeToken: string | undefined = process.env['OWLCODA_RUNTIME_TOKEN'],
+): AdminAuthManager {
+  return new AdminAuthManager(getAdminBearerToken(config, runtimeToken))
 }
 
 function matchRoute(method: string, url: string): RouteMatch | null {
@@ -509,6 +530,7 @@ function matchRoute(method: string, url: string): RouteMatch | null {
   if (method === 'POST' && url === '/admin/api/models') return { action: 'create-model' }
   if (method === 'POST' && url === '/admin/api/default') return { action: 'set-default' }
   if (method === 'POST' && url === '/admin/api/test-connection') return { action: 'test-connection' }
+  if (method === 'POST' && url === '/admin/api/auth/token') return { action: 'auth-issue' }
   if ((method === 'POST' || method === 'GET') && url === '/admin/api/auth/exchange') return { action: 'auth-exchange' }
   if (method === 'POST' && url === '/admin/api/bulk/patch') return { action: 'bulk-patch' }
   if (method === 'POST' && url === '/admin/api/bulk/bind-discovered') return { action: 'bulk-bind-discovered' }
@@ -534,13 +556,18 @@ function isWriteMethod(method: string): boolean {
   return method === 'POST' || method === 'PATCH' || method === 'DELETE' || method === 'PUT'
 }
 
-function sanitizeSnapshot(snapshot: ModelTruthSnapshot): ModelTruthSnapshot {
+type CredentialProjection = 'status' | 'marker'
+
+export function sanitizeSnapshot(
+  snapshot: ModelTruthSnapshot,
+  credentialProjection: CredentialProjection = 'status',
+): ModelTruthSnapshot {
   const sanitizeStatus = <T extends typeof snapshot.statuses[number]>(status: T): T => ({
     ...status,
     raw: status.raw.config
       ? {
           ...status.raw,
-          config: sanitizeModel(status.raw.config),
+          config: sanitizeModel(status.raw.config, credentialProjection),
         }
       : status.raw,
   })
@@ -554,18 +581,49 @@ function sanitizeSnapshot(snapshot: ModelTruthSnapshot): ModelTruthSnapshot {
   }
 }
 
-function sanitizeConfig(config: OwlCodaConfig): Omit<OwlCodaConfig, 'models'> & { models: Array<Record<string, unknown>> } {
+export function sanitizeConfig(
+  config: OwlCodaConfig,
+  credentialProjection: CredentialProjection = 'status',
+): Record<string, unknown> {
+  const rawConfig = config as unknown as Record<string, unknown>
   return {
-    ...config,
-    models: config.models.map(model => sanitizeModel(model)),
+    ...rawConfig,
+    adminToken: projectCredential(config.adminToken, credentialProjection),
+    models: config.models.map(model => sanitizeModel(model, credentialProjection)),
+    ...(Array.isArray(config.backends)
+      ? {
+          backends: config.backends.map(backend => ({
+            ...backend,
+            apiKey: projectCredential(backend.apiKey, credentialProjection),
+          })),
+        }
+      : {}),
   }
 }
 
-function sanitizeModel(model: ConfiguredModel): Record<string, unknown> {
+function sanitizeModel(
+  model: ConfiguredModel,
+  credentialProjection: CredentialProjection,
+): Record<string, unknown> {
   return {
     ...model,
-    apiKey: { set: Boolean(model.apiKey && model.apiKey.length > 0) },
+    apiKey: projectCredential(model.apiKey, credentialProjection),
+    ...(model.headers ? { headers: sanitizeHeaders(model.headers) } : {}),
   }
+}
+
+function projectCredential(
+  value: string | undefined,
+  projection: CredentialProjection,
+): { set: boolean } | string | undefined {
+  if (projection === 'status') return { set: Boolean(value && value.length > 0) }
+  return value ? '***' : undefined
+}
+
+function sanitizeHeaders(headers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.keys(headers).map(name => [name, '***']),
+  )
 }
 
 async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -724,7 +782,14 @@ function parseCookies(header: string | string[] | undefined): Record<string, str
 }
 
 function randomToken(prefix: string): string {
-  return `${prefix}_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`
+  return `${prefix}_${randomBytes(32).toString('base64url')}`
+}
+
+function secureTokenEqual(provided: string, expected: string): boolean {
+  const providedBuffer = Buffer.from(provided)
+  const expectedBuffer = Buffer.from(expected)
+  return providedBuffer.length === expectedBuffer.length
+    && timingSafeEqual(providedBuffer, expectedBuffer)
 }
 
 class AdminApiError extends Error {

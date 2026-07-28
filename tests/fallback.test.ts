@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildFallbackChain, withFallback } from '../src/middleware/fallback.js'
+import { buildFallbackChain, isAutomaticFallbackEnabled, withFallback } from '../src/middleware/fallback.js'
 import type { OwlCodaConfig } from '../src/config.js'
 
 function mockConfig(models: Array<{ id: string; tier: string }>): OwlCodaConfig {
@@ -56,6 +56,15 @@ describe('buildFallbackChain', () => {
     ])
     expect(buildFallbackChain(config, 'primary')).toEqual(['primary', 'kimi-code', 'minimax-m27'])
     expect(buildFallbackChain(config, 'kimi-code')[0]).toBe('kimi-code')
+  })
+})
+
+describe('automatic fallback policy', () => {
+  it('is opt-in so a selected cloud model cannot silently fall back to a local runtime', () => {
+    expect(isAutomaticFallbackEnabled(undefined)).toBe(false)
+    expect(isAutomaticFallbackEnabled({})).toBe(false)
+    expect(isAutomaticFallbackEnabled({ fallbackEnabled: false })).toBe(false)
+    expect(isAutomaticFallbackEnabled({ fallbackEnabled: true })).toBe(true)
   })
 })
 

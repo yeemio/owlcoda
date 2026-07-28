@@ -62,7 +62,7 @@ describe('method registry', () => {
       params: {
         client: { name: 'owlcoda-desktop', version: '0.1.0' },
         supportedProtocolVersions: ['v1'],
-        expectedRuntimeVersion: '0.15.30',
+        expectedRuntimeVersion: '0.15.31',
         expectedWorkspaceRealpath: realpathSync(projectRoot),
         requestedCapabilities: { review: true, eventReplay: true },
       },
@@ -70,7 +70,7 @@ describe('method registry', () => {
 
     expect(response).toMatchObject({
       result: {
-        runtimeVersion: '0.15.30',
+        runtimeVersion: '0.15.31',
         protocolVersion: 'v1',
         workspaceRealpath: realpathSync(projectRoot),
         compatibility: 'compatible',
@@ -581,7 +581,7 @@ describe('method registry', () => {
     expect(response.result).toMatchObject({
       defaultModelId: 'vision-model',
       defaultPermissionMode: 'normal',
-      workspaceModes: [{ id: 'project', available: true }, { id: 'managed', available: true }],
+      workspaceModes: [{ id: 'project', available: true }, { id: 'managed', available: false }],
     })
     expect(response.result.models).toEqual([
       expect.objectContaining({ id: 'vision-model', label: 'Vision Model', origin: 'cloud', availability: 'available', isDefault: true, vision: expect.objectContaining({ status: 'supported', inputImages: true }) }),

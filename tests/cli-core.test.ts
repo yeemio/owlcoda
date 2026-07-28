@@ -43,6 +43,20 @@ describe('resolveStalePidStopCleanup', () => {
   })
 })
 
+describe('App Server runtime ownership', () => {
+  it('owns only a newly created runtime requested with --runtime-port 0', async () => {
+    const cliCore = await import('../src/cli-core.js') as Record<string, unknown>
+    const shouldStop = cliCore['shouldStopAppServerRuntime']
+
+    expect(shouldStop).toBeTypeOf('function')
+    const decide = shouldStop as (requestedRuntimePort: number | undefined, reused: boolean) => boolean
+    expect(decide(0, false)).toBe(true)
+    expect(decide(0, true)).toBe(false)
+    expect(decide(undefined, false)).toBe(false)
+    expect(decide(6199, false)).toBe(false)
+  })
+})
+
 describe('parseArgs', () => {
   const parse = (args: string[]) => parseArgs(['node', 'owlcoda', ...args])
 
@@ -504,11 +518,12 @@ describe('doUi', () => {
 
     const result = await doUi(undefined, undefined, undefined, { printUrl: true }, {
       ensureProxyRunning: vi.fn(async () => ({ pid: 1, reused: true })),
-      readRuntimeMeta: vi.fn(() => ({ host: '127.0.0.1', port: 8019 })),
+      readRuntimeMeta: vi.fn(() => ({ host: '127.0.0.1', port: 8019, runtimeToken: 'runtime-secret' })),
       getMetaBaseUrl: vi.fn(() => 'http://127.0.0.1:8019'),
       getBaseUrl: vi.fn(() => 'http://127.0.0.1:8019'),
       openUrlInBrowser: vi.fn(() => true),
       now: () => 1234,
+      requestOneShotAdminToken: vi.fn(async () => 'ots1.fixture'),
       getAdminBundleStatus: () => ({ bundleDir: join(workdir, 'dist', 'admin'), indexPath: join(workdir, 'dist', 'admin', 'index.html'), available: false }),
     } as any)
 
@@ -528,11 +543,12 @@ describe('doUi', () => {
 
     const result = await doUi(undefined, undefined, undefined, { openBrowser: true }, {
       ensureProxyRunning: vi.fn(async () => ({ pid: 1, reused: true })),
-      readRuntimeMeta: vi.fn(() => ({ host: '127.0.0.1', port: 8019 })),
+      readRuntimeMeta: vi.fn(() => ({ host: '127.0.0.1', port: 8019, runtimeToken: 'runtime-secret' })),
       getMetaBaseUrl: vi.fn(() => 'http://127.0.0.1:8019'),
       getBaseUrl: vi.fn(() => 'http://127.0.0.1:8019'),
       openUrlInBrowser: opener,
       now: () => 5678,
+      requestOneShotAdminToken: vi.fn(async () => 'ots1.fixture'),
       getAdminBundleStatus: () => ({
         bundleDir: join(workdir, 'dist', 'admin'),
         indexPath: join(workdir, 'dist', 'admin', 'index.html'),
@@ -557,11 +573,12 @@ describe('doUi', () => {
 
     const result = await doUi(undefined, undefined, undefined, {}, {
       ensureProxyRunning: vi.fn(async () => ({ pid: 1, reused: true })),
-      readRuntimeMeta: vi.fn(() => ({ host: '127.0.0.1', port: 8019 })),
+      readRuntimeMeta: vi.fn(() => ({ host: '127.0.0.1', port: 8019, runtimeToken: 'runtime-secret' })),
       getMetaBaseUrl: vi.fn(() => 'http://127.0.0.1:8019'),
       getBaseUrl: vi.fn(() => 'http://127.0.0.1:8019'),
       openUrlInBrowser: opener,
       now: () => 2468,
+      requestOneShotAdminToken: vi.fn(async () => 'ots1.fixture'),
       getAdminBundleStatus: () => ({
         bundleDir: join(workdir, 'dist', 'admin'),
         indexPath: join(workdir, 'dist', 'admin', 'index.html'),
@@ -587,11 +604,12 @@ describe('doUi', () => {
       view: 'issues',
     }, {
       ensureProxyRunning: vi.fn(async () => ({ pid: 1, reused: true })),
-      readRuntimeMeta: vi.fn(() => ({ host: '127.0.0.1', port: 8019 })),
+      readRuntimeMeta: vi.fn(() => ({ host: '127.0.0.1', port: 8019, runtimeToken: 'runtime-secret' })),
       getMetaBaseUrl: vi.fn(() => 'http://127.0.0.1:8019'),
       getBaseUrl: vi.fn(() => 'http://127.0.0.1:8019'),
       openUrlInBrowser: vi.fn(() => true),
       now: () => 9999,
+      requestOneShotAdminToken: vi.fn(async () => 'ots1.fixture'),
       getAdminBundleStatus: () => ({
         bundleDir: join(workdir, 'dist', 'admin'),
         indexPath: join(workdir, 'dist', 'admin', 'index.html'),

@@ -283,7 +283,7 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     responseType: 'ManagedWorkspaceCreateResult',
     requires: ['slug'],
     queryKeys: ['slug', 'startingRef', 'allowUntracked'],
-    notes: 'Creates a managed worktree without changing the long-lived App Server process cwd.',
+    notes: 'Requires an injected trusted host authorizer before creating a managed worktree; does not change the long-lived App Server process cwd.',
   },
   'workspace/read': {
     method: 'workspace/read',
@@ -302,7 +302,7 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     responseType: 'ManagedWorkspaceResumeResult',
     requires: ['workspaceId'],
     queryKeys: ['workspaceId'],
-    notes: 'Fails closed unless ledger, path, branch, and base commit still match Git truth.',
+    notes: 'Requires an injected trusted host authorizer and fails closed unless ledger, path, branch, and base commit still match Git truth.',
   },
   'workspace/status': {
     method: 'workspace/status',
@@ -312,7 +312,7 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     responseType: 'ManagedWorkspaceStatusResult',
     requires: ['workspaceId'],
     queryKeys: ['workspaceId'],
-    notes: 'Returns the current HEAD and status fingerprint required by authorized lifecycle mutations.',
+    notes: 'Returns the current HEAD and status fingerprint used for stale-request detection; this is not strong fencing against unbrokered host writes.',
   },
   'workspace/commit': {
     method: 'workspace/commit',
@@ -322,7 +322,7 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     responseType: 'ManagedWorkspaceOperationResult',
     requires: ['workspaceId', 'requestId', 'message', 'expectedHead', 'expectedStatusFingerprint', 'authorized'],
     queryKeys: [],
-    notes: 'Requires explicit authorization and exact current workspace state; exact request replay is idempotent.',
+    notes: 'Requires explicit trusted-host authorization and revalidates current workspace state; direct Git mutation is experimental and is not strong fencing against unbrokered host writes. Exact request replay is idempotent.',
   },
   'workspace/keep': {
     method: 'workspace/keep',
@@ -342,7 +342,7 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
     responseType: 'ManagedWorkspaceOperationResult',
     requires: ['workspaceId', 'requestId', 'expectedHead', 'expectedStatusFingerprint', 'authorized'],
     queryKeys: [],
-    notes: 'Removes the worktree only after explicit current-state authorization; the branch is retained by default.',
+    notes: 'Removes the worktree only after explicit trusted-host authorization and stale-request checks; direct removal is not strong fencing against unbrokered host writes. The branch is retained by default.',
   },
   'workspace/handoff': {
     method: 'workspace/handoff',
@@ -362,7 +362,7 @@ export const APP_SERVER_METHOD_CONTRACTS: Record<AppServerMethod, AppServerMetho
       'authorized',
     ],
     queryKeys: [],
-    notes: 'Moves one persisted thread and its managed branch between Local and the same managed worktree after exact two-checkout authorization.',
+    notes: 'Moves one persisted thread and its managed branch only after trusted-host authorization and two-checkout stale-request checks; direct branch switching is not strong fencing against unbrokered host writes.',
   },
   'attachment/store': {
     method: 'attachment/store',

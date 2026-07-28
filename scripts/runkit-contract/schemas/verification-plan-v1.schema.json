@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/verification-plan-v1.json",
+  "title": "OwlCoda RunKit Verification Plan V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "planId",
+    "status",
+    "drift",
+    "profileImpact",
+    "evidence",
+    "commands",
+    "acceptance",
+    "authorizationGranted",
+    "verificationContextFingerprint"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitVerificationPlanV1" },
+    "runId": { "type": "string", "minLength": 1 },
+    "planId": { "type": "string", "minLength": 1 },
+    "status": {
+      "enum": [
+        "full_profile_required",
+        "blocked_by_global_gate",
+        "verification_mapping_required",
+        "verification_required",
+        "ready_to_finalize"
+      ]
+    },
+    "verificationContextFingerprint": { "$ref": "#/$defs/sha256" },
+    "drift": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "leasedSourceDrift",
+        "declaredDependencyDrift",
+        "unrelatedDirtyTreeDrift",
+        "globalGateFailures"
+      ],
+      "properties": {
+        "leasedSourceDrift": { "$ref": "#/$defs/stringArray" },
+        "declaredDependencyDrift": { "$ref": "#/$defs/stringArray" },
+        "unrelatedDirtyTreeDrift": { "$ref": "#/$defs/stringArray" },
+        "globalGateFailures": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "profileImpact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "primaryProfileId",
+        "directProfileIds",
+        "transitiveProfileIds",
+        "supportingProfileIds",
+        "selectedProfileIds",
+        "uncoveredPaths",
+        "warnings"
+      ],
+      "properties": {
+        "decision": { "enum": ["targeted_profiles", "full_profile_required"] },
+        "primaryProfileId": { "type": ["string", "null"] },
+        "directProfileIds": { "$ref": "#/$defs/stringArray" },
+        "transitiveProfileIds": { "$ref": "#/$defs/stringArray" },
+        "supportingProfileIds": { "$ref": "#/$defs/stringArray" },
+        "selectedProfileIds": { "$ref": "#/$defs/stringArray" },
+        "uncoveredPaths": { "$ref": "#/$defs/stringArray" },
+        "warnings": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reusableReceiptIds", "invalidatedReceipts"],
+      "properties": {
+        "coverageIndexPath": { "type": "string", "minLength": 1 },
+        "coverageIndexSha256": { "$ref": "#/$defs/sha256" },
+        "reusableReceiptIds": { "$ref": "#/$defs/stringArray" },
+        "invalidatedReceipts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["receiptId", "reasons"],
+            "properties": {
+              "receiptId": { "type": "string", "minLength": 1 },
+              "reasons": { "$ref": "#/$defs/stringArray" }
+            }
+          }
+        }
+      }
+    },
+    "commands": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requiredCommandIds",
+        "reusedCommandIds",
+        "pendingCommandIds",
+        "unmappedProfileIds",
+        "pendingCommands"
+      ],
+      "properties": {
+        "requiredCommandIds": { "$ref": "#/$defs/stringArray" },
+        "reusedCommandIds": { "$ref": "#/$defs/stringArray" },
+        "pendingCommandIds": { "$ref": "#/$defs/stringArray" },
+        "unmappedProfileIds": { "$ref": "#/$defs/stringArray" },
+        "pendingCommands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "cwd", "executable", "argv", "profileIds"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "cwd": { "type": "string", "minLength": 1 },
+              "executable": { "type": "string", "minLength": 1 },
+              "argv": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "profileIds": { "$ref": "#/$defs/stringArray" }
+            }
+          }
+        }
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["blocked", "reasons"],
+      "properties": {
+        "blocked": { "type": "boolean" },
+        "reasons": { "$ref": "#/$defs/stringArray" }
+      }
+    },
+    "authorizationGranted": { "const": false }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "stringArray": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  }
+}

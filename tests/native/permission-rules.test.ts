@@ -610,12 +610,38 @@ describe('compileRulesForTarget — rules → synthetic ProvenanceRecord (PERM-4
     expect(r.pathRecords[0].originalString).toContain('~/.ssh/**')
   })
 
-  it('synthesizes a permanent user_declared_target when allow rule matches', () => {
-    const rules = makeRules({ allow: [makeRule('Edit(src/**)', 'allow')] })
+  it('synthesizes a permanent user_declared_target when a user-owned allow rule matches', () => {
+    const userAllow: PermissionRule = {
+      ...makeRule('Edit(src/**)', 'allow'),
+      source: 'user',
+    }
+    const rules = makeRules({ allow: [userAllow] })
     const r = compileRulesForTarget(rules, 'Edit', '/abs/project/src/foo.ts', PROJECT, HOME)
     expect(r.pathRecords).toHaveLength(1)
     expect(r.pathRecords[0].kind).toBe('user_declared_target')
     expect(r.pathRecords[0].permanent).toBe(true)
+  })
+
+  it('does not synthesize user authorization from project-controlled allow rules', () => {
+    const projectAllow: PermissionRule = {
+      ...makeRule('Write(out/**)', 'allow'),
+      source: 'project',
+    }
+    const localAllow: PermissionRule = {
+      ...makeRule('Write(out/**)', 'allow'),
+      source: 'local',
+    }
+    const rules = makeRules({ allow: [projectAllow, localAllow] })
+
+    const r = compileRulesForTarget(
+      rules,
+      'Write',
+      '/abs/project/out/result.html',
+      PROJECT,
+      HOME,
+    )
+
+    expect(r.pathRecords).toEqual([])
   })
 
   it('skips rules with enforced=false (Bash rules in v1)', () => {

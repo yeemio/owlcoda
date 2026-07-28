@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { chmod, copyFile, mkdir, writeFile } from 'node:fs/promises'
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
+import { hasProductSourceChanges } from './build-info-status.mjs'
 
 const root = process.cwd()
 const cliPath = join(root, 'dist', 'cli.js')
@@ -21,9 +22,9 @@ await copyFile(attributionSrc, attributionDest)
 let sha = 'unknown'
 let dirty = false
 try {
-  sha = execSync('git rev-parse HEAD', { cwd: root, encoding: 'utf-8' }).trim()
-  const status = execSync('git status --porcelain', { cwd: root, encoding: 'utf-8' })
-  dirty = status.trim().length > 0
+  sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf-8' }).trim()
+  const status = execFileSync('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { cwd: root, encoding: 'utf-8' })
+  dirty = hasProductSourceChanges(status)
 } catch { /* not a git checkout — leave unknown */ }
 await writeFile(
   join(root, 'dist', 'build-info.json'),

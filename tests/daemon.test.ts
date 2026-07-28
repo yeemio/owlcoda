@@ -2,7 +2,18 @@
  * Tests for src/daemon.ts — daemon lifecycle, PID management, buildDaemonArgs.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { readFileSync } from 'node:fs'
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   applyActiveStaleDaemonPolicy,
@@ -12,7 +23,103 @@ import {
   forceStopOrphanDaemon,
   getBaseUrl,
   getMetaBaseUrl,
+  readRuntimeMeta,
+  writeRuntimeMeta,
 } from '../src/daemon.js'
+
+function orphanMeta(pid: number) {
+  return {
+    pid,
+    runtimeToken: 'trusted-orphan-token',
+    host: '127.0.0.1',
+    port: 8019,
+    routerUrl: 'http://127.0.0.1:11434',
+    version: '0.15.30',
+    startedAt: new Date(0).toISOString(),
+  }
+}
+
+function authenticatedOrphanHealth(pid: number) {
+  return {
+    status: 'healthy',
+    version: '0.15.30',
+    pid,
+    runtimeToken: 'trusted-orphan-token',
+    host: '127.0.0.1',
+    port: 8019,
+    routerUrl: 'http://127.0.0.1:11434',
+  }
+}
+
+describe('runtime metadata permissions', () => {
+  it('repairs an existing owned home and legacy runtime.json before reading its secret', () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-runtime-meta-'))
+    const home = join(root, 'home')
+    const runtimePath = join(home, 'runtime.json')
+    const previousHome = process.env['OWLCODA_HOME']
+    try {
+      mkdirSync(home, { mode: 0o777 })
+      chmodSync(home, 0o777)
+      writeFileSync(runtimePath, JSON.stringify(orphanMeta(7001)), { mode: 0o644 })
+      chmodSync(runtimePath, 0o644)
+      process.env['OWLCODA_HOME'] = home
+
+      expect(readRuntimeMeta()).toMatchObject({ pid: 7001 })
+      expect(statSync(home).mode & 0o777).toBe(0o700)
+      expect(statSync(runtimePath).mode & 0o777).toBe(0o600)
+    } finally {
+      if (previousHome === undefined) delete process.env['OWLCODA_HOME']
+      else process.env['OWLCODA_HOME'] = previousHome
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('atomically replaces runtime.json with owner-only permissions', () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-runtime-meta-'))
+    const home = join(root, 'home')
+    const runtimePath = join(home, 'runtime.json')
+    const previousHome = process.env['OWLCODA_HOME']
+    try {
+      mkdirSync(home, { mode: 0o777 })
+      chmodSync(home, 0o777)
+      writeFileSync(runtimePath, 'legacy\n', { mode: 0o644 })
+      chmodSync(runtimePath, 0o644)
+      process.env['OWLCODA_HOME'] = home
+
+      writeRuntimeMeta(orphanMeta(7002))
+
+      expect(JSON.parse(readFileSync(runtimePath, 'utf8'))).toMatchObject({ pid: 7002 })
+      expect(statSync(home).mode & 0o777).toBe(0o700)
+      expect(statSync(runtimePath).mode & 0o777).toBe(0o600)
+      expect(readdirSync(home)).toEqual(['runtime.json'])
+    } finally {
+      if (previousHome === undefined) delete process.env['OWLCODA_HOME']
+      else process.env['OWLCODA_HOME'] = previousHome
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses a symlinked runtime.json without changing or reading its target', () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-runtime-meta-'))
+    const home = join(root, 'home')
+    const externalPath = join(root, 'external-runtime.json')
+    const previousHome = process.env['OWLCODA_HOME']
+    try {
+      mkdirSync(home, { mode: 0o700 })
+      writeFileSync(externalPath, JSON.stringify(orphanMeta(7003)), { mode: 0o644 })
+      chmodSync(externalPath, 0o644)
+      symlinkSync(externalPath, join(home, 'runtime.json'))
+      process.env['OWLCODA_HOME'] = home
+
+      expect(readRuntimeMeta()).toBeNull()
+      expect(statSync(externalPath).mode & 0o777).toBe(0o644)
+    } finally {
+      if (previousHome === undefined) delete process.env['OWLCODA_HOME']
+      else process.env['OWLCODA_HOME'] = previousHome
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('buildPortInUseMessage (Windows orphan-daemon misreport fix)', () => {
   it('reports a stale OwlCoda daemon with PID + stop hint when /healthz identifies the holder', () => {
@@ -35,7 +142,8 @@ describe('forceStopOrphanDaemon (stop --force without a PID file)', () => {
   it('recovers the orphan PID from /healthz and SIGTERMs it', async () => {
     const signals: Array<[number, string]> = []
     const pid = await forceStopOrphanDaemon('http://127.0.0.1:8019', {
-      fetchHealthz: async () => ({ pid: 9001 }),
+      fetchHealthz: async () => authenticatedOrphanHealth(9001),
+      readRuntimeMeta: () => orphanMeta(9001),
       signal: (p, s) => { signals.push([p, s]); return true },
       waitGone: async () => true,
       isAlive: () => false,
@@ -47,7 +155,8 @@ describe('forceStopOrphanDaemon (stop --force without a PID file)', () => {
     const signals: Array<[number, string]> = []
     let waitCount = 0
     const pid = await forceStopOrphanDaemon('http://127.0.0.1:8019', {
-      fetchHealthz: async () => ({ pid: 9002 }),
+      fetchHealthz: async () => authenticatedOrphanHealth(9002),
+      readRuntimeMeta: () => orphanMeta(9002),
       signal: (p, s) => { signals.push([p, s]); return true },
       waitGone: async () => {
         waitCount += 1
@@ -62,6 +171,7 @@ describe('forceStopOrphanDaemon (stop --force without a PID file)', () => {
     const signals: number[] = []
     const pid = await forceStopOrphanDaemon('http://127.0.0.1:8019', {
       fetchHealthz: async () => null,
+      readRuntimeMeta: () => orphanMeta(9001),
       signal: (p) => { signals.push(p); return true },
       waitGone: async () => true,
       isAlive: () => false,
@@ -71,7 +181,8 @@ describe('forceStopOrphanDaemon (stop --force without a PID file)', () => {
   })
   it('throws instead of reporting success when SIGTERM cannot be sent', async () => {
     await expect(forceStopOrphanDaemon('http://127.0.0.1:8019', {
-      fetchHealthz: async () => ({ pid: 9003 }),
+      fetchHealthz: async () => authenticatedOrphanHealth(9003),
+      readRuntimeMeta: () => orphanMeta(9003),
       signal: () => false,
       waitGone: async () => false,
       isAlive: () => true,
@@ -80,7 +191,8 @@ describe('forceStopOrphanDaemon (stop --force without a PID file)', () => {
   it('throws instead of reporting success when SIGKILL cannot clear a survivor', async () => {
     const signals: string[] = []
     await expect(forceStopOrphanDaemon('http://127.0.0.1:8019', {
-      fetchHealthz: async () => ({ pid: 9004 }),
+      fetchHealthz: async () => authenticatedOrphanHealth(9004),
+      readRuntimeMeta: () => orphanMeta(9004),
       signal: (_p, s) => {
         signals.push(s)
         return s === 'SIGTERM'

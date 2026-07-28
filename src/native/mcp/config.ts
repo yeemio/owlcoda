@@ -3,7 +3,7 @@
  *
  * Discovers MCP server configs from:
  *   1. .mcp.json in project root (project-scoped)
- *   2. ~/.owlcoda/mcp.json (OwlCoda-specific global)
+ *   2. $OWLCODA_HOME/mcp.json or ~/.owlcoda/mcp.json (OwlCoda-specific global)
  *
  * Merges project-scoped over global (project wins on name collision).
  */
@@ -11,14 +11,23 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import type { MCPServerConfig, MCPConfigFile } from './types.js'
+import type { MCPServerConfig } from './types.js'
+
+export type MCPConfigSource = 'user' | 'project'
+
+export interface ResolvedMCPServerConfig {
+  name: string
+  config: MCPServerConfig
+  source: MCPConfigSource
+  configPath: string
+}
 
 /** Search paths for MCP config, in priority order (later wins on collision). */
-function configPaths(cwd: string): string[] {
-  const home = homedir()
+function configPaths(cwd: string): Array<{ path: string; source: MCPConfigSource }> {
+  const owlcodaHome = process.env['OWLCODA_HOME'] ?? join(homedir(), '.owlcoda')
   return [
-    join(home, '.owlcoda', 'mcp.json'),
-    join(cwd, '.mcp.json'),
+    { path: join(owlcodaHome, 'mcp.json'), source: 'user' },
+    { path: join(cwd, '.mcp.json'), source: 'project' },
   ]
 }
 
@@ -39,15 +48,12 @@ function isValidServerConfig(val: unknown): val is MCPServerConfig {
   return typeof obj.command === 'string' && obj.command.length > 0
 }
 
-/**
- * Load all MCP server configs from known locations.
- * Returns a map of server-name → config.
- */
-export function loadMCPConfig(cwd: string = process.cwd()): Map<string, MCPServerConfig> {
-  const servers = new Map<string, MCPServerConfig>()
+/** Load configs without discarding which trust boundary supplied each entry. */
+export function loadResolvedMCPConfig(cwd: string = process.cwd()): ResolvedMCPServerConfig[] {
+  const servers: ResolvedMCPServerConfig[] = []
 
-  for (const path of configPaths(cwd)) {
-    const data = tryReadJson(path)
+  for (const layer of configPaths(cwd)) {
+    const data = tryReadJson(layer.path)
     if (!data) continue
 
     // Extract mcpServers key (standard location)
@@ -58,16 +64,35 @@ export function loadMCPConfig(cwd: string = process.cwd()): Map<string, MCPServe
       // Skip non-server entries when config files include extra top-level keys.
       if (!isValidServerConfig(val)) continue
 
-      servers.set(name, {
-        command: val.command,
-        args: Array.isArray(val.args) ? val.args.map(String) : undefined,
-        env: typeof val.env === 'object' && val.env !== null
-          ? Object.fromEntries(Object.entries(val.env as Record<string, unknown>).map(([k, v]) => [k, String(v)]))
-          : undefined,
-        cwd: typeof val.cwd === 'string' ? val.cwd : undefined,
+      servers.push({
+        name,
+        source: layer.source,
+        configPath: layer.path,
+        config: {
+          command: val.command,
+          args: Array.isArray(val.args) ? val.args.map(String) : undefined,
+          env: typeof val.env === 'object' && val.env !== null
+            ? Object.fromEntries(Object.entries(val.env as Record<string, unknown>).map(([k, v]) => [k, String(v)]))
+            : undefined,
+          cwd: typeof val.cwd === 'string' ? val.cwd : undefined,
+        },
       })
     }
   }
 
+  return servers
+}
+
+/**
+ * Load all MCP server configs from known locations.
+ * Returns a map of server-name → config with the legacy project-over-user
+ * discovery precedence. Execution callers must use the resolved loader above
+ * so they do not erase source trust before making an authorization decision.
+ */
+export function loadMCPConfig(cwd: string = process.cwd()): Map<string, MCPServerConfig> {
+  const servers = new Map<string, MCPServerConfig>()
+  for (const entry of loadResolvedMCPConfig(cwd)) {
+    servers.set(entry.name, entry.config)
+  }
   return servers
 }

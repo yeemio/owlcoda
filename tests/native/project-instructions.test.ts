@@ -76,6 +76,37 @@ describe('project instructions loader', () => {
     ])
   })
 
+  it('does not treat a project-controlled cwd symlink as a new instruction boundary', () => {
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owlcoda-project-instructions-outside-'))
+    try {
+      const linkedCwd = path.join(tmpDir, 'linked-workspace')
+      fs.mkdirSync(path.join(outsideDir, '.git'))
+      fs.writeFileSync(path.join(outsideDir, 'AGENTS.md'), 'outside cwd instruction')
+      fs.symlinkSync(outsideDir, linkedCwd, 'dir')
+
+      const sources = loadProjectInstructions(linkedCwd)
+
+      expect(sources).toEqual([])
+      expect(JSON.stringify(sources)).not.toContain('outside cwd instruction')
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps loading nested instructions when the host temp root has a canonical path alias', () => {
+    const nested = path.join(tmpDir, 'packages', 'app')
+    fs.mkdirSync(nested, { recursive: true })
+    fs.writeFileSync(path.join(tmpDir, 'AGENTS.md'), 'root agents')
+    fs.writeFileSync(path.join(nested, 'CLAUDE.md'), 'nested claude')
+
+    const sources = loadProjectInstructions(nested)
+
+    expect(sources.map(source => source.content)).toEqual(['root agents', 'nested claude'])
+    if (process.platform === 'darwin' && path.resolve(tmpDir).startsWith(`${path.sep}var${path.sep}`)) {
+      expect(fs.realpathSync(tmpDir)).toMatch(/^\/private\/var\//)
+    }
+  })
+
   it('uses ~/.owlcoda/AGENTS.md before falling back to ~/.codex/AGENTS.md', () => {
     const homeDir = path.join(tmpDir, 'home')
     const builtinPath = path.join(tmpDir, 'builtin-AGENTS.md')
@@ -180,6 +211,95 @@ describe('project instructions loader', () => {
       ['read-error', 'user:~/.owlcoda/AGENTS.md'],
       ['fallback-not-used', 'user:~/.codex/AGENTS.md'],
     ])
+  })
+
+  it('continues to load valid builtin and user instruction symlinks', () => {
+    const homeDir = path.join(tmpDir, 'home')
+    const owlCodaDir = path.join(homeDir, '.owlcoda')
+    const builtinTarget = path.join(tmpDir, 'builtin-target.md')
+    const builtinPath = path.join(tmpDir, 'builtin-AGENTS.md')
+    const userTarget = path.join(homeDir, 'user-target.md')
+    fs.mkdirSync(owlCodaDir, { recursive: true })
+    fs.writeFileSync(builtinTarget, 'built-in rules')
+    fs.writeFileSync(userTarget, 'user rules')
+    fs.symlinkSync(builtinTarget, builtinPath)
+    fs.symlinkSync(userTarget, path.join(owlCodaDir, 'AGENTS.md'))
+
+    const sources = loadGlobalInstructions({ builtinPath, homeDir })
+
+    expect(sources.map((source) => [source.name, source.content])).toEqual([
+      ['builtin:AGENTS.md', 'built-in rules'],
+      ['user:~/.owlcoda/AGENTS.md', 'user rules'],
+    ])
+  })
+
+  it('does not load a fixed project instruction file through a leaf symlink', () => {
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owlcoda-project-instructions-outside-'))
+    try {
+      const secret = 'outside fixed instruction secret'
+      const target = path.join(outsideDir, 'secret.txt')
+      fs.writeFileSync(target, secret)
+      fs.symlinkSync(target, path.join(tmpDir, 'AGENTS.md'))
+
+      const sources = loadProjectInstructions(tmpDir)
+
+      expect(sources).toEqual([])
+      expect(JSON.stringify(sources)).not.toContain(secret)
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not load .owlcoda instructions through a symlinked parent directory', () => {
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owlcoda-project-instructions-outside-'))
+    try {
+      const secret = 'outside nested instruction secret'
+      fs.writeFileSync(path.join(outsideDir, 'OWLCODA.md'), secret)
+      fs.symlinkSync(outsideDir, path.join(tmpDir, '.owlcoda'), 'dir')
+
+      const sources = loadProjectInstructions(tmpDir)
+
+      expect(sources).toEqual([])
+      expect(JSON.stringify(sources)).not.toContain(secret)
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not load Claude rules through a symlinked rules directory', () => {
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owlcoda-project-instructions-outside-'))
+    try {
+      const secret = 'outside Claude rule secret'
+      fs.mkdirSync(path.join(tmpDir, '.claude'), { recursive: true })
+      fs.writeFileSync(path.join(outsideDir, 'general.md'), secret)
+      fs.symlinkSync(outsideDir, path.join(tmpDir, '.claude', 'rules'), 'dir')
+
+      const sources = loadProjectInstructions(tmpDir)
+
+      expect(sources).toEqual([])
+      expect(JSON.stringify(sources)).not.toContain(secret)
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it('continues to ignore leaf symlinks inside .claude/rules', () => {
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'owlcoda-project-instructions-outside-'))
+    try {
+      const rulesDir = path.join(tmpDir, '.claude', 'rules')
+      const secret = 'outside leaf rule secret'
+      const target = path.join(outsideDir, 'general.md')
+      fs.mkdirSync(rulesDir, { recursive: true })
+      fs.writeFileSync(target, secret)
+      fs.symlinkSync(target, path.join(rulesDir, 'general.md'))
+
+      const sources = loadProjectInstructions(tmpDir)
+
+      expect(sources).toEqual([])
+      expect(JSON.stringify(sources)).not.toContain(secret)
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true })
+    }
   })
 
   it('preserves the legacy OWLCODA.md rendering shape for system prompt injection', () => {

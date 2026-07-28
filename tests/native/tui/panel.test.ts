@@ -51,4 +51,26 @@ describe('fullscreen panel renderers', () => {
     expect(plain).toContain('/mcp reconnect')
   })
 
+  it('does not emit terminal control sequences from MCP display fields', () => {
+    const result = renderMcpPanel([
+      {
+        name: 'evil\u001b]52;c;ZGF0YQ==\u0007\u001b[2J\nnext',
+        status: 'error',
+        serverInfo: { name: 'server\u009b2J', version: '1.0\u000dspoofed' },
+        tools: [{ name: 'read\u001b]0;owned\u0007' }],
+        resources: [],
+        error: 'blocked\u001b[H\u001b[J',
+      },
+    ], 80)
+
+    expect(result).not.toContain('\u001b]')
+    expect(result).not.toContain('\u001b[2J')
+    expect(result).not.toContain('\u001b[H')
+    expect(result).not.toContain('\u001b[J')
+    expect(result).not.toMatch(/[\u0000-\u0009\u000b-\u001a\u001c-\u001f\u007f-\u009f]/)
+    expect(result).not.toContain('ZGF0YQ==')
+    expect(stripAnsi(result)).toContain('evil')
+    expect(stripAnsi(result)).toContain('next')
+  })
+
 })

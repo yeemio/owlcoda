@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/resume-attempt-v1.json",
+  "title": "OwlCoda RunKit Resume Attempt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "resumeId",
+    "mode",
+    "runId",
+    "sourceRunId",
+    "reason",
+    "parentGoal",
+    "parentCloseout",
+    "inheritedEvidence",
+    "nextAllowedAction",
+    "requiredWorkflow",
+    "authorizationGranted"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitResumeAttemptV1" },
+    "resumeId": { "type": "string", "minLength": 1 },
+    "mode": { "enum": ["same_execution", "continuation"] },
+    "runId": { "type": "string", "minLength": 1 },
+    "sourceRunId": { "type": "string", "minLength": 1 },
+    "reason": { "type": "string", "minLength": 1 },
+    "parentGoal": { "$ref": "#/$defs/artifactRef" },
+    "parentCloseout": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["decision", "path", "sha256"],
+          "properties": {
+            "decision": { "enum": ["accepted", "rejected", "blocked"] },
+            "path": { "type": "string", "minLength": 1 },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          }
+        }
+      ]
+    },
+    "inheritedEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coverageIndexPath", "coverageIndexSha256", "reusableReceiptIds"],
+      "properties": {
+        "coverageIndexPath": { "type": "string", "minLength": 1 },
+        "coverageIndexSha256": { "$ref": "#/$defs/sha256" },
+        "reusableReceiptIds": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    },
+    "nextAllowedAction": { "const": "acquire_writer_lease" },
+    "requiredWorkflow": {
+      "const": [
+        "acquire_writer_lease",
+        "prepare_or_replace_delivery_packet",
+        "verify_plan"
+      ]
+    },
+    "authorizationGranted": { "const": false }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

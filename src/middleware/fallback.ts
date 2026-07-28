@@ -3,7 +3,7 @@
  * Only falls back on 5xx/connection errors, never on 4xx.
  */
 
-import type { OwlCodaConfig, ConfiguredModel } from '../config.js'
+import type { OwlCodaConfig, ConfiguredModel, MiddlewareConfig } from '../config.js'
 import { isAutomaticFallbackEligible } from '../model-capabilities.js'
 
 export interface FallbackResult {
@@ -11,6 +11,10 @@ export interface FallbackResult {
   servedBy: string
   fallbackUsed: boolean
   attemptedModels: string[]
+}
+
+export function isAutomaticFallbackEnabled(config: MiddlewareConfig | undefined): boolean {
+  return config?.fallbackEnabled === true
 }
 
 /**

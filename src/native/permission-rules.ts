@@ -544,8 +544,12 @@ function readLayer(path: string, source: PermissionRuleSource): ParsedSettingsLa
 //
 //   deny rule match  → synthetic user_explicit_deny with permanent=true.
 //                      Step 1 short-circuits revoke (PERM-5 detail).
-//   allow rule match → synthetic user_declared_target with permanent=true.
+//   user/host-owned allow rule match
+//                    → synthetic user_declared_target with permanent=true.
 //                      Step 2 admits via declared_target.
+//   project/local allow rule match
+//                    → no authority record. Repository-controlled settings
+//                      may narrow authority, but cannot impersonate the user.
 //
 // Non-enforced rules (Bash in v1) are skipped here — they were already
 // warned about at load time.
@@ -619,6 +623,7 @@ export function compileRulesForTarget(
   }
 
   for (const rule of rules.allow) {
+    if (rule.source === 'project' || rule.source === 'local') continue
     if (!rule.enforced) continue
     if (!ruleToolMatches(rule.tool, toolName)) continue
     if (!matchRulePattern(rule.pattern, canonicalPath, projectRoot, homeDir)) continue

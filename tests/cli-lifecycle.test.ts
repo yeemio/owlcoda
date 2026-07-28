@@ -125,11 +125,13 @@ async function startFakeManagedDaemon(options: {
 }): Promise<ChildProcess> {
   const runtimeToken = options.runtimeToken ?? 'fake-runtime-token'
   const code = `
+    const crypto = require('node:crypto');
     const http = require('node:http');
     const port = ${JSON.stringify(options.port)};
     const routerUrl = ${JSON.stringify(options.routerUrl)};
     const version = ${JSON.stringify(options.version)};
     const runtimeToken = ${JSON.stringify(runtimeToken)};
+    const runtimeTokenFingerprint = 'sha256:' + crypto.createHash('sha256').update(runtimeToken).digest('hex');
     const server = http.createServer((req, res) => {
       if (req.url === '/healthz') {
         res.writeHead(200, { 'content-type': 'application/json' });
@@ -140,7 +142,7 @@ async function startFakeManagedDaemon(options: {
           host: '127.0.0.1',
           port,
           routerUrl,
-          runtimeToken,
+          runtimeTokenFingerprint,
         }));
         return;
       }

@@ -30,10 +30,14 @@ export function classifyRuntimeBinding(
   }
 
   if (observedHealthz) {
+    const observedLocation = typeof observedHealthz.host === 'string' && typeof observedHealthz.port === 'number'
+      ? formatBaseUrl({ host: observedHealthz.host, port: observedHealthz.port })
+      : 'the public health endpoint'
+    const observedPid = typeof observedHealthz.pid === 'number' ? String(observedHealthz.pid) : 'unavailable'
     return {
       kind: 'proxy_changed',
       summary: 'Proxy changed',
-      detail: `Expected ${formatBaseUrl(expected)} PID ${expected.pid}, found PID ${observedHealthz.pid} at ${formatBaseUrl(observedHealthz)}.`,
+      detail: `Expected ${formatBaseUrl(expected)} PID ${expected.pid}, found PID ${observedPid} at ${observedLocation}.`,
     }
   }
 

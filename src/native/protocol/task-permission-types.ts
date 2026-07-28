@@ -12,7 +12,7 @@
 
 export type RiskClass =
   | 'safe'            // read-only, no permission needed
-  | 'safe_readonly_local' // local GET/HEAD health diagnostics, no permission needed
+  | 'safe_readonly_local' // retained protocol value; no public WebFetch path currently emits it
   | 'internal_state'  // mutates OwlCoda session state (tasks, todos, dialogs); not a user-visible artifact
   | 'mutating'        // file/edit/write inside cwd
   | 'destructive'     // shell with deletion / sudo / pipe-to-shell shape

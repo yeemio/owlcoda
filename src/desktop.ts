@@ -12,6 +12,7 @@ export {
   type AppServerClient,
   type AppServerClientOptions,
   type AppServerEventSubscription,
+  type AppServerCompatibilityCheckResult,
 } from './native/app-server/client.js'
 
 export {
@@ -89,4 +90,8 @@ export type {
   AppServerStructuredOutputArtifactStatus,
   AppServerStructuredOutputAttemptItem,
   AppServerStructuredOutputRerunAction,
+  AppServerClientIdentity,
+  AppServerClientInitializeInput,
+  AppServerClientInitializeResult,
+  AppServerCompatibility,
 } from './native/app-server/protocol-contract.js'

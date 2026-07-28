@@ -9,6 +9,7 @@ assistant.delta
 
 # User-specific config (may contain API keys)
 config.json
+!integrations/codex/skills/owlcoda-runkit/assets/templates/config.json
 
 # Vendored upstream (users must provide their own)
 upstream/

@@ -161,6 +161,7 @@ export function loadProjectInstructions(
   const found: Array<ProjectInstructionSource & { kind: ProjectFileInstructionKind; scope: 'project' }> = []
   const seen = new Set<string>()
   const rootCwd = path.resolve(cwd)
+  if (traversesProjectControlledSymlink(rootCwd)) return []
   const dirs = collectInstructionDirs(rootCwd, maxSearchDepth)
   const skipped = options.skipped
 
@@ -191,6 +192,7 @@ export function loadProjectInstructions(
         scope: 'project',
         depth: entry.depth,
         maxBytesPerFile,
+        projectBoundary: entry.dir,
         skipped,
       })
       if (source) {
@@ -202,7 +204,7 @@ export function loadProjectInstructions(
     for (const filePath of listMarkdownFiles(path.join(entry.dir, '.claude', 'rules'), {
       maxDepth: DEFAULT_MAX_RULE_DEPTH,
       maxFiles: maxRuleFiles,
-    })) {
+    }, entry.dir)) {
       if (seen.has(filePath)) continue
       seen.add(filePath)
 
@@ -213,6 +215,7 @@ export function loadProjectInstructions(
         scope: 'project',
         depth: entry.depth,
         maxBytesPerFile,
+        projectBoundary: entry.dir,
         skipped,
       })
       if (source) found.push(source)
@@ -296,11 +299,32 @@ function readInstructionSource<K extends ProjectInstructionKind, S extends Proje
   name?: string
   depth: number
   maxBytesPerFile: number
+  projectBoundary?: string
   skipped?: InstructionChainSkippedSource[]
 }): (ProjectInstructionSource & { kind: K; scope: S }) | null {
+  let descriptor: number | undefined
   try {
-    const stat = fs.statSync(input.filePath)
+    if (input.projectBoundary) {
+      if (instructionFilePresence(input.filePath) === 'missing') return null
+      if (!isSafeProjectInstructionPath(input.filePath, input.projectBoundary)) {
+        recordReadSkip(input, 'not-file')
+        return null
+      }
+    }
+
+    const openFlags = input.projectBoundary
+      ? fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
+      : fs.constants.O_RDONLY
+    descriptor = fs.openSync(input.filePath, openFlags)
+    const stat = fs.fstatSync(descriptor)
     if (!stat.isFile()) {
+      recordReadSkip(input, 'not-file')
+      return null
+    }
+    if (
+      input.projectBoundary
+      && !isSafeOpenedProjectInstruction(input.filePath, input.projectBoundary, stat)
+    ) {
       recordReadSkip(input, 'not-file')
       return null
     }
@@ -309,9 +333,10 @@ function readInstructionSource<K extends ProjectInstructionKind, S extends Proje
       return null
     }
 
-    const buffer = fs.readFileSync(input.filePath)
-    const sliced = buffer.subarray(0, Math.max(0, input.maxBytesPerFile))
-    const content = sliced.toString('utf-8').trim()
+    const maxBytes = Math.max(0, Math.trunc(input.maxBytesPerFile))
+    const buffer = Buffer.alloc(Math.min(stat.size, maxBytes))
+    const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, 0)
+    const content = buffer.subarray(0, bytesRead).toString('utf-8').trim()
     if (!content) {
       recordReadSkip(input, 'empty')
       return null
@@ -328,12 +353,64 @@ function readInstructionSource<K extends ProjectInstructionKind, S extends Proje
       kind: input.kind,
       scope: input.scope,
       depth: input.depth,
-      bytesRead: sliced.length,
+      bytesRead,
       content,
     }
   } catch {
     if (instructionFilePresence(input.filePath) === 'present') recordReadSkip(input, 'read-error')
     return null
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        fs.closeSync(descriptor)
+      } catch {
+        // The read result remains authoritative if closing an already-open descriptor fails.
+      }
+    }
+  }
+}
+
+function isSafeProjectInstructionPath(filePath: string, projectBoundary: string): boolean {
+  const boundary = path.resolve(projectBoundary)
+  const target = path.resolve(filePath)
+  const relative = path.relative(boundary, target)
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return false
+  }
+
+  try {
+    let current = boundary
+    for (const segment of relative.split(path.sep)) {
+      current = path.join(current, segment)
+      if (fs.lstatSync(current).isSymbolicLink()) return false
+    }
+
+    const canonicalBoundary = fs.realpathSync(boundary)
+    const canonicalTarget = fs.realpathSync(target)
+    const canonicalRelative = path.relative(canonicalBoundary, canonicalTarget)
+    return canonicalRelative !== ''
+      && canonicalRelative !== '..'
+      && !canonicalRelative.startsWith(`..${path.sep}`)
+      && !path.isAbsolute(canonicalRelative)
+  } catch {
+    return false
+  }
+}
+
+function isSafeOpenedProjectInstruction(
+  filePath: string,
+  projectBoundary: string,
+  openedStat: fs.Stats,
+): boolean {
+  if (!isSafeProjectInstructionPath(filePath, projectBoundary)) return false
+
+  try {
+    const currentStat = fs.statSync(filePath)
+    return currentStat.isFile()
+      && currentStat.dev === openedStat.dev
+      && currentStat.ino === openedStat.ino
+  } catch {
+    return false
   }
 }
 
@@ -448,10 +525,45 @@ function collectInstructionDirs(cwd: string, maxSearchDepth: number): Array<{ di
   return dirs.reverse()
 }
 
+function traversesProjectControlledSymlink(cwd: string): boolean {
+  let boundary = cwd
+
+  while (true) {
+    if (
+      instructionFilePresence(path.join(boundary, '.git')) === 'present'
+      && hasSymlinkBelowBoundary(boundary, cwd)
+    ) {
+      return true
+    }
+    const parent = path.dirname(boundary)
+    if (parent === boundary) return false
+    boundary = parent
+  }
+}
+
+function hasSymlinkBelowBoundary(boundary: string, target: string): boolean {
+  const relative = path.relative(boundary, target)
+  if (!relative) return false
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return true
+
+  let current = boundary
+  try {
+    for (const segment of relative.split(path.sep)) {
+      current = path.join(current, segment)
+      if (fs.lstatSync(current).isSymbolicLink()) return true
+    }
+    return false
+  } catch {
+    return true
+  }
+}
+
 function listMarkdownFiles(
   root: string,
   options: { maxDepth: number; maxFiles: number },
+  projectBoundary: string,
 ): string[] {
+  if (!isSafeProjectInstructionPath(root, projectBoundary)) return []
   const files: string[] = []
   collectMarkdownFiles(root, 0, options, files)
   return files.sort()

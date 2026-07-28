@@ -11,6 +11,7 @@
 
 import { sgr, stripAnsi, themeColor, visibleWidth } from './colors.js'
 import { padRight, truncate } from './text.js'
+import stripAnsiSequences from 'strip-ansi'
 
 export interface SessionPanelItem {
   id: string
@@ -31,6 +32,13 @@ export interface McpPanelServer {
   tools: Array<{ name: string }>
   resources: unknown[]
   error?: string
+}
+
+export function sanitizeMcpDisplayValue(value: string): string {
+  return stripAnsiSequences(value)
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 }
 
 function columnsOrDefault(columns?: number): number {
@@ -178,22 +186,25 @@ export function renderMcpPanel(servers: McpPanelServer[], columns?: number): str
 
   const lines = renderPanelHeader('/mcp', `${servers.length} server${servers.length === 1 ? '' : 's'}`, width)
   for (const server of servers) {
+    const name = sanitizeMcpDisplayValue(server.name)
     // Status dot mirrors design's `oc-mcp .dot` (success=on, error=err, neutral=subtle)
     const dot = server.status === 'connected'
       ? `${themeColor('success')}●${sgr.reset}`
       : server.status === 'error'
         ? `${themeColor('error')}✗${sgr.reset}`
         : `${themeColor('warning')}◌${sgr.reset}`
-    const info = server.serverInfo?.name
-      ? ` ${themeColor('textMute')}${server.serverInfo.name}${server.serverInfo.version ? ` v${server.serverInfo.version}` : ''}${sgr.reset}`
+    const infoName = server.serverInfo?.name ? sanitizeMcpDisplayValue(server.serverInfo.name) : ''
+    const infoVersion = server.serverInfo?.version ? sanitizeMcpDisplayValue(server.serverInfo.version) : ''
+    const info = infoName
+      ? ` ${themeColor('textMute')}${infoName}${infoVersion ? ` v${infoVersion}` : ''}${sgr.reset}`
       : ''
-    lines.push(clip(`${dot}  ${themeColor('text')}${sgr.bold}${server.name}${sgr.reset}${info}`, width))
+    lines.push(clip(`${dot}  ${themeColor('text')}${sgr.bold}${name}${sgr.reset}${info}`, width))
     if (server.status === 'connected') {
-      const tools = server.tools.map((tool) => tool.name).join(', ')
+      const tools = server.tools.map((tool) => sanitizeMcpDisplayValue(tool.name)).join(', ')
       lines.push(`${themeColor('textDim')}    tools ${server.tools.length}: ${truncate(tools || 'none', Math.max(20, width - 14))}${sgr.reset}`)
       lines.push(`${themeColor('textDim')}    resources ${server.resources.length}${sgr.reset}`)
     } else if (server.error) {
-      lines.push(`${themeColor('error')}    ${truncate(server.error.split('\n')[0] ?? '', Math.max(10, width - 4))}${sgr.reset}`)
+      lines.push(`${themeColor('error')}    ${truncate(sanitizeMcpDisplayValue(server.error), Math.max(10, width - 4))}${sgr.reset}`)
     }
   }
   lines.push('')

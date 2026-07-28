@@ -11,9 +11,8 @@ describe('Admin endpoint auth', () => {
   //   - always-on for every /admin/* data route (static assets already
   //     short-circuited earlier by handleAdminStatic)
   //   - delegates to AdminAuthManager.authenticate(), which accepts an
-  //     explicit Authorization: Bearer <adminToken>, the deterministic
-  //     fallback bearer `owlcoda-local-key-${port}`, OR a session cookie
-  //     minted via one-shot-token exchange
+  //     explicit/daemon-identity bearer or a session cookie minted via a
+  //     stateful, single-consumption token exchange
   //   - returns 401/403 with the manager's reported {status, code, message}
   // The "if (config.adminToken) { Bearer check }" pattern this test suite
   // used to pin against has been deleted — it was the bug (open access

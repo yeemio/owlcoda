@@ -11,6 +11,7 @@
  */
 import { describe, it, expect, vi } from 'vitest'
 import { ensureLaunchdProxyRunning } from '../src/daemon.js'
+import { runtimeTokenFingerprint } from '../src/healthz-client.js'
 
 const cfg = {
   host: '127.0.0.1',
@@ -29,7 +30,7 @@ function healthz(over: Record<string, unknown> = {}): any {
     host: '127.0.0.1',
     port: 8019,
     routerUrl: 'http://127.0.0.1:11434',
-    runtimeToken: 'tok',
+    runtimeTokenFingerprint: runtimeTokenFingerprint('tok'),
     ...over,
   }
 }
@@ -67,6 +68,20 @@ describe('ensureLaunchdProxyRunning', () => {
     const r = await ensureLaunchdProxyRunning(cfg, BASE, () => {}, deps)
     expect(deps.kickstart).toHaveBeenCalledOnce()
     expect(r).toEqual({ pid: 5555, reused: false })
+  })
+
+  it('kickstarts a legacy raw-token daemon instead of reusing it', async () => {
+    const deps = makeDeps({
+      fetchHealthz: vi.fn(async () => healthz({
+        runtimeTokenFingerprint: undefined,
+        runtimeToken: 'tok',
+      })),
+    })
+
+    const r = await ensureLaunchdProxyRunning(cfg, BASE, () => {}, deps)
+
+    expect(deps.kickstart).toHaveBeenCalledOnce()
+    expect(r).toEqual({ pid: 4242, reused: false })
   })
 
   it('kickstarts when the daemon is not responding (crash window)', async () => {

@@ -109,6 +109,10 @@ describe('classifyToolRisk — external_effect tools', () => {
   it.each([
     ['WebFetch', { url: 'https://x.com' }, 'external_effect'],
     ['WebFetch', { url: 'http://127.0.0.1:3000/admin/stats' }, 'external_effect'],
+    ['WebFetch', { url: 'http://127.0.0.1:3000/health' }, 'external_effect'],
+    ['WebFetch', { url: 'http://localhost:3000/healthz' }, 'external_effect'],
+    ['WebFetch', { url: 'http://[::1]:3000/health' }, 'external_effect'],
+    ['WebFetch', { url: 'http://127.0.0.1:3000/api/health', method: 'HEAD' }, 'external_effect'],
     ['WebFetch', { url: 'http://127.0.0.1:3000/health', method: 'POST' }, 'external_effect'],
     ['WebFetch', { url: 'http://127.0.0.1:3000/health', body: '{}' }, 'external_effect'],
     ['WebSearch', { query: 'foo' }, 'external_effect'],
@@ -121,17 +125,6 @@ describe('classifyToolRisk — external_effect tools', () => {
     ['WorkflowRun', { plan: { steps: [{ id: 'x', method: 'GET', url: 'https://example.com' }] } }, 'external_effect'],
   ] as const)('classifies %s as external_effect', (toolName, args, expected) => {
     expect(classifyToolRisk(toolName, args as Record<string, unknown>)).toBe<RiskClass>(expected)
-  })
-})
-
-describe('classifyToolRisk — safe_readonly_local health checks', () => {
-  it.each([
-    ['WebFetch', { url: 'http://127.0.0.1:3000/health' }],
-    ['WebFetch', { url: 'http://localhost:3000/healthz' }],
-    ['WebFetch', { url: 'http://[::1]:3000/health' }],
-    ['WebFetch', { url: 'http://127.0.0.1:3000/api/health', method: 'HEAD' }],
-  ] as const)('classifies %s %o as safe_readonly_local', (toolName, args) => {
-    expect(classifyToolRisk(toolName, args as Record<string, unknown>)).toBe('safe_readonly_local')
   })
 })
 

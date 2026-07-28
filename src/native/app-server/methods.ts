@@ -104,7 +104,10 @@ import {
   validateConfiguredAppServerModelSelection,
 } from './model-reasoning-contract.js'
 import { appServerProjectStatePath } from './project-state-service.js'
-import { createManagedWorkspaceService } from './managed-workspace-service.js'
+import {
+  createManagedWorkspaceService,
+  type ManagedWorkspaceAuthorizer,
+} from './managed-workspace-service.js'
 import { classifyToolRisk } from '../tool-risk.js'
 import { classifyBashCommand, primaryBashRiskReason } from '../bash-risk.js'
 import type { RiskClass } from '../protocol/task-permission-types.js'
@@ -175,6 +178,7 @@ export interface MethodRegistryOptions {
   dispatcherFactory?: () => ToolDispatcher
   config?: OwlCodaConfig
   approvalBroker?: AppServerApprovalBroker
+  managedWorkspaceAuthorizer?: ManagedWorkspaceAuthorizer
   interactionStoragePath?: string
 }
 
@@ -218,7 +222,10 @@ export function createMethodRegistry(options: MethodRegistryOptions = {}): AppSe
   const loopRunner = options.loopRunner ?? runConversationLoop
   const dispatcherFactory = options.dispatcherFactory ?? (() => new ToolDispatcher())
   const toolDefs = buildNativeToolDefs(dispatcherFactory())
-  const managedWorkspaceService = createManagedWorkspaceService({ projectRoot })
+  const managedWorkspaceService = createManagedWorkspaceService({
+    projectRoot,
+    authorizeOperation: options.managedWorkspaceAuthorizer,
+  })
   const resolvedLoopConfig = options.loopOptions
     ? null
     : options.config ? resolveAppServerLoopConfig(options.config, options.loopModelId) : null

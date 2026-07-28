@@ -11,11 +11,17 @@ import { get as httpGet } from 'node:http'
 export interface HealthzResponse {
   status: string
   version: string
-  pid: number
-  runtimeToken: string | null
-  host: string
-  port: number
-  routerUrl: string
+  pid?: number
+  /**
+   * Legacy daemons echoed the raw runtime token. New daemons never do; the
+   * optional field remains client-side only so an upgraded CLI can retire a
+   * stale pre-fix daemon safely.
+   */
+  runtimeToken?: string | null
+  runtimeTokenFingerprint?: string
+  host?: string
+  port?: number
+  routerUrl?: string
   configFingerprint?: string
 }
 
@@ -66,11 +72,18 @@ export function configIdentityFingerprint(config: HealthzConfigIdentity): string
   return createHash('sha256').update(JSON.stringify(identity)).digest('hex').slice(0, 16)
 }
 
+export function runtimeTokenFingerprint(runtimeToken: string): string {
+  return `sha256:${createHash('sha256').update(runtimeToken).digest('hex')}`
+}
+
 export function healthzMatchesConfig(
   healthz: HealthzResponse,
   config: HealthzConfigIdentity,
   options: { requireConfigFingerprint?: boolean } = {},
 ): boolean {
+  if (typeof healthz.port !== 'number' || typeof healthz.routerUrl !== 'string' || typeof healthz.host !== 'string') {
+    return false
+  }
   if (healthz.port !== config.port) return false
   if (healthz.routerUrl !== config.routerUrl) return false
   const healthzClient = resolveClientHost(healthz.host)
@@ -90,25 +103,62 @@ export interface RuntimeMetaLike {
   routerUrl: string
 }
 
-export function healthzMatchesRuntimeMeta(healthz: HealthzResponse, meta: RuntimeMetaLike): boolean {
+export type HealthzRuntimeIdentityMatch = 'fingerprint' | 'legacy_raw' | 'mismatch'
+
+export function classifyHealthzRuntimeIdentity(
+  healthz: HealthzResponse,
+  meta: RuntimeMetaLike,
+): HealthzRuntimeIdentityMatch {
   // Status check is about identity, not health — accept any valid status
   const validStatuses = ['ok', 'healthy', 'degraded', 'unhealthy']
-  if (!validStatuses.includes(healthz.status)) return false
-  if (healthz.pid !== meta.pid) return false
-  if (healthz.runtimeToken !== meta.runtimeToken) return false
-  if (healthz.port !== meta.port) return false
-  if (healthz.routerUrl !== meta.routerUrl) return false
-  return resolveClientHost(healthz.host) === resolveClientHost(meta.host)
+  if (!validStatuses.includes(healthz.status)) return 'mismatch'
+  if (
+    typeof healthz.pid !== 'number'
+    || typeof healthz.port !== 'number'
+    || typeof healthz.routerUrl !== 'string'
+    || typeof healthz.host !== 'string'
+  ) return 'mismatch'
+  if (healthz.pid !== meta.pid) return 'mismatch'
+  if (healthz.port !== meta.port) return 'mismatch'
+  if (healthz.routerUrl !== meta.routerUrl) return 'mismatch'
+  if (resolveClientHost(healthz.host) !== resolveClientHost(meta.host)) return 'mismatch'
+  if (
+    healthz.runtimeToken === undefined
+    && healthz.runtimeTokenFingerprint === runtimeTokenFingerprint(meta.runtimeToken)
+  ) {
+    return 'fingerprint'
+  }
+  if (healthz.runtimeTokenFingerprint === undefined && healthz.runtimeToken === meta.runtimeToken) {
+    return 'legacy_raw'
+  }
+  return 'mismatch'
+}
+
+export function healthzMatchesRuntimeMeta(healthz: HealthzResponse, meta: RuntimeMetaLike): boolean {
+  return classifyHealthzRuntimeIdentity(healthz, meta) === 'fingerprint'
+}
+
+export function healthzIdentifiesRuntimeMetaForRetirement(
+  healthz: HealthzResponse,
+  meta: RuntimeMetaLike,
+): boolean {
+  return classifyHealthzRuntimeIdentity(healthz, meta) !== 'mismatch'
 }
 
 // ─── Healthz HTTP client ───
 
-export function fetchHealthz(baseUrl: string, timeoutMs: number = 2000): Promise<HealthzResponse | null> {
+export function fetchHealthz(
+  baseUrl: string,
+  timeoutMs: number = 2000,
+  runtimeToken?: string,
+): Promise<HealthzResponse | null> {
   return new Promise(resolve => {
     const url = `${baseUrl}/healthz`
     let req: ReturnType<typeof httpGet>
     try {
-      req = httpGet(url, res => {
+      req = httpGet(url, runtimeToken
+        ? { headers: { Authorization: `Bearer ${runtimeToken}` } }
+        : {}, res => {
         const chunks: Buffer[] = []
         res.on('data', (chunk: Buffer) => chunks.push(chunk))
         res.on('end', () => {
@@ -135,10 +185,12 @@ export async function waitForVerifiedHealthz(
   baseUrl: string,
   matcher: (healthz: HealthzResponse) => boolean,
   timeoutMs: number = 5000,
+  runtimeToken?: string | (() => string | undefined),
 ): Promise<HealthzResponse | null> {
   const start = Date.now()
   while (Date.now() - start <= timeoutMs) {
-    const healthz = await fetchHealthz(baseUrl, 500)
+    const token = typeof runtimeToken === 'function' ? runtimeToken() : runtimeToken
+    const healthz = await fetchHealthz(baseUrl, 500, token)
     if (healthz && matcher(healthz)) return healthz
     await new Promise(resolve => setTimeout(resolve, 150))
   }

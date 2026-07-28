@@ -15,7 +15,7 @@ import { addTokenUsage } from '../trace.js'
 import { runRequestHooks, runResponseHooks, runErrorHooks } from '../plugins/index.js'
 import { withRetry } from '../middleware/retry.js'
 import { checkRateLimit } from '../middleware/rate-limit.js'
-import { buildFallbackChain, withFallback } from '../middleware/fallback.js'
+import { buildFallbackChain, isAutomaticFallbackEnabled, withFallback } from '../middleware/fallback.js'
 import { resolveHeadersTimeoutMs, readCloudHeadersTimeoutMsFromEnv } from './headers-timeout.js'
 import { isModelHealthy } from '../health-monitor.js'
 import { isCircuitOpen, recordSuccess, recordFailure } from '../middleware/circuit-breaker.js'
@@ -466,7 +466,7 @@ async function handleMessagesNonStream(
     ...(mwCfg.retryMaxAttempts != null ? { maxRetries: mwCfg.retryMaxAttempts } : {}),
     ...(mwCfg.retryBaseDelayMs != null ? { baseDelayMs: mwCfg.retryBaseDelayMs } : {}),
   }
-  const fallbackEnabled = mwCfg.fallbackEnabled !== false // default true
+  const fallbackEnabled = isAutomaticFallbackEnabled(mwCfg)
   const fallbackChain = fallbackEnabled
     ? buildFallbackChain(config, route.backendModel)
     : [route.backendModel]
@@ -790,7 +790,7 @@ async function handleMessagesStream(
     ...(mwCfg.retryMaxAttempts != null ? { maxRetries: mwCfg.retryMaxAttempts } : {}),
     ...(mwCfg.retryBaseDelayMs != null ? { baseDelayMs: mwCfg.retryBaseDelayMs } : {}),
   }
-  const fallbackEnabled = mwCfg.fallbackEnabled !== false
+  const fallbackEnabled = isAutomaticFallbackEnabled(mwCfg)
   const streamFallbackChain = fallbackEnabled
     ? buildFallbackChain(config, route.backendModel)
     : [route.backendModel]

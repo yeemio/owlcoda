@@ -1071,6 +1071,16 @@ describe('extractPathsFromUserMessage — Stage D (user_reference default)', () 
     expect(r.extractions).toEqual([])
   })
 
+  it('scans long path-free text in bounded time', () => {
+    const startedAt = performance.now()
+    const r = extractPathsFromUserMessage('x'.repeat(50_000), {
+      cwd: tmpCwd, ts: 0, originIteration: 0,
+    })
+
+    expect(r.extractions).toEqual([])
+    expect(performance.now() - startedAt).toBeLessThan(250)
+  })
+
   it('classifies bare path mention (no verb / no deny marker) as user_reference', () => {
     const r = extractPathsFromUserMessage('error log: 看 /nonexistent-test-root/utils.ts 那个 stack trace', {
       cwd: tmpCwd, ts: 1000, originIteration: 0,

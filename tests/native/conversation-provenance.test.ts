@@ -925,7 +925,7 @@ describe('settings.json permission rules — end-to-end (PERM-7)', () => {
     }
   })
 
-  it('project-level allow rule admits a write the conversation alone could not justify', async () => {
+  it('project-level allow rule cannot authorize a write the conversation cannot justify', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'owlcoda-perm-e2e-allow-'))
     const home = await mkdtemp(join(tmpdir(), 'owlcoda-perm-e2e-home-'))
     process.env['OWLCODA_HOME'] = home
@@ -951,8 +951,18 @@ describe('settings.json permission rules — end-to-end (PERM-7)', () => {
         apiBaseUrl: 'http://localhost:0', apiKey: 'test-key', cwd: canonicalCwd, maxIterations: 3,
       })
 
-      // Allow rule synthesized declared_target — write proceeds.
-      expect(writes).toEqual([outFile])
+      expect(writes).toEqual([])
+      const events = await readGateEvents(home)
+      expect(events).toContainEqual(expect.objectContaining({
+        kind: 'path_provenance_block',
+        canonicalPath: outFile,
+        isNewFile: true,
+      }))
+      expect(events).not.toContainEqual(expect.objectContaining({
+        kind: 'path_provenance_admit_evidence',
+        canonicalPath: outFile,
+        via: 'user_declared_target',
+      }))
     } finally {
       await rm(cwd, { recursive: true, force: true })
       await rm(home, { recursive: true, force: true })

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { existsSync, realpathSync } from 'node:fs'
+import { existsSync, lstatSync, readlinkSync, realpathSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import {
   handoffSessionWorkspace,
@@ -104,6 +104,25 @@ export interface ManagedWorkspaceHandoffInput extends ManagedWorkspaceAuthorized
   expectedProjectStatusFingerprint: string
 }
 
+export interface ManagedWorkspaceAuthorizationBinding {
+  action: 'commit' | 'keep' | 'cleanup' | 'handoff'
+  requestId: string
+  requestSha256: string
+  workspaceId: string
+  currentHead: string
+  currentStatusFingerprint: string
+  message?: string
+  discardChanges?: boolean
+  threadId?: string
+  direction?: 'to_project' | 'to_managed'
+  currentProjectHead?: string
+  currentProjectStatusFingerprint?: string
+}
+
+export type ManagedWorkspaceAuthorizer = (
+  binding: Readonly<ManagedWorkspaceAuthorizationBinding>,
+) => boolean
+
 export interface ManagedWorkspaceOperationReceipt {
   schemaVersion: 1
   receiptId: string
@@ -159,7 +178,10 @@ interface RepositoryIdentity {
   primaryRoot: string
 }
 
-export function createManagedWorkspaceService(options: { projectRoot: string }): ManagedWorkspaceService {
+export function createManagedWorkspaceService(options: {
+  projectRoot: string
+  authorizeOperation?: ManagedWorkspaceAuthorizer
+}): ManagedWorkspaceService {
   const projectRoot = resolve(options.projectRoot)
   const repository = resolveRepositoryIdentity(projectRoot)
 
@@ -199,7 +221,7 @@ export function createManagedWorkspaceService(options: { projectRoot: string }):
   return {
     capability() {
       return {
-        available: repository !== null,
+        available: repository !== null && options.authorizeOperation !== undefined,
         currentMode: this.currentWorkspace() ? 'managed' : 'project',
       }
     },
@@ -212,6 +234,7 @@ export function createManagedWorkspaceService(options: { projectRoot: string }):
     },
 
     create(input) {
+      requireTrustedHostAvailability(options.authorizeOperation)
       const { primaryRoot } = requireRepository()
       const error = validateWorktreeSlug(input.slug)
       if (error) throw new Error(error)
@@ -274,6 +297,7 @@ export function createManagedWorkspaceService(options: { projectRoot: string }):
     },
 
     resume(input) {
+      requireTrustedHostAvailability(options.authorizeOperation)
       const workspace = findWorkspace(input.workspaceId)
       const ledger = readLifecycleLedger(workspace.ledgerPath)
       writeLifecycleLedger(workspace.ledgerPath, { ...ledger, status: 'active', error: undefined })
@@ -299,6 +323,16 @@ export function createManagedWorkspaceService(options: { projectRoot: string }):
       const replay = replayOperation(found.ledger, input.requestId, requestSha256)
       if (replay) return { receipt: replay }
       const workspace = findWorkspace(input.workspaceId)
+      const reviewed = requireExpectedStatus(workspace, input)
+      requireTrustedHostAuthorization(options.authorizeOperation, {
+        action: 'commit',
+        requestId: input.requestId,
+        requestSha256,
+        workspaceId: input.workspaceId,
+        currentHead: reviewed.head,
+        currentStatusFingerprint: reviewed.statusFingerprint,
+        message,
+      })
       const before = requireExpectedStatus(workspace, input)
       if (before.clean) throw new Error('Managed workspace has no changes to commit')
       execFileSync('git', ['add', '--all'], {
@@ -337,6 +371,15 @@ export function createManagedWorkspaceService(options: { projectRoot: string }):
       const replay = replayOperation(found.ledger, input.requestId, requestSha256)
       if (replay) return { receipt: replay }
       const workspace = findWorkspace(input.workspaceId)
+      const reviewed = requireExpectedStatus(workspace, input)
+      requireTrustedHostAuthorization(options.authorizeOperation, {
+        action: 'keep',
+        requestId: input.requestId,
+        requestSha256,
+        workspaceId: input.workspaceId,
+        currentHead: reviewed.head,
+        currentStatusFingerprint: reviewed.statusFingerprint,
+      })
       const before = requireExpectedStatus(workspace, input)
       const receipt = operationReceipt({
         action: 'keep',
@@ -370,6 +413,16 @@ export function createManagedWorkspaceService(options: { projectRoot: string }):
       const replay = replayOperation(found.ledger, input.requestId, requestSha256)
       if (replay) return { receipt: replay }
       const workspace = findWorkspace(input.workspaceId)
+      const reviewed = requireExpectedStatus(workspace, input)
+      requireTrustedHostAuthorization(options.authorizeOperation, {
+        action: 'cleanup',
+        requestId: input.requestId,
+        requestSha256,
+        workspaceId: input.workspaceId,
+        currentHead: reviewed.head,
+        currentStatusFingerprint: reviewed.statusFingerprint,
+        discardChanges,
+      })
       const before = requireExpectedStatus(workspace, input)
       if (before.changedFiles > 0 && !discardChanges) {
         throw new Error(`Managed workspace has ${before.changedFiles} uncommitted file(s); explicit discard authorization is required`)
@@ -418,6 +471,20 @@ export function createManagedWorkspaceService(options: { projectRoot: string }):
       const replay = replayOperation(found.ledger, input.requestId, requestSha256)
       if (replay) return { receipt: replay }
       const workspace = findWorkspace(input.workspaceId)
+      const reviewed = requireExpectedStatus(workspace, input)
+      const reviewedProject = requireExpectedProjectStatus(workspace.projectRoot, input)
+      requireTrustedHostAuthorization(options.authorizeOperation, {
+        action: 'handoff',
+        requestId: input.requestId,
+        requestSha256,
+        workspaceId: input.workspaceId,
+        currentHead: reviewed.head,
+        currentStatusFingerprint: reviewed.statusFingerprint,
+        threadId: input.threadId,
+        direction: input.direction,
+        currentProjectHead: reviewedProject.head,
+        currentProjectStatusFingerprint: reviewedProject.statusFingerprint,
+      })
       const before = requireExpectedStatus(workspace, input)
       const projectBefore = requireExpectedProjectStatus(workspace.projectRoot, input)
       if (!before.clean || !projectBefore.clean) {
@@ -537,6 +604,49 @@ function readCheckoutStatus(checkoutPath: string): ManagedCheckoutStatus {
     encoding: null,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
+  const rawDiff = execFileSync('git', ['diff', '--raw', '-z', 'HEAD', '--'], {
+    cwd: checkoutPath,
+    encoding: null,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  const changedPaths = execFileSync('git', ['diff', '--name-only', '-z', 'HEAD', '--'], {
+    cwd: checkoutPath,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).split('\0').filter(Boolean)
+  const untrackedPaths = execFileSync('git', ['ls-files', '--others', '--exclude-standard', '-z'], {
+    cwd: checkoutPath,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).split('\0').filter(Boolean)
+  const contentManifest = createHash('sha256')
+  for (const relativePath of [...new Set([...changedPaths, ...untrackedPaths])].sort()) {
+    contentManifest.update(relativePath).update('\0')
+    try {
+      const absolutePath = resolve(checkoutPath, relativePath)
+      const fileStat = lstatSync(absolutePath)
+      const fileType = fileStat.isFile()
+        ? 'file'
+        : fileStat.isSymbolicLink()
+          ? 'symlink'
+          : fileStat.isDirectory()
+            ? 'directory'
+            : 'other'
+      contentManifest
+        .update(fileType)
+        .update('\0')
+        .update((fileStat.mode & 0o7777).toString(8))
+        .update('\0')
+        .update(
+          fileStat.isSymbolicLink()
+            ? createHash('sha256').update(readlinkSync(absolutePath)).digest('hex')
+            : git(checkoutPath, 'hash-object', '--no-filters', '--', relativePath),
+        )
+    } catch {
+      contentManifest.update('missing')
+    }
+    contentManifest.update('\0')
+  }
   const changedFiles = status.length === 0 ? 0 : status.toString('utf8').split('\0').filter(Boolean).length
   return {
     head,
@@ -549,6 +659,8 @@ function readCheckoutStatus(checkoutPath: string): ManagedCheckoutStatus {
       .update(branch ?? '')
       .update('\0')
       .update(status)
+      .update(rawDiff)
+      .update(contentManifest.digest())
       .digest('hex'),
   }
 }
@@ -558,6 +670,20 @@ function requireAuthorization(input: ManagedWorkspaceAuthorizedInput): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(input.requestId)) throw new Error('Invalid managed workspace request id')
   if (!/^[a-f0-9]{40,64}$/.test(input.expectedHead)) throw new Error('Invalid expected managed workspace HEAD')
   if (!/^[a-f0-9]{64}$/.test(input.expectedStatusFingerprint)) throw new Error('Invalid expected managed workspace status fingerprint')
+}
+
+function requireTrustedHostAuthorization(
+  authorizer: ManagedWorkspaceAuthorizer | undefined,
+  binding: ManagedWorkspaceAuthorizationBinding,
+): void {
+  if (!authorizer) throw new Error('Managed workspace trusted host authorization is unavailable')
+  if (authorizer(Object.freeze({ ...binding })) !== true) {
+    throw new Error('Managed workspace trusted host authorization denied the operation')
+  }
+}
+
+function requireTrustedHostAvailability(authorizer: ManagedWorkspaceAuthorizer | undefined): void {
+  if (!authorizer) throw new Error('Managed workspace trusted host authorization is unavailable')
 }
 
 function requireExpectedStatus(

@@ -102,42 +102,37 @@ describe('Config tool', () => {
     expect(result.metadata).toHaveProperty('newValue')
   })
 
-  // --- autoApprove (yolo) programmatic toggle ---
+  // --- autoApprove (read-only yolo state) ---
 
-  it('autoApprove read returns false when no setter is wired (default registration)', async () => {
+  it('autoApprove read returns false in the default registration', async () => {
     const result = await tool.execute({ setting: 'autoApprove' })
     expect(result.isError).toBe(false)
     expect(result.output).toContain('autoApprove = false')
   })
 
-  it('autoApprove write rejected when no setter is wired (default registration)', async () => {
+  it('autoApprove write is rejected in the default registration', async () => {
     const result = await tool.execute({ setting: 'autoApprove', value: 'true' })
     expect(result.isError).toBe(true)
     expect(result.output).toContain('read-only')
   })
 
-  it('autoApprove read/write works when wired with deps', async () => {
+  it('autoApprove remains read-only when a live getter is wired', async () => {
     let yolo = false
     const wired = createConfigTool({
       autoApprove: {
         get: () => yolo,
-        set: (v: boolean) => { yolo = v },
       },
     })
     const r1 = await wired.execute({ setting: 'autoApprove' })
     expect(r1.output).toContain('autoApprove = false')
 
     const r2 = await wired.execute({ setting: 'autoApprove', value: 'true' })
-    expect(r2.isError).toBe(false)
-    expect(r2.output).toContain('Set autoApprove = true')
-    expect(yolo).toBe(true)
+    expect(r2.isError).toBe(true)
+    expect(r2.output).toContain('read-only')
+    expect(yolo).toBe(false)
 
     const r3 = await wired.execute({ setting: 'autoApprove' })
-    expect(r3.output).toContain('autoApprove = true')
-
-    const r4 = await wired.execute({ setting: 'autoApprove', value: 'false' })
-    expect(r4.isError).toBe(false)
-    expect(yolo).toBe(false)
+    expect(r3.output).toContain('autoApprove = false')
   })
 
   // --- autoDeny (QA verification mode, 0.13.42) ---

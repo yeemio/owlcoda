@@ -90,10 +90,10 @@ import {
   adminAutoOpenDisabledHint,
   adminHandoffFailureHint,
   buildAdminHandoffUrl,
-  createOneShotAdminToken,
   getAdminBearerToken,
   getAdminBundleStatus,
   openUrlInBrowser,
+  requestOneShotAdminToken,
   shouldAutoOpenAdminBrowser,
   type AdminHandoffContext,
 } from "../admin-delivery.js"
@@ -147,6 +147,7 @@ export interface ReplOptions {
   resumeSession?: string
   liveReplClientId?: string
   liveReplRuntime?: {
+    pid: number
     host: string
     port: number
     routerUrl: string
@@ -197,7 +198,18 @@ async function openAdminHandoffFromSlash(
   }
 
   const config = loadConfig()
-  const token = createOneShotAdminToken(getAdminBearerToken(config))
+  const bearerToken = getAdminBearerToken(config, opts.liveReplRuntime?.runtimeToken)
+  if (!bearerToken) {
+    console.log(`${ansi.dim}Browser handoff unavailable: no trusted admin bearer is available.${ansi.reset}`)
+    return
+  }
+  let token: string
+  try {
+    token = await requestOneShotAdminToken(opts.apiBaseUrl, bearerToken)
+  } catch (error) {
+    console.log(`${ansi.dim}Browser handoff unavailable: ${error instanceof Error ? error.message : String(error)}.${ansi.reset}`)
+    return
+  }
   const url = buildAdminHandoffUrl(opts.apiBaseUrl, token, context)
   const shouldOpenBrowser = handoffOptions.explicitOpen || shouldAutoOpenAdminBrowser()
 

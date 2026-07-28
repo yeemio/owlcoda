@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/resume-request-v1.json",
+  "title": "OwlCoda RunKit Resume Request V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "resumeId", "continuationRunId", "reason", "coverage"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitResumeRequestV1" },
+    "resumeId": { "type": "string", "minLength": 1 },
+    "continuationRunId": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string", "minLength": 1 }
+      ]
+    },
+    "reason": { "type": "string", "minLength": 1 },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coverageId", "sources"],
+      "properties": {
+        "coverageId": { "type": "string", "minLength": 1 },
+        "sources": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/coverageSource" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "coverageSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gateInputPath", "gateInputSha256", "commandBindings", "dependencyBindings"],
+      "properties": {
+        "gateInputPath": { "type": "string", "minLength": 1 },
+        "gateInputSha256": { "$ref": "#/$defs/sha256" },
+        "commandBindings": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["receiptCommandId", "profileId", "commandId"],
+            "properties": {
+              "receiptCommandId": { "type": "string", "minLength": 1 },
+              "profileId": { "type": "string", "minLength": 1 },
+              "commandId": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "dependencyBindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["dependencyId", "source"],
+            "properties": {
+              "dependencyId": { "type": "string", "minLength": 1 },
+              "source": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "identity"],
+                "properties": {
+                  "kind": { "enum": ["lockfile", "fixture", "material_input"] },
+                  "identity": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

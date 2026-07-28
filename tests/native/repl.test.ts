@@ -2406,6 +2406,10 @@ describe('Additional slash commands', () => {
 
   it('/models edit <id> prints a focused browser handoff URL', async () => {
     const conv = makeConv()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+      JSON.stringify({ token: 'ots1.fixture-token' }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ))
     const fs = await import('node:fs')
     const os = await import('node:os')
     const path = await import('node:path')
@@ -2432,8 +2436,16 @@ describe('Additional slash commands', () => {
         apiBaseUrl: 'http://127.0.0.1:8019',
         apiKey: 'admin-token',
         model: 'cloud-model',
+        liveReplRuntime: {
+          pid: 101,
+          host: '127.0.0.1',
+          port: 8019,
+          routerUrl: 'http://127.0.0.1:8066',
+          runtimeToken: 'runtime-secret',
+        },
       })).toBe(true)
     } finally {
+      fetchSpy.mockRestore()
       process.chdir(prevCwd)
       if (prevHome === undefined) delete process.env.OWLCODA_HOME
       else process.env.OWLCODA_HOME = prevHome
@@ -2448,6 +2460,10 @@ describe('Additional slash commands', () => {
 
   it('/models browser catalog opens a catalog handoff URL', async () => {
     const conv = makeConv()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
+      JSON.stringify({ token: 'ots1.fixture-token' }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    ))
     const fs = await import('node:fs')
     const os = await import('node:os')
     const path = await import('node:path')
@@ -2460,8 +2476,16 @@ describe('Additional slash commands', () => {
         apiBaseUrl: 'http://127.0.0.1:8019',
         apiKey: 'admin-token',
         model: 'cloud-model',
+        liveReplRuntime: {
+          pid: 101,
+          host: '127.0.0.1',
+          port: 8019,
+          routerUrl: 'http://127.0.0.1:8066',
+          runtimeToken: 'runtime-secret',
+        },
       })).toBe(true)
     } finally {
+      fetchSpy.mockRestore()
       process.chdir(prevCwd)
       fs.rmSync(tmpDir, { recursive: true, force: true })
     }

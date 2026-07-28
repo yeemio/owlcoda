@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/resource-preflight-v1.json",
+  "title": "OwlCoda RunKit Resource Preflight V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "preflightId",
+    "sequence",
+    "evaluatedAt",
+    "validUntil",
+    "requestSha256",
+    "verificationPlan",
+    "policy",
+    "receiptReuse",
+    "estimate",
+    "resources",
+    "decision",
+    "authorizationGranted",
+    "gitAuthorization",
+    "releaseAuthorization"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitResourcePreflightV1" },
+    "runId": { "$ref": "#/$defs/identifier" },
+    "preflightId": { "$ref": "#/$defs/identifier" },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "evaluatedAt": { "type": "string", "format": "date-time" },
+    "validUntil": { "type": ["string", "null"], "format": "date-time" },
+    "requestSha256": { "$ref": "#/$defs/sha256" },
+    "verificationPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "planId"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "planId": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "policy": { "$ref": "resource-preflight-request-v1.schema.json#/$defs/policy" },
+    "receiptReuse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["verificationPlanId", "reusableReceiptIds", "appliedReceiptIds"],
+      "properties": {
+        "verificationPlanId": { "$ref": "#/$defs/identifier" },
+        "reusableReceiptIds": { "$ref": "#/$defs/identifierArray" },
+        "appliedReceiptIds": { "$ref": "#/$defs/identifierArray" }
+      }
+    },
+    "estimate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "plannedWorkloads",
+        "reusedWorkloads",
+        "pendingWorkloads",
+        "calls",
+        "inputTokens",
+        "outputTokens",
+        "totalTokens",
+        "elapsedMs",
+        "cost"
+      ],
+      "properties": {
+        "plannedWorkloads": { "$ref": "#/$defs/nonNegativeInteger" },
+        "reusedWorkloads": { "$ref": "#/$defs/nonNegativeInteger" },
+        "pendingWorkloads": { "$ref": "#/$defs/nonNegativeInteger" },
+        "calls": { "$ref": "#/$defs/nonNegativeInteger" },
+        "inputTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "outputTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "totalTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "elapsedMs": { "$ref": "#/$defs/nonNegativeInteger" },
+        "cost": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["status", "valueUsd"],
+              "properties": {
+                "status": { "const": "known" },
+                "valueUsd": { "type": "number", "minimum": 0 }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["status", "knownSubtotalUsd", "unknownResources"],
+              "properties": {
+                "status": { "const": "unknown" },
+                "knownSubtotalUsd": { "type": "number", "minimum": 0 },
+                "unknownResources": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "resources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["providerId", "modelId", "adapter", "availability", "quota", "pricing", "demand"],
+        "properties": {
+          "providerId": { "$ref": "#/$defs/identifier" },
+          "modelId": { "$ref": "#/$defs/identifier" },
+          "adapter": { "$ref": "resource-preflight-request-v1.schema.json#/$defs/observation/properties/adapter" },
+          "availability": { "$ref": "resource-preflight-request-v1.schema.json#/$defs/observation/properties/availability" },
+          "quota": { "$ref": "resource-preflight-request-v1.schema.json#/$defs/observation/properties/quota" },
+          "pricing": { "$ref": "resource-preflight-request-v1.schema.json#/$defs/observation/properties/pricing" },
+          "demand": { "$ref": "#/$defs/demand" }
+        }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "blockers", "warnings", "nextAllowedAction"],
+      "properties": {
+        "status": { "enum": ["ready_for_model_execution", "ready_without_model_execution", "blocked_by_resource"] },
+        "blockers": { "$ref": "#/$defs/stringArray" },
+        "warnings": { "$ref": "#/$defs/stringArray" },
+        "nextAllowedAction": { "enum": ["begin_model_execution", "continue_without_model_calls", "pause_at_deterministic_stage"] }
+      }
+    },
+    "authorizationGranted": { "const": false },
+    "gitAuthorization": { "const": false },
+    "releaseAuthorization": { "const": false }
+  },
+  "$defs": {
+    "identifier": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "nonNegativeInteger": { "type": "integer", "minimum": 0 },
+    "identifierArray": { "type": "array", "items": { "$ref": "#/$defs/identifier" }, "uniqueItems": true },
+    "stringArray": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+    "demand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["calls", "inputTokens", "outputTokens", "totalTokens", "elapsedMs"],
+      "properties": {
+        "calls": { "$ref": "#/$defs/nonNegativeInteger" },
+        "inputTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "outputTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "totalTokens": { "$ref": "#/$defs/nonNegativeInteger" },
+        "elapsedMs": { "$ref": "#/$defs/nonNegativeInteger" }
+      }
+    }
+  }
+}

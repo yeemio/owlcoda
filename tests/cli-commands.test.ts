@@ -25,13 +25,17 @@ function makeRuntimeDir(): string {
 async function runCli(
   args: string[],
   runtimeDir: string,
-  timeoutMs: number = CLI_SUBPROCESS_TEST_TIMEOUT_MS,
+  options: {
+    timeoutMs?: number
+    env?: NodeJS.ProcessEnv
+  } = {},
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--import', 'tsx', CLI_ENTRY, ...args], {
       cwd: REPO_ROOT,
       env: {
         ...process.env,
+        ...options.env,
         HOME: join(runtimeDir, 'home'),
         OWLCODA_HOME: runtimeDir,
       },
@@ -46,11 +50,29 @@ async function runCli(
     const timer = setTimeout(() => {
       child.kill('SIGKILL')
       reject(new Error(`CLI command timed out: ${args.join(' ')}`))
-    }, timeoutMs)
+    }, options.timeoutMs ?? CLI_SUBPROCESS_TEST_TIMEOUT_MS)
 
     child.on('error', err => { clearTimeout(timer); reject(err) })
     child.on('close', code => { clearTimeout(timer); resolve({ code, stdout, stderr }) })
   })
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function waitForProcessExit(pid: number, timeoutMs = 5_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+  return !isProcessAlive(pid)
 }
 
 afterEach(() => {
@@ -82,8 +104,9 @@ describe('CLI commands integration', { timeout: CLI_COMMANDS_TEST_TIMEOUT_MS }, 
     expect(result.stderr).toContain('--daemon-only')
   })
 
-  it('app-server smoke starts the structured desktop App Server contract', async () => {
+  it('app-server smoke keeps public health minimal and verifies the authenticated structured contract', async () => {
     const runtimeDir = makeRuntimeDir()
+    const managedToken = 'cli-smoke-managed-token'
     const result = await runCli([
       'app-server',
       '--app-server-host',
@@ -91,23 +114,33 @@ describe('CLI commands integration', { timeout: CLI_COMMANDS_TEST_TIMEOUT_MS }, 
       '--app-server-port',
       '0',
       '--app-server-smoke',
-    ], runtimeDir)
+    ], runtimeDir, {
+      env: { OWLCODA_APP_SERVER_TOKEN: managedToken },
+    })
 
     expect(result.code).toBe(0)
     const smoke = JSON.parse(result.stdout) as {
       ok: boolean
       baseUrl: string
-      health: { status: string; methods: string[] }
+      health: { status: string }
+      compatibility: string
+      protocol: {
+        methods: Array<{ method: string }>
+      }
     }
     expect(smoke.ok).toBe(true)
     expect(smoke.baseUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
-    expect(smoke.health.status).toBe('ok')
-    expect(smoke.health.methods).toContain('runtimeTranscript/read')
-    expect(smoke.health.methods).toContain('interaction/list')
-    expect(smoke.health.methods).toContain('runtimeRail/read')
+    expect(smoke.health).toEqual({ status: 'ok' })
+    expect(smoke.compatibility).toBe('compatible')
+    const methodNames = smoke.protocol.methods.map(method => method.method)
+    expect(methodNames).toContain('runtimeTranscript/read')
+    expect(methodNames).toContain('interaction/list')
+    expect(methodNames).toContain('runtimeRail/read')
+    expect(result.stdout).not.toContain(managedToken)
+    expect(result.stderr).not.toContain(managedToken)
   })
 
-  it('app-server smoke loads OwlCoda config for runtime loop execution', async () => {
+  it('app-server smoke loads OwlCoda config for authenticated runtime diagnostics', async () => {
     const runtimeDir = makeRuntimeDir()
     writeFileSync(join(runtimeDir, 'config.json'), JSON.stringify({
       port: 8125,
@@ -136,7 +169,8 @@ describe('CLI commands integration', { timeout: CLI_COMMANDS_TEST_TIMEOUT_MS }, 
     expect(result.code).toBe(0)
     const smoke = JSON.parse(result.stdout) as {
       ok: boolean
-      health: {
+      health: { status: string }
+      diagnostic: {
         subsystems: {
           appServerLoop: {
             status: string
@@ -147,11 +181,173 @@ describe('CLI commands integration', { timeout: CLI_COMMANDS_TEST_TIMEOUT_MS }, 
       }
     }
     expect(smoke.ok).toBe(true)
-    expect(smoke.health.subsystems.appServerLoop).toMatchObject({
+    expect(smoke.health).toEqual({ status: 'ok' })
+    expect(smoke.diagnostic.subsystems.appServerLoop).toMatchObject({
       status: 'ok',
       model: 'desktop-model',
       apiBaseUrl: 'http://127.0.0.1:8125',
     })
+  })
+
+  it('app-server smoke replaces a blank configured token with authenticated temporary authority', async () => {
+    const runtimeDir = makeRuntimeDir()
+    const result = await runCli([
+      'app-server',
+      '--app-server-host',
+      '127.0.0.1',
+      '--app-server-port',
+      '0',
+      '--app-server-smoke',
+    ], runtimeDir, {
+      env: { OWLCODA_APP_SERVER_TOKEN: '   ' },
+    })
+
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      health: { status: 'ok' },
+      compatibility: 'compatible',
+    })
+  })
+
+  it('app-server stops its ephemeral provider router when the App Server exits', async () => {
+    const runtimeDir = makeRuntimeDir()
+    const reservation = createServer()
+    await new Promise<void>(resolve => reservation.listen(0, '127.0.0.1', resolve))
+    const address = reservation.address()
+    if (!address || typeof address === 'string') throw new Error('runtime port reservation failed')
+    const runtimePort = address.port
+    await new Promise<void>(resolve => reservation.close(() => resolve()))
+
+    writeFileSync(join(runtimeDir, 'config.json'), JSON.stringify({
+      port: runtimePort,
+      host: '127.0.0.1',
+      routerUrl: 'http://127.0.0.1:65534/v1',
+      models: [{
+        id: 'desktop-model',
+        label: 'Desktop Model',
+        backendModel: 'desktop-model',
+        aliases: [],
+        provider: 'openai-compat',
+        endpoint: 'http://127.0.0.1:65534/v1',
+        apiKey: 'loopback-test-key',
+        tier: 'local',
+        default: true,
+      }],
+    }), 'utf8')
+
+    const child = spawn(process.execPath, [
+      '--import',
+      'tsx',
+      CLI_ENTRY,
+      'app-server',
+      '--app-server-host',
+      '127.0.0.1',
+      '--app-server-port',
+      '0',
+      '--runtime-port',
+      '0',
+    ], {
+      cwd: REPO_ROOT,
+      env: {
+        ...process.env,
+        HOME: join(runtimeDir, 'home'),
+        OWLCODA_HOME: runtimeDir,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    let stderr = ''
+    child.stderr.on('data', chunk => { stderr += String(chunk) })
+    let runtimePid: number | undefined
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error(`App Server did not start: ${stderr}`)), 15_000)
+        const onData = () => {
+          if (!stderr.includes('OwlCoda App Server listening at')) return
+          clearTimeout(timeout)
+          resolve()
+        }
+        child.stderr.on('data', onData)
+        child.once('exit', code => {
+          clearTimeout(timeout)
+          reject(new Error(`App Server exited early (${code}): ${stderr}`))
+        })
+      })
+
+      const runtimeMeta = JSON.parse(readFileSync(join(runtimeDir, 'runtime.json'), 'utf8')) as {
+        host: string
+        pid: number
+        port: number
+      }
+      runtimePid = runtimeMeta.pid
+      expect(runtimeMeta.port).toBeGreaterThan(0)
+      const response = await fetch(`http://${runtimeMeta.host}:${runtimeMeta.port}/health`)
+      expect(response.ok).toBe(true)
+      expect(await response.json()).toMatchObject({ status: 'ok' })
+    } finally {
+      child.kill('SIGTERM')
+      await new Promise<void>(resolve => child.once('close', () => resolve()))
+      const runtimeExited = runtimePid === undefined || await waitForProcessExit(runtimePid)
+      if (!runtimeExited) await runCli(['stop', '--force'], runtimeDir)
+      expect(runtimeExited).toBe(true)
+    }
+  })
+
+  it('app-server stops its ephemeral provider router when App Server binding fails', async () => {
+    const runtimeDir = makeRuntimeDir()
+    const occupied = createServer()
+    await new Promise<void>(resolve => occupied.listen(0, '127.0.0.1', resolve))
+    const occupiedAddress = occupied.address()
+    if (!occupiedAddress || typeof occupiedAddress === 'string') {
+      throw new Error('App Server port reservation failed')
+    }
+
+    writeFileSync(join(runtimeDir, 'config.json'), JSON.stringify({
+      port: 0,
+      host: '127.0.0.1',
+      routerUrl: 'http://127.0.0.1:65534/v1',
+      models: [{
+        id: 'desktop-model',
+        label: 'Desktop Model',
+        backendModel: 'desktop-model',
+        aliases: [],
+        provider: 'openai-compat',
+        endpoint: 'http://127.0.0.1:65534/v1',
+        apiKey: 'loopback-test-key',
+        tier: 'local',
+        default: true,
+      }],
+    }), 'utf8')
+
+    let runtimePid: number | undefined
+    try {
+      const result = await runCli([
+        'app-server',
+        '--app-server-host',
+        '127.0.0.1',
+        '--app-server-port',
+        String(occupiedAddress.port),
+        '--runtime-port',
+        '0',
+      ], runtimeDir)
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toMatch(/EADDRINUSE|address already in use/i)
+      const runtimeMetaPath = join(runtimeDir, 'runtime.json')
+      if (existsSync(runtimeMetaPath)) {
+        const runtimeMeta = JSON.parse(readFileSync(runtimeMetaPath, 'utf8')) as {
+          pid: number
+        }
+        runtimePid = runtimeMeta.pid
+        expect(await waitForProcessExit(runtimePid)).toBe(true)
+      }
+    } finally {
+      await new Promise<void>(resolve => occupied.close(() => resolve()))
+      if (runtimePid !== undefined && isProcessAlive(runtimePid)) {
+        await runCli(['stop', '--force'], runtimeDir)
+      }
+    }
   })
 
   it('workflow execute runs a native HTTP plan and prints a machine-readable receipt', async () => {

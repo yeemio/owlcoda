@@ -161,7 +161,24 @@ describe('Fitness Matrix Tier-1 observable probes', () => {
 
     const signals: Array<[number, string]> = []
     const stopped = await forceStopOrphanDaemon('http://127.0.0.1:8019', {
-      fetchHealthz: async () => ({ pid: 4242 }),
+      fetchHealthz: async () => ({
+        status: 'healthy',
+        version: '0.15.30',
+        pid: 4242,
+        runtimeToken: 'trusted-orphan-token',
+        host: '127.0.0.1',
+        port: 8019,
+        routerUrl: 'http://127.0.0.1:11434',
+      }),
+      readRuntimeMeta: () => ({
+        pid: 4242,
+        runtimeToken: 'trusted-orphan-token',
+        host: '127.0.0.1',
+        port: 8019,
+        routerUrl: 'http://127.0.0.1:11434',
+        version: '0.15.30',
+        startedAt: new Date(0).toISOString(),
+      }),
       signal: (pid, signal) => { signals.push([pid, signal]); return true },
       waitGone: async () => true,
       isAlive: () => false,

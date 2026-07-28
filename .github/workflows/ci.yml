@@ -6,15 +6,14 @@ on:
       - main
   pull_request:
 
-# One run per ref; cancel stale runs so the single self-hosted runner
-# doesn't pile up.
+# One run per ref; cancel stale runs to avoid wasting hosted capacity.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify:
-    runs-on: [self-hosted, macOS, ARM64]
+    runs-on: macos-14
     timeout-minutes: 30
 
     steps:
@@ -81,9 +80,9 @@ jobs:
       - name: Test
         run: npm test
 
-      # 8. Clean-checkout build. Self-hosted workspaces are reused across runs,
-      #    so build once more from a fresh clone in a temp dir to decouple from
-      #    any workspace residue. This is the automated form of the
+      # 8. Clean-checkout build. Build once more from a fresh clone in a temp
+      #    dir to prove the candidate does not depend on checkout residue. This is
+      #    the automated form of the
       #    "release must build from a clean checkout" hygiene rule.
       - name: Clean-checkout build
         shell: bash

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/core-artifact-v2.json",
+  "title": "OwlCoda RunKit Core Artifact V2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "core", "producer", "payload", "extensions"],
+  "properties": {
+    "schemaVersion": { "const": "RunKitCoreArtifactV2" },
+    "core": { "$ref": "engine-pin-v2.schema.json" },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapterKind", "adapterVersion"],
+      "properties": {
+        "adapterKind": { "type": "string", "minLength": 1 },
+        "adapterVersion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "payload": { "type": "object" },
+    "extensions": { "type": "object", "propertyNames": { "pattern": "^[^.]+\\..+" } }
+  }
+}

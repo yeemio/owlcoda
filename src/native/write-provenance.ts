@@ -547,7 +547,7 @@ export function formatProvenanceError(
  * filtered post-match by `isPathLikeToken`.
  */
 const PATH_TOKEN_RE =
-  /(?:~\/|\.{1,2}\/|\/)[\w.\-_]+(?:\/[\w.\-_]+)*|[\w.\-_]+(?:\/[\w.\-_]+)+/g
+  /(?<![\w.\-_])(?:(?:~\/|\.{1,2}\/|\/)[\w.\-_]+(?:\/[\w.\-_]+)*|[\w.\-_]+(?:\/[\w.\-_]+)+)/g
 
 /** Characters stripped from the end of a captured path (sentence punctuation). */
 const TRAILING_PUNCT_RE = /[.,;:!?)\]}'"`]+$/

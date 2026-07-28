@@ -1,32 +1,42 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const scriptPath = fileURLToPath(import.meta.url)
-const projectRoot = path.resolve(path.dirname(scriptPath), '..')
+const sourceRoot = path.resolve(path.dirname(scriptPath), '..')
 const options = parseArgs(process.argv.slice(2))
-const ownsCompileDir = !options.compileDir
-const compileDir = options.compileDir
-  ? path.resolve(options.compileDir)
-  : mkdtempSync(path.join(tmpdir(), 'owlcoda-desktop-preview-dist-'))
+const projectRoot = options.projectRoot ? path.resolve(options.projectRoot) : sourceRoot
+const requestedCompileParent = path.resolve(options.compileDir ?? tmpdir())
+const sourceRootRealpath = realpathSync(sourceRoot)
+assertCompileParentOutsideSource(requestedCompileParent, sourceRootRealpath)
+mkdirSync(requestedCompileParent, { recursive: true })
+const compileParent = realpathSync(requestedCompileParent)
+assertCompileParentOutsideSource(compileParent, sourceRootRealpath)
+const previewRoot = mkdtempSync(path.join(compileParent, 'owlcoda-desktop-preview-package-'))
+const compileDir = previewRootPath('dist')
 
-compileAppServer()
-linkNodeModules()
+let server
+let evaluateDesktopCapabilityGate
+try {
+  compileAppServer()
+  linkNodeModules()
+  linkRunKitCore()
 
-const [
-  { createAppServer, listenAppServer },
-  { evaluateDesktopCapabilityGate },
-] = await Promise.all([
-  import(`${pathToFileURL(path.join(compileDir, 'native', 'app-server', 'http-server.js')).href}?t=${Date.now()}`),
-  import(`${pathToFileURL(path.join(compileDir, 'native', 'app-server', 'desktop-capability-gate.js')).href}?t=${Date.now()}`),
-])
-
-const server = createAppServer({ projectRoot })
-await listenAppServer(server, { host: options.host, port: options.port })
+  const [httpServerModule, capabilityGateModule] = await Promise.all([
+    import(`${pathToFileURL(path.join(compileDir, 'native', 'app-server', 'http-server.js')).href}?t=${Date.now()}`),
+    import(`${pathToFileURL(path.join(compileDir, 'native', 'app-server', 'desktop-capability-gate.js')).href}?t=${Date.now()}`),
+  ])
+  evaluateDesktopCapabilityGate = capabilityGateModule.evaluateDesktopCapabilityGate
+  server = httpServerModule.createAppServer({ projectRoot })
+  await httpServerModule.listenAppServer(server, { host: options.host, port: options.port })
+} catch (error) {
+  cleanupCompileDir()
+  throw error
+}
 const address = server.address()
 const port = typeof address === 'object' && address ? address.port : options.port
 const baseUrl = `http://${options.host}:${port}`
@@ -34,18 +44,26 @@ const desktopUrl = `${baseUrl}/desktop`
 
 if (options.smoke) {
   try {
-    const [healthResponse, desktopResponse, protocolResponse] = await Promise.all([
+    const [healthResponse, desktopResponse, protocolResponse, runKitRailResponse] = await Promise.all([
       fetch(`${baseUrl}/healthz`),
       fetch(desktopUrl),
       rpc(baseUrl, 'protocol/describe', {}),
+      rpc(baseUrl, 'runtimeRail/read', {}),
     ])
     const health = await healthResponse.json()
     const html = await desktopResponse.text()
     const protocolBody = await protocolResponse.json()
+    const runKitRailBody = await runKitRailResponse.json()
     const protocol = protocolBody.result ?? null
+    const runKitRail = runKitRailBody.result ?? null
     const capabilityGate = protocol ? evaluateDesktopCapabilityGate(protocol) : null
     console.log(JSON.stringify({
-      ok: healthResponse.ok && desktopResponse.ok && protocolResponse.ok,
+      ok: healthResponse.ok
+        && desktopResponse.ok
+        && protocolResponse.ok
+        && runKitRailResponse.ok
+        && Boolean(runKitRail)
+        && runKitRail.freshness !== 'error',
       desktopUrl,
       health,
       protocol: protocol ? {
@@ -72,6 +90,13 @@ if (options.smoke) {
         errors: capabilityGate.errors,
         warnings: capabilityGate.warnings,
       } : null,
+      runKitRail: runKitRail ? {
+        freshness: runKitRail.freshness,
+        source: runKitRail.source,
+        schemaVersion: runKitRail.summary?.schemaVersion ?? null,
+        nextAllowedAction: runKitRail.summary?.nextAllowedAction ?? null,
+        releaseAuthorization: runKitRail.summary?.releaseAuthorization ?? false,
+      } : null,
       hasDesktopShell: html.includes('id="owlcoda-desktop-shell"'),
       hasProtocolContractSurface: html.includes('data-surface="app-server-protocol-contract"')
         && html.includes('protocol/describe'),
@@ -81,7 +106,10 @@ if (options.smoke) {
       hasToolOutputDelta: html.includes('data-surface="tool-output-delta"'),
       hasApprovalSurface: html.includes('data-surface="approval-center"'),
       hasInteractionSurface: html.includes('data-surface="interaction-center"'),
-      hasTruthWriterActions: html.includes('data-surface="runkit-truth-actions"'),
+      hasReadOnlyRunKitRail: html.includes('data-surface="runkit-context-summary"')
+        && !html.includes('data-surface="runkit-truth-actions"')
+        && !html.includes('proof/append')
+        && !html.includes('gate/confirm'),
       hasProviderEvalReport: html.includes('data-surface="provider-eval-report"')
         && html.includes('benchmark/providerEvalReport/read'),
       hasRuntimeFactsSummary: html.includes('data-surface="runtime-facts-summary"')
@@ -120,6 +148,7 @@ function parseArgs(args) {
     noOpen: false,
     smoke: false,
     compileDir: undefined,
+    projectRoot: undefined,
   }
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]
@@ -132,6 +161,8 @@ function parseArgs(args) {
       }
     } else if (arg === '--compile-dir') {
       parsed.compileDir = requireValue(args, ++index, arg)
+    } else if (arg === '--project-root') {
+      parsed.projectRoot = requireValue(args, ++index, arg)
     } else if (arg === '--no-open') {
       parsed.noOpen = true
     } else if (arg === '--smoke') {
@@ -154,10 +185,43 @@ function requireValue(args, index, flag) {
   return value
 }
 
+function isPathInside(parent, candidate) {
+  const relative = path.relative(parent, candidate)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
+function assertCompileParentOutsideSource(candidate, sourceRealpath) {
+  if (isPathInside(sourceRealpath, candidate)) {
+    throw new Error('--compile-dir must be outside the OwlCoda source tree')
+  }
+
+  let existingAncestor = candidate
+  while (!existsSync(existingAncestor)) {
+    const parent = path.dirname(existingAncestor)
+    if (parent === existingAncestor) break
+    existingAncestor = parent
+  }
+  const projectedCandidate = path.resolve(
+    realpathSync(existingAncestor),
+    path.relative(existingAncestor, candidate),
+  )
+  if (isPathInside(sourceRealpath, projectedCandidate)) {
+    throw new Error('--compile-dir must be outside the OwlCoda source tree')
+  }
+}
+
+function previewRootPath(...parts) {
+  const target = path.resolve(previewRoot, ...parts)
+  if (!isPathInside(previewRoot, target)) {
+    throw new Error('Desktop preview path escaped its isolated package root')
+  }
+  return target
+}
+
 function compileAppServer() {
   rmSync(compileDir, { recursive: true, force: true })
   mkdirSync(compileDir, { recursive: true })
-  const tsc = path.join(projectRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'tsc.cmd' : 'tsc')
+  const tsc = path.join(sourceRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'tsc.cmd' : 'tsc')
   const result = spawnSync(tsc, [
     '--outDir',
     compileDir,
@@ -166,7 +230,7 @@ function compileAppServer() {
     '--sourceMap',
     'false',
   ], {
-    cwd: projectRoot,
+    cwd: sourceRoot,
     encoding: 'utf8',
     stdio: options.smoke ? 'pipe' : 'inherit',
   })
@@ -180,13 +244,25 @@ function compileAppServer() {
 }
 
 function linkNodeModules() {
-  const source = path.join(projectRoot, 'node_modules')
+  const source = path.join(sourceRoot, 'node_modules')
   if (!existsSync(source)) {
     throw new Error('node_modules is missing; run npm ci first')
   }
-  const target = path.join(compileDir, 'node_modules')
+  const target = previewRootPath('node_modules')
   rmSync(target, { recursive: true, force: true })
-  symlinkSync(source, target, 'dir')
+  symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir')
+}
+
+function linkRunKitCore() {
+  const source = path.join(sourceRoot, 'scripts', 'runkit-contract')
+  if (!existsSync(path.join(source, 'runkit-cli.mjs'))) {
+    throw new Error('RunKit Core is missing from scripts/runkit-contract')
+  }
+  const scriptsRoot = previewRootPath('scripts')
+  const target = previewRootPath('scripts', 'runkit-contract')
+  mkdirSync(scriptsRoot, { recursive: true })
+  rmSync(target, { recursive: true, force: true })
+  symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir')
 }
 
 function openUrl(url) {
@@ -230,8 +306,7 @@ function rpc(url, method, params) {
 }
 
 function cleanupCompileDir() {
-  if (!ownsCompileDir) return
-  rmSync(compileDir, { recursive: true, force: true })
+  rmSync(previewRoot, { recursive: true, force: true })
 }
 
 function printHelp() {
@@ -240,7 +315,8 @@ function printHelp() {
 Options:
   --host <host>           Host to bind. Default: 127.0.0.1
   --port <port>           Port to bind. Use 0 for any free port. Default: 6199
-  --compile-dir <path>    Temporary compile output directory.
+  --compile-dir <path>    Parent for an isolated preview package; the parent is preserved.
+  --project-root <path>   Project whose .owlcoda/runkit truth is shown. Default: OwlCoda source root.
   --no-open               Do not open the desktop URL.
   --smoke                 Start, verify /healthz and /desktop, print JSON, then exit.
   -h, --help              Show this help.

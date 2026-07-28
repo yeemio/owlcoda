@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/engine-pin-v2.json",
+  "title": "OwlCoda RunKit Engine Pin V2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contractVersion", "coreVersion", "coreManifestSha256", "coreSourceRef"],
+  "properties": {
+    "contractVersion": { "const": "0.2" },
+    "coreVersion": { "type": "string", "minLength": 1 },
+    "coreManifestSha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "coreSourceRef": { "type": "string", "minLength": 1 }
+  }
+}

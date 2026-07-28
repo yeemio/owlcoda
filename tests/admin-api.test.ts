@@ -36,7 +36,7 @@ describe('Admin API endpoints (server.ts + routes/admin.ts)', () => {
 
   it('has GET /admin/config with key redaction', () => {
     expect(serverSource).toContain("'/admin/config'")
-    expect(adminSource).toContain("'***'")
+    expect(adminSource).toContain("sanitizeConfig(config, 'marker')")
   })
 
   it('has GET /admin/requests with optional count param', () => {
@@ -99,8 +99,8 @@ describe('Admin API in OpenAPI spec', () => {
 })
 
 describe('Admin API auth guard', () => {
-  it('has auth guard checking adminToken', () => {
-    expect(serverSource).toContain('config.adminToken')
+  it('delegates every admin data route to the shared auth manager', () => {
+    expect(serverSource).toContain('adminApiDeps.auth.authenticate(req)')
   })
 
   it('returns validation warnings on reload-config', () => {

@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/closeout-receipt-v2.json",
+  "title": "OwlCoda RunKit Accepted Closeout Payload V2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["runId", "decision", "authorizationGranted", "verification"],
+  "properties": {
+    "runId": { "type": "string", "minLength": 1 },
+    "decision": { "const": "accepted" },
+    "authorizationGranted": { "const": false },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "gateDecision", "gateInputSha256", "activeReceiptSha256", "sourceFingerprint", "verificationContextFingerprint", "selectedProfileIds", "leaseState", "releasedLeaseIds"],
+      "properties": {
+        "contractVersion": { "const": "0.2" },
+        "gateDecision": { "const": "accepted_passed" },
+        "gateInputSha256": { "$ref": "#/$defs/sha256" },
+        "activeReceiptSha256": { "$ref": "#/$defs/sha256" },
+        "sourceFingerprint": { "$ref": "#/$defs/sha256" },
+        "verificationContextFingerprint": { "$ref": "#/$defs/sha256" },
+        "selectedProfileIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "leaseState": { "const": "released" },
+        "releasedLeaseIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

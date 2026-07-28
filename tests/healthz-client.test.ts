@@ -7,6 +7,7 @@ import {
   resolveClientHost,
   healthzMatchesConfig,
   healthzMatchesRuntimeMeta,
+  runtimeTokenFingerprint,
   type HealthzResponse,
   type RuntimeMetaLike,
 } from '../src/healthz-client.js'
@@ -43,7 +44,7 @@ const baseHealthz: HealthzResponse = {
   status: 'healthy',
   version: '0.9.9',
   pid: 1234,
-  runtimeToken: 'tok-abc',
+  runtimeTokenFingerprint: runtimeTokenFingerprint('tok-abc'),
   host: '0.0.0.0',
   port: 8019,
   routerUrl: 'http://localhost:11435/v1',
@@ -129,8 +130,26 @@ describe('healthzMatchesRuntimeMeta', () => {
     expect(healthzMatchesRuntimeMeta({ ...baseHealthz, pid: 9999 }, meta)).toBe(false)
   })
 
-  it('rejects runtimeToken mismatch', () => {
-    expect(healthzMatchesRuntimeMeta({ ...baseHealthz, runtimeToken: 'other' }, meta)).toBe(false)
+  it('rejects a legacy raw runtime token even when it matches', () => {
+    expect(healthzMatchesRuntimeMeta({
+      ...baseHealthz,
+      runtimeTokenFingerprint: undefined,
+      runtimeToken: meta.runtimeToken,
+    }, meta)).toBe(false)
+  })
+
+  it('rejects a raw token even when a matching fingerprint is also present', () => {
+    expect(healthzMatchesRuntimeMeta({
+      ...baseHealthz,
+      runtimeToken: meta.runtimeToken,
+    }, meta)).toBe(false)
+  })
+
+  it('rejects runtime token fingerprint mismatch', () => {
+    expect(healthzMatchesRuntimeMeta({
+      ...baseHealthz,
+      runtimeTokenFingerprint: runtimeTokenFingerprint('other'),
+    }, meta)).toBe(false)
   })
 
   it('rejects port mismatch', () => {

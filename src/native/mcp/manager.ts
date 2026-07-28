@@ -9,7 +9,7 @@
  */
 
 import { MCPClient } from './client.js'
-import { loadMCPConfig } from './config.js'
+import { loadResolvedMCPConfig } from './config.js'
 import type {
   MCPServerConfig,
   MCPServerState,
@@ -29,10 +29,31 @@ export class MCPManager implements MCPClientProvider, MCPResourceProvider, MCPRe
 
   /** Connect to all configured MCP servers. Returns summary of results. */
   async connectAll(cwd?: string): Promise<MCPServerState[]> {
-    const configs = loadMCPConfig(cwd)
-    if (configs.size === 0) return []
-
+    // connectAll is used by both REPL startup and `/mcp connect`. Neither call
+    // is proof that repository-controlled code was trusted, so only user-level
+    // config is executable here. Project config remains discoverable through
+    // loadMCPConfig, but requires a future explicit trust/approval boundary
+    // before any command from it may be spawned.
+    const configs = new Map<string, MCPServerConfig>()
     const results: MCPServerState[] = []
+    for (const entry of loadResolvedMCPConfig(cwd)) {
+      if (entry.source === 'user') {
+        configs.set(entry.name, entry.config)
+        continue
+      }
+      const blockedState: MCPServerState = {
+        name: entry.name,
+        config: entry.config,
+        status: 'error',
+        error: `Refusing to start project-scoped MCP config without explicit trust: ${entry.configPath}`,
+        tools: [],
+        resources: [],
+      }
+      this.states.set(entry.name, blockedState)
+      results.push(blockedState)
+    }
+    if (configs.size === 0) return results
+
     const promises: Promise<void>[] = []
 
     for (const [name, config] of configs) {

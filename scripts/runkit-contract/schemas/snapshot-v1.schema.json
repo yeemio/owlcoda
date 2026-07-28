@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/snapshot-v1.json",
+  "title": "OwlCoda RunKit Snapshot V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "runId", "snapshotId", "status", "mode", "targetRoot", "verificationContextFingerprint", "repositoryBefore", "repositoryAfter", "command", "authorizationGranted"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitSnapshotV1" },
+    "runId": { "type": "string", "minLength": 1 },
+    "snapshotId": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["snapshot_passed", "snapshot_failed", "invalidated_by_target_write"] },
+    "mode": { "enum": ["project", "foreign_readonly"] },
+    "targetRoot": { "type": "string", "minLength": 1 },
+    "verificationContextFingerprint": { "$ref": "#/$defs/sha256" },
+    "repositoryBefore": { "$ref": "#/$defs/repositoryState" },
+    "repositoryAfter": { "$ref": "#/$defs/repositoryState" },
+    "command": { "$ref": "#/$defs/command" },
+    "visual": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["automationManifestPath", "resultPath", "result", "issues"],
+      "properties": {
+        "automationManifestPath": { "type": "string", "minLength": 1 },
+        "resultPath": { "type": "string", "minLength": 1 },
+        "result": { "type": ["object", "null"] },
+        "issues": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "authorizationGranted": { "const": false }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "fileMap": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/sha256" }
+    },
+    "repositoryState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["head", "statusMode", "statusSha256", "statusByteCount", "statusEntryCount", "selectedFiles", "manifestFingerprint"],
+      "properties": {
+        "head": { "type": "string", "minLength": 1 },
+        "statusMode": { "const": "porcelain-v1-z-untracked-all-runkit-excluded" },
+        "statusSha256": { "$ref": "#/$defs/sha256" },
+        "statusByteCount": { "type": "integer", "minimum": 0 },
+        "statusEntryCount": { "type": "integer", "minimum": 0 },
+        "selectedFiles": { "$ref": "#/$defs/fileMap" },
+        "manifestFingerprint": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startedAt", "endedAt", "durationMs", "exitCode", "stdoutPath", "stdoutSha256", "stdoutLineCount", "stderrPath", "stderrSha256", "stderrLineCount", "evidence"],
+      "properties": {
+        "startedAt": { "type": "string", "minLength": 1 },
+        "endedAt": { "type": "string", "minLength": 1 },
+        "durationMs": { "type": "integer", "minimum": 0 },
+        "exitCode": { "type": "integer" },
+        "stdoutPath": { "type": "string", "minLength": 1 },
+        "stdoutSha256": { "$ref": "#/$defs/sha256" },
+        "stdoutLineCount": { "type": "integer", "minimum": 0 },
+        "stderrPath": { "type": "string", "minLength": 1 },
+        "stderrSha256": { "$ref": "#/$defs/sha256" },
+        "stderrLineCount": { "type": "integer", "minimum": 0 },
+        "evidence": { "$ref": "replayable-evidence-v1.schema.json" }
+      }
+    }
+  }
+}

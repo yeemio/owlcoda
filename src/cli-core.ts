@@ -5,6 +5,8 @@
  */
 
 import { existsSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { createServer as createNetServer } from 'node:net'
 import { loadConfig, getPreferredInteractiveConfiguredModel, type OwlCodaConfig } from './config.js'
 import { startServer } from './server.js'
 import { runPreflight, formatPreflightForCli } from './preflight.js'
@@ -13,10 +15,10 @@ import {
   adminAutoOpenDisabledHint,
   adminHandoffFailureHint,
   buildAdminHandoffUrl,
-  createOneShotAdminToken,
   getAdminBearerToken,
   getAdminBundleStatus,
   openUrlInBrowser,
+  requestOneShotAdminToken,
   shouldAutoOpenAdminBrowser,
   type AdminHandoffContext,
 } from './admin-delivery.js'
@@ -594,42 +596,112 @@ interface AppServerCliContext {
   model?: string
 }
 
+export function shouldStopAppServerRuntime(requestedRuntimePort: number | undefined, reused: boolean): boolean {
+  return requestedRuntimePort === 0 && !reused
+}
+
 export async function doAppServer(args: string[] = [], context: AppServerCliContext = {}): Promise<void> {
   const options = parseAppServerCliOptions(args)
+  const configPath = options.configPath ?? context.configPath
+  const requestedRuntimePort = options.runtimePort ?? context.runtimePort
+  const runtimePort = !options.smoke && requestedRuntimePort === 0
+    ? await reserveAppServerRuntimePort(options.host)
+    : requestedRuntimePort
+  const routerUrl = options.routerUrl ?? context.routerUrl
   const config = loadEffectiveConfig(
-    options.configPath ?? context.configPath,
-    options.runtimePort ?? context.runtimePort,
-    options.routerUrl ?? context.routerUrl,
+    configPath,
+    runtimePort,
+    routerUrl,
   )
-  const { createAppServer, listenAppServer } = await import('./native/app-server/http-server.js')
-  const server = createAppServer({
-    projectRoot: process.cwd(),
-    config,
-    loopModelId: options.model ?? context.model,
-  })
-  await listenAppServer(server, { host: options.host, port: options.port })
+  const runtime = options.smoke
+    ? undefined
+    : await ensureProxyRunning(config, configPath, runtimePort, routerUrl)
+  const stopOwnedRuntime = runtime && shouldStopAppServerRuntime(requestedRuntimePort, runtime.reused)
+    ? () => stopAndWait(runtime.pid, getBaseUrl(config))
+    : undefined
+  let runtimeCleanupTransferred = false
+  try {
+    const configuredSmokeToken = process.env['OWLCODA_APP_SERVER_TOKEN']?.trim()
+    const smokeToken = options.smoke
+      ? configuredSmokeToken || randomUUID()
+      : undefined
+    const { createAppServer, listenAppServer } = await import('./native/app-server/http-server.js')
+    const server = createAppServer({
+      projectRoot: process.cwd(),
+      config,
+      loopModelId: options.model ?? context.model,
+      ...(options.smoke ? { managedToken: smokeToken } : {}),
+    })
+    await listenAppServer(server, { host: options.host, port: options.port })
 
-  const address = server.address()
-  const port = typeof address === 'object' && address ? address.port : options.port
-  const baseUrl = `http://${options.host}:${port}`
+    const address = server.address()
+    const port = typeof address === 'object' && address ? address.port : options.port
+    const baseUrl = `http://${options.host}:${port}`
 
-  if (options.smoke) {
-    try {
-      const response = await fetch(`${baseUrl}/healthz`)
-      const health = await response.json()
-      process.stdout.write(JSON.stringify({
-        ok: response.ok,
-        baseUrl,
-        health,
-      }) + '\n')
-    } finally {
-      await closeAppServer(server)
+    if (options.smoke) {
+      try {
+        const [
+          { createAppServerClient },
+          { APP_SERVER_PROTOCOL_VERSION },
+        ] = await Promise.all([
+          import('./native/app-server/client.js'),
+          import('./native/app-server/protocol-contract.js'),
+        ])
+        const client = createAppServerClient({ baseUrl, token: smokeToken })
+        const response = await fetch(`${baseUrl}/healthz`)
+        const health = await response.json()
+        const initialized = await client.initialize({
+          client: { name: 'owlcoda-cli-smoke', version: VERSION },
+          supportedProtocolVersions: [APP_SERVER_PROTOCOL_VERSION],
+          expectedRuntimeVersion: VERSION,
+          expectedWorkspaceRealpath: process.cwd(),
+          requestedCapabilities: {},
+        })
+        const [protocol, diagnostic] = await Promise.all([
+          client.protocolDescribe(),
+          client.call<{ status: string }>('diagnostic/health', {}),
+        ])
+        process.stdout.write(JSON.stringify({
+          ok: response.ok
+            && initialized.compatibility === 'compatible'
+            && diagnostic.status === 'ok',
+          baseUrl,
+          health,
+          compatibility: initialized.compatibility,
+          protocol,
+          diagnostic,
+        }) + '\n')
+      } finally {
+        await closeAppServer(server)
+      }
+      return
     }
-    return
-  }
 
-  console.error(`OwlCoda App Server listening at ${baseUrl}`)
-  await waitForAppServerShutdown(server)
+    console.error(`OwlCoda App Server listening at ${baseUrl}`)
+    runtimeCleanupTransferred = true
+    await waitForAppServerShutdown(server, stopOwnedRuntime)
+  } finally {
+    if (!runtimeCleanupTransferred) await stopOwnedRuntime?.()
+  }
+}
+
+async function reserveAppServerRuntimePort(host: string): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    const server = createNetServer()
+    server.once('error', reject)
+    server.listen(0, host, () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        server.close()
+        reject(new Error('Could not reserve a managed App Server runtime port.'))
+        return
+      }
+      server.close(error => {
+        if (error) reject(error)
+        else resolve(address.port)
+      })
+    })
+  })
 }
 
 function parseAppServerCliOptions(args: string[]): AppServerCliOptions {
@@ -696,14 +768,38 @@ function closeAppServer(server: import('node:http').Server): Promise<void> {
   })
 }
 
-function waitForAppServerShutdown(server: import('node:http').Server): Promise<void> {
-  return new Promise((resolve) => {
+function waitForAppServerShutdown(
+  server: import('node:http').Server,
+  stopOwnedRuntime?: () => Promise<void>,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let shutdownStarted = false
+    let settled = false
+    const finish = (error?: unknown): void => {
+      if (settled) return
+      settled = true
+      process.removeListener('SIGINT', shutdown)
+      process.removeListener('SIGTERM', shutdown)
+      server.removeListener('close', onClose)
+      if (error) reject(error)
+      else resolve()
+    }
     const shutdown = () => {
-      void closeAppServer(server).finally(resolve)
+      if (shutdownStarted) return
+      shutdownStarted = true
+      void Promise.all([
+        closeAppServer(server),
+        stopOwnedRuntime?.() ?? Promise.resolve(),
+      ]).then(() => finish(), finish)
+    }
+    const onClose = () => {
+      if (shutdownStarted) return
+      shutdownStarted = true
+      void (stopOwnedRuntime?.() ?? Promise.resolve()).then(() => finish(), finish)
     }
     process.once('SIGINT', shutdown)
     process.once('SIGTERM', shutdown)
-    server.once('close', resolve)
+    server.once('close', onClose)
   })
 }
 
@@ -1269,6 +1365,7 @@ export interface UiLaunchDeps {
   openUrlInBrowser: (url: string) => boolean
   now: () => number
   getAdminBundleStatus: typeof getAdminBundleStatus
+  requestOneShotAdminToken: typeof requestOneShotAdminToken
 }
 
 const defaultUiLaunchDeps: UiLaunchDeps = {
@@ -1278,6 +1375,7 @@ const defaultUiLaunchDeps: UiLaunchDeps = {
   getBaseUrl,
   openUrlInBrowser,
   getAdminBundleStatus,
+  requestOneShotAdminToken,
   now: () => Date.now(),
 }
 
@@ -1413,7 +1511,11 @@ export async function doUi(
   const runtimeMeta = deps.readRuntimeMeta()
   const baseUrl = runtimeMeta ? deps.getMetaBaseUrl(runtimeMeta) : deps.getBaseUrl(config)
   const bundleStatus = deps.getAdminBundleStatus()
-  const token = createOneShotAdminToken(getAdminBearerToken(config), { now: deps.now })
+  const bearerToken = getAdminBearerToken(config, runtimeMeta?.runtimeToken)
+  if (!bearerToken) {
+    throw new Error('Admin handoff is unavailable: no explicit adminToken or trusted daemon identity is available')
+  }
+  const token = await deps.requestOneShotAdminToken(baseUrl, bearerToken)
   const context: AdminHandoffContext = {
     route: options.route,
     select: options.select,
@@ -1585,6 +1687,7 @@ export async function doLaunch(
       resumeSession: effectiveResumeSession,
       liveReplClientId: clientId,
       liveReplRuntime: {
+        pid: runtimeMeta.pid,
         host: runtimeMeta.host,
         port: runtimeMeta.port,
         routerUrl: runtimeMeta.routerUrl,

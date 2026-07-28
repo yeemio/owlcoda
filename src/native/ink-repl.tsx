@@ -168,6 +168,7 @@ import {
 } from './tui/message.js'
 import { dumpRenderIncident, recordFullToolOutput, recordRawMdChunk, renderNarration, renderNotice, renderTurnFooter } from './tui/chrome.js'
 import { stripAnsi } from './tui/colors.js'
+import { sanitizeMcpDisplayValue } from './tui/panel.js'
 import {
   renderBashPermission,
   renderFilePermission,
@@ -329,11 +330,9 @@ let inkAppForSlashCommands: InkInstance | null = null
 
 /**
  * Module-level live pointer to the active REPL's `approveState`. Published
- * when the React component mounts so non-REPL surfaces (the Config tool,
- * future programmatic toggles) can read or flip yolo without going through
- * `/yolo`. Hostile-QA against 0.13.38 hit "I can read the rail but I can't
- * toggle yolo from a tool call" and had to skip the entire group; this
- * module-level handle is the missing channel.
+ * when the React component mounts so the Config tool can read approval state
+ * and drive its QA-only auto-deny toggle. Enabling yolo remains restricted to
+ * explicit user-facing controls.
  *
  * Singleton-by-design: there is one REPL per process, the same way
  * `inkAppForSlashCommands` is already module-scoped.
@@ -929,11 +928,10 @@ function NativeReplApp({
   // forward-reference cycle (handleSubmit is defined later in the same
   // component but depends on runCapturedSlashCommand via handleSlashSubmit).
   const handleSubmitRef = useRef<((value: string) => Promise<void>) | null>(null)
-  // Publish the ref's current object so the Config tool (and any future
-  // headless surface) can flip `autoApprove` programmatically. Mutating
-  // this object directly is fine — useRef hands back the same reference
-  // every render — and the rail re-reads it via the `uiVersion`-keyed
-  // useMemo, which gets bumped on every tool-end and slash-command return.
+  // Publish the ref's current object so Config can read approval state and
+  // drive the QA-only auto-deny toggle. useRef hands back the same reference
+  // every render, and the rail re-reads it via the `uiVersion`-keyed useMemo,
+  // which gets bumped on every tool-end and slash-command return.
   liveApproveState = approveStateRef.current
   const batchApproveAllRef = useRef(false)
   const perToolApproveRef = useRef<Set<string>>(conversation.options?.alwaysApprove ?? new Set<string>())
@@ -1217,12 +1215,14 @@ function NativeReplApp({
       if (cancelled || !isMountedRef.current) return
       const connected = states.filter((state) => state.status === 'connected')
       if (connected.length > 0) {
-        const names = connected.map((state) => state.name).join(', ')
+        const names = connected.map((state) => sanitizeMcpDisplayValue(state.name)).join(', ')
         const toolCount = connected.reduce((count, state) => count + state.tools.length, 0)
         appendTranscript(`  ${themeColor('success')}✓ MCP: ${connected.length} server${connected.length > 1 ? 's' : ''} connected (${toolCount} tools) — ${names}${sgr.reset}`)
       }
       for (const state of states.filter((item) => item.status === 'error')) {
-        appendTranscript(`  ${themeColor('warning')}⚠ MCP "${state.name}": ${state.error?.split('\n')[0] ?? 'failed'}${sgr.reset}`)
+        const name = sanitizeMcpDisplayValue(state.name)
+        const error = state.error ? sanitizeMcpDisplayValue(state.error) : 'failed'
+        appendTranscript(`  ${themeColor('warning')}⚠ MCP "${name}": ${error}${sgr.reset}`)
       }
     }).catch((err) => {
       // MCP-level failure (not a per-server error — whole connectAll threw).
@@ -3354,20 +3354,12 @@ export async function startInkRepl(opts: ReplOptions): Promise<void> {
     maxTokens: opts.maxTokens ?? resolveDefaultMaxOutputTokens(),
   }))
 
-  // Re-register the Config tool with a live autoApprove getter/setter so
-  // `Config({setting:"autoApprove", value:true})` is a working programmatic
-  // /yolo toggle. The default registration in dispatch.registerDefaults()
-  // produces a Config without that wiring; re-registering replaces it
-  // (ToolDispatcher.register is `Map.set`, last-write-wins). The setter
-  // mutates the same object the React ref points to, so the rail picks up
-  // the change on the next render.
+  // Re-register Config with live REPL state. autoApprove is deliberately
+  // getter-only: model tool calls may inspect yolo state but cannot promote
+  // their own approval authority. autoDeny remains a QA-only writable toggle.
   dispatcher.register(createConfigTool({
     autoApprove: {
       get: () => getLiveApproveState()?.autoApprove ?? false,
-      set: (v: boolean) => {
-        const live = getLiveApproveState()
-        if (live) live.autoApprove = v
-      },
     },
     autoDeny: {
       get: () => getLiveApproveState()?.autoDeny ?? false,

@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/resource-preflight-request-v1.json",
+  "title": "OwlCoda RunKit Resource Preflight Request V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "preflightId",
+    "verificationPlanPath",
+    "verificationPlanSha256",
+    "policy",
+    "observations",
+    "workloads"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitResourcePreflightRequestV1" },
+    "preflightId": { "$ref": "#/$defs/identifier" },
+    "verificationPlanPath": { "type": "string", "minLength": 1 },
+    "verificationPlanSha256": { "$ref": "#/$defs/sha256" },
+    "policy": { "$ref": "#/$defs/policy" },
+    "observations": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/observation" }
+    },
+    "workloads": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/workload" }
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "unknownPolicy": { "enum": ["fail_open", "fail_closed"] },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gateMode", "maxObservationAgeMs", "unknownHandling", "limits"],
+      "properties": {
+        "gateMode": { "enum": ["model_required", "model_optional"] },
+        "maxObservationAgeMs": { "type": "integer", "minimum": 1 },
+        "unknownHandling": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "quota", "resetTime", "pricing"],
+          "properties": {
+            "availability": { "$ref": "#/$defs/unknownPolicy" },
+            "quota": { "$ref": "#/$defs/unknownPolicy" },
+            "resetTime": { "$ref": "#/$defs/unknownPolicy" },
+            "pricing": { "$ref": "#/$defs/unknownPolicy" }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxCalls": { "type": "integer", "minimum": 0 },
+            "maxTotalTokens": { "type": "integer", "minimum": 0 },
+            "maxElapsedMs": { "type": "integer", "minimum": 0 },
+            "maxCostUsd": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "unknown": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": { "const": "unknown" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "knownInteger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "value"],
+      "properties": {
+        "status": { "const": "known" },
+        "value": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "knownTimestamp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "value"],
+      "properties": {
+        "status": { "const": "known" },
+        "value": { "type": "string", "format": "date-time" }
+      }
+    },
+    "observation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["providerId", "modelId", "adapter", "availability", "quota", "pricing"],
+      "properties": {
+        "providerId": { "$ref": "#/$defs/identifier" },
+        "modelId": { "$ref": "#/$defs/identifier" },
+        "adapter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "kind", "evidenceRef", "evidenceSha256", "observedAt"],
+          "properties": {
+            "id": { "$ref": "#/$defs/identifier" },
+            "kind": { "enum": ["owlcoda_runtime", "provider_api", "project_declared"] },
+            "evidenceRef": { "type": "string", "minLength": 1 },
+            "evidenceSha256": { "$ref": "#/$defs/sha256" },
+            "observedAt": { "type": "string", "format": "date-time" }
+          }
+        },
+        "availability": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["status"],
+              "properties": { "status": { "const": "available" } }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["status", "reason"],
+              "properties": {
+                "status": { "enum": ["unavailable", "unknown"] },
+                "reason": { "type": "string", "minLength": 1 }
+              }
+            }
+          ]
+        },
+        "quota": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["remainingCalls", "remainingTokens", "resetAt"],
+          "properties": {
+            "remainingCalls": { "oneOf": [{ "$ref": "#/$defs/knownInteger" }, { "$ref": "#/$defs/unknown" }] },
+            "remainingTokens": { "oneOf": [{ "$ref": "#/$defs/knownInteger" }, { "$ref": "#/$defs/unknown" }] },
+            "resetAt": { "oneOf": [{ "$ref": "#/$defs/knownTimestamp" }, { "$ref": "#/$defs/unknown" }] }
+          }
+        },
+        "pricing": {
+          "oneOf": [
+            { "$ref": "#/$defs/unknown" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["status", "currency", "inputPerMillion", "outputPerMillion"],
+              "properties": {
+                "status": { "const": "known" },
+                "currency": { "const": "USD" },
+                "inputPerMillion": { "type": "number", "minimum": 0 },
+                "outputPerMillion": { "type": "number", "minimum": 0 }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "providerId", "modelId", "calls", "inputTokens", "outputTokens", "elapsedMs"],
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "providerId": { "$ref": "#/$defs/identifier" },
+        "modelId": { "$ref": "#/$defs/identifier" },
+        "calls": { "type": "integer", "minimum": 1 },
+        "inputTokens": { "type": "integer", "minimum": 0 },
+        "outputTokens": { "type": "integer", "minimum": 0 },
+        "elapsedMs": { "type": "integer", "minimum": 0 },
+        "coveredByReceiptId": { "$ref": "#/$defs/identifier" }
+      }
+    }
+  }
+}

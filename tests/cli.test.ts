@@ -12,6 +12,7 @@ import {
 import type { OwlCodaConfig } from '../src/config.js'
 import type { RuntimeMeta } from '../src/cli-core.js'
 import type { HealthzResponse } from '../src/cli-core.js'
+import { runtimeTokenFingerprint } from '../src/healthz-client.js'
 import { writeFileSync, mkdirSync, rmSync, mkdtempSync, symlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -178,12 +179,12 @@ describe('healthzMatchesRuntimeMeta', () => {
     startedAt: '2026-04-02T00:00:00.000Z',
   }
 
-  it('returns true when pid, token, and normalized config all match', () => {
+  it('returns true when pid, token fingerprint, and normalized config all match', () => {
     const healthz: HealthzResponse = {
       status: 'ok',
       version: '0.3.3',
       pid: 4242,
-      runtimeToken: 'rt-4242',
+      runtimeTokenFingerprint: runtimeTokenFingerprint('rt-4242'),
       host: '::',
       port: 8019,
       routerUrl: 'http://127.0.0.1:8009',

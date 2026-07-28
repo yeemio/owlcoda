@@ -5,7 +5,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, openSync, closeSync, statSync, renameSync, writeSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, openSync, closeSync, statSync, renameSync, writeSync } from 'node:fs'
 import { getOwlcodaDir, getOwlcodaPidPath, getOwlcodaRuntimeMetaPath, getOwlcodaDaemonLogPath } from './paths.js'
 import { VERSION } from './version.js'
 import type { OwlCodaConfig } from './config.js'
@@ -14,6 +14,7 @@ import {
   resolveClientHost,
   fetchHealthz,
   healthzMatchesConfig,
+  healthzIdentifiesRuntimeMetaForRetirement,
   healthzMatchesRuntimeMeta,
   waitForVerifiedHealthz,
   waitForHealthzGone,
@@ -63,23 +64,59 @@ export interface DaemonVersionPolicyDecision {
 
 export function ensureOwlcodaDir(): void {
   const owlcodaDir = getOwlcodaDir()
-  if (!existsSync(owlcodaDir)) mkdirSync(owlcodaDir, { recursive: true })
+  if (!existsSync(owlcodaDir)) mkdirSync(owlcodaDir, { recursive: true, mode: 0o700 })
+  restrictOwnedPathPermissions(owlcodaDir, 0o700, 'directory')
 }
 
 // ─── Runtime meta management ───
 
 export function writeRuntimeMeta(meta: RuntimeMeta): void {
   ensureOwlcodaDir()
-  writeFileSync(getOwlcodaRuntimeMetaPath(), JSON.stringify(meta, null, 2) + '\n', 'utf-8')
+  const runtimeMetaPath = getOwlcodaRuntimeMetaPath()
+  const temporaryPath = `${runtimeMetaPath}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    writeFileSync(temporaryPath, JSON.stringify(meta, null, 2) + '\n', {
+      encoding: 'utf-8',
+      flag: 'wx',
+      mode: 0o600,
+    })
+    restrictOwnedPathPermissions(temporaryPath, 0o600, 'file')
+    renameSync(temporaryPath, runtimeMetaPath)
+    restrictOwnedPathPermissions(runtimeMetaPath, 0o600, 'file')
+  } catch (error) {
+    try { if (existsSync(temporaryPath)) unlinkSync(temporaryPath) } catch { /* preserve original error */ }
+    throw error
+  }
 }
 
 export function readRuntimeMeta(): RuntimeMeta | null {
   const runtimeMetaPath = getOwlcodaRuntimeMetaPath()
   if (!existsSync(runtimeMetaPath)) return null
   try {
+    ensureOwlcodaDir()
+    restrictOwnedPathPermissions(runtimeMetaPath, 0o600, 'file')
     return JSON.parse(readFileSync(runtimeMetaPath, 'utf-8')) as RuntimeMeta
   } catch {
     return null
+  }
+}
+
+function restrictOwnedPathPermissions(
+  path: string,
+  mode: number,
+  expectedType: 'directory' | 'file',
+): void {
+  const stat = lstatSync(path)
+  if (stat.isSymbolicLink()) throw new Error(`Refusing symbolic link at protected OwlCoda path: ${path}`)
+  if (expectedType === 'directory' ? !stat.isDirectory() : !stat.isFile()) {
+    throw new Error(`Protected OwlCoda path is not a ${expectedType}: ${path}`)
+  }
+  const currentUid = process.getuid?.()
+  if (currentUid === undefined) return
+  if (stat.uid !== currentUid) throw new Error(`Protected OwlCoda path is not owned by the current user: ${path}`)
+  chmodSync(path, mode)
+  if ((lstatSync(path).mode & 0o777) !== mode) {
+    throw new Error(`Unable to enforce protected OwlCoda path permissions: ${path}`)
   }
 }
 
@@ -129,7 +166,7 @@ export function getMetaBaseUrl(meta: Pick<RuntimeMeta, 'host' | 'port'>): string
 
 export async function verifyManagedDaemon(meta: RuntimeMeta): Promise<HealthzResponse | null> {
   if (!isPidAlive(meta.pid)) return null
-  const healthz = await fetchHealthz(getMetaBaseUrl(meta))
+  const healthz = await fetchHealthz(getMetaBaseUrl(meta), 2000, meta.runtimeToken)
   if (!healthz) return null
   if (!healthzMatchesRuntimeMeta(healthz, meta)) return null
   return healthz
@@ -204,24 +241,26 @@ export function buildPortInUseMessage(port: number, baseUrl: string, holderPid: 
 
 /** Injectable IO for forceStopOrphanDaemon (real impls by default; fakes in tests). */
 export interface OrphanStopIO {
-  fetchHealthz: (baseUrl: string, timeoutMs?: number) => Promise<{ pid: number } | null>
+  fetchHealthz: (baseUrl: string, timeoutMs?: number, runtimeToken?: string) => Promise<HealthzResponse | null>
+  readRuntimeMeta: () => RuntimeMeta | null
   signal: (pid: number, sig: NodeJS.Signals) => boolean
   waitGone: (baseUrl: string, timeoutMs?: number) => Promise<boolean>
   isAlive: (pid: number) => boolean
 }
 
-/** Stop an orphan OwlCoda daemon that has no PID file by recovering its PID
- *  from /healthz on `baseUrl`. Returns the stopped PID, or null when no live
- *  OwlCoda daemon answers there. SIGTERM first, SIGKILL fallback. This is what
- *  makes `owlcoda stop --force` work without relying on the PID file alone. */
+/** Stop an orphan OwlCoda daemon that has no PID file only when host-owned
+ *  runtime metadata authenticates the detailed /healthz response. */
 export async function forceStopOrphanDaemon(baseUrl: string, io: Partial<OrphanStopIO> = {}): Promise<number | null> {
   const fetchH = io.fetchHealthz ?? fetchHealthz
+  const readMeta = io.readRuntimeMeta ?? readRuntimeMeta
   const signal = io.signal ?? safeSendSignal
   const waitGone = io.waitGone ?? waitForHealthzGone
   const alive = io.isAlive ?? isPidAlive
-  const healthz = await fetchH(baseUrl)
-  if (!healthz) return null
-  const pid = healthz.pid
+  const runtimeMeta = readMeta()
+  if (!runtimeMeta) return null
+  const healthz = await fetchH(baseUrl, 2000, runtimeMeta.runtimeToken)
+  if (!healthz || !healthzIdentifiesRuntimeMetaForRetirement(healthz, runtimeMeta)) return null
+  const pid = runtimeMeta.pid
   if (!signal(pid, 'SIGTERM')) {
     throw new Error(`failed to send SIGTERM to orphan OwlCoda daemon PID ${pid}`)
   }
@@ -402,23 +441,27 @@ export function getBaseUrl(config: { host: string; port: number }): string {
 // ─── launchd-aware coordination (P2-b) ───
 
 export interface LaunchdProxyDeps {
-  fetchHealthz: (baseUrl: string) => Promise<HealthzResponse | null>
+  fetchHealthz: (baseUrl: string, runtimeToken?: string) => Promise<HealthzResponse | null>
   matchesConfig: (healthz: HealthzResponse, config: OwlCodaConfig) => boolean
   readMeta: () => RuntimeMeta | null
   activeClients: (meta: RuntimeMeta) => number
   decide: (daemonVersion: string, activeClientCount: number) => DaemonVersionPolicyDecision
   kickstart: () => void
-  waitReady: (baseUrl: string, matcher: (healthz: HealthzResponse) => boolean) => Promise<HealthzResponse | null>
+  waitReady: (
+    baseUrl: string,
+    matcher: (healthz: HealthzResponse) => boolean,
+    runtimeToken?: string | (() => string | undefined),
+  ) => Promise<HealthzResponse | null>
 }
 
 const defaultLaunchdProxyDeps: LaunchdProxyDeps = {
-  fetchHealthz: (baseUrl) => fetchHealthz(baseUrl),
+  fetchHealthz: (baseUrl, runtimeToken) => fetchHealthz(baseUrl, 2000, runtimeToken),
   matchesConfig: (healthz, config) => healthzMatchesConfig(healthz, config),
   readMeta: () => readRuntimeMeta(),
   activeClients: (meta) => getActiveLiveReplClientsForRuntime(meta).length,
   decide: (daemonVersion, activeClientCount) => decideDaemonVersionPolicy(daemonVersion, activeClientCount),
   kickstart: () => kickstartLaunchdService(),
-  waitReady: (baseUrl, matcher) => waitForVerifiedHealthz(baseUrl, matcher),
+  waitReady: (baseUrl, matcher, runtimeToken) => waitForVerifiedHealthz(baseUrl, matcher, 5000, runtimeToken),
 }
 
 /**
@@ -435,15 +478,15 @@ export async function ensureLaunchdProxyRunning(
   log: (message: string) => void,
   deps: LaunchdProxyDeps = defaultLaunchdProxyDeps,
 ): Promise<EnsureProxyRunningResult> {
-  const healthz = await deps.fetchHealthz(baseUrl)
-  if (healthz && deps.matchesConfig(healthz, config)) {
-    const meta = deps.readMeta()
+  const meta = deps.readMeta()
+  const healthz = await deps.fetchHealthz(baseUrl, meta?.runtimeToken)
+  if (healthz && meta && healthzMatchesRuntimeMeta(healthz, meta) && deps.matchesConfig(healthz, config)) {
     const activeClientCount = meta ? deps.activeClients(meta) : 0
     const decision = deps.decide(healthz.version ?? meta?.version ?? VERSION, activeClientCount)
     if (decision.action === 'reuse_active_stale') {
-      applyActiveStaleDaemonPolicy(healthz.pid, baseUrl, decision)
+      applyActiveStaleDaemonPolicy(meta.pid, baseUrl, decision)
       return {
-        pid: healthz.pid,
+        pid: meta.pid,
         reused: true,
         staleDaemon: {
           daemonVersion: decision.daemonVersion!,
@@ -453,7 +496,7 @@ export async function ensureLaunchdProxyRunning(
       }
     }
     if (decision.action !== 'restart_idle_stale') {
-      return { pid: healthz.pid, reused: true }
+      return { pid: meta.pid, reused: true }
     }
     log(
       `launchd daemon is v${decision.daemonVersion}, CLI is v${decision.cliVersion}; ` +
@@ -466,10 +509,16 @@ export async function ensureLaunchdProxyRunning(
   }
 
   deps.kickstart()
-  const ready = await deps.waitReady(baseUrl, (h) =>
-    ['ok', 'healthy', 'degraded', 'unhealthy'].includes(h.status) && deps.matchesConfig(h, config),
-  )
-  if (ready) return { pid: ready.pid, reused: false }
+  const ready = await deps.waitReady(baseUrl, (h) => {
+    const currentMeta = deps.readMeta()
+    return Boolean(
+      currentMeta
+      && ['ok', 'healthy', 'degraded', 'unhealthy'].includes(h.status)
+      && healthzMatchesRuntimeMeta(h, currentMeta)
+      && deps.matchesConfig(h, config),
+    )
+  }, () => deps.readMeta()?.runtimeToken)
+  if (ready && typeof ready.pid === 'number') return { pid: ready.pid, reused: false }
   throw new Error(`launchd-managed OwlCoda daemon failed to become ready at ${baseUrl}`)
 }
 
@@ -509,8 +558,8 @@ export async function ensureProxyRunning(
       removePid()
       removeRuntimeMeta()
     } else if (meta && meta.pid === existingPid) {
-      const healthz = await verifyManagedDaemon(meta)
-      if (healthz && healthzMatchesConfig(healthz, config)) {
+      const healthz = await fetchHealthz(getMetaBaseUrl(meta), 2000, meta.runtimeToken)
+      if (healthz && healthzMatchesRuntimeMeta(healthz, meta) && healthzMatchesConfig(healthz, config)) {
         const activeClientCount = getActiveLiveReplClientsForRuntime(meta).length
         const versionDecision = decideDaemonVersionPolicy(healthz.version ?? meta.version, activeClientCount)
         if (versionDecision.action === 'restart_idle_stale') {
@@ -533,8 +582,11 @@ export async function ensureProxyRunning(
         } else {
           return { pid: existingPid, reused: true }
         }
-      } else if (healthz) {
+      } else if (healthz && healthzMatchesRuntimeMeta(healthz, meta)) {
         log(`Existing daemon (PID ${existingPid}) config mismatch — restarting`)
+        await stopAndWait(existingPid, getMetaBaseUrl(meta))
+      } else if (healthz && healthzIdentifiesRuntimeMetaForRetirement(healthz, meta)) {
+        log(`Existing daemon (PID ${existingPid}) uses a legacy raw-token health identity — retiring it before reuse`)
         await stopAndWait(existingPid, getMetaBaseUrl(meta))
       } else {
         log(`PID ${existingPid} alive but runtime metadata no longer matches a live OwlCoda daemon — clearing stale state`)
@@ -548,71 +600,60 @@ export async function ensureProxyRunning(
     }
   }
 
-  // 2. Probe target address for orphan daemon
-  const orphanHealthz = await fetchHealthz(baseUrl)
-  if (orphanHealthz && healthzMatchesConfig(orphanHealthz, config, { requireConfigFingerprint: true })) {
-    log(`Found matching OwlCoda proxy at ${baseUrl} (no PID file)`)
-    // Synthesize runtime.json from the orphan's healthz so downstream
-    // readRuntimeMeta() calls succeed. Without this heal step the CLI
-    // immediately errored with "Failed to resolve live REPL lease
-    // metadata" and exited — user couldn't resume a session whenever
-    // the daemon was alive but its runtime.json had been removed (e.g.
-    // after a stop + fresh owlcoda, or a disk-level cleanup). A daemon
-    // with a null runtimeToken can't be a trusted lease target, so we
-    // fall through to the restart path for that case.
-    if (orphanHealthz.runtimeToken !== null) {
-      const orphanMeta: RuntimeMeta = {
-        pid: orphanHealthz.pid,
-        runtimeToken: orphanHealthz.runtimeToken,
-        host: orphanHealthz.host,
-        port: orphanHealthz.port,
-        routerUrl: orphanHealthz.routerUrl,
-        version: orphanHealthz.version,
-        startedAt: new Date().toISOString(),
-      }
+  // 2. Recover a missing pid file only from host-owned runtime metadata.
+  // Public /healthz deliberately contains no process identity, so an
+  // unauthenticated response can never authorize signaling or lease recovery.
+  const orphanMeta = readRuntimeMeta()
+  const orphanHealthz = await fetchHealthz(baseUrl, 2000, orphanMeta?.runtimeToken)
+  const verifiedOrphan = Boolean(
+    orphanMeta
+    && orphanHealthz
+    && healthzMatchesRuntimeMeta(orphanHealthz, orphanMeta),
+  )
+  const legacyOrphan = Boolean(
+    orphanMeta
+    && orphanHealthz
+    && !verifiedOrphan
+    && healthzIdentifiesRuntimeMetaForRetirement(orphanHealthz, orphanMeta),
+  )
+  if (verifiedOrphan && orphanMeta && orphanHealthz) {
+    if (healthzMatchesConfig(orphanHealthz, config, { requireConfigFingerprint: true })) {
+      log(`Found authenticated OwlCoda proxy at ${baseUrl} with a missing PID file`)
       const activeClientCount = getActiveLiveReplClientsForRuntime(orphanMeta).length
       const versionDecision = decideDaemonVersionPolicy(orphanHealthz.version, activeClientCount)
       if (versionDecision.action === 'restart_idle_stale') {
         log(
-          `Orphan daemon (PID ${orphanHealthz.pid}) is v${versionDecision.daemonVersion}, ` +
+          `Authenticated daemon (PID ${orphanMeta.pid}) is v${versionDecision.daemonVersion}, ` +
           `CLI is v${versionDecision.cliVersion}; no active live REPL clients — restarting`,
         )
-        safeSendSignal(orphanHealthz.pid, 'SIGTERM')
+        safeSendSignal(orphanMeta.pid, 'SIGTERM')
         await waitForHealthzGone(baseUrl, 1000)
-      } else if (versionDecision.action === 'reuse_active_stale') {
-        writeRuntimeMeta(orphanMeta)
-        applyActiveStaleDaemonPolicy(orphanHealthz.pid, baseUrl, versionDecision)
-        return {
-          pid: orphanHealthz.pid,
-          reused: true,
-          staleDaemon: {
-            daemonVersion: versionDecision.daemonVersion!,
-            cliVersion: versionDecision.cliVersion,
-            activeClientCount: versionDecision.activeClientCount,
-          },
-        }
       } else {
-        writeRuntimeMeta({
-          pid: orphanHealthz.pid,
-          runtimeToken: orphanHealthz.runtimeToken,
-          host: orphanHealthz.host,
-          port: orphanHealthz.port,
-          routerUrl: orphanHealthz.routerUrl,
-          version: orphanHealthz.version,
-          startedAt: new Date().toISOString(),
-        })
-        return { pid: orphanHealthz.pid, reused: true }
+        writePid(orphanMeta.pid)
+        if (versionDecision.action === 'reuse_active_stale') {
+          applyActiveStaleDaemonPolicy(orphanMeta.pid, baseUrl, versionDecision)
+          return {
+            pid: orphanMeta.pid,
+            reused: true,
+            staleDaemon: {
+              daemonVersion: versionDecision.daemonVersion!,
+              cliVersion: versionDecision.cliVersion,
+              activeClientCount: versionDecision.activeClientCount,
+            },
+          }
+        }
+        return { pid: orphanMeta.pid, reused: true }
       }
-    }
-    if (orphanHealthz.runtimeToken === null) {
-      log('Orphan daemon has no runtimeToken — cannot claim lease, restarting.')
-      safeSendSignal(orphanHealthz.pid, 'SIGTERM')
+    } else {
+      log(`Authenticated OwlCoda proxy at ${baseUrl} has a different config — restarting`)
+      safeSendSignal(orphanMeta.pid, 'SIGTERM')
       await waitForHealthzGone(baseUrl, 1000)
     }
-  } else if (orphanHealthz && healthzMatchesConfig(orphanHealthz, config)) {
-    log(`Found OwlCoda proxy at ${baseUrl}, but its config fingerprint differs — restarting`)
-    safeSendSignal(orphanHealthz.pid, 'SIGTERM')
-    await waitForHealthzGone(baseUrl, 1000)
+  } else if (legacyOrphan && orphanMeta) {
+    log(`Found legacy raw-token OwlCoda daemon at ${baseUrl} — retiring it before reuse`)
+    await stopAndWait(orphanMeta.pid, baseUrl)
+  } else if (orphanHealthz) {
+    log(`A service answers ${baseUrl}/healthz, but no matching host-owned runtime identity is available; refusing to signal or claim it`)
   }
 
   const targetPortAvailable = await isPortAvailable(config.port, resolveClientHost(config.host))
@@ -620,8 +661,13 @@ export async function ensureProxyRunning(
     // Identify the holder before blaming a "non-OwlCoda process": /healthz is
     // OwlCoda-only, so any response proves a stale / config-mismatched OwlCoda
     // daemon holds the port (common on Windows after a lost PID file).
-    const portHolder = await fetchHealthz(baseUrl)
-    throw new Error(buildPortInUseMessage(config.port, baseUrl, portHolder ? portHolder.pid : null))
+    const portHolder = orphanMeta
+      ? await fetchHealthz(baseUrl, 2000, orphanMeta.runtimeToken)
+      : orphanHealthz
+    const verifiedPid = orphanMeta && portHolder && healthzIdentifiesRuntimeMetaForRetirement(portHolder, orphanMeta)
+      ? orphanMeta.pid
+      : null
+    throw new Error(buildPortInUseMessage(config.port, baseUrl, verifiedPid))
   }
 
   // 3. Start fresh
@@ -631,7 +677,15 @@ export async function ensureProxyRunning(
   const readyState = await Promise.race([
     waitForVerifiedHealthz(
       baseUrl,
-      healthz => ['ok', 'healthy', 'degraded', 'unhealthy'].includes(healthz.status) && healthz.pid === pid && healthz.runtimeToken === runtimeToken,
+      healthz => healthzMatchesRuntimeMeta(healthz, {
+        pid,
+        runtimeToken,
+        host: config.host,
+        port: config.port,
+        routerUrl: config.routerUrl,
+      }),
+      5000,
+      runtimeToken,
     ).then((healthz) => ({ kind: 'ready' as const, healthz })),
     exitPromise.then((exit) => ({ kind: 'exit' as const, exit })),
   ])

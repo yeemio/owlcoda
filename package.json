@@ -1,6 +1,6 @@
 {
   "name": "owlcoda",
-  "version": "0.15.30",
+  "version": "0.15.31",
   "description": "OwlCoda — independent local-first AI coding platform with a native REPL, 42+ tools, and local model routing.",
   "license": "GPL-3.0-or-later",
   "author": "yeemio <yeemio@gmail.com>",
@@ -84,13 +84,13 @@
     "prepublishOnly": "npm run release:smoke"
   },
   "devDependencies": {
-    "@anthropic-ai/sdk": "^0.81.0",
+    "@anthropic-ai/sdk": "^0.91.1",
     "@types/lodash-es": "^4.17.12",
     "@types/node": "^22.0.0",
     "@types/react": "^19.2.14",
     "tsx": "^4.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.2.7"
   },
   "engines": {
     "node": ">=20.19.0"
@@ -118,5 +118,10 @@
     "type-fest": "^5.6.0",
     "usehooks-ts": "^3.1.1",
     "wrap-ansi": "^10.0.0"
+  },
+  "overrides": {
+    "esbuild": "0.28.1",
+    "postcss": "8.5.23",
+    "vite": "7.3.6"
   }
 }

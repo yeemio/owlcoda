@@ -1,5 +1,5 @@
 import * as http from 'node:http'
-import { createHash } from 'node:crypto'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import type { OwlCodaConfig } from './config.js'
 import { configureCircuitBreaker, resetCircuitBreaker, getAllCircuitStates } from './middleware/circuit-breaker.js'
 import { createLogger } from './utils/logger.js'
@@ -18,7 +18,7 @@ import {
   handleAccountSettings,
 } from './endpoints/stubs.js'
 import { VERSION } from './version.js'
-import { configIdentityFingerprint } from './healthz-client.js'
+import { configIdentityFingerprint, runtimeTokenFingerprint } from './healthz-client.js'
 import { selfRegisterDaemon } from './daemon.js'
 import { traceRequest, traceResponse, isTraceEnabled, getTokenUsage } from './trace.js'
 import { recordError } from './diagnostics.js'
@@ -75,6 +75,7 @@ const HEALTH_PROBE_TTL = 10_000
 let probeInFlight = false
 
 function getBasicHealthData(config: OwlCodaConfig): Record<string, unknown> {
+  const runtimeToken = process.env['OWLCODA_RUNTIME_TOKEN']
   return {
     status: 'healthy',
     version: VERSION,
@@ -83,7 +84,7 @@ function getBasicHealthData(config: OwlCodaConfig): Record<string, unknown> {
     port: config.port,
     routerUrl: config.routerUrl,
     configFingerprint: configIdentityFingerprint(config),
-    runtimeToken: process.env['OWLCODA_RUNTIME_TOKEN'] ?? null,
+    runtimeTokenFingerprint: runtimeToken ? runtimeTokenFingerprint(runtimeToken) : null,
   }
 }
 
@@ -141,6 +142,7 @@ async function doProbe(config: OwlCodaConfig): Promise<Record<string, unknown>> 
     status = 'healthy'
   }
 
+  const runtimeToken = process.env['OWLCODA_RUNTIME_TOKEN']
   const data = {
     status,
     version: VERSION,
@@ -152,7 +154,7 @@ async function doProbe(config: OwlCodaConfig): Promise<Record<string, unknown>> 
     router: routerInfo,
     circuitBreakers: circuits,
     errorBudgets: budgets,
-    runtimeToken: process.env['OWLCODA_RUNTIME_TOKEN'] ?? null,
+    runtimeTokenFingerprint: runtimeToken ? runtimeTokenFingerprint(runtimeToken) : null,
   }
 
   healthProbeCache = { ts: Date.now(), data }
@@ -169,6 +171,30 @@ function sendJson(res: http.ServerResponse, statusCode: number, body: unknown): 
   setCorsHeaders(res)
   res.writeHead(statusCode, { 'Content-Type': 'application/json' })
   res.end(JSON.stringify(body))
+}
+
+function sendJsonWithoutCors(res: http.ServerResponse, statusCode: number, body: unknown): void {
+  res.writeHead(statusCode, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify(body))
+}
+
+function publicHealthProjection(data: Record<string, unknown>): Record<string, unknown> {
+  return {
+    status: data.status,
+    version: data.version,
+  }
+}
+
+function isHealthzIdentityAuthorized(req: http.IncomingMessage): boolean {
+  const runtimeToken = process.env['OWLCODA_RUNTIME_TOKEN']
+  if (!runtimeToken) return false
+  const authorization = headerString(req.headers['authorization'])
+  const provided = authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim()
+  if (!provided) return false
+  const expectedBuffer = Buffer.from(runtimeToken)
+  const providedBuffer = Buffer.from(provided)
+  return expectedBuffer.length === providedBuffer.length
+    && timingSafeEqual(expectedBuffer, providedBuffer)
 }
 
 function sendError(res: http.ServerResponse, statusCode: number, errorType: string, message: string): void {
@@ -278,6 +304,7 @@ function handleRequest(
   const method = req.method?.toUpperCase() ?? 'GET'
   const rawUrl = req.url ?? '/'
   const url = rawUrl.split('?')[0]!
+  const requestTargetForLog = redactSensitiveQueryValues(rawUrl)
   const requestId = assignRequestId(res)
 
   const startTime = Date.now()
@@ -298,25 +325,26 @@ function handleRequest(
         durationMs: duration,
         ...buildAuditClientSource(req),
       })
-      logInfo('http', `${method} ${rawUrl} → ${res.statusCode}`, { requestId: requestId.slice(0, 8), durationMs: duration })
+      logInfo('http', `${method} ${requestTargetForLog} → ${res.statusCode}`, { requestId: requestId.slice(0, 8), durationMs: duration })
     } catch (err) {
       console.error(`[owlcoda] request-finish telemetry failed (ignored): ${(err as Error)?.message ?? String(err)}`)
     }
   })
 
   if (method === 'OPTIONS') {
-    setCorsHeaders(res)
+    if (url !== '/healthz') setCorsHeaders(res)
     res.writeHead(204)
     res.end()
     return
   }
 
   if (method === 'GET' && url === '/healthz') {
+    const identityAuthorized = isHealthzIdentityAuthorized(req)
     deepHealthProbe(config).then(data => {
       const statusCode = data.status === 'healthy' ? 200 : data.status === 'degraded' ? 200 : 503
-      sendJson(res, statusCode, data)
+      sendJsonWithoutCors(res, statusCode, identityAuthorized ? data : publicHealthProjection(data))
     }).catch(() => {
-      sendJson(res, 503, { status: 'unhealthy', version: VERSION })
+      sendJsonWithoutCors(res, 503, { status: 'unhealthy', version: VERSION })
     })
     return
   }
@@ -762,17 +790,9 @@ function handleRequest(
 
   // === Admin API ===
 
-  // Gate every /admin/* data route behind AdminAuthManager, regardless of
-  // whether config.adminToken is explicitly set. Previously this branch
-  // ran the Bearer check only when an explicit adminToken was configured,
-  // leaving all admin endpoints wide open when the user hadn't bothered
-  // to set one — because the fallback bearer is deterministic
-  // (`owlcoda-local-key-${port}`), any local process could reach the
-  // admin API for free. AdminAuthManager.authenticate already accepts:
-  //   - `Authorization: Bearer <bearerToken>` (explicit OR fallback)
-  //   - a valid admin session cookie minted via one-shot token exchange
-  // Static assets (handleAdminStatic above) were already handled and are
-  // not sensitive; this gate only covers data/mutation routes.
+  // Gate every /admin/* data route behind AdminAuthManager. It accepts either
+  // an explicit/daemon-identity bearer or a session minted from a stateful
+  // single-consumption browser handoff. Static assets above remain public.
   if (url.startsWith('/admin/')) {
     const authResult = adminApiDeps.auth.authenticate(req)
     if (!authResult.ok) {
@@ -824,6 +844,32 @@ function handleRequest(
   // Catch-all: return 200 empty instead of 404 (CC treats 404 as fatal)
   logWarn('http', `Unhandled endpoint: ${method} ${rawUrl} — returning empty OK`)
   sendJson(res, 200, {})
+}
+
+const SENSITIVE_QUERY_PARAMETER_NAMES = new Set([
+  'access_token',
+  'api_key',
+  'apikey',
+  'authorization',
+  'code',
+  'key',
+  'password',
+  'secret',
+  'token',
+])
+
+function redactSensitiveQueryValues(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl, 'http://owlcoda.invalid')
+    for (const name of [...parsed.searchParams.keys()]) {
+      if (SENSITIVE_QUERY_PARAMETER_NAMES.has(name.toLowerCase())) {
+        parsed.searchParams.set(name, '[REDACTED]')
+      }
+    }
+    return `${parsed.pathname}${parsed.search}`
+  } catch {
+    return rawUrl.split('?')[0] ?? '/'
+  }
 }
 
 async function checkRouter(config: OwlCodaConfig, _log: ReturnType<typeof createLogger>): Promise<void> {

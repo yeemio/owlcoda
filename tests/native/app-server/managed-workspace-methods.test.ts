@@ -17,10 +17,25 @@ afterEach(() => {
 })
 
 describe('managed workspace App Server contract', () => {
+  it('fails closed for lifecycle mutation when the default host has no authorizer', async () => {
+    const { sandbox, projectRoot } = makeGitRepository()
+    process.env['OWLCODA_HOME'] = join(sandbox, 'owlcoda-home')
+    const registry = createMethodRegistry({ projectRoot })
+
+    expect((await request(registry, 'model/list', {})).result).toMatchObject({
+      workspaceModes: [{ id: 'project', available: true }, { id: 'managed', available: false }],
+    })
+    expect((await request(registry, 'workspace/create', {
+      slug: 'unauthorized-create',
+      startingRef: 'HEAD',
+    })).error?.message).toMatch(/trusted host authorization is unavailable/i)
+    expect(git(projectRoot, 'branch', '--list', 'owlcoda/unauthorized-create')).toBe('')
+  })
+
   it('reports managed unavailable outside a Git repository', async () => {
     const sandbox = mkdtempSync(join(tmpdir(), 'owlcoda-managed-methods-nongit-'))
     sandboxes.push(sandbox)
-    const registry = createMethodRegistry({ projectRoot: sandbox })
+    const registry = createAuthorizedMethodRegistry({ projectRoot: sandbox })
 
     expect((await request(registry, 'model/list', {})).result).toMatchObject({
       workspaceModes: [{ id: 'project', available: true }, { id: 'managed', available: false }],
@@ -30,7 +45,7 @@ describe('managed workspace App Server contract', () => {
   it('exposes create/list/read/resume and reports managed capability from Git truth', async () => {
     const { sandbox, projectRoot } = makeGitRepository()
     process.env['OWLCODA_HOME'] = join(sandbox, 'owlcoda-home')
-    const registry = createMethodRegistry({ projectRoot })
+    const registry = createAuthorizedMethodRegistry({ projectRoot })
 
     const modelList = await request(registry, 'model/list', {})
     expect(modelList.result).toMatchObject({
@@ -66,7 +81,7 @@ describe('managed workspace App Server contract', () => {
   it('requires explicit current-state authorization for commit and cleanup operations', async () => {
     const { sandbox, projectRoot } = makeGitRepository()
     process.env['OWLCODA_HOME'] = join(sandbox, 'owlcoda-home')
-    const registry = createMethodRegistry({ projectRoot })
+    const registry = createAuthorizedMethodRegistry({ projectRoot })
     const created = await request(registry, 'workspace/create', { slug: 'authorized-task', startingRef: 'HEAD' })
     const workspace = created.result.workspace
     writeFileSync(join(workspace.worktreePath, 'managed-change.txt'), 'managed change\n')
@@ -126,7 +141,7 @@ describe('managed workspace App Server contract', () => {
   it('persists managed thread identity only from the ledger-backed worktree runtime', async () => {
     const { sandbox, projectRoot } = makeGitRepository()
     process.env['OWLCODA_HOME'] = join(sandbox, 'owlcoda-home')
-    const rootRegistry = createMethodRegistry({ projectRoot })
+    const rootRegistry = createAuthorizedMethodRegistry({ projectRoot })
     const created = await request(rootRegistry, 'workspace/create', { slug: 'thread-task', startingRef: 'HEAD' })
     const workspace = created.result.workspace
 
@@ -134,7 +149,7 @@ describe('managed workspace App Server contract', () => {
     expect(rejected.error).toMatchObject({ code: -32602 })
     expect(rejected.error.message).toMatch(/managed workspace App Server/i)
 
-    const managedRegistry = createMethodRegistry({ projectRoot: workspace.worktreePath })
+    const managedRegistry = createAuthorizedMethodRegistry({ projectRoot: workspace.worktreePath })
     const started = await request(managedRegistry, 'thread/start', {
       title: 'managed thread',
       workspaceMode: 'managed',
@@ -168,7 +183,7 @@ describe('managed workspace App Server contract', () => {
   it('declares the explicit workspace handoff contract', async () => {
     const { sandbox, projectRoot } = makeGitRepository()
     process.env['OWLCODA_HOME'] = join(sandbox, 'owlcoda-home')
-    const registry = createMethodRegistry({ projectRoot })
+    const registry = createAuthorizedMethodRegistry({ projectRoot })
 
     const protocol = (await request(registry, 'protocol/describe', {})).result
     expect(protocol.methods).toContainEqual(expect.objectContaining({
@@ -195,7 +210,7 @@ describe('managed workspace App Server contract', () => {
     let releaseLoop!: () => void
     let markLoopStarted!: () => void
     const loopStarted = new Promise<void>(resolve => { markLoopStarted = resolve })
-    const rootRegistry = createMethodRegistry({
+    const rootRegistry = createAuthorizedMethodRegistry({
       projectRoot,
       loopOptions: { apiBaseUrl: 'http://loop.test', apiKey: 'test-key' },
       loopRunner: async (conversation: any) => {
@@ -213,7 +228,7 @@ describe('managed workspace App Server contract', () => {
     } as any)
     const created = await request(rootRegistry, 'workspace/create', { slug: 'handoff-task', startingRef: 'HEAD' })
     const workspace = created.result.workspace
-    const managedRegistry = createMethodRegistry({ projectRoot: workspace.worktreePath })
+    const managedRegistry = createAuthorizedMethodRegistry({ projectRoot: workspace.worktreePath })
     const started = await request(managedRegistry, 'thread/start', {
       title: 'handoff thread',
       workspaceMode: 'managed',
@@ -329,6 +344,13 @@ function makeGitRepository(): { sandbox: string; projectRoot: string } {
   git(projectRoot, 'add', 'README.md')
   git(projectRoot, 'commit', '--quiet', '-m', 'fixture baseline')
   return { sandbox, projectRoot }
+}
+
+function createAuthorizedMethodRegistry(options: Parameters<typeof createMethodRegistry>[0] = {}) {
+  return createMethodRegistry({
+    ...options,
+    managedWorkspaceAuthorizer: () => true,
+  })
 }
 
 function git(cwd: string, ...args: string[]): string {

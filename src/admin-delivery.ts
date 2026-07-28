@@ -61,8 +61,14 @@ export function getAdminBundleStatus(projectRoot?: string): AdminBundleStatus {
   }
 }
 
-export function getAdminBearerToken(config: Pick<OwlCodaConfig, 'adminToken' | 'port'>): string {
-  return config.adminToken ?? `owlcoda-local-key-${config.port}`
+export function getAdminBearerToken(
+  config: Pick<OwlCodaConfig, 'adminToken' | 'port'>,
+  runtimeToken: string | undefined = process.env['OWLCODA_RUNTIME_TOKEN'],
+): string | null {
+  const explicit = config.adminToken?.trim()
+  if (explicit) return explicit
+  const daemonIdentity = runtimeToken?.trim()
+  return daemonIdentity || null
 }
 
 export function createOneShotAdminToken(secret: string, options: OneShotTokenOptions = {}): string {
@@ -95,6 +101,26 @@ export function verifyOneShotAdminToken(
   const providedBuffer = Buffer.from(providedSignature, 'utf-8')
   if (expectedBuffer.length !== providedBuffer.length) return false
   return timingSafeEqual(expectedBuffer, providedBuffer)
+}
+
+export async function requestOneShotAdminToken(
+  baseUrl: string,
+  bearerToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  const endpoint = new URL('/admin/api/auth/token', baseUrl)
+  const response = await fetchImpl(endpoint, {
+    method: 'POST',
+    headers: {
+      accept: 'application/json',
+      authorization: `Bearer ${bearerToken}`,
+    },
+  })
+  const body = await response.json() as { token?: unknown }
+  if (!response.ok || typeof body.token !== 'string' || body.token.length === 0) {
+    throw new Error(`Admin handoff token request failed (HTTP ${response.status})`)
+  }
+  return body.token
 }
 
 export function buildAdminHandoffHash(context: AdminHandoffContext = {}): string {

@@ -10,6 +10,7 @@ import { getOwlcodaConfigPath } from '../paths.js'
 import { validateConfig as validateConfigSchema } from '../config-validate.js'
 import { applyReloadableFields } from '../config-watcher.js'
 import type { ModelTruthSnapshot } from '../model-truth.js'
+import { sanitizeConfig, sanitizeSnapshot } from '../admin-api.js'
 
 function sendJson(res: ServerResponse, statusCode: number, body: unknown): void {
   res.writeHead(statusCode, { 'Content-Type': 'application/json' })
@@ -63,14 +64,7 @@ export function handleReloadConfig(
 export function handleGetConfig(
   _req: IncomingMessage, res: ServerResponse, config: OwlCodaConfig,
 ): void {
-  const safeConfig = { ...(config as unknown as Record<string, unknown>) }
-  if (Array.isArray(safeConfig.models)) {
-    safeConfig.models = (safeConfig.models as Array<Record<string, unknown>>).map(m => ({
-      ...m,
-      apiKey: m.apiKey ? '***' : undefined,
-    }))
-  }
-  sendJson(res, 200, safeConfig)
+  sendJson(res, 200, sanitizeConfig(config, 'marker'))
 }
 
 export function handleGetModelTruth(
@@ -79,26 +73,7 @@ export function handleGetModelTruth(
   const params = new URLSearchParams(rawUrl.split('?')[1] ?? '')
   const skipCache = params.get('skipCache') === 'true'
   deps.getModelTruthSnapshot({ skipCache }).then(snapshot => {
-    const sanitizeStatus = <T extends typeof snapshot.statuses[number]>(status: T): T => ({
-      ...status,
-      raw: status.raw.config
-        ? {
-            ...status.raw,
-            config: {
-              ...status.raw.config,
-              apiKey: status.raw.config.apiKey ? '***' : undefined,
-            },
-          }
-        : status.raw,
-    })
-    const safeSnapshot = {
-      ...snapshot,
-      statuses: snapshot.statuses.map(sanitizeStatus),
-      byModelId: Object.fromEntries(
-        Object.entries(snapshot.byModelId).map(([modelId, status]) => [modelId, sanitizeStatus(status)]),
-      ),
-    }
-    sendJson(res, 200, safeSnapshot)
+    sendJson(res, 200, sanitizeSnapshot(snapshot, 'marker'))
   }).catch(err => {
     sendError(res, 500, 'api_error', `Model truth read failed: ${err instanceof Error ? err.message : String(err)}`)
   })

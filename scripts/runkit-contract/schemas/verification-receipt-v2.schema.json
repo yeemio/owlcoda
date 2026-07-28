@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/verification-receipt-v2.json",
+  "title": "OwlCoda RunKit Verification Receipt V2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "runId", "status", "sourceFingerprint", "verificationContextFingerprint", "selectedProfileIds", "commandRuns", "commandReceipts"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitVerificationReceiptV2" },
+    "runId": { "type": "string", "minLength": 1 },
+    "receiptId": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["passed", "ready_for_verification", "shadow_validated", "invalidated_by_concurrent_write"] },
+    "sourceFingerprint": { "$ref": "#/$defs/sha256" },
+    "verificationContextFingerprint": { "$ref": "#/$defs/sha256" },
+    "selectedProfileIds": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "commandRuns": { "type": "integer", "minimum": 0 },
+    "commandReceipts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidence", "exitCode", "stdoutSha256", "stderrSha256"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "evidence": { "$ref": "replayable-evidence-v1.schema.json" },
+          "exitCode": { "type": "integer" },
+          "stdoutSha256": { "$ref": "#/$defs/sha256" },
+          "stderrSha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

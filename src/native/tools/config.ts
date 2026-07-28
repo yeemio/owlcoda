@@ -23,16 +23,12 @@ interface SettingDef {
 
 export interface ConfigToolDeps {
   /**
-   * Live getter/setter for the REPL's `autoApprove` flag. Wired by
-   * ink-repl.tsx so an autonomous flow can flip yolo without going
-   * through the TUI slash surface — hostile-QA against 0.13.38 hit the
-   * "I can read the rail but I can't toggle yolo from a tool call" wall
-   * and had to skip group 9 entirely. Optional: when not wired (e.g.
-   * headless, tests), the `autoApprove` setting reports read-only.
+   * Live read-only view of the REPL's `autoApprove` flag. Approval authority
+   * remains user-controlled through the TUI slash surface; a model tool call
+   * must not be able to promote its own permissions.
    */
   autoApprove?: {
     get: () => boolean
-    set: (v: boolean) => void
   }
   /**
    * Live getter/setter for `autoDeny`. When on, every prompt that
@@ -71,7 +67,6 @@ export function createConfigTool(deps: ConfigToolDeps = {}): NativeToolDef<Confi
     },
     autoApprove: {
       get: () => deps.autoApprove ? deps.autoApprove.get() : false,
-      ...(deps.autoApprove ? { set: (v: unknown) => deps.autoApprove!.set(Boolean(v)) } : {}),
       type: 'boolean',
     },
     autoDeny: {

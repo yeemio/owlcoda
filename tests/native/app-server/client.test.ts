@@ -50,12 +50,12 @@ describe('app-server client adapter', () => {
     await expect(client.checkCompatibility({
       client: { name: 'owlcoda-desktop', version: '0.1.0' },
       supportedProtocolVersions: ['v1'],
-      expectedRuntimeVersion: '0.15.30',
+      expectedRuntimeVersion: '0.15.31',
       expectedWorkspaceRealpath: realpathSync(projectRoot),
       requestedCapabilities: { review: true },
     })).resolves.toMatchObject({
       compatibility: 'compatible',
-      runtimeVersion: '0.15.30',
+      runtimeVersion: '0.15.31',
       protocolVersion: 'v1',
       workspaceRealpath: realpathSync(projectRoot),
       capabilities: { review: true },
@@ -72,7 +72,7 @@ describe('app-server client adapter', () => {
     const result = await client.checkCompatibility({
       client: { name: 'owlcoda-desktop', version: '0.1.0' },
       supportedProtocolVersions: ['v1'],
-      expectedRuntimeVersion: '0.15.30',
+      expectedRuntimeVersion: '0.15.31',
       expectedWorkspaceRealpath: realpathSync(projectRoot),
       requestedCapabilities: {},
       ...override,
@@ -133,7 +133,7 @@ describe('app-server client adapter', () => {
     await expect(client.checkCompatibility({
       client: { name: 'owlcoda-desktop', version: '0.1.0' },
       supportedProtocolVersions: ['v1'],
-      expectedRuntimeVersion: '0.15.30',
+      expectedRuntimeVersion: '0.15.31',
       expectedWorkspaceRealpath: process.cwd(),
       requestedCapabilities: {},
     })).resolves.toEqual({ compatibility: 'unreachable' })
@@ -161,7 +161,7 @@ describe('app-server client adapter', () => {
     const result = await client.checkCompatibility({
       client: { name: 'owlcoda-desktop', version: '0.1.0' },
       supportedProtocolVersions: ['v1'],
-      expectedRuntimeVersion: '0.15.30',
+      expectedRuntimeVersion: '0.15.31',
       expectedWorkspaceRealpath,
       requestedCapabilities: {},
     })
@@ -1519,7 +1519,7 @@ function jsonRpcResult(id: unknown, result: unknown): Response {
 
 function initializeResult(workspaceRealpath: string, override: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    runtimeVersion: '0.15.30',
+    runtimeVersion: '0.15.31',
     runtimeBuild: 'test-build',
     protocolVersion: 'v1',
     workspaceId: workspaceId(workspaceRealpath),

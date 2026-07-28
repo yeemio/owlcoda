@@ -143,8 +143,8 @@ export const CAPABILITIES: Capability[] = [
   // Round 21 — Prometheus metrics, log file rotation, admin auth, deep healthz, config validation
   { name: 'Prometheus /metrics endpoint', status: 'supported', detail: 'OpenMetrics text format with 11 metric families: uptime, requests, by-model, by-status, duration, tokens, rate-limits, circuits, budgets, errors' },
   { name: 'Log file output with rotation', status: 'supported', detail: 'Sync append to logFilePath, auto-rotate at logFileMaxBytes, keep logFileKeep rotated files' },
-  { name: 'Admin auth (Bearer token)', status: 'supported', detail: 'Optional adminToken protects /admin/* endpoints; backward compatible (no token = open access)' },
-  { name: 'Deep health probe', status: 'supported', detail: '/healthz returns router reachability/latency/modelCount, circuit breaker states, error budgets, overall status (healthy/degraded/unhealthy)' },
+  { name: 'Admin auth (Bearer token)', status: 'supported', detail: 'Admin data routes require an explicit adminToken or daemon-identity bearer; browser sessions use single-consumption handoff tokens' },
+  { name: 'Deep health probe', status: 'supported', detail: 'Public /healthz reports status/version only; authenticated probes include router reachability, circuits, budgets, and runtime metadata' },
   { name: 'Config schema validation', status: 'supported', detail: 'Validates types, ranges, enum values for all config fields; warns on load + hot-reload + admin reload' },
   { name: '/metrics REPL command', status: 'supported', detail: 'Display Prometheus metrics in REPL' },
   { name: 'Health status levels', status: 'supported', detail: 'Three-level health: healthy (all good), degraded (some circuits open), unhealthy (router down / all circuits open)' },

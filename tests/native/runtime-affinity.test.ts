@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { classifyRuntimeBinding } from '../../src/native/runtime-affinity.js'
+import { runtimeTokenFingerprint } from '../../src/healthz-client.js'
 
 const expected = {
   pid: 101,
@@ -15,7 +16,7 @@ describe('classifyRuntimeBinding', () => {
       status: 'healthy',
       version: '0.10.0',
       pid: 101,
-      runtimeToken: 'tok-expected',
+      runtimeTokenFingerprint: runtimeTokenFingerprint('tok-expected'),
       host: '127.0.0.1',
       port: 18139,
       routerUrl: 'http://127.0.0.1:8009',
