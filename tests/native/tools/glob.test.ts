@@ -183,11 +183,14 @@ describe('Native Glob tool — truncation signaling', () => {
     // Generate >MAX_RESULTS (10_000) files in a flat directory to exercise the
     // display-truncation path. We stay under HARD_RESULT_CAP (20_000) so the
     // collection itself completes naturally.
-    const files: Promise<unknown>[] = []
-    for (let i = 0; i < 10_500; i++) {
-      files.push(writeFile(join(dir, `f${i}.ts`), ''))
+    const batchSize = 128
+    for (let start = 0; start < 10_500; start += batchSize) {
+      const writes: Promise<void>[] = []
+      for (let i = start; i < Math.min(start + batchSize, 10_500); i++) {
+        writes.push(writeFile(join(dir, `f${i}.ts`), ''))
+      }
+      await Promise.all(writes)
     }
-    await Promise.all(files)
   }, 60_000)
 
   afterAll(async () => {
