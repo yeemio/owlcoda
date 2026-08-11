@@ -319,6 +319,22 @@ export function appendJobOutput(jobId: string, output: string, maxChars = 2000):
   return cloneJob(job)
 }
 
+export function mergeJobFactRefs(jobId: string, factRefs: RuntimeFactRefs): JobRecord | undefined {
+  ensureJobStoreLoaded()
+  const job = jobs.get(jobId)
+  if (!job) return undefined
+  const mergedFactRefs = mergeRuntimeFactRefs(job.factRefs, factRefs, { jobId })
+  if (!mergedFactRefs) return cloneJob(job)
+  job.factRefs = mergedFactRefs
+  if (mergedFactRefs.threadId) job.threadId = mergedFactRefs.threadId
+  if (mergedFactRefs.turnId) job.turnId = mergedFactRefs.turnId
+  if (mergedFactRefs.runId) job.runId = mergedFactRefs.runId
+  if (mergedFactRefs.taskId) job.taskId = mergedFactRefs.taskId
+  job.updatedAt = new Date().toISOString()
+  persistJobRegistry()
+  return cloneJob(job)
+}
+
 export function addJobArtifacts(jobId: string, artifacts: JobArtifactRef[]): JobRecord | undefined {
   ensureJobStoreLoaded()
   const job = jobs.get(jobId)

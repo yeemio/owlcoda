@@ -10,6 +10,14 @@ import type { OwlCodaConfig } from '../src/config.js'
 import { resetCache } from '../src/response-cache.js'
 import { readAuditLog } from '../src/audit.js'
 import { __resetAdmissionForTesting } from '../src/endpoints/admission.js'
+import {
+  configureCircuitBreaker,
+  getCircuitState,
+  recordFailure,
+  resetCircuitBreaker,
+} from '../src/middleware/circuit-breaker.js'
+import { getErrorBudget, resetBudgets } from '../src/error-budget.js'
+import { getModelMetrics, resetModelMetrics } from '../src/perf-tracker.js'
 
 // ─── Mock Router ───
 // Simulates an OpenAI-compatible backend
@@ -348,6 +356,187 @@ describe('messages endpoint — streaming', () => {
     expect(text.length).toBeGreaterThan(0)
   })
 
+  it('accounts for a translated JSON response exactly once on the streaming path', async () => {
+    resetCircuitBreaker()
+    resetBudgets()
+    resetModelMetrics()
+    mockRouterHandler = (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        id: 'chatcmpl-json-stream',
+        object: 'chat.completion',
+        model: 'test-backend',
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'Translated JSON stream.' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 },
+      }))
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'default',
+          messages: [{ role: 'user', content: 'translate JSON as SSE' }],
+          max_tokens: 100,
+          stream: true,
+        }),
+      })
+      const requestId = response.headers.get('x-request-id')
+      const text = await response.text()
+
+      expect(response.status).toBe(200)
+      expect(text).toContain('Translated JSON stream.')
+      expect(text).toContain('event: message_stop')
+      expect(getCircuitState('test-backend')).toMatchObject({ state: 'closed', failures: 0 })
+      expect(getErrorBudget('test-backend')).toMatchObject({ total: 1, successes: 1, failures: 0 })
+      expect(getModelMetrics('test-backend')).toMatchObject({
+        requestCount: 1,
+        failureCount: 0,
+        totalInputTokens: 7,
+        totalOutputTokens: 5,
+      })
+
+      await new Promise(resolve => setTimeout(resolve, 50))
+      const matchingAudit = (await readAuditLog(20)).filter(entry => entry.requestId === requestId)
+      expect(matchingAudit).toHaveLength(1)
+      expect(matchingAudit[0]).toMatchObject({
+        servedBy: 'test-backend',
+        inputTokens: 7,
+        outputTokens: 5,
+        status: 200,
+        streaming: true,
+      })
+      expect(matchingAudit[0]?.failure).toBeUndefined()
+    } finally {
+      resetCircuitBreaker()
+      resetBudgets()
+      resetModelMetrics()
+    }
+  })
+
+  it('reports malformed translated JSON as a streaming failure instead of synthesizing normal completion', async () => {
+    const previousFallbackEnabled = owlcodaConfig.middleware?.fallbackEnabled
+    const previousStreamFallbackEnabled = owlcodaConfig.middleware?.streamFallbackToNonStreamingEnabled
+    if (!owlcodaConfig.middleware) owlcodaConfig.middleware = {}
+    owlcodaConfig.middleware.fallbackEnabled = false
+    owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = false
+    resetCircuitBreaker()
+    resetBudgets()
+    resetModelMetrics()
+    mockRouterHandler = (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end('{"choices":[')
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'default',
+          messages: [{ role: 'user', content: 'malformed JSON must fail' }],
+          max_tokens: 100,
+          stream: true,
+        }),
+      })
+      const requestId = response.headers.get('x-request-id')
+      const text = await response.text()
+
+      expect(response.status).toBe(200)
+      expect(text).toContain('event: error')
+      expect(text).not.toContain('event: message_stop')
+      expect(getCircuitState('test-backend')).toMatchObject({ failures: 1 })
+      expect(getErrorBudget('test-backend')).toMatchObject({ total: 1, successes: 0, failures: 1 })
+      expect(getModelMetrics('test-backend')).toMatchObject({ requestCount: 1, failureCount: 1 })
+
+      await new Promise(resolve => setTimeout(resolve, 50))
+      const matchingAudit = (await readAuditLog(20)).filter(entry => entry.requestId === requestId)
+      expect(matchingAudit).toHaveLength(1)
+      expect(matchingAudit[0]?.failure).toBeDefined()
+    } finally {
+      if (previousFallbackEnabled === undefined) delete owlcodaConfig.middleware.fallbackEnabled
+      else owlcodaConfig.middleware.fallbackEnabled = previousFallbackEnabled
+      if (previousStreamFallbackEnabled === undefined) delete owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled
+      else owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = previousStreamFallbackEnabled
+      resetCircuitBreaker()
+      resetBudgets()
+      resetModelMetrics()
+    }
+  })
+
+  it('enforces the first-token watchdog while reading a translated JSON body', async () => {
+    const previousFallbackEnabled = owlcodaConfig.middleware?.fallbackEnabled
+    const previousStreamFallbackEnabled = owlcodaConfig.middleware?.streamFallbackToNonStreamingEnabled
+    const previousFirstTokenTimeout = owlcodaConfig.middleware?.streamFirstTokenTimeoutMs
+    const previousTotalTimeout = owlcodaConfig.middleware?.streamTotalTimeoutMs
+    if (!owlcodaConfig.middleware) owlcodaConfig.middleware = {}
+    owlcodaConfig.middleware.fallbackEnabled = false
+    owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = false
+    owlcodaConfig.middleware.streamFirstTokenTimeoutMs = 50
+    owlcodaConfig.middleware.streamTotalTimeoutMs = 120
+    resetCircuitBreaker()
+    resetBudgets()
+    let lateBodySent = false
+    mockRouterHandler = (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.flushHeaders()
+      const timer = setTimeout(() => {
+        lateBodySent = true
+        res.end(JSON.stringify({
+          id: 'chatcmpl-late-json',
+          object: 'chat.completion',
+          model: 'test-backend',
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'LATE_JSON_SUCCESS' },
+            finish_reason: 'stop',
+          }],
+          usage: { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 },
+        }))
+      }, 350)
+      res.on('close', () => clearTimeout(timer))
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'default',
+          messages: [{ role: 'user', content: 'late JSON body must time out' }],
+          max_tokens: 100,
+          stream: true,
+        }),
+      })
+      const text = await response.text()
+
+      expect(response.status).toBe(200)
+      expect(text).toContain('event: error')
+      expect(text).toContain('stream_first_token_timeout')
+      expect(text).not.toContain('LATE_JSON_SUCCESS')
+      expect(text).not.toContain('event: message_stop')
+      expect(lateBodySent).toBe(false)
+      expect(getCircuitState('test-backend').failures).toBe(1)
+      expect(getErrorBudget('test-backend')).toMatchObject({ total: 1, successes: 0, failures: 1 })
+    } finally {
+      if (previousFallbackEnabled === undefined) delete owlcodaConfig.middleware.fallbackEnabled
+      else owlcodaConfig.middleware.fallbackEnabled = previousFallbackEnabled
+      if (previousStreamFallbackEnabled === undefined) delete owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled
+      else owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = previousStreamFallbackEnabled
+      if (previousFirstTokenTimeout === undefined) delete owlcodaConfig.middleware.streamFirstTokenTimeoutMs
+      else owlcodaConfig.middleware.streamFirstTokenTimeoutMs = previousFirstTokenTimeout
+      if (previousTotalTimeout === undefined) delete owlcodaConfig.middleware.streamTotalTimeoutMs
+      else owlcodaConfig.middleware.streamTotalTimeoutMs = previousTotalTimeout
+      resetCircuitBreaker()
+      resetBudgets()
+    }
+  }, 20_000)
+
   it('returns error for stream with upstream failure', async () => {
     mockRouterHandler = (_req, res) => {
       res.writeHead(503, { 'Content-Type': 'application/json' })
@@ -394,6 +583,273 @@ describe('messages endpoint — request timeout', () => {
 })
 
 describe('messages endpoint — streaming body timeout', () => {
+  it('preserves bare fields, multi-line data, and event-field SSE semantics without recovery', async () => {
+    const previousModels = owlcodaConfig.models
+    const previousProtocol = owlcodaConfig.localRuntimeProtocol
+    const previousFallbackEnabled = owlcodaConfig.middleware?.fallbackEnabled
+    const previousStreamFallbackEnabled = owlcodaConfig.middleware?.streamFallbackToNonStreamingEnabled
+    if (!owlcodaConfig.middleware) owlcodaConfig.middleware = {}
+    owlcodaConfig.localRuntimeProtocol = 'anthropic_messages'
+    owlcodaConfig.middleware.fallbackEnabled = true
+    owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = true
+    owlcodaConfig.models = [
+      {
+        id: 'multiline-primary',
+        label: 'Multiline primary',
+        backendModel: 'multiline-primary-backend',
+        aliases: [],
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+        tier: 'general',
+        default: true,
+        contextWindow: 32768,
+      },
+      {
+        id: 'multiline-fallback',
+        label: 'Multiline fallback',
+        backendModel: 'multiline-fallback-backend',
+        aliases: [],
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+        tier: 'balanced',
+        contextWindow: 32768,
+      },
+    ]
+    let nonStreamingCalls = 0
+    mockRouterHandler = (_req, res) => {
+      if (lastRouterRequest?.body?.stream === true) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.write('id\n\n')
+        res.write('event: content_block_delta\ndata: {"index":0,\ndata: "delta":{"type":"text_delta","text":"VISIBLE_MULTILINE"}}\n\n')
+        res.write('event: message_stop\ndata: {}\n\n')
+        res.end()
+        return
+      }
+      nonStreamingCalls += 1
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'REPLACEMENT' }],
+        model: lastRouterRequest?.body?.model ?? 'multiline-fallback-backend',
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        usage: { input_tokens: 3, output_tokens: 1 },
+      }))
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'multiline-primary',
+          messages: [{ role: 'user', content: 'legal multiline SSE' }],
+          max_tokens: 100,
+          stream: true,
+        }),
+      })
+      const text = await response.text()
+
+      expect(response.status).toBe(200)
+      expect(text).toContain('VISIBLE_MULTILINE')
+      expect(text).not.toContain('REPLACEMENT')
+      expect(text).not.toContain('event: error')
+      expect(response.headers.get('x-owlcoda-served-by')).toBe('multiline-primary-backend')
+      expect(response.headers.get('x-owlcoda-fallback')).toBeNull()
+      expect(nonStreamingCalls).toBe(0)
+    } finally {
+      owlcodaConfig.models = previousModels
+      owlcodaConfig.localRuntimeProtocol = previousProtocol
+      if (previousFallbackEnabled === undefined) delete owlcodaConfig.middleware.fallbackEnabled
+      else owlcodaConfig.middleware.fallbackEnabled = previousFallbackEnabled
+      if (previousStreamFallbackEnabled === undefined) delete owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled
+      else owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = previousStreamFallbackEnabled
+    }
+  }, 20_000)
+
+  it('records fetch failures only for fallback models that were actually attempted', async () => {
+    const previousModels = owlcodaConfig.models
+    const previousProtocol = owlcodaConfig.localRuntimeProtocol
+    const previousFallbackEnabled = owlcodaConfig.middleware?.fallbackEnabled
+    const previousStreamFallbackEnabled = owlcodaConfig.middleware?.streamFallbackToNonStreamingEnabled
+    const previousRetryMaxAttempts = owlcodaConfig.middleware?.retryMaxAttempts
+    if (!owlcodaConfig.middleware) owlcodaConfig.middleware = {}
+    owlcodaConfig.localRuntimeProtocol = 'openai_chat'
+    owlcodaConfig.middleware.fallbackEnabled = true
+    owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = false
+    owlcodaConfig.middleware.retryMaxAttempts = 0
+    owlcodaConfig.models = [
+      {
+        id: 'attempt-primary',
+        label: 'Attempt primary',
+        backendModel: 'attempt-primary-backend',
+        aliases: [],
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+        tier: 'general',
+        default: true,
+        contextWindow: 32768,
+      },
+      {
+        id: 'attempt-fallback',
+        label: 'Skipped fallback',
+        backendModel: 'attempt-fallback-backend',
+        aliases: [],
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+        tier: 'balanced',
+        contextWindow: 32768,
+      },
+    ]
+    resetCircuitBreaker()
+    resetBudgets()
+    configureCircuitBreaker({ threshold: 1, cooldownMs: 60_000 })
+    recordFailure('attempt-fallback')
+    let fallbackCalls = 0
+    mockRouterHandler = (_req, res) => {
+      if (lastRouterRequest?.body?.model === 'attempt-fallback-backend') {
+        fallbackCalls += 1
+      }
+      res.destroy(new Error('fetch failed before response headers'))
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'attempt-primary',
+          messages: [{ role: 'user', content: 'only attempted models may fail' }],
+          max_tokens: 100,
+          stream: true,
+        }),
+      })
+      await response.text()
+
+      expect(response.status).toBeGreaterThanOrEqual(400)
+      expect(fallbackCalls).toBe(0)
+      expect(getCircuitState('attempt-primary-backend').failures).toBe(1)
+      expect(getErrorBudget('attempt-primary-backend')).toMatchObject({ total: 1, failures: 1 })
+      expect(getCircuitState('attempt-fallback')).toMatchObject({ state: 'open', failures: 1 })
+      expect(getErrorBudget('attempt-fallback')).toMatchObject({ total: 0, failures: 0 })
+    } finally {
+      owlcodaConfig.models = previousModels
+      owlcodaConfig.localRuntimeProtocol = previousProtocol
+      if (previousFallbackEnabled === undefined) delete owlcodaConfig.middleware.fallbackEnabled
+      else owlcodaConfig.middleware.fallbackEnabled = previousFallbackEnabled
+      if (previousStreamFallbackEnabled === undefined) delete owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled
+      else owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = previousStreamFallbackEnabled
+      if (previousRetryMaxAttempts === undefined) delete owlcodaConfig.middleware.retryMaxAttempts
+      else owlcodaConfig.middleware.retryMaxAttempts = previousRetryMaxAttempts
+      resetCircuitBreaker()
+      resetBudgets()
+    }
+  }, 20_000)
+
+  it('records earlier fetch failures when the last attempted model recovers with JSON', async () => {
+    const previousModels = owlcodaConfig.models
+    const previousProtocol = owlcodaConfig.localRuntimeProtocol
+    const previousFallbackEnabled = owlcodaConfig.middleware?.fallbackEnabled
+    const previousStreamFallbackEnabled = owlcodaConfig.middleware?.streamFallbackToNonStreamingEnabled
+    const previousRetryMaxAttempts = owlcodaConfig.middleware?.retryMaxAttempts
+    if (!owlcodaConfig.middleware) owlcodaConfig.middleware = {}
+    owlcodaConfig.localRuntimeProtocol = 'openai_chat'
+    owlcodaConfig.middleware.fallbackEnabled = true
+    owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = true
+    owlcodaConfig.middleware.retryMaxAttempts = 0
+    owlcodaConfig.models = [
+      {
+        id: 'account-primary',
+        label: 'Accounting primary',
+        backendModel: 'account-primary-backend',
+        aliases: [],
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/chat/completions`,
+        tier: 'general',
+        default: true,
+        contextWindow: 32768,
+      },
+      {
+        id: 'account-fallback',
+        label: 'Accounting fallback',
+        backendModel: 'account-fallback-backend',
+        aliases: [],
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/chat/completions`,
+        tier: 'balanced',
+        contextWindow: 32768,
+      },
+    ]
+    resetCircuitBreaker()
+    resetBudgets()
+    let primaryStreamCalls = 0
+    let fallbackStreamCalls = 0
+    let fallbackJsonCalls = 0
+    mockRouterHandler = (_req, res) => {
+      const requestModel = lastRouterRequest?.body?.model
+      const streaming = lastRouterRequest?.body?.stream === true
+      if (requestModel === 'account-primary-backend' && streaming) {
+        primaryStreamCalls += 1
+        res.destroy(new Error('fetch failed before headers'))
+        return
+      }
+      if (requestModel === 'account-fallback-backend' && streaming) {
+        fallbackStreamCalls += 1
+        res.destroy(new Error('fetch failed before headers'))
+        return
+      }
+      if (requestModel === 'account-fallback-backend') {
+        fallbackJsonCalls += 1
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({
+          id: 'chatcmpl-accounting-recovery',
+          object: 'chat.completion',
+          model: 'account-fallback-backend',
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'RECOVERED_ON_LAST_ATTEMPT' },
+            finish_reason: 'stop',
+          }],
+          usage: { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 },
+        }))
+        return
+      }
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'unexpected accounting request' } }))
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'account-primary',
+          messages: [{ role: 'user', content: 'recover after two fetch failures' }],
+          max_tokens: 100,
+          stream: true,
+        }),
+      })
+      const text = await response.text()
+
+      expect(response.status).toBe(200)
+      expect(text).toContain('RECOVERED_ON_LAST_ATTEMPT')
+      expect(text).toContain('event: message_stop')
+      expect(primaryStreamCalls).toBe(1)
+      expect(fallbackStreamCalls).toBe(1)
+      expect(fallbackJsonCalls).toBe(1)
+      expect(getCircuitState('account-primary-backend').failures).toBe(1)
+      expect(getErrorBudget('account-primary-backend')).toMatchObject({ total: 1, successes: 0, failures: 1 })
+      expect(getCircuitState('account-fallback')).toMatchObject({ state: 'closed', failures: 0 })
+      expect(getErrorBudget('account-fallback')).toMatchObject({ total: 1, successes: 1, failures: 0 })
+    } finally {
+      owlcodaConfig.models = previousModels
+      owlcodaConfig.localRuntimeProtocol = previousProtocol
+      if (previousFallbackEnabled === undefined) delete owlcodaConfig.middleware.fallbackEnabled
+      else owlcodaConfig.middleware.fallbackEnabled = previousFallbackEnabled
+      if (previousStreamFallbackEnabled === undefined) delete owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled
+      else owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = previousStreamFallbackEnabled
+      if (previousRetryMaxAttempts === undefined) delete owlcodaConfig.middleware.retryMaxAttempts
+      else owlcodaConfig.middleware.retryMaxAttempts = previousRetryMaxAttempts
+      resetCircuitBreaker()
+      resetBudgets()
+    }
+  }, 20_000)
+
   it('falls back to non-streaming when upstream stream socket closes before headers', async () => {
     const previous = owlcodaConfig.middleware?.streamFallbackToNonStreamingEnabled
     if (!owlcodaConfig.middleware) owlcodaConfig.middleware = {}
@@ -505,6 +961,877 @@ describe('messages endpoint — streaming body timeout', () => {
     } finally {
       if (previous === undefined) delete owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled
       else owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = previous
+    }
+  }, 20_000)
+
+  it('continues on a fallback model when the selected model fails before first token in both stream modes', async () => {
+    const previousModels = owlcodaConfig.models
+    const previousFallbackEnabled = owlcodaConfig.middleware?.fallbackEnabled
+    const previousStreamFallbackEnabled = owlcodaConfig.middleware?.streamFallbackToNonStreamingEnabled
+    if (!owlcodaConfig.middleware) owlcodaConfig.middleware = {}
+    owlcodaConfig.middleware.fallbackEnabled = true
+    owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = true
+    owlcodaConfig.models = [
+      ...previousModels,
+      {
+        id: 'fallback-model',
+        label: 'Fallback',
+        backendModel: 'fallback-backend',
+        aliases: [],
+        tier: 'balanced',
+        contextWindow: 32768,
+      },
+    ]
+
+    let primaryStreamCalls = 0
+    let primaryNonStreamCalls = 0
+    let fallbackModelCalls = 0
+    mockRouterHandler = (_req, res) => {
+      const requestModel = lastRouterRequest?.body?.model
+      const streaming = lastRouterRequest?.body?.stream === true
+      if (requestModel === 'test-backend' && streaming) {
+        primaryStreamCalls += 1
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.write('data: {"id":"chatcmpl-primary","object":"chat.completion.chunk","model":"test-backend","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}\n\n')
+        setImmediate(() => res.destroy(new Error('primary stream closed after role-only chunk')))
+        return
+      }
+      if (requestModel === 'test-backend') {
+        primaryNonStreamCalls += 1
+        res.writeHead(503, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'primary non-streaming recovery failed' } }))
+        return
+      }
+
+      fallbackModelCalls += 1
+      if (streaming) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.end([
+          'data: {"id":"chatcmpl-cross-model","object":"chat.completion.chunk","model":"fallback-backend","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}',
+          'data: {"id":"chatcmpl-cross-model","object":"chat.completion.chunk","model":"fallback-backend","choices":[{"index":0,"delta":{"content":"Recovered on fallback model."},"finish_reason":null}]}',
+          'data: {"id":"chatcmpl-cross-model","object":"chat.completion.chunk","model":"fallback-backend","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":7,"completion_tokens":5,"total_tokens":12}}',
+          'data: [DONE]',
+          '',
+        ].join('\n\n'))
+        return
+      }
+
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        id: 'chatcmpl-cross-model',
+        object: 'chat.completion',
+        model: 'fallback-backend',
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'Recovered on fallback model.' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 },
+      }))
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'default',
+          messages: [{ role: 'user', content: 'recover across models' }],
+          max_tokens: 100,
+          stream: true,
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const text = await response.text()
+      expect(text).toContain('Recovered on fallback model.')
+      expect(text).toContain('event: message_stop')
+      expect(text).not.toContain('event: error')
+      expect(text.match(/event: message_start/g)).toHaveLength(1)
+      expect(primaryStreamCalls).toBeGreaterThanOrEqual(1)
+      expect(primaryNonStreamCalls).toBeGreaterThanOrEqual(1)
+      expect(fallbackModelCalls).toBeGreaterThanOrEqual(1)
+      expect(response.headers.get('x-owlcoda-served-by')).toBe('fallback-model')
+      expect(response.headers.get('x-owlcoda-fallback')).toBe('true')
+    } finally {
+      owlcodaConfig.models = previousModels
+      if (previousFallbackEnabled === undefined) delete owlcodaConfig.middleware.fallbackEnabled
+      else owlcodaConfig.middleware.fallbackEnabled = previousFallbackEnabled
+      if (previousStreamFallbackEnabled === undefined) delete owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled
+      else owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = previousStreamFallbackEnabled
+    }
+  }, 20_000)
+
+  it.each([
+    {
+      wireFormat: 'Anthropic SSE',
+      controlFrames: [
+        'event: message_start',
+        'data: {"type":"message_start","message":{"id":"msg_primary","type":"message","role":"assistant","content":[],"model":"test-backend","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":0}}}',
+        '',
+        'event: ping',
+        'data: {"type":"ping"}',
+        '',
+        'event: content_block_start',
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        '',
+        '',
+      ].join('\n'),
+    },
+    {
+      wireFormat: 'raw JSON lines',
+      controlFrames: [
+        '{"type":"message_start","message":{"id":"msg_primary","type":"message","role":"assistant","content":[],"model":"test-backend","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":0}}}',
+        '{"type":"ping"}',
+        '{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        '',
+      ].join('\n'),
+    },
+  ])('discards uncommitted $wireFormat control frames before cross-model recovery', async ({ controlFrames }) => {
+    const previousModels = owlcodaConfig.models
+    const previousProtocol = owlcodaConfig.localRuntimeProtocol
+    const previousFallbackEnabled = owlcodaConfig.middleware?.fallbackEnabled
+    const previousStreamFallbackEnabled = owlcodaConfig.middleware?.streamFallbackToNonStreamingEnabled
+    if (!owlcodaConfig.middleware) owlcodaConfig.middleware = {}
+    owlcodaConfig.localRuntimeProtocol = 'anthropic_messages'
+    owlcodaConfig.middleware.fallbackEnabled = true
+    owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = true
+    owlcodaConfig.models = [
+      ...previousModels.map(model => ({
+        ...model,
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+      })),
+      {
+        id: 'fallback-model',
+        label: 'Fallback',
+        backendModel: 'fallback-backend',
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+        aliases: [],
+        tier: 'balanced',
+        contextWindow: 32768,
+      },
+    ]
+
+    let primaryNonStreamCalls = 0
+    let fallbackModelCalls = 0
+    mockRouterHandler = (_req, res) => {
+      const requestModel = lastRouterRequest?.body?.model
+      const streaming = lastRouterRequest?.body?.stream === true
+      if (requestModel === 'test-backend' && streaming) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.write(controlFrames)
+        setImmediate(() => res.destroy(new Error('primary stream closed after control frames')))
+        return
+      }
+      if (requestModel === 'test-backend') {
+        primaryNonStreamCalls += 1
+        res.writeHead(503, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'primary non-streaming recovery failed' } }))
+        return
+      }
+
+      fallbackModelCalls += 1
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        id: 'msg_cross_model_control_frame_recovery',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Recovered after buffered control frames.' }],
+        model: 'fallback-backend',
+        stop_reason: 'end_turn',
+        stop_sequence: null,
+        usage: { input_tokens: 7, output_tokens: 5 },
+      }))
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'default',
+          messages: [{ role: 'user', content: 'recover after upstream control frames' }],
+          max_tokens: 100,
+          stream: true,
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const text = await response.text()
+      expect(text).toContain('Recovered after buffered control frames.')
+      expect(text).toContain('event: message_stop')
+      expect(text).not.toContain('event: error')
+      expect(text.match(/event: message_start/g)).toHaveLength(1)
+      expect(primaryNonStreamCalls).toBeGreaterThanOrEqual(1)
+      expect(fallbackModelCalls).toBeGreaterThanOrEqual(1)
+      expect(response.headers.get('x-owlcoda-served-by')).toBe('fallback-model')
+      expect(response.headers.get('x-owlcoda-fallback')).toBe('true')
+    } finally {
+      owlcodaConfig.models = previousModels
+      owlcodaConfig.localRuntimeProtocol = previousProtocol
+      if (previousFallbackEnabled === undefined) delete owlcodaConfig.middleware.fallbackEnabled
+      else owlcodaConfig.middleware.fallbackEnabled = previousFallbackEnabled
+      if (previousStreamFallbackEnabled === undefined) delete owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled
+      else owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = previousStreamFallbackEnabled
+    }
+  }, 20_000)
+
+  it.each([
+    {
+      wireFormat: 'Anthropic SSE',
+      messageStart: [
+        'event: message_start',
+        'data: {"type":"message_start","message":{"id":"msg_buffer_limit","type":"message","role":"assistant","content":[],"model":"test-backend","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":0}}}',
+        '',
+        '',
+      ].join('\n'),
+      makePing: (index: number, padding: string) =>
+        `event: ping\ndata: ${JSON.stringify({ type: 'ping', index, padding })}\n\n`,
+    },
+    {
+      wireFormat: 'raw JSON lines',
+      messageStart: '{"type":"message_start","message":{"id":"msg_buffer_limit","type":"message","role":"assistant","content":[],"model":"test-backend","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":4,"output_tokens":0}}}\n',
+      makePing: (index: number, padding: string) =>
+        `${JSON.stringify({ type: 'ping', index, padding })}\n`,
+    },
+  ])('commits the primary $wireFormat lifecycle when non-visible control frames exceed the precommit byte budget', async ({ messageStart, makePing }) => {
+    const previousModels = owlcodaConfig.models
+    const previousProtocol = owlcodaConfig.localRuntimeProtocol
+    const previousFallbackEnabled = owlcodaConfig.middleware?.fallbackEnabled
+    const previousStreamFallbackEnabled = owlcodaConfig.middleware?.streamFallbackToNonStreamingEnabled
+    if (!owlcodaConfig.middleware) owlcodaConfig.middleware = {}
+    owlcodaConfig.localRuntimeProtocol = 'anthropic_messages'
+    owlcodaConfig.middleware.fallbackEnabled = true
+    owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = true
+    owlcodaConfig.models = [
+      ...previousModels.map(model => ({
+        ...model,
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+      })),
+      {
+        id: 'fallback-model',
+        label: 'Fallback',
+        backendModel: 'fallback-backend',
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+        aliases: [],
+        tier: 'balanced',
+        contextWindow: 32768,
+      },
+    ]
+
+    const controlFrames = [messageStart]
+    let controlFrameBytes = Buffer.byteLength(messageStart)
+    let controlFrameIndex = 0
+    while (controlFrameBytes <= 80 * 1024) {
+      const padding = controlFrameIndex === 32 ? `precommit-limit-crossed-${'x'.repeat(2048)}` : 'x'.repeat(2048)
+      const frame = makePing(controlFrameIndex, padding)
+      controlFrames.push(frame)
+      controlFrameBytes += Buffer.byteLength(frame)
+      controlFrameIndex += 1
+    }
+
+    let primaryNonStreamCalls = 0
+    let fallbackModelCalls = 0
+    mockRouterHandler = (_req, res) => {
+      const requestModel = lastRouterRequest?.body?.model
+      const streaming = lastRouterRequest?.body?.stream === true
+      if (requestModel === 'test-backend' && streaming) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        for (const frame of controlFrames) res.write(frame)
+        res.end()
+        return
+      }
+      if (requestModel === 'test-backend') {
+        primaryNonStreamCalls += 1
+        res.writeHead(503, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'must not retry after protocol commit' } }))
+        return
+      }
+
+      if (requestModel === 'fallback-backend') {
+        fallbackModelCalls += 1
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({
+          id: 'msg_unsafe_replay',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Must not replay after buffer commit.' }],
+          model: 'fallback-backend',
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 7, output_tokens: 5 },
+        }))
+        return
+      }
+
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'unexpected mock request' } }))
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'default',
+          messages: [{ role: 'user', content: 'bound non-visible control buffering' }],
+          max_tokens: 100,
+          stream: true,
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const text = await response.text()
+      expect(controlFrameBytes).toBeGreaterThan(80 * 1024)
+      expect(text).toContain('precommit-limit-crossed')
+      expect(text).toContain('event: error')
+      expect(text).not.toContain('Must not replay after buffer commit.')
+      expect(text.match(/event: message_start/g)).toHaveLength(1)
+      expect(primaryNonStreamCalls).toBe(0)
+      expect(fallbackModelCalls).toBe(0)
+      expect(response.headers.get('x-owlcoda-served-by')).toBe('test-backend')
+      expect(response.headers.get('x-owlcoda-fallback')).toBeNull()
+    } finally {
+      owlcodaConfig.models = previousModels
+      owlcodaConfig.localRuntimeProtocol = previousProtocol
+      if (previousFallbackEnabled === undefined) delete owlcodaConfig.middleware.fallbackEnabled
+      else owlcodaConfig.middleware.fallbackEnabled = previousFallbackEnabled
+      if (previousStreamFallbackEnabled === undefined) delete owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled
+      else owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = previousStreamFallbackEnabled
+    }
+  }, 20_000)
+
+  it.each([
+    {
+      wireFormat: 'Anthropic SSE',
+      incompleteFramePrefix: 'event: ping\ndata: {"type":"ping","padding":"',
+      continuationChunk: 'x'.repeat(2048),
+    },
+    {
+      wireFormat: 'raw JSON line',
+      incompleteFramePrefix: '{"type":"ping","padding":"',
+      continuationChunk: 'x'.repeat(2048),
+    },
+    {
+      wireFormat: 'undetermined wire-format prefix',
+      incompleteFramePrefix: ' '.repeat(2048),
+      continuationChunk: ' '.repeat(2048),
+    },
+  ])('fails closed when one incomplete $wireFormat parser frame exceeds the byte budget', async ({
+    incompleteFramePrefix,
+    continuationChunk,
+  }) => {
+    const previousModels = owlcodaConfig.models
+    const previousProtocol = owlcodaConfig.localRuntimeProtocol
+    const previousFallbackEnabled = owlcodaConfig.middleware?.fallbackEnabled
+    const previousStreamFallbackEnabled = owlcodaConfig.middleware?.streamFallbackToNonStreamingEnabled
+    if (!owlcodaConfig.middleware) owlcodaConfig.middleware = {}
+    owlcodaConfig.localRuntimeProtocol = 'anthropic_messages'
+    owlcodaConfig.middleware.fallbackEnabled = true
+    owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = true
+    owlcodaConfig.models = [
+      ...previousModels.map(model => ({
+        ...model,
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+      })),
+      {
+        id: 'fallback-model',
+        label: 'Fallback',
+        backendModel: 'fallback-backend',
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+        aliases: [],
+        tier: 'balanced',
+        contextWindow: 32768,
+      },
+    ]
+
+    let primaryNonStreamCalls = 0
+    let fallbackModelCalls = 0
+    mockRouterHandler = (_req, res) => {
+      const requestModel = lastRouterRequest?.body?.model
+      const streaming = lastRouterRequest?.body?.stream === true
+      if (requestModel === 'test-backend' && streaming) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.write(incompleteFramePrefix)
+        for (let i = 0; i < 48; i += 1) res.write(continuationChunk)
+        res.end()
+        return
+      }
+      if (requestModel === 'test-backend') {
+        primaryNonStreamCalls += 1
+        res.writeHead(503, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'must not recover after parser limit' } }))
+        return
+      }
+      if (requestModel === 'fallback-backend') {
+        fallbackModelCalls += 1
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({
+          id: 'msg_unsafe_parser_replay',
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Must not replay after parser limit.' }],
+          model: 'fallback-backend',
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 7, output_tokens: 5 },
+        }))
+        return
+      }
+
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'unexpected mock request' } }))
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'default',
+          messages: [{ role: 'user', content: 'bound incomplete parser frames' }],
+          max_tokens: 100,
+          stream: true,
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const text = await response.text()
+      expect(text).toContain('parser buffer limit')
+      expect(text).toContain('65536')
+      expect(text).toContain('event: error')
+      expect(text).not.toContain('Must not replay after parser limit.')
+      expect(primaryNonStreamCalls).toBe(0)
+      expect(fallbackModelCalls).toBe(0)
+      expect(response.headers.get('x-owlcoda-served-by')).toBe('test-backend')
+      expect(response.headers.get('x-owlcoda-fallback')).toBeNull()
+    } finally {
+      owlcodaConfig.models = previousModels
+      owlcodaConfig.localRuntimeProtocol = previousProtocol
+      if (previousFallbackEnabled === undefined) delete owlcodaConfig.middleware.fallbackEnabled
+      else owlcodaConfig.middleware.fallbackEnabled = previousFallbackEnabled
+      if (previousStreamFallbackEnabled === undefined) delete owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled
+      else owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = previousStreamFallbackEnabled
+    }
+  }, 20_000)
+
+  it('detects Anthropic SSE when event and data prefixes are split across TCP chunks', async () => {
+    const previousModels = owlcodaConfig.models
+    const previousProtocol = owlcodaConfig.localRuntimeProtocol
+    const previousFallbackEnabled = owlcodaConfig.middleware?.fallbackEnabled
+    const previousStreamFallbackEnabled = owlcodaConfig.middleware?.streamFallbackToNonStreamingEnabled
+    if (!owlcodaConfig.middleware) owlcodaConfig.middleware = {}
+    owlcodaConfig.localRuntimeProtocol = 'anthropic_messages'
+    owlcodaConfig.middleware.fallbackEnabled = true
+    owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = true
+    owlcodaConfig.models = [
+      ...previousModels.map(model => ({
+        ...model,
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+      })),
+      {
+        id: 'fallback-model',
+        label: 'Fallback',
+        backendModel: 'fallback-backend',
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+        aliases: [],
+        tier: 'balanced',
+        contextWindow: 32768,
+      },
+    ]
+
+    let fallbackModelCalls = 0
+    mockRouterHandler = (_req, res) => {
+      const requestModel = lastRouterRequest?.body?.model
+      const streaming = lastRouterRequest?.body?.stream === true
+      if (requestModel === 'test-backend' && streaming) {
+        const messageStart = {
+          type: 'message_start',
+          message: {
+            id: 'msg_split_prefix',
+            type: 'message',
+            role: 'assistant',
+            content: [],
+            model: 'test-backend',
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 4, output_tokens: 0 },
+          },
+        }
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.write('ev')
+        setTimeout(() => res.write('ent: message_start\nda'), 10)
+        setTimeout(() => {
+          res.write(`ta: ${JSON.stringify(messageStart)}\n\n`)
+          res.end([
+            'event: content_block_start',
+            'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+            '',
+            'event: content_block_delta',
+            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Split SSE prefix parsed."}}',
+            '',
+            'event: content_block_stop',
+            'data: {"type":"content_block_stop","index":0}',
+            '',
+            'event: message_delta',
+            'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}',
+            '',
+            'event: message_stop',
+            'data: {"type":"message_stop"}',
+            '',
+            '',
+          ].join('\n'))
+        }, 20)
+        return
+      }
+      if (requestModel === 'fallback-backend') {
+        fallbackModelCalls += 1
+      }
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'unexpected recovery request' } }))
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'default',
+          messages: [{ role: 'user', content: 'parse split SSE prefixes' }],
+          max_tokens: 100,
+          stream: true,
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const text = await response.text()
+      expect(text).toContain('Split SSE prefix parsed.')
+      expect(text).toContain('event: message_stop')
+      expect(text).not.toContain('event: error')
+      expect(text.match(/event: message_start/g)).toHaveLength(1)
+      expect(fallbackModelCalls).toBe(0)
+      expect(response.headers.get('x-owlcoda-served-by')).toBe('test-backend')
+      expect(response.headers.get('x-owlcoda-fallback')).toBeNull()
+    } finally {
+      owlcodaConfig.models = previousModels
+      owlcodaConfig.localRuntimeProtocol = previousProtocol
+      if (previousFallbackEnabled === undefined) delete owlcodaConfig.middleware.fallbackEnabled
+      else owlcodaConfig.middleware.fallbackEnabled = previousFallbackEnabled
+      if (previousStreamFallbackEnabled === undefined) delete owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled
+      else owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = previousStreamFallbackEnabled
+    }
+  }, 20_000)
+
+  it('processes CRLF SSE frames when the delimiter is split across upstream chunks', async () => {
+    const previousModels = owlcodaConfig.models
+    const previousProtocol = owlcodaConfig.localRuntimeProtocol
+    const previousFallbackEnabled = owlcodaConfig.middleware?.fallbackEnabled
+    const previousStreamFallbackEnabled = owlcodaConfig.middleware?.streamFallbackToNonStreamingEnabled
+    const previousFirstTokenTimeout = owlcodaConfig.middleware?.streamFirstTokenTimeoutMs
+    if (!owlcodaConfig.middleware) owlcodaConfig.middleware = {}
+    owlcodaConfig.localRuntimeProtocol = 'anthropic_messages'
+    owlcodaConfig.models = previousModels.map(model => ({
+      ...model,
+      endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+    }))
+    owlcodaConfig.middleware.fallbackEnabled = false
+    owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = false
+    owlcodaConfig.middleware.streamFirstTokenTimeoutMs = 1_000
+
+    let tailSentAt = 0
+    mockRouterHandler = (_req, res) => {
+      const requestModel = lastRouterRequest?.body?.model
+      if (requestModel !== 'test-backend' || lastRouterRequest?.body?.stream !== true) {
+        res.writeHead(500, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'unexpected request' } }))
+        return
+      }
+
+      const messageStart = JSON.stringify({
+        type: 'message_start',
+        message: {
+          id: 'msg_crlf_split',
+          type: 'message',
+          role: 'assistant',
+          content: [],
+          model: 'test-backend',
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 4, output_tokens: 0 },
+        },
+      })
+      const visibleDelta = JSON.stringify({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'CRLF visible before delayed tail.' },
+      })
+      const tailFrames = [
+        `event: content_block_stop\r\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}`,
+        `event: message_delta\r\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 6 } })}`,
+        `event: message_stop\r\ndata: ${JSON.stringify({ type: 'message_stop' })}`,
+      ].join('\r\n\r\n')
+
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+      res.write(`event: message_start\r\ndata: ${messageStart}\r\n\r\n`)
+      // Leave the final CR of the visible frame's CRLFCRLF delimiter in the
+      // first TCP write; the rest arrives in a separate write below.
+      res.write(`event: content_block_delta\r\ndata: ${visibleDelta}\r`)
+      setTimeout(() => {
+        res.write('\n\r\n')
+        setTimeout(() => {
+          tailSentAt = Date.now()
+          res.write(`${tailFrames}\r\n\r\n`)
+          res.end()
+        }, 220)
+      }, 20)
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'default',
+          messages: [{ role: 'user', content: 'parse CRLF split SSE' }],
+          max_tokens: 100,
+          stream: true,
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      expect(response.body).toBeTruthy()
+      const reader = response.body!.getReader()
+      const decoder = new TextDecoder()
+      let text = ''
+      let visibleAt = 0
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        text += decoder.decode(value, { stream: true })
+        if (!visibleAt && text.includes('CRLF visible before delayed tail.')) visibleAt = Date.now()
+      }
+      text += decoder.decode()
+
+      expect(visibleAt).toBeGreaterThan(0)
+      expect(tailSentAt).toBeGreaterThan(0)
+      expect(visibleAt).toBeLessThan(tailSentAt)
+      expect(text).toContain('CRLF visible before delayed tail.')
+      expect(text).toContain('event: message_stop')
+      expect(text).not.toContain('event: error')
+    } finally {
+      owlcodaConfig.models = previousModels
+      owlcodaConfig.localRuntimeProtocol = previousProtocol
+      if (previousFallbackEnabled === undefined) delete owlcodaConfig.middleware.fallbackEnabled
+      else owlcodaConfig.middleware.fallbackEnabled = previousFallbackEnabled
+      if (previousStreamFallbackEnabled === undefined) delete owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled
+      else owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = previousStreamFallbackEnabled
+      if (previousFirstTokenTimeout === undefined) delete owlcodaConfig.middleware.streamFirstTokenTimeoutMs
+      else owlcodaConfig.middleware.streamFirstTokenTimeoutMs = previousFirstTokenTimeout
+    }
+  }, 20_000)
+
+  it('counts a body-stage primary failure once and opens its circuit after cross-model recovery', async () => {
+    const previousModels = owlcodaConfig.models
+    const previousProtocol = owlcodaConfig.localRuntimeProtocol
+    const previousFallbackEnabled = owlcodaConfig.middleware?.fallbackEnabled
+    const previousStreamFallbackEnabled = owlcodaConfig.middleware?.streamFallbackToNonStreamingEnabled
+    const previousFirstTokenTimeout = owlcodaConfig.middleware?.streamFirstTokenTimeoutMs
+    if (!owlcodaConfig.middleware) owlcodaConfig.middleware = {}
+    owlcodaConfig.localRuntimeProtocol = 'anthropic_messages'
+    owlcodaConfig.middleware.fallbackEnabled = true
+    owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = true
+    owlcodaConfig.middleware.streamFirstTokenTimeoutMs = 1_000
+    owlcodaConfig.models = [
+      {
+        id: 'c-primary',
+        label: 'C primary',
+        backendModel: 'c-primary-backend',
+        aliases: ['c-primary'],
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+        tier: 'general',
+        default: true,
+        contextWindow: 32768,
+      },
+      {
+        id: 'c-fallback',
+        label: 'C fallback',
+        backendModel: 'c-fallback-backend',
+        aliases: [],
+        endpoint: `http://127.0.0.1:${mockRouterPort}/v1/messages`,
+        tier: 'balanced',
+        contextWindow: 32768,
+      },
+    ]
+
+    resetCircuitBreaker()
+    resetBudgets()
+    configureCircuitBreaker({ threshold: 3, cooldownMs: 60_000 })
+    let primaryStreamCalls = 0
+    let primaryNonStreamCalls = 0
+    let fallbackNonStreamCalls = 0
+    mockRouterHandler = (_req, res) => {
+      const requestModel = lastRouterRequest?.body?.model
+      const streaming = lastRouterRequest?.body?.stream === true
+      if (requestModel === 'c-primary-backend' && streaming) {
+        primaryStreamCalls += 1
+        const messageStart = JSON.stringify({
+          type: 'message_start',
+          message: {
+            id: `c-primary-${primaryStreamCalls}`,
+            type: 'message',
+            role: 'assistant',
+            content: [],
+            model: 'c-primary-backend',
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 4, output_tokens: 0 },
+          },
+        })
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.write(`event: message_start\ndata: ${messageStart}\n\n`)
+        setTimeout(() => res.destroy(new Error('primary body closed before visible output')), 10)
+        return
+      }
+      if (requestModel === 'c-primary-backend') {
+        primaryNonStreamCalls += 1
+        res.writeHead(503, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'primary non-stream recovery failed' } }))
+        return
+      }
+      if (requestModel === 'c-fallback-backend' && !streaming) {
+        fallbackNonStreamCalls += 1
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'text', text: 'Recovered after body-stage failure.' }],
+          model: 'c-fallback-backend',
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 7, output_tokens: 5 },
+        }))
+        return
+      }
+      res.writeHead(500, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'unexpected circuit test request' } }))
+    }
+
+    try {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const response = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/messages`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'c-primary',
+            messages: [{ role: 'user', content: `body-stage recovery ${attempt}` }],
+            max_tokens: 100,
+            stream: true,
+          }),
+        })
+        expect(response.status).toBe(200)
+        const text = await response.text()
+        expect(text).toContain('Recovered after body-stage failure.')
+        expect(text).toContain('event: message_stop')
+        expect(text).not.toContain('event: error')
+        expect(response.headers.get('x-owlcoda-served-by')).toBe('c-fallback')
+        expect(response.headers.get('x-owlcoda-fallback')).toBe('true')
+      }
+
+      const primaryCircuit = getCircuitState('c-primary-backend')
+      expect(primaryCircuit.state).toBe('open')
+      expect(primaryCircuit.failures).toBe(3)
+      expect(getErrorBudget('c-primary-backend')).toMatchObject({ total: 3, successes: 0, failures: 3 })
+      expect(getErrorBudget('c-fallback')).toMatchObject({ total: 3, successes: 3, failures: 0 })
+      expect(primaryStreamCalls).toBe(3)
+      expect(primaryNonStreamCalls).toBe(3)
+      expect(fallbackNonStreamCalls).toBe(3)
+    } finally {
+      resetCircuitBreaker()
+      resetBudgets()
+      owlcodaConfig.models = previousModels
+      owlcodaConfig.localRuntimeProtocol = previousProtocol
+      if (previousFallbackEnabled === undefined) delete owlcodaConfig.middleware.fallbackEnabled
+      else owlcodaConfig.middleware.fallbackEnabled = previousFallbackEnabled
+      if (previousStreamFallbackEnabled === undefined) delete owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled
+      else owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = previousStreamFallbackEnabled
+      if (previousFirstTokenTimeout === undefined) delete owlcodaConfig.middleware.streamFirstTokenTimeoutMs
+      else owlcodaConfig.middleware.streamFirstTokenTimeoutMs = previousFirstTokenTimeout
+    }
+  }, 20_000)
+
+  it('does not cross models when the selected model rejects non-streaming recovery with a client error', async () => {
+    const previousModels = owlcodaConfig.models
+    const previousFallbackEnabled = owlcodaConfig.middleware?.fallbackEnabled
+    const previousStreamFallbackEnabled = owlcodaConfig.middleware?.streamFallbackToNonStreamingEnabled
+    if (!owlcodaConfig.middleware) owlcodaConfig.middleware = {}
+    owlcodaConfig.middleware.fallbackEnabled = true
+    owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = true
+    owlcodaConfig.models = [
+      ...previousModels,
+      {
+        id: 'fallback-model',
+        label: 'Fallback',
+        backendModel: 'fallback-backend',
+        aliases: [],
+        tier: 'balanced',
+        contextWindow: 32768,
+      },
+    ]
+
+    let fallbackModelCalls = 0
+    mockRouterHandler = (_req, res) => {
+      const requestModel = lastRouterRequest?.body?.model
+      const streaming = lastRouterRequest?.body?.stream === true
+      if (requestModel === 'test-backend' && streaming) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+        res.flushHeaders()
+        setImmediate(() => res.destroy(new Error('primary stream closed before first token')))
+        return
+      }
+      if (requestModel === 'test-backend') {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: { message: 'request is invalid for every model' } }))
+        return
+      }
+
+      fallbackModelCalls += 1
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({
+        id: 'chatcmpl-unsafe-fallback',
+        object: 'chat.completion',
+        model: 'fallback-backend',
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: 'Must not be used.' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 },
+      }))
+    }
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${owlcodaPort}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'default',
+          messages: [{ role: 'user', content: 'invalid across all models' }],
+          max_tokens: 100,
+          stream: true,
+        }),
+      })
+
+      expect(response.status).toBe(200)
+      const text = await response.text()
+      expect(text).toContain('event: error')
+      expect(text).not.toContain('Must not be used.')
+      expect(fallbackModelCalls).toBe(0)
+    } finally {
+      owlcodaConfig.models = previousModels
+      if (previousFallbackEnabled === undefined) delete owlcodaConfig.middleware.fallbackEnabled
+      else owlcodaConfig.middleware.fallbackEnabled = previousFallbackEnabled
+      if (previousStreamFallbackEnabled === undefined) delete owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled
+      else owlcodaConfig.middleware.streamFallbackToNonStreamingEnabled = previousStreamFallbackEnabled
     }
   }, 20_000)
 

@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/core-successor-plan-v1.json",
+  "title": "OwlCoda RunKit Core Successor Plan V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "planId", "status", "fromCore", "fromCoreMode", "fromCoreSetSha256", "fleetCoreBindings", "toCore", "sourceCandidate", "fleetDiscoveryRequest", "fleetDiscovery", "migrationContract", "repositoryActions", "authorizationGranted", "planSha256"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitCoreSuccessorPlanV1" },
+    "planId": { "type": "string", "minLength": 1 },
+    "status": { "const": "frozen" },
+    "fromCore": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/core" }] },
+    "fromCoreMode": { "enum": ["uniform", "per_project"] },
+    "fromCoreSetSha256": { "$ref": "#/$defs/hash" },
+    "fleetCoreBindings": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/coreBinding" } },
+    "toCore": { "$ref": "#/$defs/core" },
+    "sourceCandidate": { "$ref": "#/$defs/source" },
+    "fleetDiscoveryRequest": { "$ref": "#/$defs/fleetRequest" },
+    "fleetDiscovery": { "$ref": "#/$defs/discovery" },
+    "migrationContract": { "$ref": "#/$defs/migration" },
+    "repositoryActions": { "$ref": "#/$defs/actions" },
+    "authorizationGranted": { "const": false },
+    "planSha256": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "core": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "coreVersion", "coreManifestSha256", "coreSourceRef"],
+      "properties": {
+        "contractVersion": { "type": "string", "minLength": 1 },
+        "coreVersion": { "type": "string", "minLength": 1 },
+        "coreManifestSha256": { "$ref": "#/$defs/hash" },
+        "coreSourceRef": { "type": "string", "pattern": "^artifact:sha256:[a-f0-9]{64}$" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidatePath", "candidateSha256", "sourceFingerprint", "pathClosure", "materializationProof"],
+      "properties": {
+        "candidatePath": { "type": "string", "minLength": 1 },
+        "candidateSha256": { "$ref": "#/$defs/hash" },
+        "sourceFingerprint": { "type": "string", "pattern": "^(?:sha256:)?[a-f0-9]{64}$" },
+        "deliveryPacketPath": { "type": "string", "minLength": 1 },
+        "pathClosure": { "$ref": "#/$defs/pathClosure" },
+        "materializationProof": { "$ref": "#/$defs/materializationProof" }
+      }
+    },
+    "coreBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspaceRoot", "fromCore"],
+      "properties": {
+        "workspaceRoot": { "type": "string", "minLength": 1 },
+        "fromCore": { "$ref": "#/$defs/core" }
+      }
+    },
+    "pathClosure": {
+      "type": "object",
+      "required": ["schemaVersion", "status", "exitCode", "includedPaths", "issueCodes", "closureSha256", "authorizationGranted"],
+      "properties": {
+        "schemaVersion": { "const": "OwlCodaRunKitSourceCandidatePathClosureV1" },
+        "status": { "const": "valid" },
+        "exitCode": { "const": 0 },
+        "includedPaths": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "includedDirtyPaths": { "type": "array", "items": { "type": "string" } },
+        "candidateCoveredPaths": { "type": "array", "items": { "type": "string" } },
+        "uncoveredDirtyPaths": { "type": "array", "maxItems": 0, "items": { "type": "string" } },
+        "issueCodes": { "type": "array", "maxItems": 0, "items": { "type": "string" } },
+        "candidateSha256": { "$ref": "#/$defs/hash" },
+        "payloadSha256": { "$ref": "#/$defs/hash" },
+        "closureSha256": { "$ref": "#/$defs/hash" },
+        "authorizationGranted": { "const": false }
+      }
+    },
+    "materializationProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidateSha256", "payloadSha256", "materializedCore", "matchesToCore"],
+      "properties": {
+        "candidateSha256": { "$ref": "#/$defs/hash" },
+        "payloadSha256": { "$ref": "#/$defs/hash" },
+        "materializedCore": { "$ref": "#/$defs/core" },
+        "matchesToCore": { "const": true }
+      }
+    },
+    "fleetRequest": {
+      "type": "object",
+      "properties": {
+        "workspaceRoots": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "fleetRoots": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "fleetManifestPath": { "type": "string", "minLength": 1 }
+      }
+    },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "source", "coverageRoots", "unreachableRoots", "workspaceRoots", "classifications", "issues", "complete", "frozenManifestSha256", "authorizationGranted"],
+      "properties": {
+        "schemaVersion": { "const": "OwlCodaRunKitFleetDiscoveryV1" },
+        "source": { "type": "string", "minLength": 1 },
+        "manifestPath": { "type": "string", "minLength": 1 },
+        "coverageRoots": { "type": "array", "items": { "type": "string" } },
+        "unreachableRoots": { "type": "array", "items": { "type": "string" } },
+        "workspaceRoots": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+        "classifications": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["active", "retired", "excluded", "invalid"],
+          "properties": {
+            "active": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "retired": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "excluded": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "invalid": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+          }
+        },
+        "issues": { "type": "array", "maxItems": 0 },
+        "complete": { "const": true },
+        "frozenManifestSha256": { "$ref": "#/$defs/hash" },
+        "authorizationGranted": { "const": false }
+      }
+    },
+    "migration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["completeFleetRequired", "globalPreflightBeforeWrites", "ownerMigrationAuthorityRequired", "migrationScope", "projectOrder"],
+      "properties": {
+        "completeFleetRequired": { "const": true },
+        "globalPreflightBeforeWrites": { "const": true },
+        "ownerMigrationAuthorityRequired": { "const": true },
+        "migrationScope": { "const": "project_runkit_config_and_local_migration_receipt_only" },
+        "projectOrder": { "const": "canonical_workspace_root" }
+      }
+    },
+    "actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "commit", "push", "publish", "deploy"],
+      "properties": { "stage": { "const": false }, "commit": { "const": false }, "push": { "const": false }, "publish": { "const": false }, "deploy": { "const": false } }
+    }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitCoreSuccessorPlanV1",
+    "planId": "successor-001",
+    "status": "frozen",
+    "fromCore": { "contractVersion": "0.2", "coreVersion": "0.15.1", "coreManifestSha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "coreSourceRef": "artifact:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+    "fromCoreMode": "uniform",
+    "fromCoreSetSha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "fleetCoreBindings": [{ "workspaceRoot": "/fleet/project", "fromCore": { "contractVersion": "0.2", "coreVersion": "0.15.1", "coreManifestSha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "coreSourceRef": "artifact:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } }],
+    "toCore": { "contractVersion": "0.2", "coreVersion": "0.16.0", "coreManifestSha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "coreSourceRef": "artifact:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+    "sourceCandidate": {
+      "candidatePath": ".owlcoda/runkit/source.json",
+      "candidateSha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "sourceFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "pathClosure": { "schemaVersion": "OwlCodaRunKitSourceCandidatePathClosureV1", "status": "valid", "exitCode": 0, "includedPaths": ["scripts/runkit-contract/**"], "issueCodes": [], "closureSha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222", "authorizationGranted": false },
+      "materializationProof": { "candidateSha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "payloadSha256": "sha256:3333333333333333333333333333333333333333333333333333333333333333", "materializedCore": { "contractVersion": "0.2", "coreVersion": "0.16.0", "coreManifestSha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "coreSourceRef": "artifact:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }, "matchesToCore": true }
+    },
+    "fleetDiscoveryRequest": { "fleetRoots": ["/fleet"] },
+    "fleetDiscovery": { "schemaVersion": "OwlCodaRunKitFleetDiscoveryV1", "source": "fleet_roots", "coverageRoots": ["/fleet"], "unreachableRoots": [], "workspaceRoots": ["/fleet/project"], "classifications": { "active": ["/fleet/project"], "retired": [], "excluded": [], "invalid": [] }, "issues": [], "complete": true, "frozenManifestSha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "authorizationGranted": false },
+    "migrationContract": { "completeFleetRequired": true, "globalPreflightBeforeWrites": true, "ownerMigrationAuthorityRequired": true, "migrationScope": "project_runkit_config_and_local_migration_receipt_only", "projectOrder": "canonical_workspace_root" },
+    "repositoryActions": { "stage": false, "commit": false, "push": false, "publish": false, "deploy": false },
+    "authorizationGranted": false,
+    "planSha256": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  }]
+}

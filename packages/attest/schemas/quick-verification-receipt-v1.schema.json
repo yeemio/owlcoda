@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/trust/quick-verification-receipt-v1.schema.json",
+  "title": "OwlCoda Quick Verification Receipt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "receiptId",
+    "assurance",
+    "authorizationGranted",
+    "coreIdentity",
+    "workspaceBefore",
+    "exactCommand",
+    "verificationContext",
+    "startedAt",
+    "finishedAt",
+    "exitResult",
+    "outputArtifacts",
+    "workspaceAfter",
+    "mutationDecision",
+    "issueCodes"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "OwlCodaQuickVerificationReceiptV1"
+    },
+    "receiptId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "assurance": {
+      "const": "captured_verification"
+    },
+    "authorizationGranted": {
+      "const": false
+    },
+    "coreIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "coreVersion",
+        "coreManifestSha256"
+      ],
+      "properties": {
+        "contractVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "coreVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "coreManifestSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "workspaceBefore": {
+      "$ref": "workspace-snapshot-v1.schema.json"
+    },
+    "exactCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executable",
+        "argv",
+        "cwd"
+      ],
+      "properties": {
+        "executable": {
+          "type": "string",
+          "minLength": 1
+        },
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "verificationContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "platform",
+        "architecture",
+        "runtime"
+      ],
+      "properties": {
+        "platform": {
+          "type": "string",
+          "minLength": 1
+        },
+        "architecture": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "startedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "finishedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "exitResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "exitCode",
+        "signal"
+      ],
+      "properties": {
+        "exitCode": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "signal": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "outputArtifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stdout",
+        "stderr"
+      ],
+      "properties": {
+        "stdout": {
+          "$ref": "#/$defs/outputArtifact"
+        },
+        "stderr": {
+          "$ref": "#/$defs/outputArtifact"
+        }
+      }
+    },
+    "workspaceAfter": {
+      "$ref": "workspace-snapshot-v1.schema.json"
+    },
+    "mutationDecision": {
+      "enum": [
+        "source_unchanged",
+        "invalidated_by_command_source_mutation"
+      ]
+    },
+    "issueCodes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "signatureRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "outputArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "sizeBytes"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

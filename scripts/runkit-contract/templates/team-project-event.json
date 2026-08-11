@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "OwlCodaRunKitTeamProjectEventV1",
+  "eventId": "event-001",
+  "type": "agent_assigned",
+  "occurredAt": "2026-08-08T00:00:00.000Z",
+  "assignmentId": "assignment-001",
+  "workItemId": "work-item-1",
+  "agentId": "agent-runtime"
+}

@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "OwlCodaRunKitDeploymentExecuteRequestV1",
+  "executeRunId": "replace-with-execute-run-id",
+  "executeGoal": {
+    "path": ".owlcoda/runkit/executions/replace-with-execute-run-id/goal-contract.json",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "prepareReceiptSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "target": {
+    "schemaVersion": "OwlCodaRunKitRemoteTargetV1",
+    "targetId": "replace-with-target-id",
+    "environment": "production",
+    "host": "replace.example.invalid",
+    "port": 22,
+    "user": "deploy",
+    "hostKeySha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "machineIdentitySha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  },
+  "ownerAuthority": {
+    "path": "authorities/replace-with-execute-run-id.json",
+    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "ownerDecision": {
+    "path": "authorities/replace-with-owner-decision-id.json",
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  },
+  "ownerDecisionSnapshot": {
+    "path": ".owlcoda/runkit/deployments/replace-with-execute-run-id/owner-decision-snapshot.json",
+    "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+  },
+  "workItemId": "deployment-execute",
+  "profileId": "deployment",
+  "resourcePreflight": {
+    "path": ".owlcoda/runkit/executions/replace-with-execute-run-id/resource-preflights/replace-with-preflight-id.json",
+    "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+  },
+  "deploy": true,
+  "destructive": false
+}

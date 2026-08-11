@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
@@ -33,14 +33,19 @@ import {
   resetJobSupervisor,
   startJob,
 } from '../../src/native/job-supervisor.js'
+import { installIsolatedOwlCodaHome } from './isolated-owlcoda-home.js'
 
-// Use a temp dir to avoid polluting real sessions
-const REAL_DIR = getSessionsDir()
+const restoreTestHome = installIsolatedOwlCodaHome('owlcoda-session-tests-')
+const isolatedHome = process.env['OWLCODA_HOME']!
+afterAll(() => {
+  try {
+    expect(process.env['OWLCODA_HOME']).toBe(isolatedHome)
+  } finally {
+    restoreTestHome()
+  }
+})
+
 const SESSION_IO_TEST_TIMEOUT_MS = 15000
-let tmpDir: string
-
-// We'll mock the sessions dir by writing to the real dir then cleaning up
-// Instead, let's test the core logic with real save/load
 
 describe('Native Session Persistence', { timeout: SESSION_IO_TEST_TIMEOUT_MS }, () => {
   const testId = `test-session-${Date.now()}`
@@ -53,6 +58,7 @@ describe('Native Session Persistence', { timeout: SESSION_IO_TEST_TIMEOUT_MS }, 
   })
 
   it('saves and loads a conversation', () => {
+    expect(getSessionsDir()).toBe(path.join(isolatedHome, 'sessions'))
     const conv = createConversation({
       system: 'Be helpful',
       model: 'test-model',

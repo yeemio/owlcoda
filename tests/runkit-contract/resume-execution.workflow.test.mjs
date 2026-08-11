@@ -286,6 +286,10 @@ test("resume preserves a blocked parent while starting a continuation with empty
   try {
     const parentRunId = "blocked-parent";
     const executionRoot = await planRun(fixture, parentRunId);
+    const parentPlanPath = path.join(executionRoot, "execution-plan.json");
+    const parentPlan = JSON.parse(await readFile(parentPlanPath, "utf8"));
+    delete parentPlan.goalContractSha256;
+    await writeJson(parentPlanPath, parentPlan);
     const closed = await runCli([
       "closeout", "--workspace", fixture.root,
       "--run-id", parentRunId,
@@ -308,6 +312,16 @@ test("resume preserves a blocked parent while starting a continuation with empty
     const attempt = JSON.parse(await readFile(path.join(fixture.root, result.attemptPath), "utf8"));
     assert.equal(attempt.parentCloseout.decision, "blocked");
     assert.deepEqual(attempt.inheritedEvidence.reusableReceiptIds, []);
+    const continuationRoot = path.join(
+      fixture.root,
+      ".owlcoda/runkit/executions",
+      "blocked-continuation",
+    );
+    const continuationGoalBytes = await readFile(path.join(continuationRoot, "goal-contract.json"));
+    const continuationPlan = JSON.parse(
+      await readFile(path.join(continuationRoot, "execution-plan.json"), "utf8"),
+    );
+    assert.equal(continuationPlan.goalContractSha256, sha256(continuationGoalBytes));
     assert.deepEqual(await readFile(path.join(executionRoot, "closeout-receipt.json")), closeoutBefore);
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
@@ -577,6 +591,93 @@ test("resume rejects symlinked output directories without writing outside the wo
     assert.equal(result.status, "invalid_input");
     assert.match(result.issues.join("\n"), /symlink/i);
     assert.deepEqual(await readdir(foreignRoot), []);
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+    await rm(foreignRoot, { recursive: true, force: true });
+  }
+});
+
+test("same-execution resume rejects a symlinked engine pin", async () => {
+  const fixture = await setupFixture();
+  const foreignRoot = await mkdtemp(path.join(tmpdir(), "owlcoda-resume-pin-foreign-"));
+  try {
+    const runId = "symlink-pin-active-parent";
+    const executionRoot = await planRun(fixture, runId);
+    const pinPath = path.join(executionRoot, "engine-pin.json");
+    const foreignPinPath = path.join(foreignRoot, "engine-pin.json");
+    await writeFile(foreignPinPath, await readFile(pinPath));
+    await rm(pinPath);
+    await symlink(foreignPinPath, pinPath);
+    const eventsPath = path.join(executionRoot, "events.jsonl");
+    const eventsBefore = await readFile(eventsPath);
+    const foreignPinBefore = await readFile(foreignPinPath);
+    const requestPath = path.join(fixture.root, "resume-symlink-pin-active.json");
+    await writeJson(requestPath, resumeRequest({
+      resumeId: "resume-symlink-pin-active-001",
+      continuationRunId: null,
+      sources: [],
+    }));
+    const result = await runCli([
+      "resume", "--workspace", fixture.root,
+      "--run-id", runId,
+      "--request", requestPath,
+    ]);
+    assert.equal(result.status, "invalid_input");
+    assert.match(result.issues.join("\n"), /engine pin.*symlink|symlink.*engine pin/i);
+    assert.deepEqual(await readFile(eventsPath), eventsBefore);
+    assert.deepEqual(await readFile(foreignPinPath), foreignPinBefore);
+    await assert.rejects(
+      readFile(path.join(executionRoot, "resume-attempts/resume-symlink-pin-active-001.json")),
+      { code: "ENOENT" },
+    );
+    await assert.rejects(
+      readFile(path.join(executionRoot, "coverage-indexes/resume-symlink-pin-active-001-coverage.json")),
+      { code: "ENOENT" },
+    );
+  } finally {
+    await rm(fixture.root, { recursive: true, force: true });
+    await rm(foreignRoot, { recursive: true, force: true });
+  }
+});
+
+test("closed-run continuation rejects a symlinked parent engine pin", async () => {
+  const fixture = await setupFixture();
+  const foreignRoot = await mkdtemp(path.join(tmpdir(), "owlcoda-parent-pin-foreign-"));
+  try {
+    const parentRunId = "symlink-pin-closed-parent";
+    const executionRoot = await planRun(fixture, parentRunId);
+    assert.equal((await runCli([
+      "closeout", "--workspace", fixture.root,
+      "--run-id", parentRunId,
+      "--decision", "blocked",
+    ])).status, "closed");
+    const pinPath = path.join(executionRoot, "engine-pin.json");
+    const foreignPinPath = path.join(foreignRoot, "engine-pin.json");
+    await writeFile(foreignPinPath, await readFile(pinPath));
+    await rm(pinPath);
+    await symlink(foreignPinPath, pinPath);
+    const foreignPinBefore = await readFile(foreignPinPath);
+    const requestPath = path.join(fixture.root, "resume-symlink-pin-closed.json");
+    await writeJson(requestPath, resumeRequest({
+      resumeId: "resume-symlink-pin-closed-001",
+      continuationRunId: "symlink-pin-must-not-exist",
+      sources: [],
+    }));
+    const result = await runCli([
+      "resume", "--workspace", fixture.root,
+      "--run-id", parentRunId,
+      "--request", requestPath,
+    ]);
+    assert.equal(result.status, "invalid_input");
+    assert.match(result.issues.join("\n"), /engine pin.*symlink|symlink.*engine pin/i);
+    assert.deepEqual(await readFile(foreignPinPath), foreignPinBefore);
+    await assert.rejects(
+      readFile(path.join(
+        fixture.root,
+        ".owlcoda/runkit/executions/symlink-pin-must-not-exist/execution-plan.json",
+      )),
+      { code: "ENOENT" },
+    );
   } finally {
     await rm(fixture.root, { recursive: true, force: true });
     await rm(foreignRoot, { recursive: true, force: true });

@@ -5,8 +5,8 @@
 
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, openSync, closeSync, statSync, renameSync, writeSync } from 'node:fs'
-import { getOwlcodaDir, getOwlcodaPidPath, getOwlcodaRuntimeMetaPath, getOwlcodaDaemonLogPath } from './paths.js'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, openSync, closeSync, statSync, renameSync, writeSync, rmSync, type Stats } from 'node:fs'
+import { getOwlcodaDaemonStartLockPath, getOwlcodaDir, getOwlcodaPidPath, getOwlcodaRuntimeMetaPath, getOwlcodaDaemonLogPath } from './paths.js'
 import { VERSION } from './version.js'
 import type { OwlCodaConfig } from './config.js'
 import {
@@ -305,30 +305,42 @@ export function shouldSelfRegisterDaemon(env: NodeJS.ProcessEnv = process.env): 
   return env['OWLCODA_LAUNCHD'] === '1'
 }
 
+/** Rotate the install seed before components that derive auth from the runtime identity are built. */
+export function rotateLaunchdRuntimeToken(env: NodeJS.ProcessEnv = process.env): string | null {
+  if (!shouldSelfRegisterDaemon(env)) return null
+  const installSeed = env['OWLCODA_RUNTIME_TOKEN']
+  if (!installSeed) return null
+  const processRuntimeToken = randomUUID()
+  env['OWLCODA_RUNTIME_TOKEN'] = processRuntimeToken
+  return processRuntimeToken
+}
+
 /**
  * Register this process's pid + runtime-meta so clients can discover a
- * launchd-managed daemon (there is no spawnDaemon parent to do it). The meta's
- * runtimeToken MUST equal the token the daemon serves via /healthz
- * (process.env.OWLCODA_RUNTIME_TOKEN, set by the plist) or
- * healthzMatchesRuntimeMeta rejects it. No-ops (returns false) when not
- * launchd-launched, or when the token is absent — so we never write a
- * mismatched meta that would get the daemon needlessly restarted.
+ * launchd-managed daemon (there is no spawnDaemon parent to do it). The plist
+ * provides an install-scoped seed, but each supervised process rotates it so a
+ * recovered PID cannot inherit the previous runtime identity. The generated
+ * token is written back to the environment before server healthz is served, so
+ * healthzMatchesRuntimeMeta sees the same per-process identity.
  */
 export function selfRegisterDaemon(
   config: OwlCodaConfig,
   pid: number = process.pid,
   env: NodeJS.ProcessEnv = process.env,
+  options: { rotateToken?: boolean } = {},
 ): boolean {
   if (!shouldSelfRegisterDaemon(env)) return false
-  const runtimeToken = env['OWLCODA_RUNTIME_TOKEN']
-  if (!runtimeToken) {
+  const processRuntimeToken = options.rotateToken === false
+    ? env['OWLCODA_RUNTIME_TOKEN'] ?? null
+    : rotateLaunchdRuntimeToken(env)
+  if (!processRuntimeToken) {
     console.error('[owlcoda] OWLCODA_LAUNCHD set but OWLCODA_RUNTIME_TOKEN missing — skipping self-registration')
     return false
   }
   writePid(pid)
   writeRuntimeMeta({
     pid,
-    runtimeToken,
+    runtimeToken: processRuntimeToken,
     host: config.host,
     port: config.port,
     routerUrl: config.routerUrl,
@@ -438,6 +450,143 @@ export function getBaseUrl(config: { host: string; port: number }): string {
   return `http://${resolveClientHost(config.host)}:${config.port}`
 }
 
+// A cold start is a cross-process critical section: two CLI entry points must
+// not both observe an available port and then race to publish pid/runtime meta.
+const DAEMON_START_LOCK_TIMEOUT_MS = 15_000
+const DAEMON_START_LOCK_RETRY_MS = 25
+const DAEMON_START_LOCK_STALE_MS = 5_000
+
+interface DaemonStartLockOwner {
+  pid: number
+  token: string
+  acquiredAt: string
+}
+
+interface DaemonStartLock {
+  path: string
+  owner: DaemonStartLockOwner
+}
+
+interface DaemonStartLockSnapshot {
+  stat: Stats
+  owner: DaemonStartLockOwner | null
+}
+
+function readDaemonStartLockSnapshot(lockPath: string): DaemonStartLockSnapshot | null {
+  let lockStat: Stats
+  try {
+    lockStat = lstatSync(lockPath)
+  } catch (error) {
+    const code = error instanceof Error && 'code' in error
+      ? String((error as NodeJS.ErrnoException).code ?? '')
+      : ''
+    if (code === 'ENOENT') return null
+    throw error
+  }
+  if (lockStat.isSymbolicLink() || !lockStat.isDirectory()) {
+    throw new Error(`Refusing unexpected daemon start lock path: ${lockPath}`)
+  }
+
+  let owner: DaemonStartLockOwner | null = null
+  try {
+    const rawOwner = JSON.parse(readFileSync(`${lockPath}/owner.json`, 'utf-8')) as Partial<DaemonStartLockOwner>
+    if (Number.isInteger(rawOwner.pid) && typeof rawOwner.token === 'string' && typeof rawOwner.acquiredAt === 'string') {
+      owner = rawOwner as DaemonStartLockOwner
+    }
+  } catch {
+    // A process can die after mkdir and before publishing owner.json. The
+    // directory remains reclaimable only after the stale age is reached.
+  }
+  return { stat: lockStat, owner }
+}
+
+function reclaimStaleDaemonStartLock(
+  lockPath: string,
+  snapshot: DaemonStartLockSnapshot,
+): boolean {
+  const reclaimPath = `${lockPath}.reclaim-${randomUUID()}`
+  try {
+    const current = readDaemonStartLockSnapshot(lockPath)
+    if (!current || current.stat.ino !== snapshot.stat.ino || current.stat.mtimeMs !== snapshot.stat.mtimeMs) return false
+    if (snapshot.owner) {
+      if (!current.owner
+        || current.owner.pid !== snapshot.owner.pid
+        || current.owner.token !== snapshot.owner.token
+        || current.owner.acquiredAt !== snapshot.owner.acquiredAt
+        || isPidAlive(current.owner.pid)) {
+        return false
+      }
+    }
+    // Rename moves the exact stale directory out of the contested pathname in
+    // one filesystem operation. A waiter can create a new lock afterward, but
+    // it can never be removed by the cleanup of this old owner.
+    renameSync(lockPath, reclaimPath)
+    rmSync(reclaimPath, { recursive: true, force: true })
+    return true
+  } catch (error) {
+    const code = error instanceof Error && 'code' in error
+      ? String((error as NodeJS.ErrnoException).code ?? '')
+      : ''
+    if (code === 'ENOENT') return false
+    throw error
+  }
+}
+
+async function acquireDaemonStartLock(): Promise<DaemonStartLock> {
+  ensureOwlcodaDir()
+  const lockPath = getOwlcodaDaemonStartLockPath()
+  const owner: DaemonStartLockOwner = {
+    pid: process.pid,
+    token: randomUUID(),
+    acquiredAt: new Date().toISOString(),
+  }
+  const startedAt = Date.now()
+
+  while (true) {
+    try {
+      mkdirSync(lockPath)
+      writeFileSync(`${lockPath}/owner.json`, JSON.stringify(owner) + '\n', { flag: 'wx', mode: 0o600 })
+      return { path: lockPath, owner }
+    } catch (error) {
+      const code = error instanceof Error && 'code' in error
+        ? String((error as NodeJS.ErrnoException).code ?? '')
+        : ''
+      if (code !== 'EEXIST') throw error
+
+      const snapshot = readDaemonStartLockSnapshot(lockPath)
+      const lockAgeMs = snapshot ? Math.max(0, Date.now() - snapshot.stat.mtimeMs) : 0
+      const ownerAlive = snapshot?.owner ? isPidAlive(snapshot.owner.pid) : false
+      if (snapshot && !ownerAlive && lockAgeMs >= DAEMON_START_LOCK_STALE_MS && reclaimStaleDaemonStartLock(lockPath, snapshot)) {
+        continue
+      }
+      if (Date.now() - startedAt >= DAEMON_START_LOCK_TIMEOUT_MS) {
+        const ownerLabel = snapshot?.owner ? `PID ${snapshot.owner.pid}` : 'unknown owner'
+        throw new Error(`Timed out acquiring OwlCoda daemon start lock (${ownerLabel})`)
+      }
+      await new Promise(resolve => setTimeout(resolve, DAEMON_START_LOCK_RETRY_MS))
+    }
+  }
+}
+
+function releaseDaemonStartLock(lock: DaemonStartLock): void {
+  try {
+    const rawOwner = JSON.parse(readFileSync(`${lock.path}/owner.json`, 'utf-8')) as Partial<DaemonStartLockOwner>
+    if (rawOwner.pid !== lock.owner.pid || rawOwner.token !== lock.owner.token) return
+    rmSync(lock.path, { recursive: true, force: true })
+  } catch {
+    // The lock may already have been reclaimed after an abrupt owner exit.
+  }
+}
+
+async function withDaemonStartLock<T>(fn: () => Promise<T>): Promise<T> {
+  const lock = await acquireDaemonStartLock()
+  try {
+    return await fn()
+  } finally {
+    releaseDaemonStartLock(lock)
+  }
+}
+
 // ─── launchd-aware coordination (P2-b) ───
 
 export interface LaunchdProxyDeps {
@@ -532,6 +681,16 @@ export async function ensureLaunchdProxyRunning(
  * 6. Wait for healthz ready before returning
  */
 export async function ensureProxyRunning(
+  config: OwlCodaConfig,
+  configPath?: string,
+  port?: number,
+  routerUrl?: string,
+  options: { quiet?: boolean } = {},
+): Promise<EnsureProxyRunningResult> {
+  return await withDaemonStartLock(() => ensureProxyRunningUnlocked(config, configPath, port, routerUrl, options))
+}
+
+async function ensureProxyRunningUnlocked(
   config: OwlCodaConfig,
   configPath?: string,
   port?: number,

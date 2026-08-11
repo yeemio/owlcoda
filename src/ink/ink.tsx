@@ -8,6 +8,7 @@ import { ConcurrentRoot } from 'react-reconciler/constants.js';
 import { onExit } from 'signal-exit';
 import { flushInteractionTime } from '../bootstrap/state.js';
 import { getYogaCounters } from '../native-ts/yoga-layout/index.js';
+import { createRenderFaultAdapter, dumpRenderIncident, type RenderFaultAdapter } from '../native/tui/chrome.js';
 import { logForDebugging } from '../utils/debug.js';
 import { logError } from '../utils/log.js';
 import { format } from 'util';
@@ -84,6 +85,10 @@ export default class Ink {
   };
   // Ignore last render after unmounting a tree to prevent empty output before exit
   private isUnmounted = false;
+  private isRenderFaulted = false;
+  private terminalCleanupDone = false;
+  private renderSequence = 0;
+  private frameSequence = 0;
   private isPaused = false;
   private readonly container: FiberRoot;
   private rootNode: dom.DOMElement;
@@ -192,6 +197,7 @@ export default class Ink {
     x: number;
     y: number;
   } | null = null;
+  private readonly renderFaults: RenderFaultAdapter;
   constructor(private readonly options: Options) {
     autoBind(this);
     if (this.options.patchConsole) {
@@ -243,6 +249,47 @@ export default class Ink {
     // Ignore last render after unmounting a tree to prevent empty output before exit
     this.isUnmounted = false;
 
+    this.renderFaults = createRenderFaultAdapter({
+      getContext: () => ({
+        renderSequence: this.renderSequence,
+        frameSequence: this.frameSequence,
+        phase: this.isRenderFaulted ? 'isolated' : this.isPaused ? 'paused' : 'render',
+      }),
+      writeIncident: (incident) => dumpRenderIncident(incident.error, {
+        faultKind: incident.faultKind,
+        sequence: incident.sequence,
+        frame: incident.frame,
+        componentStack: incident.componentStack,
+        rendererState: incident.rendererState,
+        recovery: incident.recovery,
+        errorDetails: incident.error,
+      }),
+      isolateFrameProducer: () => {
+        this.isRenderFaulted = true;
+        this.isUnmounted = true;
+        this.scheduleRender.cancel?.();
+        if (this.drainTimer !== null) {
+          clearTimeout(this.drainTimer);
+          this.drainTimer = null;
+        }
+        this.unsubscribeExit();
+        this.unsubscribeTTYHandlers?.();
+        this.restoreConsole?.();
+        this.restoreStderr?.();
+        instances.delete(this.options.stdout);
+      },
+      cleanupTerminal: () => this.cleanupTerminalModes(),
+      requestRecovery: () => {
+        if (this.isRenderFaulted || this.isUnmounted) return;
+        this.prevFrameContaminated = true;
+        this.pendingForceFullRepaint = true;
+        this.scheduleRender();
+      },
+      notify: (message) => {
+        this.options.stderr.write(`${message}\n`);
+      },
+    });
+
     // Unmount when process exits
     this.unsubscribeExit = onExit(this.unmount, {
       alwaysLast: false
@@ -284,12 +331,10 @@ export default class Ink {
 
     // @ts-ignore @types/react-reconciler@0.32.3 declares 11 args with transitionCallbacks,
     // but react-reconciler 0.33.0 source only accepts 10 args (no transitionCallbacks)
-    this.container = reconciler.createContainer(this.rootNode, ConcurrentRoot, null, false, null, 'id', noop,
-    // onUncaughtError
-    noop,
-    // onCaughtError
-    noop,
-    // onRecoverableError
+    this.container = reconciler.createContainer(this.rootNode, ConcurrentRoot, null, false, null, 'id',
+    this.renderFaults.onUncaughtError,
+    this.renderFaults.onCaughtError,
+    this.renderFaults.onRecoverableError,
     noop // onDefaultTransitionIndicator
     );
     if (("production" as string) === 'development') {
@@ -449,9 +494,10 @@ export default class Ink {
     this.options.stdout.write((usesLowChurnTerminalMode() ? '' : '\x1b[?1004h') + (supportsExtendedKeys() ? DISABLE_KITTY_KEYBOARD + ENABLE_KITTY_KEYBOARD + ENABLE_MODIFY_OTHER_KEYS : ''));
   }
   onRender() {
-    if (this.isUnmounted || this.isPaused) {
+    if (this.isUnmounted || this.isRenderFaulted || this.isPaused) {
       return;
     }
+    this.frameSequence += 1;
     if (isInputLatencyTraceEnabled()) {
       traceInputLatencyCheckpoint('render-start', {
         paused: this.isPaused,
@@ -1597,7 +1643,32 @@ export default class Ink {
   private readonly instanceHandle: InkInstanceHandle = {
     enqueueStaticCommit: (lines: readonly string[]) => this.enqueueStaticCommit(lines),
   };
+  private cleanupTerminalModes(): void {
+    if (this.terminalCleanupDone) return;
+    this.terminalCleanupDone = true;
+    if (!this.options.stdout.isTTY) return;
+
+    // Clean up terminal modes synchronously before process exit or after a
+    // fatal render fault. The reconciler must not be allowed to write another
+    // frame after this boundary has been crossed.
+    /* eslint-disable custom-rules/no-sync-fs -- terminal cleanup must survive process exit */
+    if (this.altScreenActive) {
+      writeSync(1, EXIT_ALT_SCREEN);
+    }
+    writeSync(1, DISABLE_MOUSE_TRACKING);
+    this.drainStdin();
+    writeSync(1, DISABLE_MODIFY_OTHER_KEYS);
+    writeSync(1, DISABLE_KITTY_KEYBOARD);
+    writeSync(1, DFE);
+    writeSync(1, DBP);
+    writeSync(1, SHOW_CURSOR);
+    writeSync(1, CLEAR_ITERM2_PROGRESS);
+    if (supportsTabStatus()) writeSync(1, wrapForMultiplexer(CLEAR_TAB_STATUS));
+    /* eslint-enable custom-rules/no-sync-fs */
+  }
   render(node: ReactNode): void {
+    if (this.isRenderFaulted) return;
+    this.renderSequence += 1;
     this.currentNode = node;
     const tree = <App stdin={this.options.stdin} stdout={this.options.stdout} stderr={this.options.stderr} exitOnCtrlC={this.options.exitOnCtrlC} onExit={this.unmount} terminalColumns={this.terminalColumns} terminalRows={this.terminalRows} altScreenActive={this.altScreenActive} selection={this.selection} onSelectionChange={this.notifySelectionChange} onClickAt={this.dispatchClick} onHoverAt={this.dispatchHover} getHyperlinkAt={this.getHyperlinkAt} onOpenHyperlink={this.openHyperlink} onMultiClick={this.handleMultiClick} onSelectionDrag={this.handleSelectionDrag} onStdinResume={this.reassertTerminalModes} onCursorDeclaration={this.setCursorDeclaration} dispatchKeyboardEvent={this.dispatchKeyboardEvent}>
         <TerminalWriteProvider value={this.writeRaw}>
@@ -1629,41 +1700,7 @@ export default class Ink {
     const diff = this.log.renderPreviousOutput_DEPRECATED(this.frontFrame);
     writeDiffToTerminal(this.terminal, optimize(diff));
 
-    // Clean up terminal modes synchronously before process exit.
-    // React's componentWillUnmount won't run in time when process.exit() is called,
-    // so we must reset terminal modes here to prevent escape sequence leakage.
-    // Use writeSync to stdout (fd 1) to ensure writes complete before exit.
-    // We unconditionally send all disable sequences because terminal detection
-    // may not work correctly (e.g., in tmux, screen) and these are no-ops on
-    // terminals that don't support them.
-    /* eslint-disable custom-rules/no-sync-fs -- process exiting; async writes would be dropped */
-    if (this.options.stdout.isTTY) {
-      if (this.altScreenActive) {
-        // <AlternateScreen>'s unmount effect won't run during signal-exit.
-        // Exit alt screen FIRST so other cleanup sequences go to the main screen.
-        writeSync(1, EXIT_ALT_SCREEN);
-      }
-      // Disable mouse tracking — unconditional because altScreenActive can be
-      // stale if AlternateScreen's unmount (which flips the flag) raced a
-      // blocked event loop + SIGINT. No-op if tracking was never enabled.
-      writeSync(1, DISABLE_MOUSE_TRACKING);
-      // Drain stdin so in-flight mouse events don't leak to the shell
-      this.drainStdin();
-      // Disable extended key reporting (both kitty and modifyOtherKeys)
-      writeSync(1, DISABLE_MODIFY_OTHER_KEYS);
-      writeSync(1, DISABLE_KITTY_KEYBOARD);
-      // Disable focus events (DECSET 1004)
-      writeSync(1, DFE);
-      // Disable bracketed paste mode
-      writeSync(1, DBP);
-      // Show cursor
-      writeSync(1, SHOW_CURSOR);
-      // Clear iTerm2 progress bar
-      writeSync(1, CLEAR_ITERM2_PROGRESS);
-      // Clear tab status (OSC 21337) so a stale dot doesn't linger
-      if (supportsTabStatus()) writeSync(1, wrapForMultiplexer(CLEAR_TAB_STATUS));
-    }
-    /* eslint-enable custom-rules/no-sync-fs */
+    this.cleanupTerminalModes();
 
     this.isUnmounted = true;
 

@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/owner-deployment-decision-v1.json",
+  "title": "OwlCoda RunKit Owner Deployment Decision V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "decisionId",
+    "decisionVersion",
+    "provenance",
+    "project",
+    "supersedesDecisionSha256",
+    "deploymentMode",
+    "existingProjectAssets",
+    "legacyRollbackAllowed",
+    "dataAuthority",
+    "serviceActivationAuthorized",
+    "baselineCutAuthorized",
+    "destructiveScope",
+    "decisionSha256"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitOwnerDeploymentDecisionV1" },
+    "decisionId": { "$ref": "#/$defs/id" },
+    "decisionVersion": { "type": "integer", "minimum": 1 },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "sourceRef", "recordedAt"],
+      "properties": {
+        "kind": { "const": "owner_explicit" },
+        "sourceRef": { "type": "string", "minLength": 1 },
+        "recordedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["projectId", "scope"],
+      "properties": {
+        "projectId": { "$ref": "#/$defs/id" },
+        "scope": { "$ref": "#/$defs/id" }
+      }
+    },
+    "supersedesDecisionSha256": {
+      "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/hash" }]
+    },
+    "deploymentMode": { "enum": ["clean_install", "in_place_update"] },
+    "existingProjectAssets": { "enum": ["preserve", "replace", "remove"] },
+    "legacyRollbackAllowed": { "type": "boolean" },
+    "dataAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "sourceRef"],
+      "properties": {
+        "mode": {
+          "enum": ["preserve_existing", "replace_from_artifact", "initialize_new"]
+        },
+        "sourceRef": { "type": "string", "minLength": 1 }
+      }
+    },
+    "serviceActivationAuthorized": { "type": "boolean" },
+    "baselineCutAuthorized": { "type": "boolean" },
+    "destructiveScope": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "decisionSha256": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitOwnerDeploymentDecisionV1",
+    "decisionId": "owner-clean-install-001",
+    "decisionVersion": 1,
+    "provenance": {
+      "kind": "owner_explicit",
+      "sourceRef": "owner:decision/clean-install-001",
+      "recordedAt": "2026-08-01T00:00:00.000Z"
+    },
+    "project": { "projectId": "owlapp", "scope": "production" },
+    "supersedesDecisionSha256": null,
+    "deploymentMode": "clean_install",
+    "existingProjectAssets": "replace",
+    "legacyRollbackAllowed": false,
+    "dataAuthority": {
+      "mode": "initialize_new",
+      "sourceRef": "owner:data-authority/clean-install-001"
+    },
+    "serviceActivationAuthorized": true,
+    "baselineCutAuthorized": true,
+    "destructiveScope": [],
+    "decisionSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }]
+}

@@ -1,6 +1,7 @@
 import type {
   Conversation,
   ConversationTurn,
+  EvidencePersistenceFailure,
   RuntimeEventContract,
   RuntimeEventCheckpointKind,
   RuntimeEventKind,
@@ -251,6 +252,30 @@ export function appendRuntimeEvent(
     },
   }
   return event
+}
+
+export function recordEvidencePersistenceFailureEvent(
+  conversation: Conversation,
+  failure: EvidencePersistenceFailure,
+): RuntimeEventRecord {
+  return appendRuntimeEvent(conversation, {
+    kind: 'runtime_intervention',
+    runId: failure.runId,
+    itemId: failure.toolUseId,
+    payload: {
+      intervention_kind: 'evidence_persistence_failure',
+      operation: failure.operation,
+      run_id: failure.runId,
+      run_dir: failure.runDir,
+      output_root: failure.outputRoot,
+      tool_use_id: failure.toolUseId,
+      tool_name: failure.toolName,
+      error: failure.error,
+      evidence_completeness: failure.evidenceCompleteness,
+      acceptance_impact: failure.acceptanceImpact,
+      at: failure.at,
+    },
+  })
 }
 
 export function serializeRuntimeInterventionsFromEvents(

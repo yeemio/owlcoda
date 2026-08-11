@@ -20,7 +20,10 @@ import {
   currentCoreIdentity,
 } from "../../scripts/runkit-contract/core-contract.mjs";
 import { runCli } from "../../scripts/runkit-contract/runkit-cli.mjs";
-import { canonicalSourceFingerprint } from "../../scripts/runkit-contract/source-fingerprint.mjs";
+import {
+  canonicalSourceFingerprint,
+  verifyDeliveryPacket,
+} from "../../scripts/runkit-contract/source-fingerprint.mjs";
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -301,6 +304,16 @@ test("delivery create derives a bounded fresh packet from an active lease", asyn
     assert.deepEqual(packet.discovery, {
       fromLease: "W1",
       leasePath: path.relative(root, path.join(executionRoot, "leases/W1-attempt-001.json")),
+      ownedPathState: {
+        schemaVersion: "OwlCodaRunKitOwnedPathStateV1",
+        statusMode: "porcelain-v1-z-untracked-all-runkit-excluded",
+        ownedPaths: ["src/**"],
+        records: [
+          { status: " M", paths: ["src/a.txt"] },
+          { status: "??", paths: ["src/new.txt"] },
+          { status: "??", paths: ["src/space name.txt"] },
+        ],
+      },
       unrelatedDirtyPaths: ["notes/unrelated.md"],
       deletedOwnedPaths: [],
       renamedOwnedPaths: [],
@@ -329,6 +342,45 @@ test("delivery create derives a bounded fresh packet from an active lease", asyn
     assert.match(duplicate.issues.join("\n"), /already exists/i);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("delivery packets bind the complete owned dirty set, including paths created later", async () => {
+  for (const [name, ownedPaths, createdPath] of [
+    ["exact", ["src/a.txt", "src/later.txt"], "src/later.txt"],
+    ["directory", ["src/**"], "src/later/nested.txt"],
+  ]) {
+    const root = await setupFixture();
+    try {
+      const runId = `delivery-owned-state-${name}`;
+      await plan(root, runId);
+      assert.equal((await acquire(root, runId, "W1", ownedPaths)).status, "lease_acquired");
+      await writeFile(path.join(root, "src/a.txt"), "candidate a\n");
+      const created = await runCli([
+        "delivery", "create",
+        "--workspace", root,
+        "--run-id", runId,
+        "--from-lease", "W1",
+        "--packet-id", "candidate-001",
+      ]);
+      assert.equal(created.status, "delivery_packet_created", JSON.stringify(created));
+      const packet = JSON.parse(await readFile(path.join(root, created.deliveryPacketPath), "utf8"));
+      assert.equal(verifyDeliveryPacket({ workspaceRoot: root, packet }).status, "valid");
+      const legacyPacket = structuredClone(packet);
+      delete legacyPacket.discovery.ownedPathState;
+      assert.equal(verifyDeliveryPacket({ workspaceRoot: root, packet: legacyPacket }).status, "valid");
+
+      await mkdir(path.dirname(path.join(root, createdPath)), { recursive: true });
+      await writeFile(path.join(root, createdPath), "created after packet\n");
+      const stale = verifyDeliveryPacket({ workspaceRoot: root, packet });
+      assert.equal(stale.status, "invalidated_by_concurrent_write", JSON.stringify(stale));
+      assert.match(stale.issues.join("\n"), /owned.*status|owned.*path/i);
+      const staleLegacy = verifyDeliveryPacket({ workspaceRoot: root, packet: legacyPacket });
+      assert.equal(staleLegacy.status, "invalidated_by_concurrent_write", JSON.stringify(staleLegacy));
+      assert.match(staleLegacy.issues.join("\n"), /owned.*status|owned.*path/i);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });
 

@@ -2,12 +2,14 @@
 
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const scriptPath = fileURLToPath(import.meta.url)
 const sourceRoot = path.resolve(path.dirname(scriptPath), '..')
+const require = createRequire(import.meta.url)
 const options = parseArgs(process.argv.slice(2))
 const projectRoot = options.projectRoot ? path.resolve(options.projectRoot) : sourceRoot
 const requestedCompileParent = path.resolve(options.compileDir ?? tmpdir())
@@ -254,9 +256,10 @@ function linkNodeModules() {
 }
 
 function linkRunKitCore() {
-  const source = path.join(sourceRoot, 'scripts', 'runkit-contract')
+  const packageJson = require.resolve('owlrunkit/package.json')
+  const source = path.join(path.dirname(packageJson), 'scripts', 'runkit-contract')
   if (!existsSync(path.join(source, 'runkit-cli.mjs'))) {
-    throw new Error('RunKit Core is missing from scripts/runkit-contract')
+    throw new Error('Installed owlrunkit Core is missing from node_modules')
   }
   const scriptsRoot = previewRootPath('scripts')
   const target = previewRootPath('scripts', 'runkit-contract')

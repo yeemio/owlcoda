@@ -17,7 +17,15 @@ export { normalizeModel } from './model-registry.js'
 // model-registry import cycle. Re-exported so existing importers that do
 // `from './config.js'` (init.ts, tests) keep working unchanged.
 export { normalizeRouterBaseUrl }
-export type { ConfiguredModel, LocalRuntimeProtocol, ResponseModelStyle, ResolvedModel, ModelRoute } from './model-registry.js'
+export type {
+  ConfiguredModel,
+  LocalRuntimeProtocol,
+  ModelExecutorConfig,
+  ModelExecutorKind,
+  ResponseModelStyle,
+  ResolvedModel,
+  ModelRoute,
+} from './model-registry.js'
 export {
   LocalRuntimeProtocolUnresolvedError,
   resolveConfiguredModel,

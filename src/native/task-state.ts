@@ -8,6 +8,7 @@ import type {
   Conversation,
   CrossRepoBoundaryCheckpoint,
   CrossRepoBoundaryDirtySummary,
+  EvidencePersistenceFailure,
   TaskContractScopeConfidence,
   TaskExecutionState,
   TaskPathScope,
@@ -34,7 +35,7 @@ const GENERIC_PATH_RE = /(?:^|[\s(])((?:\/|\.\.?\/)?(?:[\w@~.-]+\/)+[\w@~.-]+(?:
 const SINGLE_FILE_RE = /(?:^|[\s(])((?:\/|\.\.?\/)?[\w@~.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|mdx|py|ipynb|rs|toml|yaml|yml|sh|txt|css|scss|html))(?=$|[\s),:;])/g
 const MUTATING_WRITE_TOOLS = new Set(['write', 'edit', 'NotebookEdit'])
 const SHELL_ARTIFACT_TOOLS = new Set(['bash', 'PowerShell'])
-const EXECUTION_PROGRESS_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskVerify', 'RunWorkspace', 'ArtifactVerify', 'BrowserJob'])
+const EXECUTION_PROGRESS_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskVerify', 'RunWorkspace', 'ArtifactVerify', 'BrowserJob', 'WorkflowRun'])
 const BOOTSTRAP_SCOPE_FILE_EXTS = new Set(['.md', '.mdx', '.txt'])
 const BOOTSTRAP_SCOPE_MAX_BYTES = 256 * 1024
 const ALLOW_WRITE_SECTION_RE = /(允许写入|允许修改|可改动|allowed write|allowed files|allowed paths)/i
@@ -331,6 +332,9 @@ export function deriveTaskExecutionState(
       pendingWriteApproval: approvesPendingWriteScope ? null : previous?.run.pendingWriteApproval ?? null,
       crossRepoBoundaryCheckpoint,
       runWorkspace: sameTaskAsPrevious ? previous?.run.runWorkspace ?? null : null,
+      evidencePersistenceFailures: sameTaskAsPrevious
+        ? [...(previous?.run.evidencePersistenceFailures ?? [])]
+        : [],
       lastUpdatedAt: now,
     },
     proposedToolCalls: sameTaskAsPrevious ? (previous?.proposedToolCalls ?? []) : [],
@@ -517,6 +521,16 @@ export function approveTaskWriteScope(taskState: TaskExecutionState, attemptedPa
 }
 
 export function markTaskCompleted(taskState: TaskExecutionState, summary?: string | null): void {
+  const blockingFailure = taskState.run.evidencePersistenceFailures?.find(
+    (failure) => failure.acceptanceImpact === 'blocking',
+  )
+  if (blockingFailure) {
+    markTaskGuardBlocked(
+      taskState,
+      `evidence_incomplete: ${blockingFailure.operation}: ${blockingFailure.error.message}`,
+    )
+    return
+  }
   const now = Date.now()
   taskState.run.status = 'completed'
   taskState.run.lastProgressAt = now
@@ -525,6 +539,59 @@ export function markTaskCompleted(taskState: TaskExecutionState, summary?: strin
   taskState.run.pendingWriteApproval = null
   if (summary) {
     taskState.run.currentFocus = truncateForState(summary)
+  }
+}
+
+export function recordEvidencePersistenceFailure(
+  taskState: TaskExecutionState | undefined,
+  failure: EvidencePersistenceFailure,
+): void {
+  if (!taskState) return
+  const existing = taskState.run.evidencePersistenceFailures ?? []
+  const sameFailureIdentity = (entry: EvidencePersistenceFailure): boolean =>
+    entry.operation === failure.operation
+    && entry.runId === failure.runId
+    && entry.runDir === failure.runDir
+    && entry.outputRoot === failure.outputRoot
+    && entry.toolUseId === failure.toolUseId
+    && entry.toolName === failure.toolName
+  const existingIndex = existing.findIndex(sameFailureIdentity)
+  taskState.run.evidencePersistenceFailures = existingIndex >= 0
+    ? existing.map((entry, index) => index === existingIndex ? failure : entry)
+    : [...existing, failure]
+  markTaskGuardBlocked(
+    taskState,
+    `evidence_incomplete: ${failure.operation}: ${failure.error.message}`,
+  )
+}
+
+export function clearEvidencePersistenceFailure(
+  taskState: TaskExecutionState | undefined,
+  operation: EvidencePersistenceFailure['operation'],
+  identity?: Pick<EvidencePersistenceFailure, 'runId' | 'runDir' | 'outputRoot' | 'toolUseId' | 'toolName'>,
+): void {
+  if (!taskState?.run.evidencePersistenceFailures?.length) return
+  // Artifact evidence is repaired only by a real record for the same tool
+  // use and workspace. TodoWrite retains its existing operation-wide repair.
+  if (operation === 'artifact_record' && !identity) return
+  const matches = identity
+    ? (failure: EvidencePersistenceFailure): boolean =>
+        failure.operation === operation
+        && failure.runId === identity.runId
+        && failure.runDir === identity.runDir
+        && failure.outputRoot === identity.outputRoot
+        && failure.toolUseId === identity.toolUseId
+        && failure.toolName === identity.toolName
+    : (failure: EvidencePersistenceFailure): boolean => failure.operation === operation
+  taskState.run.evidencePersistenceFailures = taskState.run.evidencePersistenceFailures.filter(
+    (failure) => !matches(failure),
+  )
+  if (
+    taskState.run.evidencePersistenceFailures.length === 0
+    && taskState.run.status === 'drifted'
+    && taskState.run.lastGuardReason?.startsWith('evidence_incomplete:')
+  ) {
+    markTaskProgress(taskState)
   }
 }
 
@@ -2289,6 +2356,7 @@ function isExecutionProgressToolCall(toolName: string, input: Record<string, unk
     return true
   }
   if (toolName === 'BrowserJob') return true
+  if (toolName === 'WorkflowRun') return true
   if (toolName !== 'RunWorkspace') return false
   return input['action'] === 'create'
     || input['action'] === 'recordArtifact'

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, afterAll, describe, expect, it } from 'vitest'
 import type { Server } from 'node:http'
 import { request as httpRequest } from 'node:http'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -6,7 +6,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createAppServer, listenAppServer } from '../../../src/native/app-server/http-server.js'
 import { deleteSession } from '../../../src/native/session.js'
-import { runCli as runRunKitCore } from '../../../scripts/runkit-contract/runkit-cli.mjs'
+import { runCli as runRunKitCore } from '../../../node_modules/owlrunkit/scripts/runkit-contract/runkit-cli.mjs'
+import { installIsolatedOwlCodaHome } from '../isolated-owlcoda-home.js'
+
+const restoreTestHome = installIsolatedOwlCodaHome('owlcoda-http-server-tests-')
+afterAll(restoreTestHome)
 
 const servers: Server[] = []
 const createdSessions: string[] = []

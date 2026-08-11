@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/deployment-prepare-receipt-v1.json",
+  "title": "OwlCoda RunKit Deployment Prepare Receipt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "prepareRunId", "prepareGoal", "closeout", "artifact", "permissions", "authorizationGranted", "receiptSha256"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitDeploymentPrepareReceiptV1" },
+    "prepareRunId": { "$ref": "#/$defs/id" },
+    "prepareGoal": { "$ref": "#/$defs/descriptor" },
+    "closeout": { "$ref": "#/$defs/closeout" },
+    "deliveryPacket": { "$ref": "#/$defs/packet" },
+    "sourceArtifact": { "$ref": "#/$defs/candidateSourceArtifact" },
+    "artifact": { "$ref": "#/$defs/artifact" },
+    "ownerDecision": { "$ref": "#/$defs/ownerDecisionBinding" },
+    "permissions": { "$ref": "#/$defs/permissions" },
+    "authorizationGranted": { "const": false },
+    "receiptSha256": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": { "path": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/hash" } }
+    },
+    "closeout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trusted", "decision", "runId", "path", "sha256", "gateInputSha256", "sourceFingerprint", "authorizationGranted"],
+      "properties": {
+        "trusted": { "const": true },
+        "decision": { "const": "accepted" },
+        "runId": { "$ref": "#/$defs/id" },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "gateInputSha256": { "$ref": "#/$defs/hash" },
+        "sourceFingerprint": { "$ref": "#/$defs/hash" },
+        "sourceArtifact": { "$ref": "#/$defs/sourceArtifact" },
+        "authorizationGranted": { "const": false }
+      }
+    },
+    "packet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "path", "sha256", "sourceFingerprint"],
+      "properties": {
+        "runId": { "$ref": "#/$defs/id" },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "sourceFingerprint": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "sourceArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "runId", "path", "sha256", "sourceFingerprint"],
+      "properties": {
+        "kind": { "enum": ["delivery_packet_v1", "source_candidate_v2"] },
+        "runId": { "$ref": "#/$defs/id" },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "sourceFingerprint": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "candidateSourceArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "runId", "path", "sha256", "sourceFingerprint"],
+      "properties": {
+        "kind": { "const": "source_candidate_v2" },
+        "runId": { "$ref": "#/$defs/id" },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "sourceFingerprint": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size", "mediaType"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "size": { "type": "integer", "minimum": 0 },
+        "mediaType": { "type": "string", "pattern": "^[A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+$" }
+      }
+    },
+    "ownerDecisionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decisionId", "decisionVersion", "decisionSha256", "deploymentMode", "existingProjectAssets", "legacyRollbackAllowed", "dataAuthority", "serviceActivationAuthorized", "baselineCutAuthorized", "destructiveScope"],
+      "properties": {
+        "decisionId": { "$ref": "#/$defs/id" },
+        "decisionVersion": { "type": "integer", "minimum": 1 },
+        "decisionSha256": { "$ref": "#/$defs/hash" },
+        "deploymentMode": { "enum": ["clean_install", "in_place_update"] },
+        "existingProjectAssets": { "enum": ["preserve", "replace", "remove"] },
+        "legacyRollbackAllowed": { "type": "boolean" },
+        "dataAuthority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "sourceRef"],
+          "properties": {
+            "mode": { "enum": ["preserve_existing", "replace_from_artifact", "initialize_new"] },
+            "sourceRef": { "type": "string", "minLength": 1 }
+          }
+        },
+        "serviceActivationAuthorized": { "type": "boolean" },
+        "baselineCutAuthorized": { "type": "boolean" },
+        "destructiveScope": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deploy", "destructive"],
+      "properties": { "deploy": { "const": false }, "destructive": { "const": false } }
+    }
+  },
+  "oneOf": [
+    { "type": "object", "required": ["deliveryPacket"] },
+    { "type": "object", "required": ["sourceArtifact"] }
+  ],
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitDeploymentPrepareReceiptV1",
+    "prepareRunId": "deployment-prepare-001",
+    "prepareGoal": { "path": ".owlcoda/runkit/executions/deployment-prepare-001/goal-contract.json", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+    "closeout": { "trusted": true, "decision": "accepted", "runId": "deployment-prepare-001", "path": ".owlcoda/runkit/executions/deployment-prepare-001/closeout-receipt.json", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "gateInputSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "sourceFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "authorizationGranted": false },
+    "deliveryPacket": { "runId": "deployment-prepare-001", "path": ".owlcoda/runkit/executions/deployment-prepare-001/delivery-packets/release.json", "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "sourceFingerprint": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" },
+    "artifact": { "path": "dist/release.tgz", "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "size": 1234, "mediaType": "application/gzip" },
+    "ownerDecision": { "decisionId": "owner-clean-install-001", "decisionVersion": 1, "decisionSha256": "2222222222222222222222222222222222222222222222222222222222222222", "deploymentMode": "clean_install", "existingProjectAssets": "replace", "legacyRollbackAllowed": false, "dataAuthority": { "mode": "initialize_new", "sourceRef": "owner:data-authority/clean-install-001" }, "serviceActivationAuthorized": true, "baselineCutAuthorized": true, "destructiveScope": [] },
+    "permissions": { "deploy": false, "destructive": false },
+    "authorizationGranted": false,
+    "receiptSha256": "1111111111111111111111111111111111111111111111111111111111111111"
+  }]
+}

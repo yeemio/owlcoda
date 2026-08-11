@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/core-successor-project-success-receipt-v1.json",
+  "title": "OwlCoda RunKit Core Successor Project Success Receipt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "receiptId", "attemptNumber", "priorAttemptReceiptSha256", "workspaceRoot", "fromCore", "toCore", "planSha256", "ownerAuthoritySha256", "fleetManifestSha256", "migrationStatus", "migrationReceiptPath", "migrationReceiptSha256", "postConfigSha256", "repositoryActions", "authorizationGranted", "receiptSha256"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitCoreSuccessorProjectSuccessReceiptV1" },
+    "receiptId": { "type": "string", "minLength": 1 },
+    "attemptNumber": { "type": "integer", "minimum": 1 },
+    "priorAttemptReceiptSha256": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/hash" }] },
+    "workspaceRoot": { "type": "string", "minLength": 1 },
+    "fromCore": { "$ref": "#/$defs/core" },
+    "toCore": { "$ref": "#/$defs/core" },
+    "planSha256": { "$ref": "#/$defs/hash" },
+    "ownerAuthoritySha256": { "$ref": "#/$defs/hash" },
+    "fleetManifestSha256": { "$ref": "#/$defs/hash" },
+    "migrationStatus": { "enum": ["upgraded", "initialized"] },
+    "migrationReceiptPath": { "type": "string", "minLength": 1 },
+    "migrationReceiptSha256": { "$ref": "#/$defs/hash" },
+    "postConfigSha256": { "$ref": "#/$defs/hash" },
+    "repositoryActions": { "$ref": "#/$defs/actions" },
+    "authorizationGranted": { "const": false },
+    "receiptSha256": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "core": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "coreVersion", "coreManifestSha256", "coreSourceRef"],
+      "properties": {
+        "contractVersion": { "type": "string", "minLength": 1 },
+        "coreVersion": { "type": "string", "minLength": 1 },
+        "coreManifestSha256": { "$ref": "#/$defs/hash" },
+        "coreSourceRef": { "type": "string", "minLength": 1 }
+      }
+    },
+    "actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "commit", "push", "publish", "deploy"],
+      "properties": {
+        "stage": { "const": false },
+        "commit": { "const": false },
+        "push": { "const": false },
+        "publish": { "const": false },
+        "deploy": { "const": false }
+      }
+    }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitCoreSuccessorProjectSuccessReceiptV1",
+    "receiptId": "apply-001",
+    "attemptNumber": 1,
+    "priorAttemptReceiptSha256": null,
+    "workspaceRoot": "/fleet/project",
+    "fromCore": { "contractVersion": "0.2", "coreVersion": "0.15.1", "coreManifestSha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "coreSourceRef": "artifact:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+    "toCore": { "contractVersion": "0.2", "coreVersion": "0.16.0", "coreManifestSha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "coreSourceRef": "artifact:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+    "planSha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "ownerAuthoritySha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "fleetManifestSha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "migrationStatus": "upgraded",
+    "migrationReceiptPath": ".owlcoda/runkit/config-migration-receipts/upgrade.json",
+    "migrationReceiptSha256": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "postConfigSha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "repositoryActions": { "stage": false, "commit": false, "push": false, "publish": false, "deploy": false },
+    "authorizationGranted": false,
+    "receiptSha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+  }]
+}

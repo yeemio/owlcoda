@@ -89,6 +89,17 @@ describe('server dispatch', () => {
     expect(body).toHaveProperty('version')
   })
 
+  it('keeps OwlCoda healthy when the separately managed local runtime is stopped', async () => {
+    await fetchApi('/healthz')
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    const res = await fetchApi('/healthz')
+    const body = await res.json() as Record<string, any>
+
+    expect(res.status).toBe(200)
+    expect(body.status).toBe('healthy')
+  })
+
   it('returns /health basic info', async () => {
     const res = await fetchApi('/health')
     expect(res.status).toBe(200)

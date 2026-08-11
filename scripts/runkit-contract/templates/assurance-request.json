@@ -1,0 +1,13 @@
+{
+  "needsDurableEvidence": true,
+  "needsFormalAcceptance": false,
+  "mayMutateProject": false,
+  "externalSideEffects": false,
+  "longRunning": false,
+  "interruptionRecovery": false,
+  "dirtyParallelWorkspace": false,
+  "exactCommandCount": 1,
+  "writerCount": 0,
+  "riskCategories": [],
+  "authorizationGranted": false
+}

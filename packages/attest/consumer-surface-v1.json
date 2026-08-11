@@ -1,0 +1,255 @@
+{
+  "schemaVersion": "OwlCodaRunKitConsumerSurfaceManifestV1",
+  "consumerSurface": "unsigned_v1",
+  "status": "frozen_candidate",
+  "commands": [
+    {
+      "id": "quick_verify",
+      "invocation": "owlcoda runkit verify -- <executable> [args...]",
+      "lane": "Quick Verification",
+      "mutation": "writes one project-local Quick receipt and bound output artifacts",
+      "runKitControlPlaneNetworkRequests": 0,
+      "childCommandNetworkPolicy": "caller_owned_not_restricted_or_measured",
+      "authorizationGranted": false
+    },
+    {
+      "id": "attest",
+      "invocation": "owlcoda attest <receipt> --workspace <path> [--json]",
+      "lane": "read-only consumer",
+      "mutation": "none",
+      "networkRequests": 0,
+      "authorizationGranted": false
+    },
+    {
+      "id": "resolve",
+      "invocation": "owlcoda resolve <reference> --store <path> [--store <path>...] [--workspace <path>] [--json]",
+      "lane": "read-only consumer",
+      "mutation": "none",
+      "networkRequests": 0,
+      "authorizationGranted": false
+    },
+    {
+      "id": "repair",
+      "invocation": "owlcoda runkit repair --run-id <run-id> [--json]",
+      "lane": "Formal Delivery recovery",
+      "mutation": "appends a repair plan, attempt, replacement packet, and receipt lineage when authorized by the active execution",
+      "runKitControlPlaneNetworkRequests": 0,
+      "childCommandNetworkPolicy": "caller_owned_not_restricted_or_measured",
+      "authorizationGranted": false
+    },
+    {
+      "id": "store_export",
+      "invocation": "owlcoda runkit store export --receipt <path> --output <path> [--json]",
+      "lane": "offline transfer producer",
+      "mutation": "creates one new exact-byte offline bundle and refuses overwrite",
+      "networkRequests": 0,
+      "authorizationGranted": false
+    },
+    {
+      "id": "store_import",
+      "invocation": "owlcoda runkit store import --bundle <path> --store <path> [--json]",
+      "lane": "offline transfer consumer",
+      "mutation": "imports exact receipt bytes idempotently and refuses byte conflicts",
+      "networkRequests": 0,
+      "authorizationGranted": false
+    },
+    {
+      "id": "local_metrics",
+      "invocation": "owlcoda runkit metrics --local [--json]",
+      "lane": "local inspection",
+      "mutation": "none",
+      "networkRequests": 0,
+      "authorizationGranted": false
+    },
+    {
+      "id": "standalone_attest",
+      "invocation": "owlcoda-attest attest <receipt-or-bundle.json> [--workspace <path>] [--json]",
+      "lane": "standalone read-only consumer",
+      "mutation": "none",
+      "networkRequests": 0,
+      "authorizationGranted": false
+    },
+    {
+      "id": "standalone_resolve",
+      "invocation": "owlcoda-attest resolve <attestation-ref.json> --store <path> [--store <path>...] [--workspace <path>] [--json]",
+      "lane": "standalone read-only consumer",
+      "mutation": "none",
+      "networkRequests": 0,
+      "authorizationGranted": false
+    }
+  ],
+  "schemas": [
+    "OwlCodaAttestationRefV1",
+    "OwlCodaAttestationResultV1",
+    "OwlCodaOfflineAttestationBundleV1",
+    "OwlCodaQuickVerificationReceiptV1",
+    "OwlCodaRunKitPublicVerificationBundleV1",
+    "OwlCodaWorkspaceSnapshotV1"
+  ],
+  "attestationReference": {
+    "schemaVersion": "OwlCodaAttestationRefV1",
+    "requiredKeys": [
+      "schemaVersion",
+      "receiptId",
+      "receiptSha256",
+      "coreIdentity"
+    ],
+    "coreIdentityRequiredKeys": [
+      "contractVersion",
+      "coreManifestSha256"
+    ],
+    "additionalProperties": false,
+    "locationHints": false
+  },
+  "outcomes": {
+    "attestationDecisions": [
+      "GO",
+      "NO_GO",
+      "INDETERMINATE"
+    ],
+    "resolutionStatuses": {
+      "resolved_valid": 0,
+      "resolved_invalid": 1,
+      "resolved_indeterminate": 3,
+      "ambiguous": 1,
+      "not_found": 3
+    }
+  },
+  "assurance": {
+    "quickLane": "captured_verification",
+    "formalLane": "receipt_backed_delivery",
+    "quickCanSatisfyFormalAcceptance": false,
+    "signatureRequired": false,
+    "signatureAbsentIssueCode": "signature_absent",
+    "quickWithoutWorkspace": {
+      "otherwiseValidDecision": "INDETERMINATE",
+      "deterministicallyInvalidDecision": "NO_GO"
+    },
+    "independentReviewRequiredForFormalHighRisk": true,
+    "authorizationDerivedFromReceipt": false
+  },
+  "compatibility": {
+    "policy": "N verifies N and declared N-1 producer identities; N-1 is not required to trust an undeclared future producer identity",
+    "historicalBytesRewritten": false,
+    "scenarios": [
+      {
+        "id": "clean_first_use",
+        "evidencePath": "scripts/runkit-wave1-fresh-checkout-smoke.mjs"
+      },
+      {
+        "id": "dirty_workspace",
+        "evidencePath": "tests/runkit-contract/quick-verification.workflow.test.mjs"
+      },
+      {
+        "id": "offline_export_import_resolve",
+        "evidencePath": "tests/runkit-contract/wave4-offline-store.test.mjs"
+      },
+      {
+        "id": "n_minus_one_upgrade",
+        "evidencePath": "tests/runkit-contract/wave4-distribution-compatibility.test.mjs"
+      },
+      {
+        "id": "rollback",
+        "evidencePath": "tests/runkit-contract/wave4-distribution-compatibility.test.mjs"
+      },
+      {
+        "id": "historical_unsigned_receipt",
+        "evidencePath": "tests/runkit-contract/wave4-distribution-compatibility.test.mjs"
+      },
+      {
+        "id": "source_drift_repair",
+        "evidencePath": "tests/runkit-contract/repair-execution.workflow.test.mjs"
+      },
+      {
+        "id": "failed_repair_lineage",
+        "evidencePath": "tests/runkit-contract/repair-execution.workflow.test.mjs"
+      }
+    ]
+  },
+  "privacy": {
+    "defaultNetworkRequests": 0,
+    "defaultNetworkRequestsScope": "RunKit control plane only; a captured or replayed child command is caller-owned, unrestricted, and unmeasured",
+    "telemetry": false,
+    "credentialsRequired": false,
+    "hostedServiceRequired": false,
+    "receiptContentsMayContainCommandArgumentsAndPaths": true,
+    "operatorMustReviewBeforeExternalSharing": true
+  },
+  "metrics": {
+    "command": "owlcoda runkit metrics --local [--json]",
+    "localOnly": true,
+    "optInInspection": true,
+    "telemetry": false,
+    "networkRequests": 0,
+    "performanceTarget": false,
+    "automaticallyRecordsIndependentConsumption": false,
+    "statement": "Local totals describe project receipt state; independent consumption is evidenced by caller-owned attestation results, never hidden instrumentation."
+  },
+  "issueCodes": {
+    "ACCEPTED_AUTHORITY_GRANTED": "A Formal bundle marked accepted while its closeout grants authority.",
+    "ACCEPTED_RECEIPT_NOT_PASSED": "A Formal bundle marked accepted while its active receipt did not pass.",
+    "ACTIVE_RECEIPT_CONTEXT_BINDING_MISMATCH": "The active Formal receipt context does not match the declared verification context.",
+    "ACTIVE_RECEIPT_SOURCE_BINDING_MISMATCH": "The active Formal receipt source does not match the declared source fingerprint.",
+    "CANONICAL_JSON_INVALID": "Canonical JSON computation failed at a public Formal artifact boundary.",
+    "CLOSEOUT_ACTIVE_RECEIPT_MISMATCH": "The Formal closeout does not bind the active receipt.",
+    "CLOSEOUT_CONTEXT_BINDING_MISMATCH": "The Formal closeout context does not bind the declared verification context.",
+    "CLOSEOUT_SOURCE_BINDING_MISMATCH": "The Formal closeout source does not bind the declared source fingerprint.",
+    "DUPLICATE_OBJECT_KEY": "A Formal JSON input contains a duplicate object key.",
+    "EXTERNAL_AUTHORITY_GRANTED": "A public Formal bundle attempts to grant external authority.",
+    "INPUT_FILE_INVALID": "A Formal verifier input file cannot be read under the public file boundary.",
+    "INPUT_JSON_INVALID": "A Formal verifier input is not strict valid JSON.",
+    "INPUT_SIZE_LIMIT_EXCEEDED": "A Formal verifier input exceeds the deterministic byte limit.",
+    "JSON_NESTING_LIMIT_EXCEEDED": "A Formal verifier input exceeds the deterministic nesting limit.",
+    "JSON_NODE_LIMIT_EXCEEDED": "A Formal verifier input exceeds the deterministic JSON node limit.",
+    "PUBLIC_BUNDLE_SHAPE_INVALID": "A Formal public bundle has an unknown, missing, or extra field.",
+    "RECEIPT_AUTHORITY_GRANTED": "A Formal receipt attempts to grant external authority.",
+    "RECEIPT_COUNT_LIMIT_EXCEEDED": "A Formal bundle exceeds the deterministic receipt-count limit.",
+    "RECEIPT_ID_DUPLICATE": "A Formal receipt identifier appears more than once.",
+    "RECEIPT_LINEAGE_CYCLE": "Formal replacement lineage contains a cycle.",
+    "RECEIPT_LINEAGE_MULTIPLE_ACTIVE_LEAVES": "Formal replacement lineage has more than one active leaf.",
+    "RECEIPT_LINEAGE_NO_ACTIVE_LEAF": "Formal replacement lineage has no active leaf.",
+    "RECEIPT_LINEAGE_ORPHAN": "A Formal replacement references a parent absent from earlier append-only lineage.",
+    "SOURCE_FINGERPRINT_MISMATCH": "The Formal source payload does not match its declared fingerprint.",
+    "VERIFICATION_CONTEXT_FINGERPRINT_MISMATCH": "The Formal verification context does not match its declared fingerprint.",
+    "anchor_absent": "No external checkpoint or timestamp anchor was checked; unsigned V1 remains usable under local policy.",
+    "attestation_material_missing": "A receipt-bound output material is unavailable, so the result is indeterminate rather than silently accepted.",
+    "attestation_target_ambiguous": "More than one byte-distinct local receipt matches the reference.",
+    "attestation_target_not_found": "No receipt matching the exact local reference was found in the supplied stores.",
+    "core_identity_mismatch": "The receipt producer Core identity is not declared by this verifier.",
+    "current_workspace_not_checked": "No explicit workspace was selected, so Quick attestation did not read output paths or compare current checkout bytes.",
+    "quick_ignored_artifact_unbound": "Git-ignored outputs are not bound unless an explicit artifact contract names and hashes them.",
+    "quick_receipt_store_invalid": "The project-local receipt store failed its path or file integrity boundary.",
+    "receipt_duplicate_key": "The receipt contains a duplicate JSON object key.",
+    "receipt_material_hash_mismatch": "A receipt-bound material differs from its recorded bytes, hash, or size.",
+    "receipt_schema_invalid": "The receipt does not satisfy the strict supported schema.",
+    "receipt_source_mismatch": "The selected workspace source does not match the receipt-bound source.",
+    "repair_plan_incomplete": "A deterministic repair plan cannot safely replay every required command and binding.",
+    "repair_replay_failed": "A replay command failed; the failed attempt and earlier lineage remain append-only.",
+    "signature_absent": "No receipt signature is present or checked; this is expected under unsigned V1 and proves no signer identity.",
+    "source_mutated_during_verification": "Source bytes changed while the command was running.",
+    "verification_command_failed": "The captured verification command did not exit successfully.",
+    "verification_context_mismatch": "The current runtime context differs from the receipt-bound runtime context."
+  },
+  "unsupportedClaims": [
+    "unsigned_receipt_proves_signer_identity",
+    "unsigned_receipt_proves_independent_machine_or_organization",
+    "issued_at_proves_trusted_wall_clock_time",
+    "unsigned_receipt_proves_external_existence_before_a_time",
+    "ignored_artifact_is_bound_without_explicit_artifact_contract",
+    "quick_receipt_proves_formal_acceptance",
+    "receipt_grants_git_release_or_business_authority",
+    "captured_or_replayed_child_command_has_zero_network",
+    "local_metrics_are_independent_consumption_events"
+  ],
+  "integration": {
+    "persist": "OwlCodaAttestationRefV1 plus the referenced receipt bytes",
+    "consume": "attest or resolve through a declared command or the standalone package",
+    "doNotImport": [
+      "private RunKit mutation Core",
+      "Desktop or App Server internals",
+      "project-private receipt-store layout"
+    ],
+    "futureSignedProfile": "additive; producer command and AttestationRefV1 shape remain unchanged"
+  },
+  "authorizationGranted": false
+}

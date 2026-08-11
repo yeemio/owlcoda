@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/trust/attestation-result-v1.schema.json",
+  "title": "OwlCoda Attestation Result V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "decision",
+    "subjectRef",
+    "verifiedAt",
+    "policy",
+    "checks",
+    "authorizationBoundary",
+    "issueCodes",
+    "verifiedMaterials"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "OwlCodaAttestationResultV1"
+    },
+    "decision": {
+      "enum": [
+        "GO",
+        "NO_GO",
+        "INDETERMINATE"
+      ]
+    },
+    "subjectRef": {
+      "$ref": "attestation-ref-v1.schema.json"
+    },
+    "verifiedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "canonicalization",
+        "lineage",
+        "source",
+        "context",
+        "signature",
+        "key",
+        "anchor"
+      ],
+      "properties": {
+        "schema": {
+          "$ref": "#/$defs/check"
+        },
+        "canonicalization": {
+          "$ref": "#/$defs/check"
+        },
+        "lineage": {
+          "$ref": "#/$defs/check"
+        },
+        "source": {
+          "$ref": "#/$defs/check"
+        },
+        "context": {
+          "$ref": "#/$defs/check"
+        },
+        "signature": {
+          "$ref": "#/$defs/check"
+        },
+        "key": {
+          "$ref": "#/$defs/check"
+        },
+        "anchor": {
+          "$ref": "#/$defs/check"
+        }
+      }
+    },
+    "authorizationBoundary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationGranted",
+        "statement"
+      ],
+      "properties": {
+        "authorizationGranted": {
+          "const": false
+        },
+        "statement": {
+          "const": "attestation_never_grants_repository_or_business_authority"
+        }
+      }
+    },
+    "issueCodes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "verifiedMaterials": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "path",
+          "sha256"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^sha256:[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "passed",
+            "failed",
+            "not_checked",
+            "material_missing"
+          ]
+        },
+        "issueCode": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

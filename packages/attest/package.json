@@ -1,0 +1,32 @@
+{
+  "name": "@owlcoda/attest",
+  "version": "0.2.0",
+  "description": "Read-only verification for OwlCoda Quick receipts and Formal public bundles.",
+  "license": "GPL-3.0-or-later",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "owlcoda-attest": "cli/owlcoda-attest.mjs"
+  },
+  "files": [
+    "cli/",
+    "consumer-surface-v1.json",
+    "distribution-manifest-v1.json",
+    "fixtures/",
+    "LICENSE",
+    "schemas/",
+    "sbom.spdx.json",
+    "src/",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  }
+}

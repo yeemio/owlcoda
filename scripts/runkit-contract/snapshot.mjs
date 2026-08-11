@@ -175,7 +175,7 @@ function validateRequest(request) {
       || typeof entry.version !== "string")) {
     throw new Error("Snapshot toolVersions must contain name and version.");
   }
-  if (!Array.isArray(request.selectedPaths) || request.selectedPaths.length === 0) {
+  if (!Array.isArray(request.selectedPaths)) {
     throw new Error("Snapshot requires selectedPaths.");
   }
   if (request.statusMode !== STATUS_MODE) {

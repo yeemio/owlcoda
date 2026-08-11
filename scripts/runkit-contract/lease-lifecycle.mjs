@@ -196,9 +196,15 @@ function acquireControlLock(workspaceRoot) {
 export function withControlTransaction(workspaceRoot, operation) {
   const release = acquireControlLock(workspaceRoot);
   try {
-    return operation();
-  } finally {
+    const result = operation();
+    if (result && typeof result.then === "function") {
+      return Promise.resolve(result).finally(release);
+    }
     release();
+    return result;
+  } catch (error) {
+    release();
+    throw error;
   }
 }
 

@@ -341,6 +341,33 @@ describe('model output harness', () => {
     expect(result.attempts.map(a => a.label)).toEqual(['primary', 'repair'])
   })
 
+  it('repairs a structural smart quote instead of accepting a schema-invalid nested object', async () => {
+    const result = await runModelOutputHarness(baseRequest, executorReturning({
+      text: [
+        '```json',
+        '{',
+        '  "artifact": "evidence-digest.v1",',
+        '  "summary": "Smart quote digest",',
+        '  "confidence": 0.64,',
+        '  "source_refs": [“source:1"],',
+        '  "meta": {"provider": "deepseek"}',
+        '}',
+        '```',
+      ].join('\n'),
+      stopReason: 'end_turn',
+    }))
+
+    expect(result.ok).toBe(true)
+    expect(result.repairCount).toBe(1)
+    expect(result.artifact).toMatchObject({
+      artifact: 'evidence-digest.v1',
+      summary: 'Smart quote digest',
+      confidence: 0.64,
+      source_refs: ['source:1'],
+    })
+    expect(result.attempts.map(a => a.label)).toEqual(['primary', 'parse', 'repair'])
+  })
+
   it('salvages YAML-like bullet lists into array fields', async () => {
     const result = await runModelOutputHarness({
       ...baseRequest,
@@ -602,13 +629,10 @@ describe('model output harness', () => {
       hardTimeoutMs: 35,
     }, async request => {
       for (const chunk of ['{"artifact":"evidence-digest.v1",', '"summary":"still streaming",']) {
-        await sleep(10)
         request.onOutputDelta?.({ type: 'text', text: chunk })
+        await Promise.resolve()
       }
-      await sleep(80)
-      return {
-        text: '{"artifact":"evidence-digest.v1","summary":"too late","confidence":0.6}',
-      }
+      await new Promise<never>(() => {})
     })
 
     expect(result.ok).toBe(false)

@@ -81,9 +81,14 @@ function isOwned(filePath, ownedPaths) {
 }
 
 function ownedStatusSignature(records, ownedPaths) {
-  return JSON.stringify(records
+  return JSON.stringify(ownedStatusRecords(records, ownedPaths));
+}
+
+function ownedStatusRecords(records, ownedPaths) {
+  return records
     .filter(record => record.paths.some(filePath => isOwned(filePath, ownedPaths)))
-    .map(record => ({ status: record.status, paths: [...record.paths] })));
+    .map(record => ({ status: record.status, paths: [...record.paths] }))
+    .sort((left, right) => JSON.stringify(left.paths).localeCompare(JSON.stringify(right.paths)));
 }
 
 function within(root, candidate) {
@@ -210,6 +215,12 @@ export function createDeliveryFromLeaseWithinControlTransaction({ workspaceRoot,
     discovery: {
       fromLease: workItemId,
       leasePath: lease.leaseRelativePath,
+      ownedPathState: {
+        schemaVersion: "OwlCodaRunKitOwnedPathStateV1",
+        statusMode: "porcelain-v1-z-untracked-all-runkit-excluded",
+        ownedPaths: [...lease.ownedPaths],
+        records: ownedStatusRecords(statusBefore, lease.ownedPaths),
+      },
       unrelatedDirtyPaths: [...unrelatedDirtyPaths].sort(),
       deletedOwnedPaths: [],
       renamedOwnedPaths: [],

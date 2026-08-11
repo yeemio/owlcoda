@@ -98,7 +98,7 @@ export const CAPABILITIES: Capability[] = [
   { name: '/ratelimit command', status: 'supported', detail: 'Per-model rate limit bucket status in TUI' },
 
   // ── Phase 4: Production Hardening (Round 16) ──
-  { name: 'Model fallback chain', status: 'supported', detail: 'API middleware can auto-fallback on 5xx/connection failure; interactive REPL keeps the selected model unless the user switches it' },
+  { name: 'Model fallback chain', status: 'supported', detail: 'When fallbackEnabled=true, API middleware can continue on an eligible model after 5xx/connection failure; interactive REPL keeps the selected model unless the user switches it' },
   { name: 'Config hot-reload', status: 'supported', detail: 'Watch config.json for changes, validate and apply without restart' },
   { name: 'Persistent audit log', status: 'supported', detail: 'Append-only JSONL at ~/.owlcoda/audit.jsonl with auto-rotation at 10MB' },
   { name: 'Background health monitor', status: 'supported', detail: 'Proactive model health checks every 60s, cached results' },
@@ -106,8 +106,8 @@ export const CAPABILITIES: Capability[] = [
 
   // ── Phase 4: Circuit Breaker & Fallback (Round 17) ──
   { name: 'Circuit breaker', status: 'supported', detail: 'Auto-disable models after 5 consecutive failures, 60s cooldown, half-open probe' },
-  { name: 'Full fallback routing', status: 'supported', detail: 'Non-streaming: auto-fallback to next model via withFallback + health filter + circuit breaker' },
-  { name: 'Streaming circuit tracking', status: 'supported', detail: 'Streaming: recordSuccess/recordFailure but no cross-model fallback (deferred)' },
+  { name: 'Full fallback routing', status: 'supported', detail: 'Non-streaming and pre-first-token streaming failures can continue to the next eligible model through the health-filtered fallback chain' },
+  { name: 'Streaming fallback safety', status: 'supported', detail: 'Cross-model recovery is allowed before visible output; after partial output the stream fails explicitly instead of replaying or mixing model output' },
   { name: 'Configurable middleware', status: 'supported', detail: 'config.json middleware section: rateLimitRpm, retryMaxAttempts, fallbackEnabled, etc.' },
   { name: '/audit command', status: 'supported', detail: 'View recent audit log entries with token counts and fallback status' },
   { name: '/health command', status: 'supported', detail: 'View model health + circuit breaker state per model' },

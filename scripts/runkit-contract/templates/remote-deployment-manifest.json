@@ -1,0 +1,108 @@
+{
+  "schemaVersion": "OwlCodaRunKitRemoteDeploymentManifestV1",
+  "deploymentId": "replace-with-deployment-id",
+  "deploymentLineageSha256": null,
+  "mode": "first",
+  "ownerDecision": {
+    "decisionId": "replace-with-owner-decision-id",
+    "decisionVersion": 1,
+    "decisionSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "deploymentMode": "clean_install",
+    "existingProjectAssets": "replace",
+    "legacyRollbackAllowed": false,
+    "dataAuthority": {
+      "mode": "initialize_new",
+      "sourceRef": "replace-with-owner-controlled-data-authority-ref"
+    },
+    "serviceActivationAuthorized": false,
+    "baselineCutAuthorized": false,
+    "destructiveScope": []
+  },
+  "serviceActivation": false,
+  "baselineCut": false,
+  "target": {
+    "schemaVersion": "OwlCodaRunKitRemoteTargetV1",
+    "targetId": "replace-with-target-id",
+    "environment": "production",
+    "host": "replace.example.invalid",
+    "port": 22,
+    "user": "deploy",
+    "hostKeySha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "machineIdentitySha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "adapter": {
+    "kind": "builtin_ssh",
+    "adapterId": "builtin-ssh-v1",
+    "version": "1.0.0",
+    "executable": "/replace/with/exact/owlrunkit/scripts/runkit-contract/ssh-remote-adapter.mjs",
+    "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "knownHostsPath": "/replace/with/exact/project/known_hosts",
+    "sshExecutable": "/usr/bin/ssh",
+    "sshExecutableSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "remoteHelper": {
+      "path": "/usr/local/libexec/owlrunkit-remote-helper",
+      "protocol": "OwlCodaRunKitSshRemoteHelperV1",
+      "version": "1.0.0",
+      "capabilities": [
+        "execute",
+        "reconcile"
+      ]
+    },
+    "authentication": {
+      "mode": "agent",
+      "identityFile": null
+    },
+    "stageContracts": {
+      "install": {
+        "archiveFormat": "tar_gzip",
+        "releaseRoot": "/opt/owlapp/releases",
+        "currentSymlink": "/opt/owlapp/current"
+      },
+      "systemd": {
+        "unitName": "owlapp.service",
+        "unitFile": {
+          "sourcePath": "deploy/owlapp.service",
+          "destinationPath": "/etc/systemd/system/owlapp.service",
+          "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+        },
+        "daemonReload": true,
+        "enable": true,
+        "restart": true
+      },
+      "nginx": {
+        "siteName": "owlapp",
+        "configFile": {
+          "sourcePath": "deploy/owlapp.nginx.conf",
+          "destinationPath": "/etc/nginx/sites-available/owlapp.conf",
+          "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+        },
+        "enabledLinkPath": "/etc/nginx/sites-enabled/owlapp.conf",
+        "configTest": true,
+        "reload": true
+      },
+      "smoke": {
+        "checks": [
+          {
+            "checkId": "service-active",
+            "kind": "systemd_active",
+            "unitName": "owlapp.service"
+          }
+        ]
+      }
+    }
+  },
+  "credentialRef": "agent:replace/with/credential-reference",
+  "artifact": {
+    "path": "dist/replace-with-artifact.tgz",
+    "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "size": 0,
+    "mediaType": "application/gzip"
+  },
+  "upload": {
+    "remotePath": "/srv/releases/replace-with-artifact.tgz",
+    "createOnly": true
+  },
+  "priorDeployment": null,
+  "expectedRemoteFiles": [],
+  "deletionAllowlist": []
+}

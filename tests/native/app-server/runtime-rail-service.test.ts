@@ -3,7 +3,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { runCli as runRunKitCore } from '../../../scripts/runkit-contract/runkit-cli.mjs'
+import { runCli as runRunKitCore } from '../../../node_modules/owlrunkit/scripts/runkit-contract/runkit-cli.mjs'
 import {
   parseRunKitInspectSummary,
   projectRunKitInspectResult,
@@ -13,6 +13,23 @@ import {
 } from '../../../src/native/app-server/runtime-rail-service.js'
 
 describe('runtime-rail-service', () => {
+  it('reads project control truth with the installed owlrunkit package', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'owlcoda-official-runkit-'))
+    const initialized = await runRunKitCore(['init', '--workspace', root])
+    expect(initialized.exitCode).toBe(0)
+
+    const state = await readRuntimeRail({ projectId: 'official-project', projectRoot: root })
+
+    expect(state).toMatchObject({
+      projectId: 'official-project',
+      freshness: 'fresh',
+      source: 'owlcoda_runkit_inspect_summary',
+      summary: {
+        currentExecution: { state: 'no_active_execution' },
+      },
+    })
+  })
+
   it('returns explicit missing state when project-owned RunKit truth is absent', async () => {
     const root = await mkdtemp(join(tmpdir(), 'owlcoda-no-runkit-'))
 

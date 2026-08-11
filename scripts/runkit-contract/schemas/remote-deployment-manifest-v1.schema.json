@@ -1,0 +1,379 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/remote-deployment-manifest-v1.json",
+  "title": "OwlCoda RunKit Remote Deployment Manifest V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "deploymentId", "deploymentLineageSha256", "mode", "target", "adapter", "credentialRef", "artifact", "upload", "priorDeployment", "expectedRemoteFiles", "deletionAllowlist"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitRemoteDeploymentManifestV1" },
+    "deploymentId": { "$ref": "#/$defs/id" },
+    "deploymentLineageSha256": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/hash" }
+      ]
+    },
+    "mode": { "enum": ["first", "update"] },
+    "ownerDecision": { "$ref": "#/$defs/ownerDecisionBinding" },
+    "serviceActivation": { "type": "boolean" },
+    "baselineCut": { "type": "boolean" },
+    "target": { "$ref": "#/$defs/target" },
+    "adapter": { "$ref": "#/$defs/adapter" },
+    "credentialRef": { "type": "string", "pattern": "^(?:agent|keychain|vault):[A-Za-z0-9][A-Za-z0-9._/-]*$" },
+    "artifact": { "$ref": "#/$defs/artifact" },
+    "upload": { "$ref": "#/$defs/upload" },
+    "priorDeployment": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/prior" }] },
+    "expectedRemoteFiles": { "type": "array", "items": { "$ref": "#/$defs/remoteFile" } },
+    "deletionAllowlist": { "type": "array", "items": { "$ref": "#/$defs/deletion" } }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "ownerDecisionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decisionId", "decisionVersion", "decisionSha256", "deploymentMode", "existingProjectAssets", "legacyRollbackAllowed", "dataAuthority", "serviceActivationAuthorized", "baselineCutAuthorized", "destructiveScope"],
+      "properties": {
+        "decisionId": { "$ref": "#/$defs/id" },
+        "decisionVersion": { "type": "integer", "minimum": 1 },
+        "decisionSha256": { "$ref": "#/$defs/hash" },
+        "deploymentMode": { "enum": ["clean_install", "in_place_update"] },
+        "existingProjectAssets": { "enum": ["preserve", "replace", "remove"] },
+        "legacyRollbackAllowed": { "type": "boolean" },
+        "dataAuthority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "sourceRef"],
+          "properties": {
+            "mode": { "enum": ["preserve_existing", "replace_from_artifact", "initialize_new"] },
+            "sourceRef": { "type": "string", "minLength": 1 }
+          }
+        },
+        "serviceActivationAuthorized": { "type": "boolean" },
+        "baselineCutAuthorized": { "type": "boolean" },
+        "destructiveScope": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "targetId", "environment", "host", "port", "user", "hostKeySha256", "machineIdentitySha256"],
+      "properties": {
+        "schemaVersion": { "const": "OwlCodaRunKitRemoteTargetV1" },
+        "targetId": { "$ref": "#/$defs/id" },
+        "environment": { "$ref": "#/$defs/id" },
+        "host": {
+          "type": "string",
+          "pattern": "^(?:[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?|[0-9A-Fa-f:]+)$"
+        },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "user": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9._-]*$" },
+        "hostKeySha256": { "$ref": "#/$defs/hash" },
+        "machineIdentitySha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "adapter": {
+      "oneOf": [
+        { "$ref": "#/$defs/legacyProcessAdapter" },
+        { "$ref": "#/$defs/processAdapter" },
+        { "$ref": "#/$defs/builtinSshAdapter" }
+      ]
+    },
+    "legacyProcessAdapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapterId", "version", "executable", "sha256"],
+      "properties": {
+        "adapterId": { "$ref": "#/$defs/id" },
+        "version": { "type": "string", "minLength": 1 },
+        "executable": { "type": "string", "pattern": "^/" },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "processAdapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "adapterId", "version", "executable", "sha256"],
+      "properties": {
+        "kind": { "const": "process" },
+        "adapterId": { "$ref": "#/$defs/id" },
+        "version": { "type": "string", "minLength": 1 },
+        "executable": { "type": "string", "pattern": "^/" },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "builtinSshAdapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "adapterId", "version", "executable", "sha256", "knownHostsPath", "sshExecutable", "sshExecutableSha256", "remoteHelper", "authentication", "stageContracts"],
+      "properties": {
+        "kind": { "const": "builtin_ssh" },
+        "adapterId": { "const": "builtin-ssh-v1" },
+        "version": { "const": "1.0.0" },
+        "executable": { "type": "string", "pattern": "^/" },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "knownHostsPath": { "type": "string", "pattern": "^/" },
+        "sshExecutable": { "type": "string", "pattern": "^/" },
+        "sshExecutableSha256": { "$ref": "#/$defs/hash" },
+        "remoteHelper": { "$ref": "#/$defs/remoteHelper" },
+        "authentication": { "$ref": "#/$defs/sshAuthentication" },
+        "stageContracts": { "$ref": "#/$defs/sshStageContracts" }
+      }
+    },
+    "remoteHelper": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "protocol", "version", "capabilities"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/(?:[A-Za-z0-9._@%+=,-]+/)*owlrunkit-remote-helper$"
+        },
+        "protocol": { "const": "OwlCodaRunKitSshRemoteHelperV1" },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "capabilities": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "execute" },
+            { "const": "reconcile" }
+          ],
+          "items": false,
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "sshAuthentication": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "identityFile"],
+          "properties": {
+            "mode": { "const": "agent" },
+            "identityFile": { "type": "null" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "identityFile"],
+          "properties": {
+            "mode": { "const": "identity_file" },
+            "identityFile": { "$ref": "#/$defs/localFileBinding" }
+          }
+        }
+      ]
+    },
+    "localFileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^/" },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "sshStageContracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["install", "systemd", "nginx", "smoke"],
+      "properties": {
+        "install": { "$ref": "#/$defs/installContract" },
+        "systemd": { "$ref": "#/$defs/systemdContract" },
+        "nginx": { "$ref": "#/$defs/nginxContract" },
+        "smoke": { "$ref": "#/$defs/smokeContract" }
+      }
+    },
+    "installContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["archiveFormat", "releaseRoot", "currentSymlink"],
+      "properties": {
+        "archiveFormat": { "const": "tar_gzip" },
+        "releaseRoot": { "$ref": "#/$defs/remotePath" },
+        "currentSymlink": { "$ref": "#/$defs/remotePath" }
+      }
+    },
+    "managedFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourcePath", "destinationPath", "sha256"],
+      "properties": {
+        "sourcePath": { "type": "string", "minLength": 1 },
+        "destinationPath": { "$ref": "#/$defs/remotePath" },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "systemdContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unitName", "unitFile", "daemonReload", "enable", "restart"],
+      "properties": {
+        "unitName": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.@-]*\\.service$" },
+        "unitFile": { "$ref": "#/$defs/managedFile" },
+        "daemonReload": { "type": "boolean" },
+        "enable": { "type": "boolean" },
+        "restart": { "type": "boolean" }
+      }
+    },
+    "nginxContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["siteName", "configFile", "enabledLinkPath", "configTest", "reload"],
+      "properties": {
+        "siteName": { "$ref": "#/$defs/id" },
+        "configFile": { "$ref": "#/$defs/managedFile" },
+        "enabledLinkPath": { "$ref": "#/$defs/remotePath" },
+        "configTest": { "type": "boolean" },
+        "reload": { "type": "boolean" }
+      }
+    },
+    "smokeContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checks"],
+      "properties": {
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/smokeCheck" }
+        }
+      }
+    },
+    "smokeCheck": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["checkId", "kind", "unitName"],
+          "properties": {
+            "checkId": { "$ref": "#/$defs/id" },
+            "kind": { "const": "systemd_active" },
+            "unitName": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.@-]*\\.service$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["checkId", "kind", "url", "expectedStatus"],
+          "properties": {
+            "checkId": { "$ref": "#/$defs/id" },
+            "kind": { "const": "http" },
+            "url": { "type": "string", "pattern": "^http://(?:127\\.0\\.0\\.1|localhost|\\[::1\\])(?::[0-9]+)?/" },
+            "expectedStatus": { "type": "integer", "minimum": 100, "maximum": 599 }
+          }
+        }
+      ]
+    },
+    "remotePath": {
+      "type": "string",
+      "pattern": "^/(?:[A-Za-z0-9._@%+=,-]+/)*[A-Za-z0-9._@%+=,-]+$"
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size", "mediaType"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "size": { "type": "integer", "minimum": 0 },
+        "mediaType": { "type": "string", "pattern": "^[A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+$" }
+      }
+    },
+    "upload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["remotePath", "createOnly"],
+      "properties": {
+        "remotePath": {
+          "type": "string",
+          "pattern": "^/(?:[A-Za-z0-9._@%+=,-]+/)*[A-Za-z0-9._@%+=,-]+$"
+        },
+        "createOnly": { "const": true }
+      }
+    },
+    "prior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["receiptSha256", "artifactSha256"],
+      "properties": { "receiptSha256": { "$ref": "#/$defs/hash" }, "artifactSha256": { "$ref": "#/$defs/hash" } }
+    },
+    "remoteFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/(?:[A-Za-z0-9._@%+=,-]+/)*[A-Za-z0-9._@%+=,-]+$"
+        },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "deletion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "priorSha256"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^/(?:[A-Za-z0-9._@%+=,-]+/)*[A-Za-z0-9._@%+=,-]+$"
+        },
+        "priorSha256": { "$ref": "#/$defs/hash" }
+      }
+    }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitRemoteDeploymentManifestV1",
+    "deploymentId": "deploy-001",
+    "deploymentLineageSha256": null,
+    "mode": "first",
+    "target": { "schemaVersion": "OwlCodaRunKitRemoteTargetV1", "targetId": "vm-01", "environment": "production", "host": "deploy.example.invalid", "port": 22, "user": "deploy", "hostKeySha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "machineIdentitySha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" },
+    "adapter": {
+      "kind": "builtin_ssh",
+      "adapterId": "builtin-ssh-v1",
+      "version": "1.0.0",
+      "executable": "/absolute/path/to/owlrunkit/scripts/runkit-contract/ssh-remote-adapter.mjs",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "knownHostsPath": "/absolute/path/to/project/deploy/known_hosts",
+      "sshExecutable": "/usr/bin/ssh",
+      "sshExecutableSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "remoteHelper": {
+        "path": "/usr/local/libexec/owlrunkit-remote-helper",
+        "protocol": "OwlCodaRunKitSshRemoteHelperV1",
+        "version": "1.0.0",
+        "capabilities": ["execute", "reconcile"]
+      },
+      "authentication": { "mode": "agent", "identityFile": null },
+      "stageContracts": {
+        "install": { "archiveFormat": "tar_gzip", "releaseRoot": "/opt/owlapp/releases", "currentSymlink": "/opt/owlapp/current" },
+        "systemd": {
+          "unitName": "owlapp.service",
+          "unitFile": { "sourcePath": "deploy/owlapp.service", "destinationPath": "/etc/systemd/system/owlapp.service", "sha256": "1111111111111111111111111111111111111111111111111111111111111111" },
+          "daemonReload": true,
+          "enable": true,
+          "restart": true
+        },
+        "nginx": {
+          "siteName": "owlapp",
+          "configFile": { "sourcePath": "deploy/owlapp.nginx.conf", "destinationPath": "/etc/nginx/sites-available/owlapp.conf", "sha256": "2222222222222222222222222222222222222222222222222222222222222222" },
+          "enabledLinkPath": "/etc/nginx/sites-enabled/owlapp.conf",
+          "configTest": true,
+          "reload": true
+        },
+        "smoke": { "checks": [{ "checkId": "service-active", "kind": "systemd_active", "unitName": "owlapp.service" }] }
+      }
+    },
+    "credentialRef": "agent:owlcoda/deploy",
+    "artifact": { "path": "dist/release.tgz", "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "size": 1234, "mediaType": "application/gzip" },
+    "upload": { "remotePath": "/srv/releases/release.tgz", "createOnly": true },
+    "priorDeployment": null,
+    "expectedRemoteFiles": [],
+    "deletionAllowlist": []
+  }]
+}

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/owner-migration-authority-v2.json",
+  "title": "OwlCoda RunKit Owner Migration Authority V2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "authorityId",
+    "decision",
+    "scope",
+    "planSha256",
+    "fromCoreSetSha256",
+    "toCoreManifestSha256",
+    "fleetManifestSha256",
+    "signerKeyId",
+    "signatureAlgorithm",
+    "authorizationGranted",
+    "authoritySha256",
+    "signature"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "OwlCodaRunKitOwnerMigrationAuthorityV2"
+    },
+    "authorityId": { "$ref": "#/$defs/id" },
+    "decision": { "const": "approved" },
+    "scope": { "const": "migrate_declared_core_successor_fleet" },
+    "planSha256": { "$ref": "#/$defs/hash" },
+    "fromCoreSetSha256": { "$ref": "#/$defs/hash" },
+    "toCoreManifestSha256": { "$ref": "#/$defs/hash" },
+    "fleetManifestSha256": { "$ref": "#/$defs/hash" },
+    "signerKeyId": { "$ref": "#/$defs/id" },
+    "signatureAlgorithm": { "const": "ed25519" },
+    "authorizationGranted": { "const": false },
+    "authoritySha256": { "$ref": "#/$defs/hash" },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitOwnerMigrationAuthorityV2",
+    "authorityId": "owner-core-successor-001",
+    "decision": "approved",
+    "scope": "migrate_declared_core_successor_fleet",
+    "planSha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "fromCoreSetSha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "toCoreManifestSha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "fleetManifestSha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "signerKeyId": "owner-key-001",
+    "signatureAlgorithm": "ed25519",
+    "authorizationGranted": false,
+    "authoritySha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+  }]
+}

@@ -1,5 +1,10 @@
-function latestIndexedCloseout(executions) {
-  return [...executions].reverse().find(execution => execution.lifecycle === "closed") ?? null;
+import {
+  deriveHumanStatusFromInspectV1,
+  selectClosedHistoryFocusV1,
+} from "./human-status.mjs";
+
+function chronologySelectedCloseout(inspected) {
+  return selectClosedHistoryFocusV1(inspected).selectedExecution;
 }
 
 function compareCodeUnits(left, right) {
@@ -18,13 +23,42 @@ function selectedFocus(inspected) {
     return inspected.executions.find(execution => execution.runId === selectedRunId) ?? null;
   }
   return inspected.recovery.state === "no_active_execution"
-    ? latestIndexedCloseout(inspected.executions)
+    ? chronologySelectedCloseout(inspected)
     : null;
 }
 
-export function buildInspectSummary(inspected) {
+function closeoutDecisionCounts(inspected) {
+  const counts = { accepted: 0, blocked: 0, rejected: 0 };
+  for (const execution of inspected.executions) {
+    if (execution.lifecycle !== "closed") continue;
+    if (Object.hasOwn(counts, execution.closeout?.decision)) {
+      counts[execution.closeout.decision] += 1;
+    }
+  }
+  return counts;
+}
+
+export function buildInspectSummary(
+  inspected,
+  { maintenanceNextAction = null } = {},
+) {
+  const humanStatus = deriveHumanStatusFromInspectV1(inspected);
   const focus = selectedFocus(inspected);
-  const latestClosed = latestIndexedCloseout(inspected.executions);
+  const latestClosed = chronologySelectedCloseout(inspected);
+  const controlHistory = inspected.controlState?.closedHistory ?? null;
+  const closedRunCount = inspected.executions.filter(
+    (execution) => execution.lifecycle === "closed",
+  ).length;
+  const independentHistory = controlHistory?.status
+    === "multiple_independent_closed_histories"
+    && controlHistory?.blocking === false;
+  const selectedHeadCloseout = latestClosed
+    ? {
+        runId: latestClosed.runId,
+        decision: latestClosed.closeout?.decision ?? "invalid",
+        trustLevel: latestClosed.recovery?.evidenceTrustLevel ?? "invalid",
+      }
+    : null;
   const holders = inspected.executions
     .flatMap(execution => (execution.recovery?.lease?.activeWorkItemIds ?? []).map(workItemId => ({
       runId: execution.runId,
@@ -42,6 +76,7 @@ export function buildInspectSummary(inspected) {
     ...(inspected.recovery.state === "multiple_active_executions"
       ? ["Multiple active executions require explicit selection."]
       : (focus?.recovery?.issues ?? [])),
+    ...(inspected.configCore?.issues ?? []),
     ...(inspected.controlIssues ?? []),
     ...(selectedResource?.blockers ?? []),
   ].filter((reason, index, all) => all.indexOf(reason) === index);
@@ -53,13 +88,21 @@ export function buildInspectSummary(inspected) {
       activeRunIds: [...inspected.recovery.activeRunIds],
       openCount: inspected.recovery.activeRunIds.length,
     },
-    latestIndexedCloseout: latestClosed
-      ? {
-          runId: latestClosed.runId,
-          decision: latestClosed.closeout?.decision ?? "invalid",
-          trustLevel: latestClosed.recovery?.evidenceTrustLevel ?? "invalid",
-        }
-      : null,
+    latestIndexedCloseout: selectedHeadCloseout,
+    selectedHeadCloseout,
+    closedHistory: {
+      status: controlHistory?.status ?? "unavailable",
+      runCount: closedRunCount,
+      blocking: controlHistory?.blocking === true
+        || controlHistory?.status === "ambiguous_history",
+      selectedHeadRunId: selectedHeadCloseout?.runId ?? null,
+      selectionReason: selectedHeadCloseout
+        ? "verified_lineage_head"
+        : closedRunCount === 0
+          ? "no_closed_history"
+          : "no_unique_lineage_head",
+      decisionCounts: controlHistory?.decisionCounts ?? closeoutDecisionCounts(inspected),
+    },
     source: {
       status: delivery?.status ?? "none",
       sourceFingerprint: delivery?.sourceFingerprint ?? verification?.sourceFingerprint ?? null,
@@ -96,10 +139,13 @@ export function buildInspectSummary(inspected) {
       resources: [...(selectedResource?.resources ?? [])],
     },
     dominantGap: {
-      code: inspected.recovery.nextAllowedAction,
+      code: humanStatus.nextAllowedAction,
       reasons: [...reasons],
     },
-    nextAllowedAction: inspected.recovery.nextAllowedAction,
+    lifecycleNextAction: inspected.recovery.nextAllowedAction,
+    maintenanceNextAction,
+    optionalReviewAction: independentHistory ? "inspect_closed_history" : null,
+    nextAllowedAction: humanStatus.nextAllowedAction,
     authorizationGranted: false,
     gitAuthorization: false,
     releaseAuthorization: false,
@@ -111,10 +157,10 @@ function value(value) {
   return String(value);
 }
 
-function summaryLines(summary) {
-  const latest = summary.latestIndexedCloseout
-    ? `${summary.latestIndexedCloseout.runId} ${summary.latestIndexedCloseout.decision}`
-    : "none";
+function summaryLines(summary, humanStatus) {
+  const selectedHead = summary.selectedHeadCloseout
+    ? `${summary.selectedHeadCloseout.runId} ${summary.selectedHeadCloseout.decision}`
+    : `none (${summary.closedHistory.selectionReason})`;
   const visibleHolders = summary.leases.holders.slice(0, 5)
     .map(holder => `${holder.runId}/${holder.workItemId}`);
   const holders = visibleHolders.length === 0
@@ -123,12 +169,22 @@ function summaryLines(summary) {
       ? ` (+${summary.leases.holders.length - visibleHolders.length} more)`
       : ""}`;
   return [
+    `Status: ${humanStatus.overall}`,
+    `Summary: ${humanStatus.headline}`,
     `Current execution: ${value(summary.currentExecution.selectedRunId)}`,
-    `Latest indexed closeout: ${latest}`,
+    `Closed history: ${summary.closedHistory.status} (${summary.closedHistory.runCount} runs, ${summary.closedHistory.blocking ? "blocking" : "non-blocking"})`,
+    `Selected lineage head: ${selectedHead}`,
     `Source status: ${summary.source.status}`,
+    `Source/data readiness: ${humanStatus.milestones.sourceData.status}`,
+    `Release package: ${humanStatus.milestones.releasePackage.status}`,
+    `Remote/VM write: ${humanStatus.milestones.remoteVmWrite.status}`,
     `Active leases: ${summary.leases.activeCount}`,
     `Lease holders: ${holders}`,
     `Open executions: ${summary.currentExecution.openCount}`,
+    `Completed: ${humanStatus.completedSteps.length > 0
+      ? humanStatus.completedSteps.join(", ")
+      : "none"}`,
+    `Remaining gates: ${humanStatus.remainingGateCount}`,
     `Evidence: ${summary.evidence.status}`,
     `Resource preflight: ${summary.resourcePreflight.status}`,
     `Model estimate: ${summary.resourcePreflight.estimate.calls} calls, ${summary.resourcePreflight.estimate.totalTokens} tokens`,
@@ -138,6 +194,12 @@ function summaryLines(summary) {
     `Receipt reuse: ${summary.resourcePreflight.receiptReuse.appliedCount}/${summary.resourcePreflight.receiptReuse.reusableCount}`,
     `Dominant gap: ${summary.dominantGap.code}`,
     `Next allowed action: ${summary.nextAllowedAction}`,
+    ...(summary.maintenanceNextAction
+      ? [`Maintenance: ${summary.maintenanceNextAction}`]
+      : []),
+    ...(summary.optionalReviewAction
+      ? [`Optional review: ${summary.optionalReviewAction}`]
+      : []),
     `Release authorization: ${summary.releaseAuthorization}`,
   ].map(escapeHumanControls);
 }
@@ -179,5 +241,6 @@ function formatExecution(execution) {
 export function formatInspectHuman(inspected) {
   if (inspected.view?.mode === "history") return `${formatHistory(inspected)}\n`;
   if (inspected.view?.mode === "execution") return `${formatExecution(inspected.view.execution)}\n`;
-  return `${summaryLines(inspected.summary).join("\n")}\n`;
+  const humanStatus = deriveHumanStatusFromInspectV1(inspected);
+  return `${summaryLines(inspected.summary, humanStatus).join("\n")}\n`;
 }

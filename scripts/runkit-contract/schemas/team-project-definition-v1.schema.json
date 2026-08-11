@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.com/schemas/runkit/team-project-definition-v1.schema.json",
+  "title": "OwlCoda RunKit Team Project Definition V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "projectId", "objective", "milestones", "workstreams", "workItems", "integrationGates"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitTeamProjectDefinitionV1" },
+    "projectId": { "$ref": "#/$defs/id" },
+    "objective": { "type": "string", "minLength": 1 },
+    "milestones": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/milestone" }
+    },
+    "workstreams": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/workstream" }
+    },
+    "workItems": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/workItem" }
+    },
+    "integrationGates": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/integrationGate" }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "strings": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "milestone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string", "minLength": 1 }
+      }
+    },
+    "workstream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "milestoneId"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string", "minLength": 1 },
+        "milestoneId": { "$ref": "#/$defs/id" }
+      }
+    },
+    "workItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "milestoneId", "workstreamId", "dependencies", "ownedPaths"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string", "minLength": 1 },
+        "milestoneId": { "$ref": "#/$defs/id" },
+        "workstreamId": { "$ref": "#/$defs/id" },
+        "dependencies": { "$ref": "#/$defs/strings" },
+        "ownedPaths": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "measurable": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["unit", "total"],
+          "properties": {
+            "unit": { "type": "string", "minLength": 1 },
+            "total": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "integrationGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "title", "requiredWorkItemIds", "requiredDecisionIds"],
+      "properties": {
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string", "minLength": 1 },
+        "requiredWorkItemIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/id" } },
+        "requiredDecisionIds": { "$ref": "#/$defs/strings" }
+      }
+    }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitTeamProjectDefinitionV1",
+    "projectId": "release-017",
+    "objective": "Ship OwlRunKit 0.17",
+    "milestones": [{ "id": "m1", "title": "Product" }],
+    "workstreams": [{ "id": "runtime", "title": "Runtime", "milestoneId": "m1" }],
+    "workItems": [{
+      "id": "engine",
+      "title": "Implement the engine",
+      "milestoneId": "m1",
+      "workstreamId": "runtime",
+      "dependencies": [],
+      "ownedPaths": ["scripts/runkit-contract/**"],
+      "measurable": { "unit": "acceptance_tests", "total": 4 }
+    }],
+    "integrationGates": [{
+      "id": "ready",
+      "title": "Ready",
+      "requiredWorkItemIds": ["engine"],
+      "requiredDecisionIds": []
+    }]
+  }]
+}

@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/remote-deployment-result-v1.json",
+  "title": "OwlCoda RunKit Remote Deployment Result V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "deploymentId", "deploymentLineageSha256", "mode", "target", "adapter", "artifact", "status", "completedStages", "stoppedAtStage", "stageReceipts", "deletionAllowlistSha256", "authorizationGranted", "resultSha256"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitRemoteDeploymentResultV1" },
+    "deploymentId": { "type": "string", "minLength": 1 },
+    "deploymentLineageSha256": { "$ref": "#/$defs/hash" },
+    "mode": { "enum": ["first", "update"] },
+    "target": { "$ref": "#/$defs/target" },
+    "adapter": { "$ref": "#/$defs/adapter" },
+    "artifact": { "$ref": "#/$defs/artifact" },
+    "status": { "enum": ["deployed", "failed", "reconciliation_required"] },
+    "completedStages": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/stage" } },
+    "stoppedAtStage": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/stage" }] },
+    "failureCode": { "type": "string", "minLength": 1 },
+    "stageReceipts": { "type": "array", "items": { "$ref": "#/$defs/stageReceipt" } },
+    "deletionAllowlistSha256": { "$ref": "#/$defs/hash" },
+    "authorizationGranted": { "const": false },
+    "resultSha256": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "stage": { "enum": ["identity_preflight", "upload", "verify_remote_hashes", "install", "service", "proxy", "smoke"] },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "targetId", "environment", "host", "port", "user", "hostKeySha256", "machineIdentitySha256"],
+      "properties": {
+        "schemaVersion": { "const": "OwlCodaRunKitRemoteTargetV1" },
+        "targetId": { "type": "string", "minLength": 1 },
+        "environment": { "type": "string", "minLength": 1 },
+        "host": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "user": { "type": "string", "minLength": 1 },
+        "hostKeySha256": { "$ref": "#/$defs/hash" },
+        "machineIdentitySha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapterId", "version", "executable", "sha256"],
+      "properties": {
+        "adapterId": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "executable": { "type": "string", "pattern": "^/" },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size", "mediaType"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "size": { "type": "integer", "minimum": 0 },
+        "mediaType": { "type": "string", "minLength": 1 }
+      }
+    },
+    "stageReceipt": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stage", "status", "failureCode"],
+          "properties": {
+            "stage": { "$ref": "#/$defs/stage" },
+            "status": { "const": "failed" },
+            "failureCode": { "type": "string", "minLength": 1 },
+            "evidenceSha256": { "$ref": "#/$defs/hash" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stage", "status", "hostKeySha256", "machineIdentitySha256"],
+          "properties": {
+            "stage": { "const": "identity_preflight" },
+            "status": { "const": "passed" },
+            "hostKeySha256": { "$ref": "#/$defs/hash" },
+            "machineIdentitySha256": { "$ref": "#/$defs/hash" },
+            "remoteHelper": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "protocol", "version", "capabilities"],
+              "properties": {
+                "path": { "type": "string", "pattern": "^/" },
+                "protocol": { "const": "OwlCodaRunKitSshRemoteHelperV1" },
+                "version": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+                },
+                "capabilities": {
+                  "type": "array",
+                  "prefixItems": [
+                    { "const": "execute" },
+                    { "const": "reconcile" }
+                  ],
+                  "items": false,
+                  "minItems": 2,
+                  "maxItems": 2
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stage", "status", "remotePath", "sha256", "size"],
+          "properties": {
+            "stage": { "enum": ["upload", "verify_remote_hashes"] },
+            "status": { "enum": ["created", "already_present", "passed"] },
+            "remotePath": { "type": "string", "pattern": "^/" },
+            "sha256": { "$ref": "#/$defs/hash" },
+            "size": { "type": "integer", "minimum": 0 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["stage", "status", "evidenceSha256"],
+          "properties": {
+            "stage": { "enum": ["install", "service", "proxy", "smoke"] },
+            "status": { "const": "passed" },
+            "evidenceSha256": { "$ref": "#/$defs/hash" }
+          }
+        }
+      ]
+    }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitRemoteDeploymentResultV1",
+    "deploymentId": "deploy-001",
+    "deploymentLineageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "mode": "first",
+    "target": { "schemaVersion": "OwlCodaRunKitRemoteTargetV1", "targetId": "vm-01", "environment": "production", "host": "deploy.example.invalid", "port": 22, "user": "deploy", "hostKeySha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "machineIdentitySha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" },
+    "adapter": { "adapterId": "ssh-json", "version": "1.0.0", "executable": "/usr/local/bin/owlrunkit-ssh", "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" },
+    "artifact": { "path": "dist/release.tgz", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "size": 1234, "mediaType": "application/gzip" },
+    "status": "deployed",
+    "completedStages": ["identity_preflight", "upload", "verify_remote_hashes", "install", "service", "proxy", "smoke"],
+    "stoppedAtStage": null,
+    "stageReceipts": [],
+    "deletionAllowlistSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "authorizationGranted": false,
+    "resultSha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  }]
+}

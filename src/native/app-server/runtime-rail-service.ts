@@ -1,5 +1,7 @@
 import { lstatSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { createRequire } from 'node:module'
+import { dirname, join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 export type RunKitRailFreshness = 'missing' | 'fresh' | 'error'
 
@@ -124,6 +126,7 @@ interface RunKitCoreModule {
 }
 
 let coreModulePromise: Promise<RunKitCoreModule> | null = null
+const require = createRequire(import.meta.url)
 
 export async function readRuntimeRail(input: string | RuntimeRailReadInput): Promise<RunKitRailState> {
   const projectId = typeof input === 'string' ? input : input.projectId
@@ -163,7 +166,9 @@ function hasProjectRunKit(projectRoot: string): boolean {
 }
 
 async function loadRunKitCore(): Promise<RunKitCoreModule> {
-  const coreModuleUrl = new URL('../../../scripts/runkit-contract/runkit-cli.mjs', import.meta.url).href
+  const packageJsonPath = require.resolve('owlrunkit/package.json')
+  const coreModulePath = join(dirname(packageJsonPath), 'scripts', 'runkit-contract', 'runkit-cli.mjs')
+  const coreModuleUrl = pathToFileURL(coreModulePath).href
   coreModulePromise ??= import(coreModuleUrl) as Promise<RunKitCoreModule>
   return coreModulePromise
 }

@@ -19,7 +19,7 @@ import {
 } from './endpoints/stubs.js'
 import { VERSION } from './version.js'
 import { configIdentityFingerprint, runtimeTokenFingerprint } from './healthz-client.js'
-import { selfRegisterDaemon } from './daemon.js'
+import { rotateLaunchdRuntimeToken, selfRegisterDaemon, shouldSelfRegisterDaemon } from './daemon.js'
 import { traceRequest, traceResponse, isTraceEnabled, getTokenUsage } from './trace.js'
 import { recordError } from './diagnostics.js'
 import { assignRequestId } from './middleware/request-id.js'
@@ -132,9 +132,9 @@ async function doProbe(config: OwlCodaConfig): Promise<Record<string, unknown>> 
   const openCircuits = Object.values(circuits).filter(c => c.state === 'open').length
   const totalModels = config.models.length
   let status: string
-  if (!routerInfo.reachable) {
-    status = 'unhealthy'
-  } else if (openCircuits > 0 && openCircuits < totalModels) {
+  // The local model runtime has its own lifecycle and health surface. Keep its
+  // reachability visible without making a live OwlCoda gateway unhealthy.
+  if (openCircuits > 0 && openCircuits < totalModels) {
     status = 'degraded'
   } else if (openCircuits >= totalModels && totalModels > 0) {
     status = 'unhealthy'
@@ -923,6 +923,10 @@ export function startServer(config: OwlCodaConfig): http.Server {
     },
   })
   const providerProbe = new ProviderProbe()
+  // launchd supplies an install-scoped seed. Rotate it before the admin auth
+  // manager is constructed, so runtime meta, /healthz, and admin auth all use
+  // the same recovered-process identity.
+  if (shouldSelfRegisterDaemon()) rotateLaunchdRuntimeToken()
   const adminAuth = createAdminAuthManager(config)
   const runtimeAdminDeps: AdminDeps = {
     ...adminDeps,
@@ -979,7 +983,7 @@ export function startServer(config: OwlCodaConfig): http.Server {
 
     // If launchd launched us directly (no spawnDaemon parent wrote the
     // pid-file), self-register so clients can discover and trust this daemon.
-    if (selfRegisterDaemon(config)) {
+    if (selfRegisterDaemon(config, process.pid, process.env, { rotateToken: false })) {
       console.error(`[owlcoda] launchd-managed daemon self-registered (pid ${process.pid})`)
     }
 

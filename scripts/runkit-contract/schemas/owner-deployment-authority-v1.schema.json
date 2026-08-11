@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/owner-deployment-authority-v1.json",
+  "title": "OwlCoda RunKit Owner Deployment Authority V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "authorityId", "decision", "scope", "executeRunId", "prepareReceiptSha256", "targetSha256", "artifactSha256", "permissions", "authorizationGranted", "authoritySha256"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitOwnerDeploymentAuthorityV1" },
+    "authorityId": { "$ref": "#/$defs/id" },
+    "decision": { "const": "approved" },
+    "scope": { "const": "execute_exact_remote_deployment" },
+    "executeRunId": { "$ref": "#/$defs/id" },
+    "prepareReceiptSha256": { "$ref": "#/$defs/hash" },
+    "targetSha256": { "$ref": "#/$defs/hash" },
+    "artifactSha256": { "$ref": "#/$defs/hash" },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deploy", "destructive"],
+      "properties": {
+        "deploy": { "const": true },
+        "destructive": { "type": "boolean" }
+      }
+    },
+    "authorizationGranted": { "const": false },
+    "authoritySha256": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitOwnerDeploymentAuthorityV1",
+    "authorityId": "owner-deployment-execute-001",
+    "decision": "approved",
+    "scope": "execute_exact_remote_deployment",
+    "executeRunId": "deployment-execute-001",
+    "prepareReceiptSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "targetSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "artifactSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "permissions": { "deploy": true, "destructive": false },
+    "authorizationGranted": false,
+    "authoritySha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  }]
+}

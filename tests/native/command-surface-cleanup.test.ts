@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
 import { createConversation } from '../../src/native/conversation.js'
 import { handleSlashCommand } from '../../src/native/repl.js'
+import { getSessionsDir } from '../../src/native/session.js'
 import { UsageTracker } from '../../src/native/usage.js'
 import { stripAnsi } from '../../src/native/tui/colors.js'
 import {
@@ -9,6 +10,17 @@ import {
 } from '../../src/native/repl-shared.js'
 import { SLASH_COMMANDS } from '../../src/native/slash-commands.js'
 import { MODE_EFFECTS, MODE_SUMMARIES, OPERATING_MODES } from '../../src/native/modes.js'
+import { installIsolatedOwlCodaHome } from './isolated-owlcoda-home.js'
+
+const restoreTestHome = installIsolatedOwlCodaHome('owlcoda-command-surface-tests-')
+const isolatedHome = process.env['OWLCODA_HOME']!
+afterAll(() => {
+  try {
+    expect(process.env['OWLCODA_HOME']).toBe(isolatedHome)
+  } finally {
+    restoreTestHome()
+  }
+})
 
 // The picker listed all ~85 commands, including redundant twins (/tokens=/cost,
 // /themes=/theme), pure forwards (/color→/theme), and now-merged permission
@@ -181,6 +193,7 @@ describe('every demoted command still dispatches (demoted ≠ deleted)', () => {
 
   for (const cmd of Object.keys(SLASH_PICKER_HIDDEN)) {
     it(`${cmd} is handled by a real case`, async () => {
+      expect(getSessionsDir()).toBe(`${isolatedHome}/sessions`)
       const input = SAFE_ARG[cmd] ? `${cmd} ${SAFE_ARG[cmd]}` : cmd
       const conversation = createConversation({ system: 'test', model: 'minimax-m27' })
       const handled = await handleSlashCommand(

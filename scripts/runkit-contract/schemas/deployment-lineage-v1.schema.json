@@ -1,0 +1,292 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/deployment-lineage-v1.json",
+  "title": "OwlCoda RunKit Deployment Lineage V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "parent", "child", "target", "authority", "permissions", "authorizationGranted", "lineageSha256"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitDeploymentLineageV1" },
+    "parent": { "$ref": "#/$defs/parent" },
+    "child": { "$ref": "#/$defs/child" },
+    "ownerDecision": { "$ref": "#/$defs/compiledOwnerDecision" },
+    "target": { "$ref": "#/$defs/targetBinding" },
+    "authority": { "$ref": "#/$defs/authority" },
+    "permissions": { "$ref": "#/$defs/permissions" },
+    "authorizationGranted": { "const": false },
+    "lineageSha256": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "id": { "type": "string", "minLength": 1 },
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "hashRef": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "ownerDecisionBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decisionId", "decisionVersion", "decisionSha256", "deploymentMode", "existingProjectAssets", "legacyRollbackAllowed", "dataAuthority", "serviceActivationAuthorized", "baselineCutAuthorized", "destructiveScope"],
+      "properties": {
+        "decisionId": { "$ref": "#/$defs/id" },
+        "decisionVersion": { "type": "integer", "minimum": 1 },
+        "decisionSha256": { "$ref": "#/$defs/hash" },
+        "compilationSha256": { "$ref": "#/$defs/hash" },
+        "deploymentMode": { "enum": ["clean_install", "in_place_update"] },
+        "existingProjectAssets": { "enum": ["preserve", "replace", "remove"] },
+        "legacyRollbackAllowed": { "type": "boolean" },
+        "dataAuthority": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "sourceRef"],
+          "properties": {
+            "mode": { "enum": ["preserve_existing", "replace_from_artifact", "initialize_new"] },
+            "sourceRef": { "type": "string", "minLength": 1 }
+          }
+        },
+        "serviceActivationAuthorized": { "type": "boolean" },
+        "baselineCutAuthorized": { "type": "boolean" },
+        "destructiveScope": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+      }
+    },
+    "compiledOwnerDecision": {
+      "allOf": [
+        { "$ref": "#/$defs/ownerDecisionBinding" },
+        {
+          "type": "object",
+          "required": ["compilationSha256"],
+          "properties": {
+            "compilationSha256": { "$ref": "#/$defs/hash" }
+          }
+        }
+      ]
+    },
+    "descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": { "path": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/hash" } }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size", "mediaType"],
+      "properties": { "path": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/hash" }, "size": { "type": "integer", "minimum": 0 }, "mediaType": { "type": "string", "minLength": 1 } }
+    },
+    "sourceArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "runId", "path", "sha256", "sourceFingerprint"],
+      "properties": {
+        "kind": { "const": "source_candidate_v2" },
+        "runId": { "$ref": "#/$defs/id" },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "sourceFingerprint": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "parent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prepareRunId", "prepareGoal", "prepareReceiptSha256", "acceptedCloseoutSha256", "artifact"],
+      "properties": {
+        "prepareRunId": { "$ref": "#/$defs/id" },
+        "prepareGoal": { "$ref": "#/$defs/descriptor" },
+        "prepareReceiptSha256": { "$ref": "#/$defs/hash" },
+        "acceptedCloseoutSha256": { "$ref": "#/$defs/hash" },
+        "deliveryPacketSha256": { "$ref": "#/$defs/hash" },
+        "sourceArtifact": { "$ref": "#/$defs/sourceArtifact" },
+        "artifact": { "$ref": "#/$defs/artifact" }
+      },
+      "oneOf": [
+        { "type": "object", "required": ["deliveryPacketSha256"] },
+        { "type": "object", "required": ["sourceArtifact"] }
+      ]
+    },
+    "child": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executeRunId", "executeGoal", "control"],
+      "properties": {
+        "executeRunId": { "$ref": "#/$defs/id" },
+        "executeGoal": { "$ref": "#/$defs/descriptor" },
+        "control": { "$ref": "#/$defs/childControl" }
+      }
+    },
+    "targetBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "sha256"],
+      "properties": { "value": { "$ref": "#/$defs/remoteTarget" }, "sha256": { "$ref": "#/$defs/hash" } }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "authorityId",
+        "path",
+        "sha256",
+        "signerKeyId",
+        "trustStoreSha256",
+        "remoteManifestFileSha256",
+        "remoteDeploymentIntentSha256",
+        "ownerDecisionId",
+        "ownerDecisionSha256",
+        "inheritedFromPrepare"
+      ],
+      "properties": {
+        "source": { "const": "owner" },
+        "authorityId": { "$ref": "#/$defs/id" },
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "signerKeyId": { "$ref": "#/$defs/id" },
+        "trustStoreSha256": { "$ref": "#/$defs/hashRef" },
+        "remoteManifestFileSha256": { "$ref": "#/$defs/hash" },
+        "remoteDeploymentIntentSha256": { "$ref": "#/$defs/hash" },
+        "ownerDecisionId": { "$ref": "#/$defs/id" },
+        "ownerDecisionSha256": { "$ref": "#/$defs/hash" },
+        "inheritedFromPrepare": { "const": false }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deploy", "destructive"],
+      "properties": { "deploy": { "const": true }, "destructive": { "type": "boolean" } }
+    },
+    "remoteTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "targetId", "environment", "host", "port", "user", "hostKeySha256", "machineIdentitySha256"],
+      "properties": {
+        "schemaVersion": { "const": "OwlCodaRunKitRemoteTargetV1" },
+        "targetId": { "$ref": "#/$defs/id" },
+        "environment": { "$ref": "#/$defs/id" },
+        "host": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "user": { "type": "string", "minLength": 1 },
+        "hostKeySha256": { "$ref": "#/$defs/hash" },
+        "machineIdentitySha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "coreIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contractVersion", "coreVersion", "coreManifestSha256", "coreSourceRef"],
+      "properties": {
+        "contractVersion": { "type": "string", "minLength": 1 },
+        "coreVersion": { "type": "string", "minLength": 1 },
+        "coreManifestSha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+        "coreSourceRef": { "type": "string", "minLength": 1 }
+      }
+    },
+    "childControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enginePin", "executionPlan", "deploymentParent", "lease", "profile", "resourcePreflight"],
+      "properties": {
+        "enginePin": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256", "value"],
+          "properties": {
+            "path": { "type": "string", "minLength": 1 },
+            "sha256": { "$ref": "#/$defs/hash" },
+            "value": { "$ref": "#/$defs/coreIdentity" }
+          }
+        },
+        "executionPlan": { "$ref": "#/$defs/descriptor" },
+        "deploymentParent": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["prepareRunId", "prepareReceiptSha256"],
+          "properties": {
+            "prepareRunId": { "$ref": "#/$defs/id" },
+            "prepareReceiptSha256": { "$ref": "#/$defs/hash" }
+          }
+        },
+        "lease": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["workItemId", "path", "sha256", "ownedPaths"],
+          "properties": {
+            "workItemId": { "$ref": "#/$defs/id" },
+            "path": { "type": "string", "minLength": 1 },
+            "sha256": { "$ref": "#/$defs/hash" },
+            "ownedPaths": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }, "uniqueItems": true }
+          }
+        },
+        "profile": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["profileId", "profilesPath", "profilesSha256", "verificationPlanPath", "verificationPlanSha256"],
+          "properties": {
+            "profileId": { "$ref": "#/$defs/id" },
+            "profilesPath": { "type": "string", "minLength": 1 },
+            "profilesSha256": { "$ref": "#/$defs/hash" },
+            "verificationPlanPath": { "type": "string", "minLength": 1 },
+            "verificationPlanSha256": { "$ref": "#/$defs/hash" }
+          }
+        },
+        "resourcePreflight": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["preflightId", "path", "sha256", "decision"],
+          "properties": {
+            "preflightId": { "$ref": "#/$defs/id" },
+            "path": { "type": "string", "minLength": 1 },
+            "sha256": { "$ref": "#/$defs/hash" },
+            "decision": { "enum": ["ready_for_model_execution", "ready_without_model_execution"] }
+          }
+        }
+      }
+    }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitDeploymentLineageV1",
+    "parent": {
+      "prepareRunId": "deployment-prepare-001",
+      "prepareGoal": { "path": ".owlcoda/runkit/executions/deployment-prepare-001/goal-contract.json", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+      "prepareReceiptSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "acceptedCloseoutSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "deliveryPacketSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "artifact": { "path": "dist/release.tgz", "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "size": 1234, "mediaType": "application/gzip" }
+    },
+    "child": {
+      "executeRunId": "deployment-execute-001",
+      "executeGoal": { "path": ".owlcoda/runkit/executions/deployment-execute-001/goal-contract.json", "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" },
+      "control": {
+        "enginePin": {
+          "path": ".owlcoda/runkit/executions/deployment-execute-001/engine-pin.json",
+          "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+          "value": {
+            "contractVersion": "0.2",
+            "coreVersion": "0.16.0",
+            "coreManifestSha256": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+            "coreSourceRef": "artifact:sha256:7777777777777777777777777777777777777777777777777777777777777777"
+          }
+        },
+        "executionPlan": { "path": ".owlcoda/runkit/executions/deployment-execute-001/execution-plan.json", "sha256": "8888888888888888888888888888888888888888888888888888888888888888" },
+        "deploymentParent": { "prepareRunId": "deployment-prepare-001", "prepareReceiptSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+        "lease": { "workItemId": "deployment-execute", "path": ".owlcoda/runkit/executions/deployment-execute-001/leases/deployment-execute-attempt-001.json", "sha256": "9999999999999999999999999999999999999999999999999999999999999999", "ownedPaths": ["dist/release.tgz"] },
+        "profile": { "profileId": "deployment", "profilesPath": ".owlcoda/runkit/profiles.json", "profilesSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "verificationPlanPath": ".owlcoda/runkit/executions/deployment-execute-001/verification-plans/deployment.json", "verificationPlanSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+        "resourcePreflight": { "preflightId": "deployment", "path": ".owlcoda/runkit/executions/deployment-execute-001/resource-preflights/deployment.json", "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "decision": "ready_without_model_execution" }
+      }
+    },
+    "target": { "value": { "schemaVersion": "OwlCodaRunKitRemoteTargetV1", "targetId": "vm-01", "environment": "production", "host": "deploy.example.invalid", "port": 22, "user": "deploy", "hostKeySha256": "4444444444444444444444444444444444444444444444444444444444444444", "machineIdentitySha256": "5555555555555555555555555555555555555555555555555555555555555555" }, "sha256": "1111111111111111111111111111111111111111111111111111111111111111" },
+    "authority": {
+      "source": "owner",
+      "authorityId": "owner-deploy-001",
+      "path": "authorities/deployment-execute-001.json",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "signerKeyId": "owner-key-001",
+      "trustStoreSha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "remoteManifestFileSha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "remoteDeploymentIntentSha256": "6666666666666666666666666666666666666666666666666666666666666666",
+      "ownerDecisionId": "owner-clean-install-001",
+      "ownerDecisionSha256": "7777777777777777777777777777777777777777777777777777777777777777",
+      "inheritedFromPrepare": false
+    },
+    "permissions": { "deploy": true, "destructive": false },
+    "authorizationGranted": false,
+    "lineageSha256": "3333333333333333333333333333333333333333333333333333333333333333"
+  }]
+}

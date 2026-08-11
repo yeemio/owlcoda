@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/owner-migration-authority-v1.json",
+  "title": "OwlCoda RunKit Owner Migration Authority V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "authorityId", "decision", "scope", "planSha256", "fromCoreSetSha256", "toCoreManifestSha256", "fleetManifestSha256", "authorizationGranted", "authoritySha256"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitOwnerMigrationAuthorityV1" },
+    "authorityId": { "type": "string", "minLength": 1 },
+    "decision": { "const": "approved" },
+    "scope": { "const": "migrate_declared_core_successor_fleet" },
+    "planSha256": { "$ref": "#/$defs/hash" },
+    "fromCoreSetSha256": { "$ref": "#/$defs/hash" },
+    "toCoreManifestSha256": { "$ref": "#/$defs/hash" },
+    "fleetManifestSha256": { "$ref": "#/$defs/hash" },
+    "authorizationGranted": { "const": false },
+    "authoritySha256": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": { "hash": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" } },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitOwnerMigrationAuthorityV1",
+    "authorityId": "owner-core-successor-001",
+    "decision": "approved",
+    "scope": "migrate_declared_core_successor_fleet",
+    "planSha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "fromCoreSetSha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "toCoreManifestSha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "fleetManifestSha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "authorizationGranted": false,
+    "authoritySha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  }]
+}

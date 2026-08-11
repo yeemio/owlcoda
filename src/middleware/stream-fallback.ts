@@ -193,16 +193,20 @@ export function synthesizeSseFromResponse(
 
 /**
  * Attempt the non-streaming fallback fetch. Returns the parsed JSON on
- * success, or `null` to signal the caller should proceed with the
- * existing error wording path.
+ * success. On failure, the HTTP status is retained when available so
+ * callers can preserve the fallback policy: retry another model on
+ * transport/5xx failures, never on a 4xx request error.
  *
- * This is intentionally lean — it does NOT thread through the full
- * fallback chain / circuit breaker / retry middleware. The fallback is
- * a single-shot best-effort retry. If the user has reached this code
- * path, the streaming attempt already exhausted its budget; we just
- * try once more on the same route in non-streaming mode and either
- * synthesize or give up.
+ * This is intentionally lean — the caller owns the health-filtered model
+ * chain and retry policy. Each invocation makes one non-streaming attempt;
+ * the caller may continue on transport/5xx failure while the downstream
+ * protocol is still uncommitted, or stop on a 4xx request error.
  */
+export interface NonStreamingFallbackAttempt {
+  response: AnthropicMessagesResponse | null
+  status?: number
+}
+
 export async function fetchNonStreamingFallback(
   endpointUrl: string,
   headers: Record<string, string>,
@@ -215,7 +219,7 @@ export async function fetchNonStreamingFallback(
     requestModel: string
     config: OwlCodaConfig
   },
-): Promise<AnthropicMessagesResponse | null> {
+): Promise<NonStreamingFallbackAttempt> {
   const fallbackController = new AbortController()
   const timer = setTimeout(() => fallbackController.abort(), timeoutMs)
   try {
@@ -229,16 +233,21 @@ export async function fetchNonStreamingFallback(
       body: JSON.stringify(wireBody),
       signal: combinedSignal,
     })
-    if (!resp.ok) return null
+    if (!resp.ok) return { response: null, status: resp.status }
     const json = (await resp.json()) as AnthropicMessagesResponse | OpenAIChatResponse
     if (route?.translate) {
-      return translateResponse(json as OpenAIChatResponse, route.requestModel, route.config)
+      return {
+        response: translateResponse(json as OpenAIChatResponse, route.requestModel, route.config),
+        status: resp.status,
+      }
     }
     const anthropicJson = json as AnthropicMessagesResponse
-    if (!anthropicJson || typeof anthropicJson !== 'object' || anthropicJson.type !== 'message') return null
-    return anthropicJson
+    if (!anthropicJson || typeof anthropicJson !== 'object' || anthropicJson.type !== 'message') {
+      return { response: null, status: resp.status }
+    }
+    return { response: anthropicJson, status: resp.status }
   } catch {
-    return null
+    return { response: null }
   } finally {
     clearTimeout(timer)
   }

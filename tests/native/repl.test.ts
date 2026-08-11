@@ -1,5 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach, expectTypeOf } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll, expectTypeOf } from 'vitest'
 import { readFileSync } from 'node:fs'
+import { installIsolatedOwlCodaHome } from './isolated-owlcoda-home.js'
+
+const restoreTestHome = installIsolatedOwlCodaHome('owlcoda-repl-tests-')
+afterAll(restoreTestHome)
 
 vi.mock('../../src/warmup.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/warmup.js')>()

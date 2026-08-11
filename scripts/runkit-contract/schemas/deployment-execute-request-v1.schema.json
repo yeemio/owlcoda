@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/deployment-execute-request-v1.json",
+  "title": "OwlCoda RunKit Deployment Execute Request V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "executeRunId", "executeGoal", "prepareReceiptSha256", "target", "ownerAuthority", "ownerDecision", "ownerDecisionSnapshot", "workItemId", "profileId", "resourcePreflight", "deploy", "destructive"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitDeploymentExecuteRequestV1" },
+    "executeRunId": { "$ref": "#/$defs/id" },
+    "executeGoal": { "$ref": "#/$defs/descriptor" },
+    "prepareReceiptSha256": { "$ref": "#/$defs/hash" },
+    "target": { "$ref": "#/$defs/target" },
+    "ownerAuthority": { "$ref": "#/$defs/descriptor" },
+    "ownerDecision": { "$ref": "#/$defs/descriptor" },
+    "ownerDecisionSnapshot": { "$ref": "#/$defs/descriptor" },
+    "workItemId": { "$ref": "#/$defs/id" },
+    "profileId": { "$ref": "#/$defs/id" },
+    "resourcePreflight": { "$ref": "#/$defs/descriptor" },
+    "deploy": { "const": true },
+    "destructive": { "type": "boolean" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": { "path": { "type": "string", "minLength": 1 }, "sha256": { "$ref": "#/$defs/hash" } }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "targetId", "environment", "host", "port", "user", "hostKeySha256", "machineIdentitySha256"],
+      "properties": {
+        "schemaVersion": { "const": "OwlCodaRunKitRemoteTargetV1" },
+        "targetId": { "$ref": "#/$defs/id" },
+        "environment": { "$ref": "#/$defs/id" },
+        "host": { "type": "string", "minLength": 1 },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "user": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9._-]*$" },
+        "hostKeySha256": { "$ref": "#/$defs/hash" },
+        "machineIdentitySha256": { "$ref": "#/$defs/hash" }
+      }
+    }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitDeploymentExecuteRequestV1",
+    "executeRunId": "deployment-execute-001",
+    "executeGoal": { "path": ".owlcoda/runkit/executions/deployment-execute-001/goal-contract.json", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+    "prepareReceiptSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "target": { "schemaVersion": "OwlCodaRunKitRemoteTargetV1", "targetId": "vm-production-01", "environment": "production", "host": "deploy.example.invalid", "port": 22, "user": "deploy", "hostKeySha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "machineIdentitySha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" },
+    "ownerAuthority": { "path": "authorities/deployment-execute-001.json", "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" },
+    "ownerDecision": { "path": "authorities/owner-deployment-decision-001.json", "sha256": "1111111111111111111111111111111111111111111111111111111111111111" },
+    "ownerDecisionSnapshot": { "path": ".owlcoda/runkit/deployments/deployment-execute-001/owner-decision-snapshot.json", "sha256": "2222222222222222222222222222222222222222222222222222222222222222" },
+    "workItemId": "deployment-execute",
+    "profileId": "deployment",
+    "resourcePreflight": { "path": ".owlcoda/runkit/executions/deployment-execute-001/resource-preflights/deployment.json", "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" },
+    "deploy": true,
+    "destructive": false
+  }]
+}

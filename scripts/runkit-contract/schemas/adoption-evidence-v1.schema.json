@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/registry-adoption-evidence-v1.json",
+  "title": "OwlCoda RunKit Registry Adoption Evidence V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "decision",
+    "packageName",
+    "version",
+    "exactSpec",
+    "registryRelease",
+    "installedBinding",
+    "authority",
+    "authorizationGranted"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitRegistryAdoptionEvidenceV1" },
+    "status": { "const": "adopted" },
+    "decision": { "const": "ELIGIBLE" },
+    "packageName": { "const": "owlrunkit" },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "exactSpec": { "type": "string", "pattern": "^owlrunkit@[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "registryRelease": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["registry", "packageName", "version", "shasum", "integrity", "tarballUrl"],
+      "properties": {
+        "registry": { "const": "https://registry.npmjs.org" },
+        "packageName": { "const": "owlrunkit" },
+        "version": { "type": "string" },
+        "shasum": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+        "integrity": { "type": "string", "pattern": "^sha512-" },
+        "tarballUrl": { "type": "string", "pattern": "^https://registry\\.npmjs\\.org/owlrunkit/-/owlrunkit-[0-9]+\\.[0-9]+\\.[0-9]+\\.tgz$" }
+      }
+    },
+    "installedBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestedSpec", "packageName", "version", "resolved", "integrity"],
+      "properties": {
+        "requestedSpec": { "type": "string" },
+        "packageName": { "const": "owlrunkit" },
+        "version": { "type": "string" },
+        "resolved": { "type": "string" },
+        "integrity": { "type": "string" }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["git", "release", "foreignProjectWrite"],
+      "properties": {
+        "git": { "const": false },
+        "release": { "const": false },
+        "foreignProjectWrite": { "const": false }
+      }
+    },
+    "authorizationGranted": { "const": false }
+  }
+}

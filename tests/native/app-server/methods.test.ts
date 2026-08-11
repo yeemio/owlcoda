@@ -62,7 +62,7 @@ describe('method registry', () => {
       params: {
         client: { name: 'owlcoda-desktop', version: '0.1.0' },
         supportedProtocolVersions: ['v1'],
-        expectedRuntimeVersion: '0.15.31',
+        expectedRuntimeVersion: '0.18.0',
         expectedWorkspaceRealpath: realpathSync(projectRoot),
         requestedCapabilities: { review: true, eventReplay: true },
       },
@@ -70,7 +70,7 @@ describe('method registry', () => {
 
     expect(response).toMatchObject({
       result: {
-        runtimeVersion: '0.15.31',
+        runtimeVersion: '0.18.0',
         protocolVersion: 'v1',
         workspaceRealpath: realpathSync(projectRoot),
         compatibility: 'compatible',

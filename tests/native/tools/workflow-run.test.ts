@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { existsSync } from 'node:fs'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import { createWorkflowRunTool } from '../../../src/native/tools/workflow-run.js'
+import { issueToolApprovedWorkflowRuntimeGrant } from '../../../src/native/runtime-execution-control/grants.js'
+import {
+  runWorkflow,
+  type WorkflowRunInput,
+} from '../../../src/native/workflow-runner.js'
 import { NATIVE_TOOL_SCHEMAS } from '../../../src/native/tool-defs.js'
 
 describe('WorkflowRun native tool', () => {
@@ -14,10 +19,27 @@ describe('WorkflowRun native tool', () => {
   let tempDir = ''
   let calls: Array<{ method: string; url: string; body: string; headers: Record<string, string | string[] | undefined> }> = []
   let flakyStatus = 500
+  let grantSequence = 0
+  let crossOriginRedirectUrl = ''
+
+  async function executeGrantedWorkflow(input: WorkflowRunInput) {
+    grantSequence += 1
+    const runtimeExecutionGrant = await issueToolApprovedWorkflowRuntimeGrant({
+      workflow: input,
+      workspaceRoot: input.cwd ?? tempDir,
+      toolUseId: `tool-workflow-test-${grantSequence}`,
+      permissionState: 'granted',
+      riskClass: 'external_effect',
+      grantEvent: { ts: Date.now(), mode: 'user_prompt', iteration: grantSequence },
+    })
+    return await createWorkflowRunTool().execute(input, { runtimeExecutionGrant })
+  }
 
   beforeEach(async () => {
     calls = []
     flakyStatus = 500
+    grantSequence = 0
+    crossOriginRedirectUrl = ''
     tempDir = await mkdtemp(join(tmpdir(), 'owlcoda-workflow-run-'))
     server = createServer((req, res) => {
       let raw = ''
@@ -34,8 +56,31 @@ describe('WorkflowRun native tool', () => {
           return
         }
 
+        if (req.url === '/redirect') {
+          res.statusCode = 302
+          res.setHeader('location', '/large')
+          res.end(JSON.stringify({ redirect: '/large' }))
+          return
+        }
+
+        if (req.url === '/cross-origin-redirect') {
+          res.statusCode = 302
+          res.setHeader('location', crossOriginRedirectUrl)
+          res.end(JSON.stringify({ redirect: crossOriginRedirectUrl }))
+          return
+        }
+
         if (req.url === '/refresh') {
           res.end(JSON.stringify({ refreshed: true, received: raw ? JSON.parse(raw) : null }))
+          return
+        }
+
+        if (req.url === '/workspace-binding') {
+          res.end(JSON.stringify({
+            ok: true,
+            result: { status: 'complete', artifacts_written: [] },
+            payload: 'x'.repeat(25_000),
+          }))
           return
         }
 
@@ -91,11 +136,120 @@ describe('WorkflowRun native tool', () => {
     })
   })
 
+  it('fails closed before the endpoint when no product runtime grant is present', async () => {
+    const result = await createWorkflowRunTool().execute({
+      cwd: tempDir,
+      plan: {
+        run_id: 'wf-without-runtime-grant',
+        base_url: baseUrl,
+        steps: [{ id: 'must_not_run', method: 'POST', url: '/refresh', body: { denied: true } }],
+      },
+    })
+
+    expect(result).toMatchObject({
+      isError: true,
+      metadata: {
+        failureCategory: 'workflow:runtime_authorization_required',
+      },
+    })
+    expect(calls).toEqual([])
+  })
+
+  it.each(['terminal', 'ancestor'] as const)(
+    'fails closed before endpoint or output writes when an approved %s workspace symlink is retargeted',
+    async symlinkKind => {
+      const caseRoot = join(tempDir, `workspace-identity-${symlinkKind}`)
+      const approvedWorkspace = symlinkKind === 'terminal'
+        ? join(caseRoot, 'approved-target-a')
+        : join(caseRoot, 'approved-ancestor-a', 'workspace')
+      const retargetedWorkspace = symlinkKind === 'terminal'
+        ? join(caseRoot, 'retargeted-target-b')
+        : join(caseRoot, 'retargeted-ancestor-b', 'workspace')
+      const workspaceLink = symlinkKind === 'terminal'
+        ? join(caseRoot, 'workspace-link')
+        : join(caseRoot, 'ancestor-link')
+      const lexicalWorkspace = symlinkKind === 'terminal'
+        ? workspaceLink
+        : join(workspaceLink, 'workspace')
+      const approvedLinkTarget = symlinkKind === 'terminal'
+        ? approvedWorkspace
+        : join(caseRoot, 'approved-ancestor-a')
+      const retargetedLinkTarget = symlinkKind === 'terminal'
+        ? retargetedWorkspace
+        : join(caseRoot, 'retargeted-ancestor-b')
+      await Promise.all([
+        mkdir(approvedWorkspace, { recursive: true }),
+        mkdir(retargetedWorkspace, { recursive: true }),
+      ])
+      await symlink(approvedLinkTarget, workspaceLink, 'dir')
+
+      const contractContent = `${JSON.stringify({
+        artifact_version: 'match-harness-task-contract.v1',
+        matchId: 'workspace-binding',
+        stamp: '2026-08-09T00-00-00-000Z',
+        runRef: 'owlcoda://workspace-binding',
+        task_queue: [{
+          task_id: 'workspace-binding-task',
+          task_name: 'workspace.binding.execute',
+          order: 1,
+          status: 'pending',
+          writes: [],
+          execution: {
+            method: 'POST',
+            endpoint: '/workspace-binding',
+            request: { approved: true },
+          },
+        }],
+      })}\n`
+      await Promise.all([
+        writeFile(join(approvedWorkspace, 'contract.json'), contractContent, 'utf8'),
+        writeFile(join(retargetedWorkspace, 'contract.json'), contractContent, 'utf8'),
+      ])
+
+      const taskRunId = `workspace-binding-${symlinkKind}`
+      const input: WorkflowRunInput = {
+        cwd: lexicalWorkspace,
+        contractRef: join(lexicalWorkspace, 'contract.json'),
+        baseUrl,
+        taskRunId,
+        artifactDir: join(lexicalWorkspace, 'binding-artifacts'),
+      }
+      const runtimeExecutionGrant = await issueToolApprovedWorkflowRuntimeGrant({
+        workflow: input,
+        workspaceRoot: lexicalWorkspace,
+        toolUseId: `tool-workspace-binding-${symlinkKind}`,
+        permissionState: 'granted',
+        riskClass: 'external_effect',
+        grantEvent: { ts: Date.now(), mode: 'user_prompt', iteration: 1 },
+      })
+
+      await rm(workspaceLink)
+      await symlink(retargetedLinkTarget, workspaceLink, 'dir')
+
+      const result = await createWorkflowRunTool().execute(input, { runtimeExecutionGrant })
+      expect.soft(result).toMatchObject({
+        isError: true,
+        metadata: {
+          runtimeControlCode: 'RUNTIME_AUTHORIZATION_WORKSPACE_DRIFT',
+        },
+      })
+      expect.soft(runtimeExecutionGrant.workspaceRoot).toBe(await realpath(approvedWorkspace))
+      expect.soft(calls).toEqual([])
+      expect.soft(existsSync(join(
+        retargetedWorkspace,
+        '.owlcoda-workflows',
+        taskRunId,
+        'receipt.json',
+      ))).toBe(false)
+      expect.soft(existsSync(join(retargetedWorkspace, 'binding-artifacts'))).toBe(false)
+    },
+  )
+
   it('executes HTTP steps, writes an invocation receipt, and compacts large responses into artifacts', async () => {
     const receiptPath = join(tempDir, 'receipt.json')
     const artifactDir = join(tempDir, 'artifacts')
 
-    const result = await createWorkflowRunTool().execute({
+    const result = await executeGrantedWorkflow({
       receiptPath,
       artifactDir,
       plan: {
@@ -181,8 +335,70 @@ describe('WorkflowRun native tool', () => {
     expect(calls.map(call => `${call.method} ${call.url}`)).toEqual(['GET /large', 'POST /refresh'])
   })
 
+  it('preserves redirect following for ordinary generic WorkflowRun calls', async () => {
+    const receiptPath = join(tempDir, 'redirect-receipt.json')
+    const result = await executeGrantedWorkflow({
+      receiptPath,
+      artifactDir: join(tempDir, 'redirect-artifacts'),
+      plan: {
+        run_id: 'wf-redirect-default',
+        base_url: baseUrl,
+        steps: [{ id: 'follow_redirect', method: 'GET', url: '/redirect', expected_status: 200 }],
+      },
+    })
+
+    expect(result.isError).toBe(false)
+    expect(calls.map(call => call.url)).toEqual(['/redirect', '/large'])
+    expect(JSON.parse(await readFile(receiptPath, 'utf-8'))).toMatchObject({
+      acceptance: 'pass',
+      endpoint_calls: [expect.objectContaining({
+        step_id: 'follow_redirect',
+        status_code: 200,
+        ok: true,
+      })],
+    })
+  })
+
+  it('checks every redirect hop and refuses an origin that was not bound by the grant', async () => {
+    let blockedOriginHits = 0
+    const blockedServer = createServer((_req, res) => {
+      blockedOriginHits += 1
+      res.end(JSON.stringify({ shouldNotRun: true }))
+    })
+    try {
+      await new Promise<void>(resolve => blockedServer.listen(0, '127.0.0.1', resolve))
+      const address = blockedServer.address()
+      if (!address || typeof address === 'string') throw new Error('blocked-origin fixture did not bind')
+      crossOriginRedirectUrl = `http://127.0.0.1:${address.port}/blocked`
+      const receiptPath = join(tempDir, 'cross-origin-redirect-receipt.json')
+
+      const result = await executeGrantedWorkflow({
+        cwd: tempDir,
+        receiptPath,
+        plan: {
+          run_id: 'wf-cross-origin-redirect',
+          base_url: baseUrl,
+          steps: [{ id: 'cross_origin', method: 'GET', url: '/cross-origin-redirect', expected_status: 200 }],
+        },
+      })
+
+      expect(result.isError).toBe(true)
+      expect(calls.map(call => call.url)).toEqual(['/cross-origin-redirect'])
+      expect(blockedOriginHits).toBe(0)
+      expect(JSON.parse(await readFile(receiptPath, 'utf8'))).toMatchObject({
+        acceptance: 'fail',
+        failed_steps: [{
+          step_id: 'cross_origin',
+          reason: expect.stringContaining('does not allow origin'),
+        }],
+      })
+    } finally {
+      await new Promise<void>(resolve => blockedServer.close(() => resolve()))
+    }
+  })
+
   it('sends step idempotency_key as an HTTP Idempotency-Key header', async () => {
-    const result = await createWorkflowRunTool().execute({
+    const result = await executeGrantedWorkflow({
       receiptPath: join(tempDir, 'idempotency-receipt.json'),
       artifactDir: join(tempDir, 'idempotency-artifacts'),
       plan: {
@@ -207,7 +423,7 @@ describe('WorkflowRun native tool', () => {
   it('records conditional steps as skipped instead of executing them when the source path is null', async () => {
     const receiptPath = join(tempDir, 'conditional-receipt.json')
 
-    const result = await createWorkflowRunTool().execute({
+    const result = await executeGrantedWorkflow({
       receiptPath,
       artifactDir: join(tempDir, 'conditional-artifacts'),
       plan: {
@@ -251,7 +467,7 @@ describe('WorkflowRun native tool', () => {
   it('allows top-level baseUrl to resolve relative plan step URLs', async () => {
     const receiptPath = join(tempDir, 'base-url-receipt.json')
 
-    const result = await createWorkflowRunTool().execute({
+    const result = await executeGrantedWorkflow({
       baseUrl,
       receiptPath,
       artifactDir: join(tempDir, 'base-url-artifacts'),
@@ -283,7 +499,7 @@ describe('WorkflowRun native tool', () => {
   })
 
   it('returns machine-readable plan validation errors before any endpoint call', async () => {
-    const result = await createWorkflowRunTool().execute({
+    const result = await executeGrantedWorkflow({
       plan: {
         steps: [{
           id: 'bad_step',
@@ -303,7 +519,7 @@ describe('WorkflowRun native tool', () => {
 
   it('resumes a saved workflow run by run id without re-executing already successful steps', async () => {
     const artifactDir = join(tempDir, 'resume-artifacts')
-    const first = await createWorkflowRunTool().execute({
+    const first = await executeGrantedWorkflow({
       cwd: tempDir,
       artifactDir,
       plan: {
@@ -336,7 +552,7 @@ describe('WorkflowRun native tool', () => {
 
     calls = []
     flakyStatus = 200
-    const resumed = await createWorkflowRunTool().execute({
+    const resumed = await executeGrantedWorkflow({
       cwd: tempDir,
       artifactDir,
       resumeRunId: 'wf-resume-1',
@@ -362,6 +578,37 @@ describe('WorkflowRun native tool', () => {
     ])
     expect(receipt.endpoint_calls[0].resumed_from_receipt).toEqual(expect.stringContaining('receipt.json'))
     expect(existsSync(join(tempDir, '.owlcoda-workflows', 'wf-resume-1', 'plan.json'))).toBe(true)
+  })
+
+  it('does not replace an approved malformed resume-plan snapshot with mutable disk bytes', async () => {
+    const runDir = join(tempDir, 'resume-plan-snapshot')
+    const receiptPath = join(runDir, 'receipt.json')
+    const planPath = join(runDir, 'plan.json')
+    await mkdir(runDir, { recursive: true })
+    await writeFile(planPath, JSON.stringify({
+      run_id: 'resume-plan-snapshot',
+      base_url: baseUrl,
+      steps: [{ id: 'must_not_run', method: 'POST', url: '/refresh', body: { mutable: true } }],
+    }), 'utf8')
+    await writeFile(receiptPath, JSON.stringify({
+      kind: 'workflow_invocation_receipt',
+      run_id: 'resume-plan-snapshot',
+      endpoint_calls: [],
+    }), 'utf8')
+
+    await expect(runWorkflow({
+      cwd: tempDir,
+      resumeRunId: 'resume-plan-snapshot',
+      receiptPath,
+    }, {
+      resumePlanSnapshot: {
+        ref: planPath,
+        content: '{approved-but-malformed',
+      },
+    })).rejects.toMatchObject({
+      errors: [expect.stringContaining('requires a saved plan snapshot')],
+    })
+    expect(calls).toEqual([])
   })
 
   it('consumes an OwlFootball harness task contract, handles 409 structured-output, and posts matching receipts', async () => {
@@ -517,7 +764,7 @@ describe('WorkflowRun native tool', () => {
       })
     })
 
-    const result = await createWorkflowRunTool().execute({
+    const result = await executeGrantedWorkflow({
       contractRef,
       baseUrl,
       receiptPath,

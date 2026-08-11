@@ -34,7 +34,8 @@ export function launchAgentPath(home: string = homedir()): string {
  * inherit the shell environment, so capture the user's current OWLCODA_* config
  * (most importantly OWLCODA_HOME — otherwise the daemon writes pid/meta to the
  * wrong config root and clobbers the real daemon's pid file) and force the
- * launchd markers (OWLCODA_LAUNCHD + a stable OWLCODA_RUNTIME_TOKEN).
+ * launchd markers (OWLCODA_LAUNCHD + an install-scoped runtime-token seed).
+ * The daemon rotates that seed into a per-process identity on each start.
  */
 /**
  * Cloud-credential env vars that config.ts reads directly from the environment
@@ -98,6 +99,8 @@ ${argLines}
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
   <key>ProcessType</key>
   <string>Background</string>
   <key>StandardOutPath</key>

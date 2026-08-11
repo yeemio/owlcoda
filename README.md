@@ -144,6 +144,45 @@ array.
 }
 ```
 
+Kimi CLI, Cursor Agent CLI, and Codex CLI can be registered explicitly as
+bounded model executors for `POST /v1/structured-output`:
+
+```json
+{
+  "models": [
+    {
+      "id": "kimi-cli",
+      "label": "Kimi CLI",
+      "backendModel": "kimi-code/kimi-for-coding",
+      "aliases": ["kimi-cli"],
+      "tier": "custom",
+      "executor": { "kind": "kimi-cli", "executable": "kimi" }
+    },
+    {
+      "id": "cursor-agent",
+      "label": "Cursor Agent CLI",
+      "backendModel": "auto",
+      "aliases": ["cursor-agent"],
+      "tier": "custom",
+      "executor": { "kind": "cursor-agent", "executable": "cursor-agent" }
+    },
+    {
+      "id": "codex-cli",
+      "label": "Codex CLI",
+      "backendModel": "gpt-5.6-sol",
+      "aliases": ["codex-cli"],
+      "tier": "custom",
+      "executor": { "kind": "codex-cli", "executable": "codex" }
+    }
+  ]
+}
+```
+
+Use model aliases available in the installed CLIs. These routes are
+non-streaming, local-read-only structured-output calls; they do not expose a
+general coding-agent or arbitrary command API. `GET /v1/models` reports each
+configured CLI's executable, version, and authentication availability.
+
 Selected environment variables:
 
 | Variable | Purpose | Default |
@@ -158,6 +197,10 @@ Selected environment variables:
 - **Transcript scrollback** isn't wired to the mouse wheel yet under terminal
   multiplexers (tmux/screen). Use `PgUp` / `PgDn` / `Ctrl+↓` or `/history`
   inside the app.
+- **Streaming cross-model fallback stops after visible output** — connection,
+  5xx, and pre-first-token failures can continue on an eligible model when
+  automatic fallback is enabled. Mid-stream failures stay explicit to avoid
+  replaying or mixing output from different models.
 - **`/cost` USD figures are a reference only** — local inference is effectively
   free; the dollar number uses cloud pricing for comparison.
 - **LSP tools need a language server** you install yourself (e.g.

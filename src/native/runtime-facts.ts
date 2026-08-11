@@ -88,14 +88,25 @@ export function normalizeRuntimeFactRefs(input: RuntimeFactRefs | null | undefin
   addRef(out, 'threadId', input.threadId)
   addRef(out, 'turnId', input.turnId)
   addRef(out, 'runId', input.runId)
+  addRef(out, 'workCaseId', input.workCaseId)
+  addRef(out, 'evidenceContextId', input.evidenceContextId)
+  addRef(out, 'executionRunId', input.executionRunId)
+  addRef(out, 'driverId', input.driverId)
+  addRef(out, 'executionId', input.executionId)
+  addRef(out, 'attemptId', input.attemptId)
+  addRef(out, 'driverSessionId', input.driverSessionId)
+  addRef(out, 'workspaceRunId', input.workspaceRunId)
   addRef(out, 'taskId', input.taskId)
   addRef(out, 'stepId', input.stepId)
   addRef(out, 'jobId', input.jobId)
   addRef(out, 'artifactId', input.artifactId)
   addRef(out, 'artifactPath', input.artifactPath)
+  addRef(out, 'workflowReceiptRef', input.workflowReceiptRef)
   addRef(out, 'checkpointId', input.checkpointId)
   addRef(out, 'proofId', input.proofId)
   addRef(out, 'itemId', input.itemId)
+  const workflowArtifactRefs = uniqueStrings(input.workflowArtifactRefs ?? [])
+  if (workflowArtifactRefs.length > 0) out.workflowArtifactRefs = workflowArtifactRefs
   const coveredIds = uniqueStrings(input.coveredIds ?? [])
   if (coveredIds.length > 0) out.coveredIds = coveredIds
   return Object.keys(out).length > 0 ? out : undefined
@@ -105,22 +116,35 @@ export function mergeRuntimeFactRefs(
   ...refs: Array<RuntimeFactRefs | null | undefined>
 ): RuntimeFactRefs | undefined {
   const merged: RuntimeFactRefs = {}
+  const workflowArtifactRefs: string[] = []
   const coveredIds: string[] = []
   for (const refsItem of refs) {
     if (!refsItem) continue
     addRefIfMissing(merged, 'threadId', refsItem.threadId)
     addRefIfMissing(merged, 'turnId', refsItem.turnId)
     addRefIfMissing(merged, 'runId', refsItem.runId)
+    addRefIfMissing(merged, 'workCaseId', refsItem.workCaseId)
+    addRefIfMissing(merged, 'evidenceContextId', refsItem.evidenceContextId)
+    addRefIfMissing(merged, 'executionRunId', refsItem.executionRunId)
+    addRefIfMissing(merged, 'driverId', refsItem.driverId)
+    addRefIfMissing(merged, 'executionId', refsItem.executionId)
+    addRefIfMissing(merged, 'attemptId', refsItem.attemptId)
+    addRefIfMissing(merged, 'driverSessionId', refsItem.driverSessionId)
+    addRefIfMissing(merged, 'workspaceRunId', refsItem.workspaceRunId)
     addRefIfMissing(merged, 'taskId', refsItem.taskId)
     addRefIfMissing(merged, 'stepId', refsItem.stepId)
     addRefIfMissing(merged, 'jobId', refsItem.jobId)
     addRefIfMissing(merged, 'artifactId', refsItem.artifactId)
     addRefIfMissing(merged, 'artifactPath', refsItem.artifactPath)
+    addRefIfMissing(merged, 'workflowReceiptRef', refsItem.workflowReceiptRef)
     addRefIfMissing(merged, 'checkpointId', refsItem.checkpointId)
     addRefIfMissing(merged, 'proofId', refsItem.proofId)
     addRefIfMissing(merged, 'itemId', refsItem.itemId)
+    workflowArtifactRefs.push(...(refsItem.workflowArtifactRefs ?? []))
     coveredIds.push(...(refsItem.coveredIds ?? []))
   }
+  const normalizedWorkflowArtifactRefs = uniqueStrings(workflowArtifactRefs)
+  if (normalizedWorkflowArtifactRefs.length > 0) merged.workflowArtifactRefs = normalizedWorkflowArtifactRefs
   const normalizedCoveredIds = uniqueStrings(coveredIds)
   if (normalizedCoveredIds.length > 0) merged.coveredIds = normalizedCoveredIds
   return normalizeRuntimeFactRefs(merged)
@@ -231,14 +255,28 @@ function readMappedFactKeys(value: Record<string, unknown>, refs: RuntimeFactRef
   addRefIfMissing(refs, 'threadId', stringField(value['threadId']) ?? stringField(value['thread_id']))
   addRefIfMissing(refs, 'turnId', stringField(value['turnId']) ?? stringField(value['turn_id']) ?? stringField(value['source_turn_id']))
   addRefIfMissing(refs, 'runId', stringField(value['runId']) ?? stringField(value['run_id']))
+  addRefIfMissing(refs, 'workCaseId', stringField(value['workCaseId']) ?? stringField(value['work_case_id']))
+  addRefIfMissing(refs, 'evidenceContextId', stringField(value['evidenceContextId']) ?? stringField(value['evidence_context_id']))
+  addRefIfMissing(refs, 'executionRunId', stringField(value['executionRunId']) ?? stringField(value['execution_run_id']))
+  addRefIfMissing(refs, 'driverId', stringField(value['driverId']) ?? stringField(value['driver_id']))
+  addRefIfMissing(refs, 'executionId', stringField(value['executionId']) ?? stringField(value['execution_id']))
+  addRefIfMissing(refs, 'attemptId', stringField(value['attemptId']) ?? stringField(value['attempt_id']))
+  addRefIfMissing(refs, 'driverSessionId', stringField(value['driverSessionId']) ?? stringField(value['driver_session_id']))
+  addRefIfMissing(refs, 'workspaceRunId', stringField(value['workspaceRunId']) ?? stringField(value['workspace_run_id']))
   addRefIfMissing(refs, 'taskId', stringField(value['taskId']) ?? stringField(value['task_id']) ?? taskIdFromLongTaskId(value))
   addRefIfMissing(refs, 'stepId', stringField(value['stepId']) ?? stringField(value['step_id']))
   addRefIfMissing(refs, 'jobId', stringField(value['jobId']) ?? stringField(value['job_id']))
   addRefIfMissing(refs, 'artifactId', stringField(value['artifactId']) ?? stringField(value['artifact_id']))
   addRefIfMissing(refs, 'artifactPath', stringField(value['artifactPath']) ?? stringField(value['artifact_path']))
+  addRefIfMissing(refs, 'workflowReceiptRef', stringField(value['workflowReceiptRef']) ?? stringField(value['workflow_receipt_ref']))
   addRefIfMissing(refs, 'checkpointId', stringField(value['checkpointId']) ?? stringField(value['checkpoint_id']))
   addRefIfMissing(refs, 'proofId', stringField(value['proofId']) ?? stringField(value['proof_id']))
   addRefIfMissing(refs, 'itemId', stringField(value['itemId']) ?? stringField(value['item_id']) ?? stringField(value['tool_use_id']))
+  refs.workflowArtifactRefs = uniqueStrings([
+    ...(refs.workflowArtifactRefs ?? []),
+    ...stringArrayField(value['workflowArtifactRefs']),
+    ...stringArrayField(value['workflow_artifact_refs']),
+  ])
   refs.coveredIds = uniqueStrings([...(refs.coveredIds ?? []), ...stringArrayField(value['coveredIds']), ...stringArrayField(value['covered_ids'])])
 }
 

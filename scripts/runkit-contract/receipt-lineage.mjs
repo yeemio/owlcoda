@@ -101,6 +101,18 @@ function validateEntryShapes(entries) {
         { index },
       ));
     }
+    if (
+      isRecord(entry.receipt)
+      && "supersedesReceiptSha256" in entry.receipt
+      && entry.receipt.supersedesReceiptSha256 !== undefined
+      && !normalizedSha256(entry.receipt.supersedesReceiptSha256)
+    ) {
+      issues.push(issue(
+        "malformed_supersedes_receipt_sha256",
+        "supersedesReceiptSha256 must be a 64-character hexadecimal SHA-256 when present.",
+        { index },
+      ));
+    }
   }
   return issues;
 }
@@ -156,10 +168,46 @@ export function validateReceiptLineage(entries) {
         { receiptSha256: receiptHash, parentReceiptSha256: parentHash },
       ));
     } else if (parent.receipt.status !== "invalidated_by_concurrent_write") {
+      const declaredSupersedes = normalizedSha256(entry.receipt.supersedesReceiptSha256);
+      if (declaredSupersedes !== parentHash) {
+        issues.push(issue(
+          declaredSupersedes === null
+            ? "parent_not_invalidated_by_concurrent_write"
+            : "supersedes_receipt_sha256_mismatch",
+          declaredSupersedes === null
+            ? "A passed parent requires an explicit repair supersedes binding."
+            : "The replacement receipt supersedes hash must match its lineage parent.",
+          {
+            receiptSha256: receiptHash,
+            parentReceiptSha256: parentHash,
+            supersedesReceiptSha256: declaredSupersedes,
+          },
+        ));
+      } else if (
+        parent.receipt.status !== "passed"
+        || entry.receipt.status !== "passed"
+        || typeof parent.receipt.sourceFingerprint !== "string"
+        || typeof entry.receipt.sourceFingerprint !== "string"
+        || parent.receipt.sourceFingerprint === entry.receipt.sourceFingerprint
+      ) {
+        issues.push(issue(
+          "invalid_repair_supersedes_edge",
+          "An explicit repair supersedes edge requires passed receipts bound to different source fingerprints.",
+          { receiptSha256: receiptHash, parentReceiptSha256: parentHash },
+        ));
+      }
+    } else if (
+      entry.receipt.supersedesReceiptSha256 !== undefined
+      && normalizedSha256(entry.receipt.supersedesReceiptSha256) !== parentHash
+    ) {
       issues.push(issue(
-        "parent_not_invalidated_by_concurrent_write",
-        "A replacement may only reference a receipt invalidated by a concurrent write.",
-        { receiptSha256: receiptHash, parentReceiptSha256: parentHash },
+        "supersedes_receipt_sha256_mismatch",
+        "The replacement receipt supersedes hash must match its lineage parent.",
+        {
+          receiptSha256: receiptHash,
+          parentReceiptSha256: parentHash,
+          supersedesReceiptSha256: normalizedSha256(entry.receipt.supersedesReceiptSha256),
+        },
       ));
     }
 

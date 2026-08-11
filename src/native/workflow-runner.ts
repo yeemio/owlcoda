@@ -56,6 +56,60 @@ export interface WorkflowRunInput {
   cwd?: string
 }
 
+export interface WorkflowRunOptions {
+  signal?: AbortSignal
+  redirect?: RequestRedirect
+  /** Internal Runtime Execution Control request boundary. */
+  requestAdmission?: WorkflowRequestAdmissionHook
+  /** Internal correlation written into the durable workflow receipt. */
+  runtimeExecution?: WorkflowRuntimeExecutionReceipt
+  /** Internal immutable contract source captured when authority is issued. */
+  contractSnapshot?: WorkflowContractSnapshot
+  /** Internal immutable previous-run sources captured when authority is issued. */
+  resumeSnapshot?: WorkflowResumeSourceSnapshot
+  /** Internal immutable saved plan source for plan-less resume requests. */
+  resumePlanSnapshot?: WorkflowResumePlanSnapshot
+}
+
+export interface WorkflowRequestAdmission {
+  method: WorkflowHttpMethod
+  url: string
+  redirect: RequestRedirect
+}
+
+export type WorkflowRequestAdmissionHook = (request: WorkflowRequestAdmission) => void
+
+export interface WorkflowRuntimeExecutionReceipt {
+  driverId: string
+  executionId: string
+  attemptId: string
+  driverSessionId: string
+  grantId?: string
+}
+
+export interface WorkflowContractSnapshot {
+  ref: string
+  content?: string
+  readError?: string
+}
+
+export interface WorkflowResumeSourceSnapshot {
+  receiptRef: string
+  receiptContent?: string
+  receiptReadError?: string
+  responseArtifacts: readonly {
+    ref: string
+    content?: string
+    readError?: string
+  }[]
+}
+
+export interface WorkflowResumePlanSnapshot {
+  ref: string
+  content?: string
+  readError?: string
+}
+
 export interface WorkflowSkippedStepReceipt {
   step_id: string
   reason: 'condition_not_met'
@@ -149,6 +203,7 @@ export interface WorkflowRunReceipt {
   consumer_readiness: WorkflowConsumerReadinessReceipt
   acceptance: WorkflowAcceptance
   required_endpoint_calls: string
+  runtime_execution?: WorkflowRuntimeExecutionReceipt
   resume?: WorkflowResumeReceipt
   contract?: {
     kind: 'owlfootball_harness_task_contract'
@@ -220,7 +275,7 @@ export class WorkflowPlanValidationError extends Error {
   }
 }
 
-export async function runWorkflow(input: WorkflowRunInput, options: { signal?: AbortSignal } = {}): Promise<WorkflowRunResult> {
+export async function runWorkflow(input: WorkflowRunInput, options: WorkflowRunOptions = {}): Promise<WorkflowRunResult> {
   if (typeof input.contractRef === 'string' && input.contractRef.trim()) {
     return await runOwlFootballHarnessContract(input, options)
   }
@@ -230,11 +285,28 @@ export async function runWorkflow(input: WorkflowRunInput, options: { signal?: A
     const receiptPath = resolveReceiptPath(cwd, runId, input.receiptPath)
     const planPath = defaultPlanSnapshotPath(receiptPath)
     let plan: WorkflowPlan
-    try {
-      plan = JSON.parse(await readFile(planPath, 'utf-8')) as WorkflowPlan
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      throw new WorkflowPlanValidationError([`resumeRunId ${runId} requires a saved plan snapshot at ${planPath}: ${message}`])
+    if (options.resumePlanSnapshot) {
+      if (resolve(options.resumePlanSnapshot.ref) !== resolve(planPath)) {
+        throw new WorkflowPlanValidationError(['resumeRunId plan does not match the approved plan snapshot'])
+      }
+      if (options.resumePlanSnapshot.content === undefined) {
+        throw new WorkflowPlanValidationError([
+          `resumeRunId ${runId} requires a saved plan snapshot at ${planPath}: ${options.resumePlanSnapshot.readError ?? 'approved plan snapshot is unavailable'}`,
+        ])
+      }
+      try {
+        plan = JSON.parse(options.resumePlanSnapshot.content) as WorkflowPlan
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        throw new WorkflowPlanValidationError([`resumeRunId ${runId} requires a saved plan snapshot at ${planPath}: ${message}`])
+      }
+    } else {
+      try {
+        plan = JSON.parse(await readFile(planPath, 'utf-8')) as WorkflowPlan
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        throw new WorkflowPlanValidationError([`resumeRunId ${runId} requires a saved plan snapshot at ${planPath}: ${message}`])
+      }
     }
     return await runWorkflowPlan({ ...input, plan: { ...plan, run_id: plan.run_id ?? runId } }, options)
   }
@@ -244,7 +316,7 @@ export async function runWorkflow(input: WorkflowRunInput, options: { signal?: A
   return await runWorkflowPlan({ ...input, plan: input.plan }, options)
 }
 
-export async function runWorkflowPlan(input: WorkflowRunInput & { plan: WorkflowPlan }, options: { signal?: AbortSignal } = {}): Promise<WorkflowRunResult> {
+export async function runWorkflowPlan(input: WorkflowRunInput & { plan: WorkflowPlan }, options: WorkflowRunOptions = {}): Promise<WorkflowRunResult> {
   const effectivePlan = input.baseUrl?.trim()
     ? { ...input.plan, base_url: input.baseUrl.trim() }
     : input.plan
@@ -265,7 +337,7 @@ export async function runWorkflowPlan(input: WorkflowRunInput & { plan: Workflow
   const failedSteps: WorkflowFailedStepReceipt[] = []
   const stepResponses = new Map<string, unknown>()
   const resumeState = input.resumeRunId?.trim()
-    ? await loadWorkflowResumeState(receiptPath, plan.steps)
+    ? await loadWorkflowResumeState(receiptPath, plan.steps, options.resumeSnapshot)
     : undefined
   const resumedStepIds: string[] = []
   for (const [stepId, value] of resumeState?.stepResponses ?? []) {
@@ -297,6 +369,8 @@ export async function runWorkflowPlan(input: WorkflowRunInput & { plan: Workflow
       baseUrl: plan.base_url,
       artifactDir,
       signal: options.signal,
+      redirect: options.redirect,
+      requestAdmission: options.requestAdmission,
     })
     endpointCalls.push(result.call)
     if (result.parsedResponse !== undefined) {
@@ -351,6 +425,7 @@ export async function runWorkflowPlan(input: WorkflowRunInput & { plan: Workflow
     consumer_readiness: consumerReadiness,
     acceptance,
     required_endpoint_calls: `${requiredEndpointActual}/${requiredEndpointTarget}`,
+    ...(options.runtimeExecution ? { runtime_execution: options.runtimeExecution } : {}),
     ...(resumeState
       ? {
           resume: {
@@ -371,18 +446,35 @@ export async function runWorkflowPlan(input: WorkflowRunInput & { plan: Workflow
   return { receipt, receiptPath, artifactDir }
 }
 
-async function runOwlFootballHarnessContract(input: WorkflowRunInput, options: { signal?: AbortSignal } = {}): Promise<WorkflowRunResult> {
+async function runOwlFootballHarnessContract(input: WorkflowRunInput, options: WorkflowRunOptions = {}): Promise<WorkflowRunResult> {
   const cwd = input.cwd && input.cwd.trim() ? resolve(input.cwd) : process.cwd()
   const contractRef = resolveFromCwd(cwd, input.contractRef!)
   const baseUrl = requiredNonEmpty(input.baseUrl, 'baseUrl')
   if (!baseUrl) throw new WorkflowPlanValidationError(['baseUrl is required when contractRef is provided'])
 
   let parsed: unknown
-  try {
-    parsed = JSON.parse(await readFile(contractRef, 'utf-8'))
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    throw new WorkflowPlanValidationError([`contractRef could not be read as JSON: ${message}`])
+  if (options.contractSnapshot) {
+    if (resolve(options.contractSnapshot.ref) !== contractRef) {
+      throw new WorkflowPlanValidationError(['contractRef does not match the approved contract snapshot'])
+    }
+    if (options.contractSnapshot.content === undefined) {
+      throw new WorkflowPlanValidationError([
+        `contractRef could not be read as JSON: ${options.contractSnapshot.readError ?? 'approved contract snapshot is unavailable'}`,
+      ])
+    }
+    try {
+      parsed = JSON.parse(options.contractSnapshot.content)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      throw new WorkflowPlanValidationError([`contractRef could not be read as JSON: ${message}`])
+    }
+  } else {
+    try {
+      parsed = JSON.parse(await readFile(contractRef, 'utf-8'))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      throw new WorkflowPlanValidationError([`contractRef could not be read as JSON: ${message}`])
+    }
   }
   const contractErrors = validateOwlFootballHarnessContract(parsed)
   if (contractErrors.length > 0) throw new WorkflowPlanValidationError(contractErrors)
@@ -426,6 +518,8 @@ async function runOwlFootballHarnessContract(input: WorkflowRunInput, options: {
       baseUrl,
       artifactDir,
       signal: options.signal,
+      redirect: options.redirect,
+      requestAdmission: options.requestAdmission,
     })
     endpointCalls.push(execute.call)
     const executeBody = asRecord(execute.parsedResponse)
@@ -439,6 +533,8 @@ async function runOwlFootballHarnessContract(input: WorkflowRunInput, options: {
         baseUrl,
         artifactDir,
         signal: options.signal,
+        redirect: options.redirect,
+        requestAdmission: options.requestAdmission,
       })
       endpointCalls.push(structuredOutput.call)
       const structuredBody = asRecord(structuredOutput.parsedResponse)
@@ -498,6 +594,8 @@ async function runOwlFootballHarnessContract(input: WorkflowRunInput, options: {
       baseUrl,
       artifactDir,
       signal: options.signal,
+      redirect: options.redirect,
+      requestAdmission: options.requestAdmission,
     })
     endpointCalls.push(receiptPost.call)
     if (!receiptPost.call.ok) {
@@ -538,6 +636,7 @@ async function runOwlFootballHarnessContract(input: WorkflowRunInput, options: {
     consumer_readiness: consumerReadiness,
     acceptance,
     required_endpoint_calls: `${requiredStepsCompleted}/${requiredStepsTotal}`,
+    ...(options.runtimeExecution ? { runtime_execution: options.runtimeExecution } : {}),
     contract: {
       kind: 'owlfootball_harness_task_contract',
       matchId: contract.matchId,
@@ -734,6 +833,8 @@ async function runStructuredOutputForOwlFootballTask(args: {
   baseUrl: string
   artifactDir: string
   signal?: AbortSignal
+  redirect?: RequestRedirect
+  requestAdmission?: WorkflowRequestAdmissionHook
 }): Promise<InternalStepResult> {
   const fromResponse = asRecord(args.executeBody['structured_output'])
     ?? asRecord(args.executeBody['request'])
@@ -781,6 +882,8 @@ async function runStructuredOutputForOwlFootballTask(args: {
     baseUrl: args.baseUrl,
     artifactDir: args.artifactDir,
     signal: args.signal,
+    redirect: args.redirect,
+    requestAdmission: args.requestAdmission,
   })
 }
 
@@ -808,6 +911,8 @@ async function executeHttpStep(step: WorkflowStep, args: {
   baseUrl?: string
   artifactDir: string
   signal?: AbortSignal
+  redirect?: RequestRedirect
+  requestAdmission?: WorkflowRequestAdmissionHook
 }): Promise<InternalStepResult> {
   const method = step.method.trim().toUpperCase() as WorkflowHttpMethod
   const url = resolveStepUrl(step.url, args.baseUrl)
@@ -833,8 +938,8 @@ async function executeHttpStep(step: WorkflowStep, args: {
         method,
         headers,
         body,
-        redirect: 'follow',
-      }, timeoutMs, args.signal)
+        redirect: args.redirect ?? 'follow',
+      }, timeoutMs, args.signal, args.requestAdmission)
       const raw = method === 'HEAD' ? '' : await response.text()
       const finishedAt = new Date().toISOString()
       const contentType = response.headers.get('content-type') ?? undefined
@@ -930,6 +1035,7 @@ async function fetchWithTimeout(
   init: RequestInit,
   timeoutMs: number,
   parentSignal?: AbortSignal,
+  requestAdmission?: WorkflowRequestAdmissionHook,
 ): Promise<Response> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(new Error(`timeout after ${timeoutMs}ms`)), timeoutMs)
@@ -938,11 +1044,76 @@ async function fetchWithTimeout(
   else parentSignal?.addEventListener('abort', abortFromParent, { once: true })
 
   try {
-    return await fetch(url, { ...init, signal: controller.signal })
+    if (!requestAdmission) return await fetch(url, { ...init, signal: controller.signal })
+
+    const redirect = init.redirect ?? 'follow'
+    if (redirect !== 'follow') {
+      requestAdmission({
+        method: normalizedRequestMethod(init.method),
+        url,
+        redirect,
+      })
+      return await fetch(url, { ...init, signal: controller.signal })
+    }
+
+    let currentUrl = url
+    let currentInit: RequestInit = { ...init, redirect: 'manual' }
+    for (let redirectCount = 0; redirectCount <= 20; redirectCount += 1) {
+      const method = normalizedRequestMethod(currentInit.method)
+      requestAdmission({ method, url: currentUrl, redirect })
+      const response = await fetch(currentUrl, { ...currentInit, signal: controller.signal })
+      if (!isRedirectResponse(response.status)) return response
+
+      const location = response.headers.get('location')
+      if (!location) return response
+      if (redirectCount === 20) {
+        await response.body?.cancel()
+        throw new Error('redirect count exceeded 20')
+      }
+
+      const nextUrl = new URL(location, currentUrl).href
+      const nextMethod = redirectMethod(response.status, method)
+      let nextHeaders = new Headers(currentInit.headers)
+      let nextBody = currentInit.body
+      if (nextMethod !== method) {
+        nextBody = undefined
+        nextHeaders.delete('content-length')
+        nextHeaders.delete('content-type')
+      }
+      if (new URL(nextUrl).origin !== new URL(currentUrl).origin) {
+        for (const name of ['authorization', 'proxy-authorization', 'cookie', 'host']) {
+          nextHeaders.delete(name)
+        }
+      }
+      await response.body?.cancel()
+      currentUrl = nextUrl
+      currentInit = {
+        ...currentInit,
+        method: nextMethod,
+        headers: nextHeaders,
+        body: nextBody,
+        redirect: 'manual',
+      }
+    }
+    throw new Error('redirect count exceeded 20')
   } finally {
     clearTimeout(timer)
     parentSignal?.removeEventListener('abort', abortFromParent)
   }
+}
+
+function normalizedRequestMethod(method: string | undefined): WorkflowHttpMethod {
+  return (method?.trim().toUpperCase() || 'GET') as WorkflowHttpMethod
+}
+
+function isRedirectResponse(status: number): boolean {
+  return [301, 302, 303, 307, 308].includes(status)
+}
+
+function redirectMethod(status: number, method: WorkflowHttpMethod): WorkflowHttpMethod {
+  if (status === 303 && method !== 'HEAD') return 'GET'
+  if ((status === 301 || status === 302) && method === 'POST') return 'GET'
+  return method
 }
 
 function resolveStepUrl(stepUrl: string, baseUrl: string | undefined): string {
@@ -1074,13 +1245,34 @@ function buildWorkflowConsumerReadiness(
   }
 }
 
-async function loadWorkflowResumeState(receiptPath: string, steps: WorkflowStep[]): Promise<WorkflowResumeState> {
+async function loadWorkflowResumeState(
+  receiptPath: string,
+  steps: WorkflowStep[],
+  snapshot?: WorkflowResumeSourceSnapshot,
+): Promise<WorkflowResumeState> {
   let parsed: unknown
-  try {
-    parsed = JSON.parse(await readFile(receiptPath, 'utf-8'))
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    throw new WorkflowPlanValidationError([`resumeRunId requires a previous receipt at ${receiptPath}: ${message}`])
+  if (snapshot) {
+    if (resolve(snapshot.receiptRef) !== resolve(receiptPath)) {
+      throw new WorkflowPlanValidationError(['resumeRunId receipt does not match the approved resume snapshot'])
+    }
+    if (snapshot.receiptContent === undefined) {
+      throw new WorkflowPlanValidationError([
+        `resumeRunId requires a previous receipt at ${receiptPath}: ${snapshot.receiptReadError ?? 'approved receipt snapshot is unavailable'}`,
+      ])
+    }
+    try {
+      parsed = JSON.parse(snapshot.receiptContent)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      throw new WorkflowPlanValidationError([`resumeRunId requires a previous receipt at ${receiptPath}: ${message}`])
+    }
+  } else {
+    try {
+      parsed = JSON.parse(await readFile(receiptPath, 'utf-8'))
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      throw new WorkflowPlanValidationError([`resumeRunId requires a previous receipt at ${receiptPath}: ${message}`])
+    }
   }
   const previous = asRecord(parsed) as WorkflowRunReceipt | undefined
   if (!previous || previous.kind !== 'workflow_invocation_receipt' || !Array.isArray(previous.endpoint_calls)) {
@@ -1093,7 +1285,7 @@ async function loadWorkflowResumeState(receiptPath: string, steps: WorkflowStep[
   for (const call of previous.endpoint_calls) {
     if (!call.ok || !stepIds.has(call.step_id)) continue
     successfulCalls.set(call.step_id, call)
-    const response = await responseFromPreviousCall(call)
+    const response = await responseFromPreviousCall(call, snapshot)
     if (response !== undefined) stepResponses.set(call.step_id, response)
   }
 
@@ -1106,12 +1298,21 @@ async function loadWorkflowResumeState(receiptPath: string, steps: WorkflowStep[
   }
 }
 
-async function responseFromPreviousCall(call: WorkflowEndpointCallReceipt): Promise<unknown> {
+async function responseFromPreviousCall(
+  call: WorkflowEndpointCallReceipt,
+  snapshot?: WorkflowResumeSourceSnapshot,
+): Promise<unknown> {
   if (call.projected_response !== undefined) return call.projected_response
   const preview = parseResponseBody(call.response_preview ?? '', call.content_type)
   if (preview !== undefined) return preview
   const artifactPath = call.response_artifact ?? call.raw_ref ?? call.artifact_ref
   if (!artifactPath) return undefined
+  if (snapshot) {
+    const artifact = snapshot.responseArtifacts.find(candidate => candidate.ref === artifactPath)
+    return artifact?.content === undefined
+      ? undefined
+      : parseResponseBody(artifact.content, call.content_type)
+  }
   try {
     return parseResponseBody(await readFile(artifactPath, 'utf-8'), call.content_type)
   } catch {

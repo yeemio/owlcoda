@@ -187,13 +187,17 @@ console.log('<!doctype html><main id="scoreboard">Chrome rendered odds board</ma
 
   it('preserves partial chrome_headless evidence when capture times out after producing DOM', async () => {
     const fakeChrome = join(artifactDir, 'slow-fake-chrome.mjs')
-    await writeFile(fakeChrome, `#!/usr/bin/env node
-import { writeFileSync } from 'node:fs'
-const screenshotArg = process.argv.find((arg) => arg.startsWith('--screenshot='))
-if (screenshotArg) writeFileSync(screenshotArg.slice('--screenshot='.length), 'partial-png')
-console.error('partial stderr before hang')
-console.log('<!doctype html><main id="scoreboard">Partial rendered odds board</main>')
-await new Promise((resolve) => setTimeout(resolve, 1000))
+    await writeFile(fakeChrome, `#!/bin/sh
+set -eu
+for arg in "$@"; do
+  case "$arg" in
+    --screenshot=*) screenshot="\${arg#--screenshot=}" ;;
+  esac
+done
+printf 'partial-png' > "$screenshot"
+printf 'partial stderr before hang\\n' >&2
+printf '<!doctype html><main id="scoreboard">Partial rendered odds board</main>\\n'
+exec tail -f /dev/null
 `, 'utf-8')
     await chmod(fakeChrome, 0o755)
     const tool = createBrowserJobTool()

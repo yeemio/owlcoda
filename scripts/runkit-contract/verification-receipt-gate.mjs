@@ -38,6 +38,132 @@ function isSortedUniqueStrings(values) {
     && values.every((value, index) => index === 0 || values[index - 1] < value);
 }
 
+function isRisk(value) {
+  return isRecord(value)
+    && new Set(["lightweight", "standard", "full"]).has(value.riskMode)
+    && isSortedUniqueStrings(value.riskCategories)
+    && value.riskCategories.every(category => new Set([
+      "backtest",
+      "funds",
+      "migration",
+      "production",
+      "release",
+    ]).has(category));
+}
+
+function validateSourceArtifactShape(receipt, sourceGate) {
+  if (receipt.sourceArtifact === undefined) return [];
+  const artifact = receipt.sourceArtifact;
+  if (
+    !isRecord(artifact)
+    || !new Set(["delivery_packet_v1", "source_candidate_v2"])
+      .has(artifact.kind)
+    || artifact.runId !== receipt.runId
+    || typeof artifact.path !== "string"
+    || artifact.path.length === 0
+    || artifact.path.startsWith("/")
+    || artifact.path.split("/").some(segment => (
+      segment.length === 0 || segment === "." || segment === ".."
+    ))
+    || !isSha256(artifact.sha256)
+    || !isSha256(artifact.sourceFingerprint)
+    || artifact.sourceFingerprint !== receipt.sourceFingerprint
+    || artifact.sourceFingerprint !== sourceGate?.recomputedFingerprint
+  ) {
+    return [issue(
+      "source_artifact_binding_malformed",
+      "sourceArtifact must exactly bind the active run, source bytes, path, and fingerprint.",
+    )];
+  }
+  return [];
+}
+
+function sameRisk(left, right) {
+  return left?.riskMode === right?.riskMode
+    && JSON.stringify(left?.riskCategories) === JSON.stringify(right?.riskCategories);
+}
+
+function validateRepairControlShape(receipt) {
+  const issues = [];
+  const hasSupersedes = receipt.supersedesReceiptSha256 !== undefined;
+  const hasControl = receipt.repairControl !== undefined;
+  if (hasSupersedes && !hasControl) {
+    issues.push(issue(
+      "repair_control_required",
+      "A superseding receipt requires a source-bound repairControl.",
+    ));
+    return issues;
+  }
+  if (!hasSupersedes && hasControl) {
+    issues.push(issue(
+      "repair_control_malformed",
+      "repairControl is only valid on a superseding receipt.",
+    ));
+    return issues;
+  }
+  if (!hasSupersedes) return issues;
+  if (!isSha256(receipt.supersedesReceiptSha256)) {
+    issues.push(issue(
+      "repair_control_malformed",
+      "supersedesReceiptSha256 must be a SHA-256.",
+    ));
+  }
+  if (!isRecord(receipt.repairControl)) {
+    issues.push(issue("repair_control_malformed", "repairControl must be an object."));
+    return issues;
+  }
+  const control = receipt.repairControl;
+  if (typeof control.repairPlanPath !== "string"
+    || control.repairPlanPath.length === 0
+    || control.parentBindingMode !== "receipt"
+    || !isSha256(control.repairPlanSha256)
+    || !isSha256(control.goalContractSha256)
+    || !isSha256(control.profilesSha256)
+    || !Array.isArray(control.executableBindings)
+    || control.executableBindings.length === 0) {
+    issues.push(issue(
+      "repair_control_malformed",
+      "repairControl is missing its plan, goal, profile, or executable binding.",
+    ));
+  }
+  const bindingIds = [];
+  for (const binding of control.executableBindings ?? []) {
+    if (!isRecord(binding)
+      || typeof binding.commandId !== "string"
+      || binding.commandId.length === 0
+      || typeof binding.executable !== "string"
+      || binding.executable.length === 0
+      || !isSha256(binding.sha256)) {
+      issues.push(issue(
+        "repair_control_malformed",
+        "Each repair executable binding must identify one command, executable, and SHA-256.",
+      ));
+      continue;
+    }
+    bindingIds.push(binding.commandId);
+  }
+  if (new Set(bindingIds).size !== bindingIds.length) {
+    issues.push(issue(
+      "repair_control_malformed",
+      "repair executable binding commandIds must be unique.",
+    ));
+  }
+  if (!isSha256(receipt.goalContractSha256) || !isRisk(receipt.risk)) {
+    issues.push(issue(
+      "goal_contract_binding_missing",
+      "A superseding receipt requires goalContractSha256 and normalized risk.",
+    ));
+  } else if (control.goalContractSha256 !== receipt.goalContractSha256
+    || !isRisk(control.risk)
+    || !sameRisk(control.risk, receipt.risk)) {
+    issues.push(issue(
+      "repair_risk_binding_mismatch",
+      "repairControl goal and risk must exactly match the receipt binding.",
+    ));
+  }
+  return issues;
+}
+
 function malformedResult(issues, lineage = null) {
   return {
     valid: false,
@@ -141,6 +267,14 @@ function validateActiveReceiptShape(receipt, contractVersion) {
       "The active receipt commandReceipts must be an array.",
     ));
   }
+  if ((receipt.goalContractSha256 !== undefined || receipt.risk !== undefined)
+    && (!isSha256(receipt.goalContractSha256) || !isRisk(receipt.risk))) {
+    issues.push(issue(
+      "goal_contract_binding_malformed",
+      "Receipt goalContractSha256 and normalized risk must either both be valid or both be absent.",
+    ));
+  }
+  issues.push(...validateRepairControlShape(receipt));
   return issues;
 }
 
@@ -208,6 +342,28 @@ export function validateVerificationReceiptGate({
     return malformedResult([
       issue("unsupported_contract_version", "contractVersion must be 0.1 or 0.2."),
     ]);
+  }
+  if (
+    Array.isArray(receipts)
+    && receipts.some((entry) => {
+      const receipt = isRecord(entry?.receipt) ? entry.receipt : entry;
+      return isRecord(receipt) && receipt.schemaVersion === "OwlCodaQuickVerificationReceiptV1";
+    })
+  ) {
+    return {
+      contractVersion,
+      valid: false,
+      malformed: false,
+      accepted: false,
+      verificationPassed: false,
+      decision: "rejected",
+      activeReceiptSha256: null,
+      lineage: null,
+      issues: [issue(
+        "quick_receipt_not_formal",
+        "A Quick Receipt cannot satisfy a Formal Delivery verification gate.",
+      )],
+    };
   }
   const lineage = validateReceiptLineage(receipts);
   if (lineage.malformed) {
@@ -296,6 +452,7 @@ export function validateVerificationReceiptGate({
   if (commandReceiptShapeIssues.length > 0) {
     return malformedResult(commandReceiptShapeIssues, lineage);
   }
+  issues.push(...validateSourceArtifactShape(activeReceipt, sourceGate));
 
   if (
     activeReceipt.sourceFingerprint.toLowerCase()

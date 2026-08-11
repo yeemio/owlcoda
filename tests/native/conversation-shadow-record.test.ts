@@ -1,4 +1,7 @@
 // tests/native/conversation-shadow-record.test.ts
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ToolDispatcher } from '../../src/native/dispatch.js'
 import {
@@ -46,6 +49,71 @@ afterEach(() => {
 })
 
 describe('conversation — shadow recording (Slice 1)', () => {
+  it('binds a granted WorkflowRun to matching central runtime identities in metadata and receipt', async () => {
+    const cwd = await mkdtemp(join(tmpdir(), 'owlcoda-workflow-grant-red-'))
+    try {
+      const receiptPath = join(cwd, 'receipt.json')
+      const conv = createConversation({ system: 'test', model: 'test-model' })
+      addUserMessage(conv, 'run the approved workflow')
+      const dispatcher = new ToolDispatcher()
+      const providerResponses = [
+        toolUseResponse('WorkflowRun', 'tu_workflow_granted', {
+          cwd,
+          receiptPath,
+          plan: {
+            run_id: 'conversation-workflow-granted',
+            base_url: 'http://workflow.test',
+            steps: [{ id: 'write', method: 'POST', url: '/execute', body: { approved: true } }],
+          },
+        }),
+        textResponse('done'),
+      ]
+      let providerIndex = 0
+      let endpointHits = 0
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (request) => {
+        const url = typeof request === 'string' ? request : request instanceof URL ? request.href : request.url
+        if (url.startsWith('http://test')) {
+          const response = providerResponses[providerIndex++]
+          if (!response) throw new Error('provider called more times than queued responses')
+          return response
+        }
+        endpointHits += 1
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      })
+
+      await runConversationLoop(conv, dispatcher, {
+        apiBaseUrl: 'http://test',
+        apiKey: 'k',
+        cwd,
+        callbacks: { onToolApproval: vi.fn().mockResolvedValue(true) },
+      })
+
+      const toolResult = conv.turns
+        .flatMap(turn => Array.isArray(turn.content) ? turn.content : [])
+        .find((block: any) => block.type === 'tool_result' && block.tool_use_id === 'tu_workflow_granted') as any
+      const runtimeExecution = toolResult?.metadata?.runtimeExecution
+      expect(endpointHits).toBe(1)
+      expect(runtimeExecution).toMatchObject({
+        driverId: 'owlcoda-native',
+        executionId: expect.stringMatching(/^runtime-execution:/),
+        attemptId: expect.stringMatching(/^runtime-attempt:/),
+        driverSessionId: expect.stringMatching(/^owlcoda-native-session:/),
+        grantId: expect.stringMatching(/^runtime-grant:/),
+      })
+      expect(new Set([
+        runtimeExecution.executionId,
+        runtimeExecution.attemptId,
+        runtimeExecution.driverSessionId,
+      ]).size).toBe(3)
+      expect(JSON.parse(await readFile(receiptPath, 'utf8')).runtime_execution).toEqual(runtimeExecution)
+    } finally {
+      await rm(cwd, { recursive: true, force: true })
+    }
+  })
+
   it('records a proposed edit with permissionState=granted when callback approves', async () => {
     const conv = createConversation({ system: 'test', model: 'test-model' })
     addUserMessage(conv, 'edit /tmp/x.md to add a line')

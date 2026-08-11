@@ -5,7 +5,13 @@
  * executes them, and returns tool_result blocks for the conversation.
  */
 
-import type { AnthropicToolUseBlock, AnthropicContentBlock } from './protocol/types.js'
+import type {
+  AnthropicToolUseBlock,
+  AnthropicContentBlock,
+  EvidencePersistenceFailure,
+  EvidencePersistenceOperation,
+  TaskExecutionState,
+} from './protocol/types.js'
 import type { NativeToolDef, ToolExecutionContext, ToolResult } from './tools/types.js'
 import { createBashTool } from './tools/bash.js'
 import { createReadTool } from './tools/read.js'
@@ -72,6 +78,8 @@ import {
   recordBashArtifactProgress,
   recordToolExecutionProgress,
   recordWriteSuccess,
+  recordEvidencePersistenceFailure,
+  clearEvidencePersistenceFailure,
 } from './task-state.js'
 import { writePlan, recordArtifact } from './run-workspace.js'
 import { normalize, isAbsolute, resolve } from 'node:path'
@@ -207,13 +215,42 @@ export class ToolDispatcher {
         // B2: Mirror TodoWrite todos → plan.json when a RunWorkspace exists.
         const runWorkspaceB2 = context?.taskState?.run.runWorkspace
         if (toolName === 'TodoWrite' && runWorkspaceB2) {
-          await mirrorTodosToRunWorkspace(block.input, runWorkspaceB2.runDir).catch(() => {})
+          try {
+            await mirrorTodosToRunWorkspace(block.input, runWorkspaceB2.runDir)
+            clearEvidencePersistenceFailure(context?.taskState, 'todo_mirror')
+          } catch (error: unknown) {
+            const failure = buildEvidencePersistenceFailure('todo_mirror', error, block.id, toolName, runWorkspaceB2)
+            recordEvidencePersistenceFailure(context?.taskState, failure)
+            notifyEvidencePersistenceFailure(context, failure, result)
+            result.metadata = { ...(result.metadata ?? {}), evidencePersistenceFailure: failure }
+          }
         }
 
         // B3: Append write/edit/NotebookEdit artifacts within outputRoot → artifacts.json.
         const runWorkspaceB3 = context?.taskState?.run.runWorkspace
         if (runWorkspaceB3 && (toolName === 'write' || toolName === 'edit' || toolName === 'NotebookEdit')) {
-          await recordWriteArtifact(toolName, result.metadata, runWorkspaceB3.runDir, runWorkspaceB3.outputRoot).catch(() => {})
+          try {
+            const artifactRecord = await recordWriteArtifact(
+              toolName,
+              result.metadata,
+              runWorkspaceB3.runDir,
+              runWorkspaceB3.outputRoot,
+            )
+            if (artifactRecord.recorded) {
+              clearEvidencePersistenceFailure(context?.taskState, 'artifact_record', {
+                runId: runWorkspaceB3.runId,
+                runDir: runWorkspaceB3.runDir,
+                outputRoot: runWorkspaceB3.outputRoot,
+                toolUseId: block.id,
+                toolName,
+              })
+            }
+          } catch (error: unknown) {
+            const failure = buildEvidencePersistenceFailure('artifact_record', error, block.id, toolName, runWorkspaceB3)
+            recordEvidencePersistenceFailure(context?.taskState, failure)
+            notifyEvidencePersistenceFailure(context, failure, result)
+            result.metadata = { ...(result.metadata ?? {}), evidencePersistenceFailure: failure }
+          }
         }
       }
       return {
@@ -323,6 +360,51 @@ export class ToolDispatcher {
   }
 }
 
+function buildEvidencePersistenceFailure(
+  operation: EvidencePersistenceOperation,
+  error: unknown,
+  toolUseId: string,
+  toolName: string,
+  runWorkspace: NonNullable<TaskExecutionState['run']['runWorkspace']>,
+): EvidencePersistenceFailure {
+  const rawMessage = error instanceof Error ? error.message : String(error)
+  const message = rawMessage
+    .replace(/((?:api[_-]?key|token|password|secret)\s*[=:]\s*)[^\s,;]+/gi, '$1[REDACTED]')
+    .replace(/[\r\n]+/g, ' ')
+    .slice(0, 500)
+  return {
+    operation,
+    runId: runWorkspace.runId,
+    runDir: runWorkspace.runDir,
+    outputRoot: runWorkspace.outputRoot,
+    toolUseId,
+    toolName,
+    error: {
+      name: error instanceof Error && error.name ? error.name : 'PersistenceError',
+      message,
+    },
+    evidenceCompleteness: 'incomplete',
+    acceptanceImpact: 'blocking',
+    at: new Date().toISOString(),
+  }
+}
+
+function notifyEvidencePersistenceFailure(
+  context: ToolExecutionContext | undefined,
+  failure: EvidencePersistenceFailure,
+  result: ToolResult,
+): void {
+  try {
+    context?.onEvidencePersistenceFailure?.(failure)
+  } catch (error: unknown) {
+    const rawMessage = error instanceof Error ? error.message : String(error)
+    result.metadata = {
+      ...(result.metadata ?? {}),
+      evidencePersistenceObserverFailure: rawMessage.replace(/[\r\n]+/g, ' ').slice(0, 200),
+    }
+  }
+}
+
 /**
  * B2: Mirror TodoWrite todos to plan.json in the active RunWorkspace.
  * Mapping: todo.content → step.title; todo.status → step.status;
@@ -353,28 +435,36 @@ async function mirrorTodosToRunWorkspace(
 /**
  * B3: Record a write/edit/NotebookEdit artifact into artifacts.json.
  * Only records paths within outputRoot (isWithinRunRoot guard).
- * Silently returns if path is not in outputRoot or metadata is missing.
+ * Reports whether a write produced a durable artifact record. A successful
+ * primary write outside outputRoot is not an artifact-record repair.
  */
+type ArtifactRecordOutcome =
+  | { recorded: true }
+  | { recorded: false; reason: 'missing_metadata' | 'missing_path' | 'outside_output_root' }
+
 async function recordWriteArtifact(
   toolName: string,
   metadata: Record<string, unknown> | undefined,
   runDir: string,
   outputRoot: string,
-): Promise<void> {
-  if (!metadata) return
+): Promise<ArtifactRecordOutcome> {
+  if (!metadata) return { recorded: false, reason: 'missing_metadata' }
   const rawPath = toolName === 'NotebookEdit'
     ? metadata['notebook_path']
     : metadata['path']
-  if (typeof rawPath !== 'string' || !rawPath) return
+  if (typeof rawPath !== 'string' || !rawPath) return { recorded: false, reason: 'missing_path' }
   const artifactPath = isAbsolute(rawPath) ? resolve(rawPath) : resolve(rawPath)
   const normalizedOutputRoot = normalize(outputRoot)
   const normalizedArtifact = normalize(artifactPath)
   // Only record artifacts within outputRoot
-  if (normalizedArtifact !== normalizedOutputRoot && !normalizedArtifact.startsWith(`${normalizedOutputRoot}/`)) return
+  if (normalizedArtifact !== normalizedOutputRoot && !normalizedArtifact.startsWith(`${normalizedOutputRoot}/`)) {
+    return { recorded: false, reason: 'outside_output_root' }
+  }
   const isFinalDir = normalizedArtifact.startsWith(normalize(`${outputRoot}/final`))
   await recordArtifact(runDir, {
     path: artifactPath,
     origin: toolName as 'write' | 'edit',
     participatesInFinal: isFinalDir,
   })
+  return { recorded: true }
 }

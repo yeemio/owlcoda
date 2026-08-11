@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/verification-preflight-v1.json",
+  "title": "OwlCoda RunKit Verification Preflight V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "verificationId",
+    "status",
+    "issueCode",
+    "executable",
+    "commandArgvSha256",
+    "authorizationGranted"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "OwlCodaRunKitVerificationPreflightV1"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "verificationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "status": {
+      "const": "rejected"
+    },
+    "issueCode": {
+      "enum": [
+        "verify_executable_absolute_path_required",
+        "verify_executable_missing",
+        "verify_executable_not_regular_file",
+        "verify_executable_symlink_rejected"
+      ]
+    },
+    "executable": {
+      "type": "string",
+      "minLength": 1
+    },
+    "commandArgvSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "authorizationGranted": {
+      "const": false
+    }
+  }
+}

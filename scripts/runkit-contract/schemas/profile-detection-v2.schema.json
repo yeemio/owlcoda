@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/profile-detection-v2.json",
+  "title": "OwlCoda RunKit Profile Detection V2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "dryRun", "writesPerformed", "confidence", "applyStatus", "issueCodes", "proposedProfiles", "candidates", "primaryProfileId", "inputManifest", "toolBinding", "currentProfilesSha256", "detectedScripts", "detectedWorkspaces", "authorizationGranted", "detectionSha256"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitProfileDetectionV2" },
+    "status": { "const": "profiles_detected" },
+    "dryRun": { "const": true },
+    "writesPerformed": { "const": 0 },
+    "confidence": { "enum": ["high", "review_required"] },
+    "applyStatus": { "enum": ["ready_to_apply", "review_required", "profiles_already_exists"] },
+    "issueCodes": { "$ref": "#/$defs/strings" },
+    "proposedProfiles": { "$ref": "#/$defs/profiles" },
+    "candidates": { "type": "array", "items": { "$ref": "#/$defs/profile" } },
+    "primaryProfileId": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1 }] },
+    "inputManifest": { "type": "array", "items": { "$ref": "#/$defs/input" } },
+    "toolBinding": { "$ref": "#/$defs/tool" },
+    "currentProfilesSha256": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/hash" }] },
+    "detectedScripts": { "$ref": "#/$defs/strings" },
+    "detectedWorkspaces": { "type": "array", "items": { "$ref": "#/$defs/workspace" } },
+    "authorizationGranted": { "const": false },
+    "detectionSha256": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "strings": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "cwd", "executable", "argv"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "cwd": { "type": "string", "minLength": 1 },
+        "executable": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1 }] },
+        "argv": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "paths", "role", "primary", "requiresProfileIds", "commands"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "paths": { "$ref": "#/$defs/strings" },
+        "role": { "enum": ["primary", "supporting"] },
+        "primary": { "type": "boolean" },
+        "requiresProfileIds": { "$ref": "#/$defs/strings" },
+        "commands": { "type": "array", "items": { "$ref": "#/$defs/command" } }
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "profiles"],
+      "properties": {
+        "schemaVersion": { "const": "OwlCodaRunKitProfilesV1" },
+        "profiles": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/profile" } }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "confidence", "source", "packageManager", "executable", "argvPrefix", "version", "executableSha256", "launcherSha256"],
+      "properties": {
+        "status": { "enum": ["resolved", "invalid", "unavailable"] },
+        "confidence": { "enum": ["high", "review_required"] },
+        "source": { "type": "string", "minLength": 1 },
+        "packageManager": { "enum": ["npm", "pnpm", "yarn", "bun"] },
+        "executable": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1 }] },
+        "argvPrefix": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "version": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1 }] },
+        "executableSha256": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/hash" }] },
+        "launcherSha256": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/hash" }] }
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "path", "scripts"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 },
+        "scripts": { "$ref": "#/$defs/strings" }
+      }
+    }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitProfileDetectionV2",
+    "status": "profiles_detected",
+    "dryRun": true,
+    "writesPerformed": 0,
+    "confidence": "high",
+    "applyStatus": "ready_to_apply",
+    "issueCodes": [],
+    "proposedProfiles": {
+      "schemaVersion": "OwlCodaRunKitProfilesV1",
+      "profiles": [{
+        "id": "node-quality",
+        "paths": ["package.json"],
+        "role": "primary",
+        "primary": true,
+        "requiresProfileIds": [],
+        "commands": [{ "id": "npm-test", "cwd": ".", "executable": "/usr/bin/node", "argv": ["/usr/lib/npm-cli.js", "run", "test"] }]
+      }]
+    },
+    "candidates": [{
+      "id": "node-quality",
+      "paths": ["package.json"],
+      "role": "primary",
+      "primary": true,
+      "requiresProfileIds": [],
+      "commands": [{ "id": "npm-test", "cwd": ".", "executable": "/usr/bin/node", "argv": ["/usr/lib/npm-cli.js", "run", "test"] }]
+    }],
+    "primaryProfileId": "node-quality",
+    "inputManifest": [{ "path": "package.json", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+    "toolBinding": {
+      "status": "resolved",
+      "confidence": "high",
+      "source": "project_lockfile",
+      "packageManager": "npm",
+      "executable": "/usr/bin/node",
+      "argvPrefix": ["/usr/lib/npm-cli.js"],
+      "version": "10.0.0",
+      "executableSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "launcherSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "currentProfilesSha256": null,
+    "detectedScripts": ["test"],
+    "detectedWorkspaces": [],
+    "authorizationGranted": false,
+    "detectionSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+  }]
+}

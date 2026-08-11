@@ -2,9 +2,11 @@ import * as http from 'node:http'
 import type { OwlCodaConfig } from '../config.js'
 import {
   LocalRuntimeProtocolUnresolvedError,
+  resolveConfiguredModel,
   resolveModelCapabilitiesForRequest,
   resolveModelRoute,
 } from '../model-registry.js'
+import { createVendorCliStructuredOutputExecutor } from '../executors/vendor-cli-runtime.js'
 import type { AnthropicMessagesRequest, AnthropicMessagesResponse, AnthropicTextBlock, AnthropicThinkingBlock } from '../types.js'
 import { translateRequest } from '../translate/request.js'
 import { translateResponse } from '../translate/response.js'
@@ -358,9 +360,11 @@ function withRegistryStructuredOutputCapabilities(
   config: OwlCodaConfig,
   request: StructuredOutputRequest,
 ): StructuredOutputRequest {
+  const resolved = resolveConfiguredModel(config, request.model)
   return {
     ...request,
     modelCapabilities: resolveModelCapabilitiesForRequest(config, request.model).structuredOutput,
+    ...(resolved.executor ? { executorKind: 'runtime-driver' as const } : {}),
   }
 }
 
@@ -543,6 +547,14 @@ async function collectAnthropicMessagesStream(args: {
 export function createStructuredOutputModelExecutor(config: OwlCodaConfig): StructuredOutputExecutor {
   return async (request): Promise<StructuredOutputModelResponse> => {
     const route = resolveModelRoute(config, request.model)
+    if (route.executorKind) {
+      return await createVendorCliStructuredOutputExecutor({
+        executorKind: route.executorKind,
+        executorConfig: route.executorConfig ?? { kind: route.executorKind },
+        backendModel: route.backendModel,
+        requestedModelConfigured: route.requestedModelConfigured === true,
+      })(request)
+    }
     const stream = shouldStreamStructuredOutput(request)
     const nativeSchema = supportsProviderNativeSchema(request) ? request.schema : undefined
     const anthropicBody: AnthropicMessagesRequest = {

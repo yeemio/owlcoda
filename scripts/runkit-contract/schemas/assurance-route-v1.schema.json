@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/assurance-route-v1.json",
+  "title": "OwlCoda RunKit Assurance Route V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "lane", "riskMode", "reasonCodes", "nextCommand", "authorizationGranted"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitAssuranceRouteV1" },
+    "status": { "const": "routed" },
+    "lane": { "enum": ["none", "quick", "formal"] },
+    "riskMode": { "enum": ["lightweight", "standard", "full"] },
+    "reasonCodes": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "nextCommand": { "oneOf": [{ "type": "null" }, { "enum": ["owlrunkit quick-verify", "owlrunkit formal start"] }] },
+    "authorizationGranted": { "const": false }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitAssuranceRouteV1",
+    "status": "routed",
+    "lane": "quick",
+    "riskMode": "lightweight",
+    "reasonCodes": ["single_bounded_verification"],
+    "nextCommand": "owlrunkit quick-verify",
+    "authorizationGranted": false
+  }]
+}

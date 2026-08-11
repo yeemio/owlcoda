@@ -244,6 +244,45 @@ test("verify preserves failed evidence and never finalizes a failed command", as
   }
 });
 
+test("verify preserves a non-accepted finalize result with its request binding", async () => {
+  const root = await setupFixture("owlcoda-finalize-attempt-");
+  try {
+    assert.equal((await start(root, "finalize-attempt", "W1", "uncovered/**")).status, "started");
+    await mkdir(path.join(root, "uncovered"), { recursive: true });
+    await writeFile(path.join(root, "uncovered/example.txt"), "candidate\n");
+    const result = await verify(
+      root,
+      "finalize-attempt",
+      "attempt-full-profile",
+      "process.stdout.write('snapshot passed\\n')",
+    );
+    assert.equal(result.status, "full_profile_required", JSON.stringify(result));
+    const artifactPath = path.join(
+      root,
+      ".owlcoda/runkit/executions/finalize-attempt",
+      "verification-requests/attempt-full-profile/finalize-result.json",
+    );
+    const artifact = JSON.parse(await readFile(artifactPath, "utf8"));
+    assert.equal(
+      artifact.schemaVersion,
+      "OwlCodaRunKitVerificationFinalizeAttemptV1",
+    );
+    assert.equal(artifact.runId, "finalize-attempt");
+    assert.equal(artifact.verificationId, "attempt-full-profile");
+    assert.equal(artifact.status, "rejected");
+    assert.equal(artifact.gateStatus, "full_profile_required");
+    assert.equal(artifact.result.profileImpact.decision, "full_profile_required");
+    assert.match(
+      artifact.finalizeRequestPath,
+      /verification-requests\/attempt-full-profile\/finalize-request\.json$/,
+    );
+    assert.match(artifact.finalizeRequestSha256, /^[a-f0-9]{64}$/);
+    assert.equal(artifact.authorizationGranted, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("finish derives the accepted gate, releases leases, and supports honest blocked closeout", async () => {
   const acceptedRoot = await setupFixture("owlcoda-finish-accepted-");
   try {
@@ -498,6 +537,13 @@ test("accepted finish cannot relabel an old snapshot with a fresh delivery finge
     const forgedReceipt = {
       ...lineage[0].receipt,
       sourceFingerprint: packet.sourceFingerprint.sha256,
+      sourceArtifact: {
+        ...lineage[0].receipt.sourceArtifact,
+        sha256: createHash("sha256")
+          .update(await readFile(packetPath))
+          .digest("hex"),
+        sourceFingerprint: packet.sourceFingerprint.sha256,
+      },
     };
     const forgedLineage = [{
       receiptSha256: receiptSha256(forgedReceipt),

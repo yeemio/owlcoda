@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/trust/attestation-ref-v1.schema.json",
+  "title": "OwlCoda Attestation Reference V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "receiptId",
+    "receiptSha256",
+    "coreIdentity"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "OwlCodaAttestationRefV1"
+    },
+    "receiptId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "receiptSha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "coreIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contractVersion",
+        "coreManifestSha256"
+      ],
+      "properties": {
+        "contractVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "coreManifestSha256": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    }
+  }
+}

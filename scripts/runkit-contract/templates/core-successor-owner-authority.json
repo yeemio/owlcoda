@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "OwlCodaRunKitOwnerMigrationAuthorityV2",
+  "authorityId": "replace-with-owner-authority-id",
+  "decision": "approved",
+  "scope": "migrate_declared_core_successor_fleet",
+  "planSha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "fromCoreSetSha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "toCoreManifestSha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "fleetManifestSha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "signerKeyId": "replace-with-owner-key-id",
+  "signatureAlgorithm": "ed25519",
+  "authorizationGranted": false,
+  "authoritySha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+}

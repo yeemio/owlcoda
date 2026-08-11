@@ -384,10 +384,14 @@ describe('import safety', () => {
     const mod = await import('../src/cli.js')
     const cliPath = join(import.meta.dirname, '..', 'src', 'cli.ts')
     const tempDir = mkdtempSync(join(tmpdir(), 'owlcoda-cli-'))
-    const symlinkPath = join(tempDir, 'owlcoda')
-    symlinkSync(cliPath, symlinkPath)
+    try {
+      const symlinkPath = join(tempDir, 'owlcoda')
+      symlinkSync(cliPath, symlinkPath)
 
-    expect(mod.isDirectCliEntry(pathToFileURL(cliPath).href, symlinkPath)).toBe(true)
+      expect(mod.isDirectCliEntry(pathToFileURL(cliPath).href, symlinkPath)).toBe(true)
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 
   it('isDirectCliEntry stays false for unrelated argv[1]', async () => {

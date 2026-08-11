@@ -97,8 +97,25 @@ export function safeRelativePath(value, label, { allowDot = false } = {}) {
 
 export function resolveExistingArtifact(workspaceRoot, value, label) {
   const relativePath = safeRelativePath(value, label);
-  const candidate = path.resolve(workspaceRoot, relativePath);
-  if (!withinRoot(workspaceRoot, candidate)) throw new Error(`${label} escapes the workspace.`);
+  const root = realpathSync(workspaceRoot);
+  const candidate = path.resolve(root, relativePath);
+  if (!withinRoot(root, candidate)) throw new Error(`${label} escapes the workspace.`);
+  let current = root;
+  const segments = relativePath.split("/");
+  for (const [index, segment] of segments.entries()) {
+    current = path.join(current, segment);
+    const stat = lstatSync(current);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`${label} must not traverse a symlink.`);
+    }
+    if (index < segments.length - 1 && !stat.isDirectory()) {
+      throw new Error(`${label} has a non-directory ancestor.`);
+    }
+    const resolved = realpathSync(current);
+    if (!withinRoot(root, resolved)) {
+      throw new Error(`${label} resolves outside the workspace.`);
+    }
+  }
   return realpathSync(candidate);
 }
 

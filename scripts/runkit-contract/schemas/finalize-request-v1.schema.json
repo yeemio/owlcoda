@@ -12,9 +12,120 @@
     "verificationContext": { "$ref": "verification-context-v1.schema.json" },
     "snapshotPaths": {
       "type": "array",
-      "minItems": 1,
       "uniqueItems": true,
       "items": { "type": "string", "minLength": 1 }
+    },
+    "supersedesReceiptSha256": { "$ref": "#/$defs/sha256" },
+    "reusedCommandReceipts": {
+      "type": "array",
+      "items": { "$ref": "verification-receipt-v2.schema.json#/$defs/commandReceipt" }
+    },
+    "repairControl": {
+      "$ref": "#/$defs/repairControl"
+    }
+  },
+  "allOf": [
+    {
+      "anyOf": [
+        {
+          "properties": {
+            "snapshotPaths": { "minItems": 1 }
+          }
+        },
+        {
+          "required": ["reusedCommandReceipts"],
+          "properties": {
+            "reusedCommandReceipts": { "minItems": 1 }
+          }
+        }
+      ]
+    },
+    {
+      "if": {
+        "required": ["supersedesReceiptSha256"]
+      },
+      "then": {
+        "required": ["repairControl"]
+      }
+    },
+    {
+      "if": {
+        "required": ["repairControl"]
+      },
+      "then": {
+        "required": ["supersedesReceiptSha256"]
+      }
+    },
+    {
+      "if": {
+        "required": ["reusedCommandReceipts"],
+        "properties": {
+          "reusedCommandReceipts": { "minItems": 1 }
+        }
+      },
+      "then": {
+        "required": ["supersedesReceiptSha256", "repairControl"]
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "repairControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repairPlanPath",
+        "repairPlanSha256",
+        "parentBindingMode",
+        "goalContractSha256",
+        "risk",
+        "profilesSha256",
+        "executableBindings"
+      ],
+      "properties": {
+        "repairPlanPath": { "type": "string", "minLength": 1 },
+        "repairPlanSha256": { "$ref": "#/$defs/sha256" },
+        "parentBindingMode": { "const": "receipt" },
+        "goalContractSha256": { "$ref": "#/$defs/sha256" },
+        "risk": { "$ref": "#/$defs/risk" },
+        "profilesSha256": { "$ref": "#/$defs/sha256" },
+        "executableBindings": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/executableBinding" }
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["riskMode", "riskCategories"],
+      "properties": {
+        "riskMode": { "enum": ["lightweight", "standard", "full"] },
+        "riskCategories": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "backtest",
+              "funds",
+              "migration",
+              "production",
+              "release"
+            ]
+          }
+        }
+      }
+    },
+    "executableBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commandId", "executable", "sha256"],
+      "properties": {
+        "commandId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+        "executable": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
     }
   }
 }

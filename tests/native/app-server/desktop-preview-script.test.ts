@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
-import { runCli as runRunKitCore } from '../../../scripts/runkit-contract/runkit-cli.mjs'
+import { runCli as runRunKitCore } from '../../../node_modules/owlrunkit/scripts/runkit-contract/runkit-cli.mjs'
 
 const execFileAsync = promisify(execFile)
 

@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/remote-deployment-stage-journal-v1.json",
+  "title": "OwlCoda RunKit Remote Deployment Stage Journal V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion"],
+  "properties": {
+    "schemaVersion": {
+      "enum": [
+        "OwlCodaRunKitRemoteDeploymentJournalBindingV1",
+        "OwlCodaRunKitRemoteStageInvocationBeforeV1",
+        "OwlCodaRunKitRemoteStageInvocationAfterV1",
+        "OwlCodaRunKitRemoteStageRecoveryV1"
+      ]
+    },
+    "deploymentId": { "type": "string", "minLength": 1 },
+    "deploymentLineageSha256": { "$ref": "#/$defs/hash" },
+    "remoteManifestSha256": { "$ref": "#/$defs/hash" },
+    "executeRequestSha256": { "$ref": "#/$defs/hash" },
+    "adapterIdentity": { "$ref": "#/$defs/adapter" },
+    "adapterIdentitySha256": { "$ref": "#/$defs/hash" },
+    "bindingSha256": { "$ref": "#/$defs/hash" },
+    "stage": { "$ref": "#/$defs/stage" },
+    "stageOrdinal": { "type": "integer", "minimum": 1, "maximum": 7 },
+    "operation": { "enum": ["execute", "reconcile"] },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "status": {
+      "enum": [
+        "invocation_started",
+        "state_proven_consistent"
+      ]
+    },
+    "outcome": { "enum": ["completed", "indeterminate"] },
+    "beforeJournalSha256": { "$ref": "#/$defs/hash" },
+    "executeBeforeJournalSha256": { "$ref": "#/$defs/hash" },
+    "reconciliationAfterJournalSha256": { "$ref": "#/$defs/hash" },
+    "recoveredByJournalSha256": { "$ref": "#/$defs/hash" },
+    "stageReceipt": { "type": "object" },
+    "authorizationGranted": { "const": false },
+    "journalSha256": { "$ref": "#/$defs/hash" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "schemaVersion": {
+            "const": "OwlCodaRunKitRemoteDeploymentJournalBindingV1"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "schemaVersion",
+          "deploymentId",
+          "deploymentLineageSha256",
+          "remoteManifestSha256",
+          "executeRequestSha256",
+          "adapterIdentity",
+          "adapterIdentitySha256",
+          "authorizationGranted",
+          "bindingSha256"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schemaVersion": {
+            "const": "OwlCodaRunKitRemoteStageInvocationBeforeV1"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "schemaVersion",
+          "bindingSha256",
+          "deploymentId",
+          "deploymentLineageSha256",
+          "remoteManifestSha256",
+          "executeRequestSha256",
+          "adapterIdentitySha256",
+          "stage",
+          "stageOrdinal",
+          "operation",
+          "attempt",
+          "status",
+          "authorizationGranted",
+          "journalSha256"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schemaVersion": {
+            "const": "OwlCodaRunKitRemoteStageInvocationAfterV1"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "schemaVersion",
+          "bindingSha256",
+          "beforeJournalSha256",
+          "stage",
+          "operation",
+          "attempt",
+          "outcome",
+          "stageReceipt",
+          "authorizationGranted",
+          "journalSha256"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "schemaVersion": {
+            "const": "OwlCodaRunKitRemoteStageRecoveryV1"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "schemaVersion",
+          "bindingSha256",
+          "stage",
+          "attempt",
+          "executeBeforeJournalSha256",
+          "reconciliationAfterJournalSha256",
+          "status",
+          "stageReceipt",
+          "authorizationGranted",
+          "journalSha256"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "stage": {
+      "enum": [
+        "identity_preflight",
+        "upload",
+        "verify_remote_hashes",
+        "install",
+        "service",
+        "proxy",
+        "smoke"
+      ]
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapterId", "version", "executable", "sha256"],
+      "properties": {
+        "adapterId": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "executable": { "type": "string", "pattern": "^/" },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schemaVersion": "OwlCodaRunKitRemoteDeploymentJournalBindingV1",
+      "deploymentId": "deployment-execute-001",
+      "deploymentLineageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "remoteManifestSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "executeRequestSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "adapterIdentity": {
+        "adapterId": "builtin-ssh-v1",
+        "version": "1.0.0",
+        "executable": "/opt/owlcoda/ssh-remote-adapter.mjs",
+        "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      },
+      "adapterIdentitySha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "authorizationGranted": false,
+      "bindingSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  ]
+}

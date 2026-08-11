@@ -91,13 +91,13 @@ async function writeStreamingResponse(res: http.ServerResponse, body: any): Prom
 
   if (bodyContains(body, 'slow-active')) {
     writeSseChunk(res, openAiChunk(body, { role: 'assistant', content: '' }))
-    await sleep(15)
+    await sleep(100)
     writeSseChunk(res, openAiChunk(body, { content: '{"artifact":"evidence-digest.v1",' }))
-    await sleep(20)
+    await sleep(100)
     writeSseChunk(res, openAiChunk(body, { content: '"summary":"Slow streaming digest",' }))
-    await sleep(20)
+    await sleep(100)
     writeSseChunk(res, openAiChunk(body, { content: '"confidence":0.92}' }))
-    await sleep(20)
+    await sleep(100)
     writeSseChunk(res, openAiChunk(body, {}, 'stop', {
       prompt_tokens: 12,
       completion_tokens: 8,
@@ -472,15 +472,15 @@ describe('/v1/structured-output', () => {
         preset: 'evidence-digest.v1',
         user: 'slow-active structured output stream',
         maxTokens: 500,
-        idleTimeoutMs: 30,
-        hardTimeoutMs: 1000,
+        idleTimeoutMs: 300,
+        hardTimeoutMs: 2000,
       }),
     })
     const elapsedMs = Date.now() - startedAt
 
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(elapsedMs).toBeGreaterThan(30)
+    expect(elapsedMs).toBeGreaterThan(300)
     expect(body.ok).toBe(true)
     expect(body.consumerReady).toBe(true)
     expect(body.artifact).toMatchObject({

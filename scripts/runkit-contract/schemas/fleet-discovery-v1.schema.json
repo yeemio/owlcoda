@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/fleet-discovery-v1.json",
+  "title": "OwlCoda RunKit Fleet Discovery V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "source", "coverageRoots", "unreachableRoots", "workspaceRoots", "classifications", "issues", "complete", "frozenManifestSha256", "authorizationGranted"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitFleetDiscoveryV1" },
+    "source": { "enum": ["fleet_registry", "fleet_registry_membership", "fleet_roots", "fleet_manifest", "explicit_workspaces"] },
+    "manifestPath": { "type": "string", "minLength": 1 },
+    "registryPath": { "type": "string", "minLength": 1 },
+    "registrySha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "coverageRoots": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "unreachableRoots": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "workspaceRoots": { "type": "array", "maxItems": 256, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "classifications": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["active", "retired", "excluded", "invalid"],
+      "properties": {
+        "active": { "type": "array", "maxItems": 256, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "retired": { "type": "array", "maxItems": 256, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "excluded": { "type": "array", "maxItems": 256, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "invalid": { "type": "array", "maxItems": 256, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "path", "coverageRoot"],
+        "properties": {
+          "code": { "type": "string", "minLength": 1 },
+          "path": { "type": "string", "minLength": 1 },
+          "coverageRoot": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "complete": { "type": "boolean" },
+    "frozenManifestSha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "authorizationGranted": { "const": false }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitFleetDiscoveryV1",
+    "source": "fleet_roots",
+    "coverageRoots": ["/absolute/path/to/fleet"],
+    "unreachableRoots": [],
+    "workspaceRoots": ["/absolute/path/to/fleet/project"],
+    "classifications": {
+      "active": ["/absolute/path/to/fleet/project"],
+      "retired": [],
+      "excluded": [],
+      "invalid": []
+    },
+    "issues": [],
+    "complete": true,
+    "frozenManifestSha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "authorizationGranted": false
+  }]
+}

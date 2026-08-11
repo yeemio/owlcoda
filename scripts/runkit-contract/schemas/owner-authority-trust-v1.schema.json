@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/owner-authority-trust-v1.json",
+  "title": "OwlCoda RunKit Owner Authority Trust V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "keys"],
+  "properties": {
+    "schemaVersion": {
+      "const": "OwlCodaRunKitOwnerAuthorityTrustV1"
+    },
+    "keys": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "keyId",
+          "algorithm",
+          "publicKeyPem",
+          "publicKeySha256",
+          "purposes",
+          "status"
+        ],
+        "properties": {
+          "keyId": { "$ref": "#/$defs/id" },
+          "algorithm": { "const": "ed25519" },
+          "publicKeyPem": {
+            "type": "string",
+            "pattern": "^-----BEGIN PUBLIC KEY-----"
+          },
+          "publicKeySha256": { "$ref": "#/$defs/hash" },
+          "purposes": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": { "$ref": "#/$defs/id" }
+          },
+          "status": { "const": "active" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^sha256:[a-f0-9]{64}$"
+    }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitOwnerAuthorityTrustV1",
+    "keys": [{
+      "keyId": "owner-key-001",
+      "algorithm": "ed25519",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n-----END PUBLIC KEY-----\n",
+      "publicKeySha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "purposes": ["core_successor", "remote_deployment"],
+      "status": "active"
+    }]
+  }]
+}

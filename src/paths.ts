@@ -57,6 +57,10 @@ export function getOwlcodaPidPath(): string {
   return join(getOwlcodaDir(), 'owlcoda.pid')
 }
 
+export function getOwlcodaDaemonStartLockPath(): string {
+  return join(getOwlcodaDir(), 'daemon-start.lock')
+}
+
 export function getOwlcodaRuntimeMetaPath(): string {
   return join(getOwlcodaDir(), 'runtime.json')
 }

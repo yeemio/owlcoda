@@ -4,6 +4,7 @@ import type {
   StructuredOutputExecutionCounts,
   StructuredOutputExecutionReceipt,
 } from './structured-output-execution-economics.js'
+import type { RuntimeExecutionResult } from './native/runtime-execution-control/types.js'
 
 export type BuiltinStructuredOutputPreset =
   | 'evidence-digest.v1'
@@ -68,6 +69,8 @@ export const STRUCTURED_OUTPUT_FAILURE_REASONS = [
   'model_call_failed',
   'capability_json_unsupported',
   'capability_gate_failed',
+  'aborted',
+  'runtime_execution_failed',
   'policy_violation',
   'failed_fallback',
   'missing_required_artifact',
@@ -213,6 +216,8 @@ export interface StructuredOutputRequest {
   executionBudget?: StructuredOutputExecutionBudget
   idempotencyKey?: string
   intentionalRepeat?: boolean
+  signal?: AbortSignal
+  executorKind?: 'runtime-driver'
 }
 
 export interface StructuredOutputExecutorRequest extends StructuredOutputRequest {
@@ -220,6 +225,7 @@ export interface StructuredOutputExecutorRequest extends StructuredOutputRequest
   system: string
   maxTokens: number
   onOutputDelta?: (delta: StructuredOutputDelta) => void
+  onRuntimeExecution?: (result: RuntimeExecutionResult) => void
 }
 
 export interface StructuredOutputModelResponse {
@@ -231,6 +237,7 @@ export interface StructuredOutputModelResponse {
   durationMs?: number
   streamingMode?: 'streaming' | 'non_streaming'
   streamDeltaSource?: 'provider_sse' | 'translated_sse' | 'none'
+  runtimeExecution?: RuntimeExecutionResult
 }
 
 export type StructuredOutputExecutor = (
@@ -263,6 +270,7 @@ export interface StructuredOutputAttempt {
   partialText?: string
   streamingMode?: 'streaming' | 'non_streaming'
   streamDeltaSource?: 'provider_sse' | 'translated_sse' | 'none'
+  runtimeExecution?: RuntimeExecutionResult
 }
 
 export type ArtifactCompletenessValidationStatus = 'pass' | 'warn' | 'fail' | 'unknown'
@@ -353,6 +361,7 @@ export interface StructuredOutputResponse {
     replayed: boolean
     namespace: 'primary' | 'rerun'
   }
+  runtimeExecution?: RuntimeExecutionResult
 }
 
 export const STRUCTURED_OUTPUT_PRESETS: Record<BuiltinStructuredOutputPreset, StructuredOutputPresetContract> = {
@@ -927,7 +936,10 @@ function parseOrExtractJsonObject(text: string): Record<string, unknown> | null 
 }
 
 function sanitizeJsonCandidate(candidate: string): string {
-  return candidate.replace(/,\s*([}\]])/gu, '$1')
+  return candidate
+    .replace(/(^|[\[{,:])(\s*)[“”](?=\S)/gu, '$1$2"')
+    .replace(/[“”](\s*)(?=[}\],:])/gu, '"$1')
+    .replace(/,\s*([}\]])/gu, '$1')
 }
 
 function closePartialJsonObject(text: string): string | null {
@@ -972,14 +984,15 @@ function closePartialJsonObject(text: string): string | null {
 }
 
 function repairJsonObject(text: string): Record<string, unknown> | null {
-  const balanced = findBalancedJsonObject(text)
+  const sanitizedText = sanitizeJsonCandidate(text)
+  const balanced = findBalancedJsonObject(sanitizedText)
   if (balanced) {
     const sanitized = sanitizeJsonCandidate(balanced)
     const parsed = parseJsonObject(sanitized)
     if (parsed) return parsed
   }
 
-  const repaired = closePartialJsonObject(text)
+  const repaired = closePartialJsonObject(sanitizedText)
   return repaired ? parseJsonObject(sanitizeJsonCandidate(repaired)) : null
 }
 
@@ -1169,6 +1182,7 @@ function attempt(args: {
   partialText?: string
   streamingMode?: 'streaming' | 'non_streaming'
   streamDeltaSource?: 'provider_sse' | 'translated_sse' | 'none'
+  runtimeExecution?: RuntimeExecutionResult
 }): StructuredOutputAttempt {
   return {
     label: args.label,
@@ -1190,6 +1204,7 @@ function attempt(args: {
     ...(args.partialText ? { partialText: args.partialText } : {}),
     ...(args.streamingMode ? { streamingMode: args.streamingMode } : {}),
     ...(args.streamDeltaSource ? { streamDeltaSource: args.streamDeltaSource } : {}),
+    ...(args.runtimeExecution ? { runtimeExecution: args.runtimeExecution } : {}),
   }
 }
 
@@ -1211,11 +1226,13 @@ interface GovernanceTelemetry {
   partialText: string
   partialThinkingText?: string
   terminationKind: StructuredOutputTerminationKind
+  runtimeExecution?: RuntimeExecutionResult
 }
 
 type GovernedExecutorResult =
   | { kind: 'completed'; response: StructuredOutputModelResponse; telemetry: GovernanceTelemetry }
   | { kind: 'timeout'; reason: 'silent_timeout' | 'hard_timeout'; telemetry: GovernanceTelemetry }
+  | { kind: 'aborted'; telemetry: GovernanceTelemetry }
   | { kind: 'error'; error: unknown; telemetry: GovernanceTelemetry }
 
 function clampTimeoutMs(value: unknown): number | undefined {
@@ -1239,13 +1256,29 @@ async function runExecutorWithActivityGovernance(args: {
   let settled = false
   let idleTimer: ReturnType<typeof setTimeout> | undefined
   let hardTimer: ReturnType<typeof setTimeout> | undefined
+  let abortGraceTimer: ReturnType<typeof setTimeout> | undefined
   let settle: (result: GovernedExecutorResult) => void = () => {}
+  let externalAbortListener: (() => void) | undefined
+  const controller = new AbortController()
+  let resolveRuntimeExecution: () => void = () => undefined
+  const runtimeExecutionAvailable = new Promise<void>(resolve => {
+    resolveRuntimeExecution = resolve
+  })
+  const governed = new Promise<GovernedExecutorResult>(resolve => {
+    settle = resolve
+  })
 
   const clearTimers = () => {
     if (idleTimer) clearTimeout(idleTimer)
     if (hardTimer) clearTimeout(hardTimer)
+    if (abortGraceTimer) clearTimeout(abortGraceTimer)
     idleTimer = undefined
     hardTimer = undefined
+    abortGraceTimer = undefined
+    if (externalAbortListener && args.request.signal) {
+      args.request.signal.removeEventListener('abort', externalAbortListener)
+    }
+    externalAbortListener = undefined
   }
 
   const resolveOnce = (result: GovernedExecutorResult) => {
@@ -1253,6 +1286,30 @@ async function runExecutorWithActivityGovernance(args: {
     settled = true
     clearTimers()
     settle(result)
+  }
+
+  const resolveAfterRuntimeAbort = (result: GovernedExecutorResult) => {
+    if (args.request.executorKind !== 'runtime-driver') {
+      resolveOnce(result)
+      return
+    }
+    void Promise.race([
+      runtimeExecutionAvailable,
+      new Promise<void>(resolve => {
+        abortGraceTimer = setTimeout(resolve, 1_500)
+        abortGraceTimer.unref()
+      }),
+    ]).then(() => resolveOnce(result))
+  }
+
+  const abortAndResolve = (result: GovernedExecutorResult, reason: unknown) => {
+    if (args.request.executorKind !== 'runtime-driver') {
+      resolveOnce(result)
+      if (!controller.signal.aborted) controller.abort(reason)
+      return
+    }
+    if (!controller.signal.aborted) controller.abort(reason)
+    resolveAfterRuntimeAbort(result)
   }
 
   const refreshIdleTimer = () => {
@@ -1263,7 +1320,7 @@ async function runExecutorWithActivityGovernance(args: {
       const idleSince = telemetry.lastOutputAtMs ?? telemetry.startedAtMs
       telemetry.idleMs = Math.max(0, now - idleSince)
       telemetry.terminationKind = 'silent_timeout'
-      resolveOnce({ kind: 'timeout', reason: 'silent_timeout', telemetry })
+      abortAndResolve({ kind: 'timeout', reason: 'silent_timeout', telemetry }, 'silent_timeout')
     }, idleTimeoutMs)
   }
 
@@ -1281,6 +1338,18 @@ async function runExecutorWithActivityGovernance(args: {
     refreshIdleTimer()
   }
 
+  externalAbortListener = () => {
+    const now = Date.now()
+    const idleSince = telemetry.lastOutputAtMs ?? telemetry.startedAtMs
+    telemetry.idleMs = Math.max(0, now - idleSince)
+    telemetry.terminationKind = 'aborted'
+    abortAndResolve({ kind: 'aborted', telemetry }, args.request.signal?.reason ?? 'aborted')
+  }
+  if (args.request.signal) {
+    if (args.request.signal.aborted) externalAbortListener()
+    else args.request.signal.addEventListener('abort', externalAbortListener, { once: true })
+  }
+
   refreshIdleTimer()
   if (hardTimeoutMs) {
     hardTimer = setTimeout(() => {
@@ -1288,16 +1357,29 @@ async function runExecutorWithActivityGovernance(args: {
       const idleSince = telemetry.lastOutputAtMs ?? telemetry.startedAtMs
       telemetry.idleMs = Math.max(0, now - idleSince)
       telemetry.terminationKind = 'hard_timeout'
-      resolveOnce({ kind: 'timeout', reason: 'hard_timeout', telemetry })
+      abortAndResolve({ kind: 'timeout', reason: 'hard_timeout', telemetry }, 'hard_timeout')
     }, hardTimeoutMs)
+    hardTimer.unref()
   }
 
   const executorPromise: Promise<GovernedExecutorResult> = args.executor({
     ...args.executorRequest,
     onOutputDelta,
+    signal: controller.signal,
+    onRuntimeExecution: result => {
+      telemetry.runtimeExecution = result
+      resolveRuntimeExecution()
+      args.executorRequest.onRuntimeExecution?.(result)
+    },
   })
     .then(response => {
-      telemetry.terminationKind = 'completed'
+      telemetry.runtimeExecution = response.runtimeExecution ?? telemetry.runtimeExecution
+      if (telemetry.runtimeExecution) resolveRuntimeExecution()
+      telemetry.terminationKind = response.runtimeExecution?.status === 'cancelled'
+        ? 'aborted'
+        : response.runtimeExecution?.status === 'failed'
+          ? 'provider_error'
+          : 'completed'
       telemetry.idleMs = telemetry.lastOutputAtMs ? Math.max(0, Date.now() - telemetry.lastOutputAtMs) : undefined
       return { kind: 'completed' as const, response, telemetry }
     })
@@ -1308,10 +1390,6 @@ async function runExecutorWithActivityGovernance(args: {
       telemetry.idleMs = Math.max(0, now - idleSince)
       return { kind: 'error', error, telemetry }
     })
-
-  const governed = new Promise<GovernedExecutorResult>(resolve => {
-    settle = resolve
-  })
 
   try {
     return await Promise.race([governed, executorPromise])
@@ -1404,10 +1482,11 @@ function providerFromModel(model: string): string {
 
 function modelResponseAttemptFields(
   modelResponse: StructuredOutputModelResponse,
-): Pick<StructuredOutputAttempt, 'streamingMode' | 'streamDeltaSource'> {
+): Pick<StructuredOutputAttempt, 'streamingMode' | 'streamDeltaSource' | 'runtimeExecution'> {
   return {
     ...(modelResponse.streamingMode ? { streamingMode: modelResponse.streamingMode } : {}),
     ...(modelResponse.streamDeltaSource ? { streamDeltaSource: modelResponse.streamDeltaSource } : {}),
+    ...(modelResponse.runtimeExecution ? { runtimeExecution: modelResponse.runtimeExecution } : {}),
   }
 }
 
@@ -1578,6 +1657,7 @@ function finalizeStructuredOutputResponse(args: {
   idleMs?: number
 }): StructuredOutputResponse {
   const terminationKind = args.terminationKind ?? 'completed'
+  const runtimeExecution = args.attempts.find(item => item.runtimeExecution)?.runtimeExecution
   const localeErrors = args.fallbackUsed ? [] : localeValidationErrors(args.artifact, forcedLocale(args.request))
   const validationErrors = uniqueStrings([...args.validationErrors, ...localeErrors])
   const localeMismatch = localeErrors.length > 0
@@ -1623,6 +1703,7 @@ function finalizeStructuredOutputResponse(args: {
   })
   const attempts = args.attempts.map(item => ({
     ...item,
+    ...(runtimeExecution && !item.runtimeExecution ? { runtimeExecution } : {}),
     ...(item.label === 'fallback' && unusableReason && !item.failureReason ? { failureReason: unusableReason } : {}),
     providerMatrixProvenance: args.request.providerMatrixProvenance,
     terminationKind: item.terminationKind ?? terminationKind,
@@ -1641,6 +1722,7 @@ function finalizeStructuredOutputResponse(args: {
     args.artifact['terminationKind'] = terminationKind
     args.artifact['repairUsed'] = args.repairCount > 0
     args.artifact['fallbackUsed'] = true
+    if (runtimeExecution) args.artifact['runtimeExecution'] = runtimeExecution
   }
   return {
     ok: usable,
@@ -1676,6 +1758,7 @@ function finalizeStructuredOutputResponse(args: {
     outputTokens: args.outputTokens,
     durationMs: args.durationMs,
     ...args.capabilityGatePayload,
+    ...(runtimeExecution ? { runtimeExecution } : {}),
   }
 }
 
@@ -1802,6 +1885,71 @@ export async function runModelOutputHarness(
       },
     })
     telemetry = governed.telemetry
+    if (governed.kind === 'aborted') {
+      const durationMs = Date.now() - start
+      const rawText = governed.telemetry.partialText
+      const rawThinkingText = governed.telemetry.partialThinkingText
+      const fallbackArtifact = failedFallbackArtifact({
+        request: effectiveRequest,
+        preset,
+        failureReason: 'aborted',
+        stopReason: 'aborted',
+        inputTokens: 0,
+        outputTokens: 0,
+        repairCount: 0,
+        salvageUsed: false,
+        rawText,
+        rawThinkingText,
+        terminationKind: 'aborted',
+      })
+      attempts.push(attempt({
+        label: 'primary',
+        model: effectiveRequest.model,
+        stopReason: 'aborted',
+        parsed: false,
+        schemaValid: false,
+        durationMs,
+        error: 'aborted',
+        terminationKind: 'aborted',
+        runtimeExecution: governed.telemetry.runtimeExecution,
+        ...providerControls,
+      }))
+      attempts.push(attempt({
+        label: 'fallback',
+        model: effectiveRequest.model,
+        stopReason: 'aborted',
+        parsed: false,
+        schemaValid: false,
+        error: 'aborted',
+        failureReason: 'aborted',
+        terminationKind: 'aborted',
+        runtimeExecution: governed.telemetry.runtimeExecution,
+        ...providerControls,
+      }))
+      return finalizeStructuredOutputResponse({
+        request: effectiveRequest,
+        preset,
+        artifact: fallbackArtifact,
+        rawText,
+        ...(rawThinkingText ? { rawThinkingText } : {}),
+        parsed: false,
+        schemaValid: false,
+        validationErrors: ['aborted'],
+        attempts,
+        repairCount: 0,
+        salvageUsed: false,
+        fallbackUsed: true,
+        stopReason: 'aborted',
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs,
+        capabilityGatePayload,
+        failureReason: 'aborted',
+        terminationKind: 'aborted',
+        lastOutputAt: governed.telemetry.lastOutputAt,
+        idleMs: governed.telemetry.idleMs,
+      })
+    }
     if (governed.kind === 'timeout') {
       const durationMs = Date.now() - start
       const rawText = governed.telemetry.partialText
@@ -1831,6 +1979,7 @@ export async function runModelOutputHarness(
         ...(governed.telemetry.lastOutputAt ? { lastOutputAt: governed.telemetry.lastOutputAt } : {}),
         ...(governed.telemetry.idleMs !== undefined ? { idleMs: governed.telemetry.idleMs } : {}),
         ...(rawText ? { partialText: rawText } : {}),
+        runtimeExecution: governed.telemetry.runtimeExecution,
         ...providerControls,
       }))
       attempts.push(attempt({
@@ -1844,6 +1993,7 @@ export async function runModelOutputHarness(
         ...(governed.telemetry.lastOutputAt ? { lastOutputAt: governed.telemetry.lastOutputAt } : {}),
         ...(governed.telemetry.idleMs !== undefined ? { idleMs: governed.telemetry.idleMs } : {}),
         ...(rawText ? { partialText: rawText } : {}),
+        runtimeExecution: governed.telemetry.runtimeExecution,
         ...providerControls,
       }))
       return finalizeStructuredOutputResponse({
@@ -2095,6 +2245,12 @@ export async function runModelOutputHarness(
     })
   }
 
+  if (modelResponse.runtimeExecution && modelResponse.runtimeExecution.status !== 'completed') {
+    return fallback('runtime_execution_failed', [
+      modelResponse.runtimeExecution.failure?.code ?? 'runtime_execution_failed',
+    ])
+  }
+
   if (!rawText.trim()) {
     if (rawThinkingText?.trim()) {
       const parsedThinking = parseOrExtractJsonObject(rawThinkingText)
@@ -2139,6 +2295,8 @@ export async function runModelOutputHarness(
     return fallback(rawThinkingText ? 'empty_text_with_thinking' : 'empty_text')
   }
 
+  const repairEnabled = effectiveRequest.repairPolicy?.enabled !== false
+  const repairAttempts = effectiveRequest.repairPolicy?.maxAttempts ?? 1
   const parsed = parseOrExtractJsonObject(rawText)
   if (parsed) {
     const validation = validateArtifact(parsed, effectiveRequest.schema, rawText, effectiveRequest.policy)
@@ -2174,11 +2332,49 @@ export async function runModelOutputHarness(
         idleMs: telemetry?.idleMs,
       })
     }
+    if (repairEnabled && repairAttempts > 0) {
+      const repaired = repairJsonObject(rawText)
+      if (repaired && stableJson(repaired) !== stableJson(parsed)) {
+        repairCount = 1
+        const repairedValidation = validateArtifact(repaired, effectiveRequest.schema, rawText, effectiveRequest.policy)
+        attempts.push(attempt({
+          label: 'repair',
+          model: effectiveRequest.model,
+          stopReason,
+          parsed: true,
+          schemaValid: repairedValidation.schemaValid,
+          ...(repairedValidation.schemaValid ? {} : { error: repairedValidation.validationErrors.join('; ') }),
+        }))
+        if (repairedValidation.schemaValid) {
+          return finalizeStructuredOutputResponse({
+            request: effectiveRequest,
+            preset,
+            artifact: repairedValidation.artifact,
+            rawText,
+            ...(rawThinkingText ? { rawThinkingText } : {}),
+            parsed: true,
+            schemaValid: true,
+            validationErrors: [],
+            attempts,
+            repairCount,
+            salvageUsed,
+            fallbackUsed: false,
+            stopReason,
+            inputTokens,
+            outputTokens,
+            durationMs: totalDurationMs,
+            capabilityGatePayload,
+            terminationKind,
+            lastOutputAt: telemetry?.lastOutputAt,
+            idleMs: telemetry?.idleMs,
+          })
+        }
+        return fallback(repairedValidation.failureReason ?? 'schema_validation_failed', repairedValidation.validationErrors)
+      }
+    }
     return fallback(validation.failureReason ?? 'schema_validation_failed', validation.validationErrors)
   }
 
-  const repairEnabled = effectiveRequest.repairPolicy?.enabled !== false
-  const repairAttempts = effectiveRequest.repairPolicy?.maxAttempts ?? 1
   if (repairEnabled && repairAttempts > 0) {
     const repaired = repairJsonObject(rawText)
     if (repaired) {

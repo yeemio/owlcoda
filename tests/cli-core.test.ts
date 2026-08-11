@@ -88,7 +88,7 @@ describe('parseArgs', () => {
     'server', 'start', 'stop', 'status', 'clients', 'run', 'serve',
     'doctor', 'ui', 'sessions', 'init', 'config', 'logs', 'completions',
     'models', 'benchmark', 'export', 'inspect', 'validate',
-    'health', 'audit', 'cache', 'skills', 'training', 'workflow', 'instructions', 'resume', 'cutover-status', 'shadow-status',
+    'health', 'audit', 'cache', 'skills', 'training', 'workflow', 'instructions', 'runkit', 'attest', 'resolve', 'resume', 'cutover-status', 'shadow-status',
   ]
 
   for (const cmd of commands) {
@@ -231,10 +231,133 @@ describe('parseArgs', () => {
     expect(result.passthroughArgs).toEqual(['inspect', '--cwd', '/tmp/project'])
   })
 
+  it('preserves Quick exact argv after the runkit command without top-level flag parsing', () => {
+    const result = parse(['runkit', 'verify', '--json', '--', process.execPath, '-e', '', 'two words', '$HOME'])
+    expect(result.command).toBe('runkit')
+    expect(result.jsonOutput).toBe(false)
+    expect(result.passthroughArgs).toEqual([
+      'verify', '--json', '--', process.execPath, '-e', '', 'two words', '$HOME',
+    ])
+  })
+
   it('passes top-level workflow resume args', () => {
     const result = parse(['resume', '--run-id', 'workflow-run-1'])
     expect(result.command).toBe('resume')
     expect(result.passthroughArgs).toEqual(['--run-id', 'workflow-run-1'])
+  })
+
+  it('preserves all RunKit arguments after the public command boundary', () => {
+    const result = parse([
+      'runkit',
+      'verify',
+      '--json',
+      '--',
+      'node',
+      '-e',
+      '',
+      'with spaces',
+      '$()',
+    ])
+    expect(result.command).toBe('runkit')
+    expect(result.passthroughArgs).toEqual([
+      'verify',
+      '--json',
+      '--',
+      'node',
+      '-e',
+      '',
+      'with spaces',
+      '$()',
+    ])
+  })
+
+  it('preserves deterministic repair arguments without treating them as top-level authority', () => {
+    const result = parse([
+      'runkit',
+      'repair',
+      '--run-id',
+      'formal-run-001',
+      '--json',
+    ])
+    expect(result.command).toBe('runkit')
+    expect(result.jsonOutput).toBe(false)
+    expect(result.passthroughArgs).toEqual([
+      'repair',
+      '--run-id',
+      'formal-run-001',
+      '--json',
+    ])
+  })
+
+  it('preserves offline store export and import arguments', () => {
+    const exported = parse([
+      'runkit',
+      'store',
+      'export',
+      '--receipt',
+      'receipt.json',
+      '--output',
+      'receipt.bundle.json',
+      '--json',
+    ])
+    expect(exported.command).toBe('runkit')
+    expect(exported.passthroughArgs).toEqual([
+      'store',
+      'export',
+      '--receipt',
+      'receipt.json',
+      '--output',
+      'receipt.bundle.json',
+      '--json',
+    ])
+
+    const imported = parse([
+      'runkit',
+      'store',
+      'import',
+      '--bundle',
+      'receipt.bundle.json',
+      '--store',
+      'offline-store',
+      '--json',
+    ])
+    expect(imported.command).toBe('runkit')
+    expect(imported.passthroughArgs).toEqual([
+      'store',
+      'import',
+      '--bundle',
+      'receipt.bundle.json',
+      '--store',
+      'offline-store',
+      '--json',
+    ])
+  })
+
+  it('preserves minimum attest arguments for the private command port', () => {
+    const result = parse(['attest', 'receipt.json', '--workspace', '.', '--json'])
+    expect(result.command).toBe('attest')
+    expect(result.passthroughArgs).toEqual(['receipt.json', '--workspace', '.', '--json'])
+  })
+
+  it('preserves resolve reference and explicit local stores', () => {
+    const result = parse([
+      'resolve',
+      'attestation-ref.json',
+      '--store',
+      '../producer/.owlcoda/runkit',
+      '--store',
+      '/tmp/secondary-store',
+      '--json',
+    ])
+    expect(result.command).toBe('resolve')
+    expect(result.passthroughArgs).toEqual([
+      'attestation-ref.json',
+      '--store',
+      '../producer/.owlcoda/runkit',
+      '--store',
+      '/tmp/secondary-store',
+      '--json',
+    ])
   })
 
   // ─── -- separator ───
@@ -269,6 +392,23 @@ describe('parseArgs', () => {
 })
 
 describe('printHelp', () => {
+  it('keeps Quick help self-contained while giving repair its own bounded contract', async () => {
+    const {
+      RUNKIT_QUICK_HELP,
+      RUNKIT_REPAIR_HELP,
+      RUNKIT_STORE_HELP,
+    } = await import('../src/native/runkit-command-port.js')
+    expect(RUNKIT_QUICK_HELP).toContain('owlcoda runkit verify -- <executable> [args...]')
+    expect(RUNKIT_QUICK_HELP).not.toContain('run-id')
+    expect(RUNKIT_QUICK_HELP).not.toContain('Deterministic Repair')
+    expect(RUNKIT_REPAIR_HELP).toContain('owlcoda runkit repair --run-id <run-id>')
+    expect(RUNKIT_REPAIR_HELP).toContain('authorization: false')
+    expect(RUNKIT_REPAIR_HELP).toContain('does not sign')
+    expect(RUNKIT_STORE_HELP).toContain('owlcoda runkit store export')
+    expect(RUNKIT_STORE_HELP).toContain('owlcoda runkit store import')
+    expect(RUNKIT_STORE_HELP).toContain('network requests: 0')
+  })
+
   it('prints help text to stderr', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     printHelp()
@@ -280,6 +420,11 @@ describe('printHelp', () => {
     expect(output).toContain('owlcoda clients')
     expect(output).toContain('owlcoda ui')
     expect(output).toContain('owlcoda admin')
+    expect(output).toContain('owlcoda runkit verify --help')
+    expect(output).toContain('owlcoda runkit repair --run-id')
+    expect(output).toContain('owlcoda runkit store --help')
+    expect(output).toContain('owlcoda attest')
+    expect(output).toContain('owlcoda resolve')
     expect(output).toContain('--print-url')
     expect(output).toContain('--route')
     expect(output).toContain('--select')

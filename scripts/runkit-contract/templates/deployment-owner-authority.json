@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "OwlCodaRunKitOwnerDeploymentAuthorityV2",
+  "authorityId": "replace-with-owner-authority-id",
+  "decision": "approved",
+  "scope": "execute_exact_remote_deployment",
+  "executeRunId": "replace-with-execute-run-id",
+  "prepareReceiptSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "targetSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "artifactSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "remoteManifestFileSha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "remoteDeploymentIntentSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "ownerDecisionId": "replace-with-owner-decision-id",
+  "ownerDecisionSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+  "signerKeyId": "replace-with-owner-key-id",
+  "signatureAlgorithm": "ed25519",
+  "permissions": {
+    "deploy": true,
+    "destructive": false
+  },
+  "authorizationGranted": false,
+  "authoritySha256": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+  "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+}

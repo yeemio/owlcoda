@@ -5,6 +5,18 @@ import { listSessions } from '../../src/native/session.js'
 import { createConversation } from '../../src/native/conversation.js'
 import { UsageTracker } from '../../src/native/usage.js'
 import { stripAnsi } from '../../src/native/tui/colors.js'
+import { installIsolatedOwlCodaHome } from './isolated-owlcoda-home.js'
+
+let restoreOwlCodaHome: (() => void) | undefined
+
+beforeEach(() => {
+  restoreOwlCodaHome = installIsolatedOwlCodaHome('owlcoda-onboarding-test-')
+})
+
+afterEach(() => {
+  restoreOwlCodaHome?.()
+  restoreOwlCodaHome = undefined
+})
 
 // ─── First-run detection (Gate 4.7) ──────────────────────────
 

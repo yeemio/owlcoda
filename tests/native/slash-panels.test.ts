@@ -3,18 +3,23 @@ import { createConversation } from '../../src/native/conversation.js'
 import { handleSlashCommand } from '../../src/native/repl.js'
 import { UsageTracker } from '../../src/native/usage.js'
 import { stripAnsi } from '../../src/native/tui/colors.js'
+import { installIsolatedOwlCodaHome } from './isolated-owlcoda-home.js'
 
 describe('slash command panels', () => {
   let logSpy: ReturnType<typeof vi.spyOn>
   let usage: UsageTracker
+  let restoreOwlCodaHome: (() => void) | undefined
 
   beforeEach(() => {
+    restoreOwlCodaHome = installIsolatedOwlCodaHome('owlcoda-slash-panels-test-')
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     usage = new UsageTracker()
   })
 
   afterEach(() => {
     logSpy.mockRestore()
+    restoreOwlCodaHome?.()
+    restoreOwlCodaHome = undefined
   })
 
   function output(): string {

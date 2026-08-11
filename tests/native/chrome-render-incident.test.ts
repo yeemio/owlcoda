@@ -62,4 +62,27 @@ describe('render incident capture', () => {
     process.env['OWLCODA_HOME'] = '/dev/null/nope'
     expect(() => dumpRenderIncident(new Error('c'))).not.toThrow()
   })
+
+  it('persists structured fault kind, sequence, frame, and recovery metadata', () => {
+    const path = dumpRenderIncident(new Error('structured boom'), {
+      faultKind: 'recoverable',
+      sequence: 9,
+      frame: { renderSequence: 4, frameSequence: 8, phase: 'render' },
+      rendererState: 'healthy',
+      recovery: 'repaint_suppressed_limit',
+      componentStack: ' at Demo',
+    })
+
+    const payload = JSON.parse(readFileSync(path!, 'utf8'))
+    expect(payload).toMatchObject({
+      schemaVersion: 1,
+      faultKind: 'recoverable',
+      sequence: 9,
+      frame: { renderSequence: 4, frameSequence: 8, phase: 'render' },
+      rendererState: 'healthy',
+      recovery: 'repaint_suppressed_limit',
+      componentStack: ' at Demo',
+      errorDetails: { name: 'Error', message: 'structured boom' },
+    })
+  })
 })

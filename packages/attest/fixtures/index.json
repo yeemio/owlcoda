@@ -1,0 +1,90 @@
+{
+  "schemaVersion": "OwlCodaRunKitPublicVerifierFixtureIndexV1",
+  "fixtures": [
+    {
+      "id": "good-accepted-replacement-chain",
+      "file": "good/accepted-replacement-chain.json",
+      "expectedValid": true,
+      "expectedSchemaValid": true,
+      "expectedIssueCodes": []
+    },
+    {
+      "id": "good-blocked-single-leaf",
+      "file": "good/blocked-single-leaf.json",
+      "expectedValid": true,
+      "expectedSchemaValid": true,
+      "expectedIssueCodes": []
+    },
+    {
+      "id": "bad-root-shape",
+      "file": "bad/root-shape-extra-property.json",
+      "expectedValid": false,
+      "expectedSchemaValid": false,
+      "expectedIssueCodes": ["PUBLIC_BUNDLE_SHAPE_INVALID"]
+    },
+    {
+      "id": "bad-source-fingerprint",
+      "file": "bad/source-fingerprint-mismatch.json",
+      "expectedValid": false,
+      "expectedSchemaValid": true,
+      "expectedIssueCodes": ["SOURCE_FINGERPRINT_MISMATCH"]
+    },
+    {
+      "id": "bad-context-fingerprint",
+      "file": "bad/context-fingerprint-mismatch.json",
+      "expectedValid": false,
+      "expectedSchemaValid": true,
+      "expectedIssueCodes": ["VERIFICATION_CONTEXT_FINGERPRINT_MISMATCH"]
+    },
+    {
+      "id": "bad-two-active-leaves",
+      "file": "bad/multiple-active-leaves.json",
+      "expectedValid": false,
+      "expectedSchemaValid": true,
+      "expectedIssueCodes": ["RECEIPT_LINEAGE_MULTIPLE_ACTIVE_LEAVES"]
+    },
+    {
+      "id": "bad-orphan-lineage",
+      "file": "bad/orphan-replacement.json",
+      "expectedValid": false,
+      "expectedSchemaValid": true,
+      "expectedIssueCodes": ["RECEIPT_LINEAGE_ORPHAN"]
+    },
+    {
+      "id": "bad-active-source-binding",
+      "file": "bad/active-source-binding-mismatch.json",
+      "expectedValid": false,
+      "expectedSchemaValid": true,
+      "expectedIssueCodes": ["ACTIVE_RECEIPT_SOURCE_BINDING_MISMATCH"]
+    },
+    {
+      "id": "bad-active-context-binding",
+      "file": "bad/active-context-binding-mismatch.json",
+      "expectedValid": false,
+      "expectedSchemaValid": true,
+      "expectedIssueCodes": ["ACTIVE_RECEIPT_CONTEXT_BINDING_MISMATCH"]
+    },
+    {
+      "id": "bad-accepted-failed-receipt",
+      "file": "bad/accepted-failed-receipt.json",
+      "expectedValid": false,
+      "expectedSchemaValid": true,
+      "expectedIssueCodes": ["ACCEPTED_RECEIPT_NOT_PASSED"]
+    },
+    {
+      "id": "bad-accepted-authority-leak",
+      "file": "bad/accepted-authority-leak.json",
+      "expectedValid": false,
+      "expectedSchemaValid": false,
+      "expectedIssueCodes": ["ACCEPTED_AUTHORITY_GRANTED"]
+    },
+    {
+      "id": "bad-duplicate-object-key",
+      "file": "bad/duplicate-object-key.json",
+      "inputMode": "raw_cli",
+      "expectedValid": false,
+      "expectedSchemaValid": false,
+      "expectedIssueCodes": ["DUPLICATE_OBJECT_KEY"]
+    }
+  ]
+}

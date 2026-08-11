@@ -95,6 +95,68 @@ test("rejects a replacement when its parent was not invalidated by a concurrent 
   );
 });
 
+test("accepts an explicit repair supersedes edge without rewriting a previously passed receipt", async () => {
+  const { receiptSha256, validateReceiptLineage } = await loadSubject();
+  const parentReceipt = {
+    receiptId: "verification-001",
+    status: "passed",
+    sourceFingerprint: "a".repeat(64),
+  };
+  const parentSha = receiptSha256(parentReceipt);
+  const replacementReceipt = {
+    receiptId: "verification-002",
+    status: "passed",
+    sourceFingerprint: "b".repeat(64),
+    supersedesReceiptSha256: parentSha,
+  };
+  const entries = [
+    { receiptSha256: parentSha, receipt: parentReceipt },
+    {
+      receiptSha256: receiptSha256(replacementReceipt),
+      parentReceiptSha256: parentSha,
+      receipt: replacementReceipt,
+    },
+  ];
+  const before = structuredClone(entries);
+
+  const result = validateReceiptLineage(entries);
+
+  assert.equal(result.valid, true);
+  assert.equal(result.active.receipt.receiptId, "verification-002");
+  assert.deepEqual(result.superseded, [entries[0]]);
+  assert.deepEqual(result.issues, []);
+  assert.deepEqual(entries, before);
+});
+
+test("rejects a repair edge whose embedded supersedes hash does not match its parent", async () => {
+  const { receiptSha256, validateReceiptLineage } = await loadSubject();
+  const parentReceipt = {
+    receiptId: "verification-001",
+    status: "passed",
+    sourceFingerprint: "a".repeat(64),
+  };
+  const parentSha = receiptSha256(parentReceipt);
+  const replacementReceipt = {
+    receiptId: "verification-002",
+    status: "passed",
+    sourceFingerprint: "b".repeat(64),
+    supersedesReceiptSha256: "f".repeat(64),
+  };
+  const entries = [
+    { receiptSha256: parentSha, receipt: parentReceipt },
+    {
+      receiptSha256: receiptSha256(replacementReceipt),
+      parentReceiptSha256: parentSha,
+      receipt: replacementReceipt,
+    },
+  ];
+
+  const result = validateReceiptLineage(entries);
+
+  assert.equal(result.valid, false);
+  assert.ok(result.issues.some((issue) => issue.code === "supersedes_receipt_sha256_mismatch"));
+});
+
 test("rejects an entry whose declared receipt hash does not match its receipt", async () => {
   const { validateReceiptLineage } = await loadSubject();
   const entries = [

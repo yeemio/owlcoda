@@ -1,0 +1,149 @@
+{
+  "schemaVersion": "OwlCodaRunKitDistributionManifestV1",
+  "consumerSurface": "unsigned_v1",
+  "current": {
+    "packageName": "@owlcoda/attest",
+    "packageVersion": "0.2.0",
+    "commands": [
+      "owlcoda-attest attest",
+      "owlcoda-attest resolve"
+    ],
+    "schemaVersions": [
+      "OwlCodaAttestationRefV1",
+      "OwlCodaAttestationResultV1",
+      "OwlCodaOfflineAttestationBundleV1",
+      "OwlCodaQuickVerificationReceiptV1",
+      "OwlCodaRunKitPublicVerificationBundleV1",
+      "OwlCodaWorkspaceSnapshotV1"
+    ]
+  },
+  "nMinusOne": {
+    "packageName": "@owlcoda/attest",
+    "packageVersion": "0.1.0",
+    "tarballSha256": "sha256:5a6bb0aa76a11c70d2539abde1499a4a01f3d2fe5ae6a36dd9b5f8e782312380"
+  },
+  "consumerSurfaceManifest": {
+    "path": "consumer-surface-v1.json",
+    "sha256": "sha256:66766ee292b0162869c617b8e8dff2d985336a845f4cfc596e7262f6311729e4"
+  },
+  "sbom": {
+    "path": "sbom.spdx.json",
+    "sha256": "sha256:8346b0d642224f78319da8ac7016f7b41f9807240304a80bbd1d9c89663a2eeb"
+  },
+  "license": {
+    "path": "LICENSE",
+    "spdx": "GPL-3.0-or-later",
+    "sha256": "sha256:3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986"
+  },
+  "supportedProducerCoreIdentities": [
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.18.0",
+      "coreManifestSha256": "sha256:2cafa3b76a6b267888b116edfb04d9d6b455db0a7dcd289b30a265d418b7abec"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.17.2",
+      "coreManifestSha256": "sha256:67b883b8a763253b873fb6047c7e7e01c81123aa5250a0db5feaabd13cc4d860"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.17.1",
+      "coreManifestSha256": "sha256:5376f3736dd17c07598df8b655a6bbceb3b64b44f3e6630e69f966e420d82e26"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.17.0",
+      "coreManifestSha256": "sha256:0c0c52e7f6299bdd3d3ea49005c8ceef0b28831d60af25d77da65a4e4de714c9"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.16.1",
+      "coreManifestSha256": "sha256:38ac9110e328c38a81db05f1359734ca810b991c9f4de77647f9719f5e6af78b"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.16.0",
+      "coreManifestSha256": "sha256:320fb1d97b4459d1a14b0b67807dcf2bc6b03970492cb9fb2c6245b17912c81e"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.15.1",
+      "coreManifestSha256": "sha256:e8ca57522a8e473da356ceb3768bb650267894638d450d5e49463ab6f51c752b"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.15.0",
+      "coreManifestSha256": "sha256:06d7616c369b4b3ece3aca32f05c505d4b30781d3ca87a13bd8d7293c1491f64"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.14.0",
+      "coreManifestSha256": "sha256:d3b498562bebb2fa180d6861cb834ce3551288bf499ce0d769ee6c64b2663231"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.13.0",
+      "coreManifestSha256": "sha256:0e3233a417365afb4e2ce22db5260608a9c697a819cd5c02897276d6454dde1f"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.13.0",
+      "coreManifestSha256": "sha256:037c012751b32abbbb48ce8a8d2cd8faa4fc2c38d6797db391205477e667065f"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.12.0",
+      "coreManifestSha256": "sha256:c415b10cb00d2a7891744b7257774fa501ddf40f8ec2f290356505a17fefb40f"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.12.0",
+      "coreManifestSha256": "sha256:be4b079fb0bc29e71858af03a1e579f864d4414c815ac612c3b514d8d663d07b"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.13.0",
+      "coreManifestSha256": "sha256:2f840d1884b34656902f8f23af3bd8052dde3212aa516dac2cbb0e0b29627ea1"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.13.0",
+      "coreManifestSha256": "sha256:febf2551317fce9e4bb412b833a392a20376d702dda09c57d6116e8a3ca4f857"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.13.0",
+      "coreManifestSha256": "sha256:4b72f572b6964f149c4a6fe5c2c9da85f73b8060c88023dc96ba5ca50a036972"
+    },
+    {
+      "contractVersion": "0.2",
+      "coreVersion": "0.13.0",
+      "coreManifestSha256": "sha256:0455c847bf2df77703583c6f19c20cf103206bafc4f122795bf34d3f85f0263d"
+    }
+  ],
+  "includedRoots": [
+    "cli/",
+    "consumer-surface-v1.json",
+    "fixtures/",
+    "LICENSE",
+    "schemas/",
+    "sbom.spdx.json",
+    "src/",
+    "README.md",
+    "distribution-manifest-v1.json",
+    "package.json"
+  ],
+  "forbiddenPatterns": [
+    ".owlcoda/",
+    "credential",
+    "desktop/",
+    "execution-prompts/",
+    "private-engine",
+    "scripts/runkit-contract/",
+    "src/native/"
+  ],
+  "networkRequests": 0,
+  "signatureRequired": false,
+  "authorizationGranted": false
+}

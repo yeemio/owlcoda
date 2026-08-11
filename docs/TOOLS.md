@@ -60,7 +60,7 @@ in local mode and had no realistic local implementation path.
 | glob | 398 | production | spawn rg (with fallback walker) | glob.test.ts (101) | full; uses rg-detect helper |
 | grep | 384 | production | spawn rg | grep.test.ts (145) | full |
 | NotebookEdit | 220 | production | fs read/write, JSON parse, fs-policy gate | notebook-edit.test.ts (177) — behavioral | full nbformat handling |
-| WebFetch | 137 | production | fetch() + html-to-text | web-fetch.test.ts + tool-risk coverage | GET/HEAD only; local explicit-port health/healthz/ready/live diagnostics classify as `safe_readonly_local`, other URLs remain external_effect |
+| WebFetch | 137 | production | fetch() + html-to-text | web-fetch.test.ts + tool-risk coverage | GET/HEAD only; all requests classify as `external_effect`, and private/loopback/link-local/reserved targets are rejected at execution |
 | WebSearch | 153 | production | fetch() to DuckDuckGo lite + parse | none (no test file) | functional but UNTESTED; brittle DDG HTML scraping |
 | EnterWorktree | 133 | production | execSync `git worktree add` + chdir | worktree.test.ts (150) | real git ops |
 | ExitWorktree | 144 | production | execSync `git worktree remove`, change counting | worktree.test.ts (150) | real git ops |

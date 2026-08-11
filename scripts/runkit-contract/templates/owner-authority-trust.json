@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "OwlCodaRunKitOwnerAuthorityTrustV1",
+  "keys": [
+    {
+      "keyId": "replace-with-owner-key-id",
+      "algorithm": "ed25519",
+      "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nreplace-with-ed25519-public-key\n-----END PUBLIC KEY-----\n",
+      "publicKeySha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "purposes": [
+        "core_successor",
+        "remote_deployment"
+      ],
+      "status": "active"
+    }
+  ]
+}

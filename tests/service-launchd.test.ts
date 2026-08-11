@@ -10,11 +10,16 @@
  * The launchctl bootstrap/bootout side effects are manually smoke-verified.
  */
 import { describe, it, expect } from 'vitest'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   renderLaunchAgentPlist,
   launchAgentPath,
   isLaunchdSupported,
   buildLaunchdEnv,
+  installLaunchdService,
+  uninstallLaunchdService,
   SERVICE_LABEL,
 } from '../src/service-launchd.js'
 
@@ -57,6 +62,10 @@ describe('renderLaunchAgentPlist', () => {
   it('sets KeepAlive + RunAtLoad so the daemon auto-restarts on crash', () => {
     expect(plist).toMatch(/<key>KeepAlive<\/key>\s*<true\/>/)
     expect(plist).toMatch(/<key>RunAtLoad<\/key>\s*<true\/>/)
+  })
+
+  it('bounds launchd crash-loop restart frequency', () => {
+    expect(plist).toMatch(/<key>ThrottleInterval<\/key>\s*<integer>10<\/integer>/)
   })
 
   it('routes stdout+stderr to the daemon log (launchd-native forensics)', () => {
@@ -132,5 +141,54 @@ describe('buildLaunchdEnv', () => {
     expect(e.PATH).toBeUndefined()
     expect(e.HOME).toBeUndefined()
     expect(e.AWS_SECRET_ACCESS_KEY).toBeUndefined()
+  })
+})
+
+describe('launchd side-effect boundary', () => {
+  it('writes and reloads only an isolated temp LaunchAgent through an injected launchctl', () => {
+    const root = mkdtempSync(join(tmpdir(), 'owlcoda-launchd-fixture-'))
+    const fakeBin = join(root, 'bin')
+    const fakeLaunchctl = join(fakeBin, 'launchctl')
+    const launchctlLog = join(root, 'launchctl.log')
+    const previousHome = process.env.HOME
+    const previousPath = process.env.PATH
+    const previousLog = process.env.OWLCODA_TEST_LAUNCHCTL_LOG
+    try {
+      mkdirSync(fakeBin)
+      writeFileSync(fakeLaunchctl, '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$OWLCODA_TEST_LAUNCHCTL_LOG"\nexit 0\n', 'utf8')
+      chmodSync(fakeLaunchctl, 0o700)
+      process.env.HOME = root
+      process.env.PATH = `${fakeBin}:${previousPath ?? ''}`
+      process.env.OWLCODA_TEST_LAUNCHCTL_LOG = launchctlLog
+
+      const installed = installLaunchdService({
+        programArgs: ['/tmp/node', '/tmp/cli.ts', 'server', '--port', '39191'],
+        stdoutPath: join(root, 'daemon.log'),
+        stderrPath: join(root, 'daemon.log'),
+        envVars: { OWLCODA_HOME: join(root, 'owlcoda'), OWLCODA_LAUNCHD: '1' },
+      })
+      expect(installed.loaded).toBe(true)
+      expect(installed.plistPath).toBe(launchAgentPath(root))
+      expect(installed.plistPath).not.toContain('/Users/example/Library/LaunchAgents')
+      expect(readFileSync(installed.plistPath, 'utf8')).toMatch(/ThrottleInterval[\s\S]*<integer>10<\/integer>/)
+      expect(readFileSync(installed.plistPath, 'utf8')).toContain('<string>39191</string>')
+
+      const removed = uninstallLaunchdService()
+      expect(removed.loaded).toBe(false)
+      expect(existsSync(installed.plistPath)).toBe(false)
+      const calls = readFileSync(launchctlLog, 'utf8').trim().split('\n')
+      expect(calls).toHaveLength(3)
+      expect(calls[0]).toMatch(/^bootout gui\/\d+\/com\.owlcoda\.daemon$/)
+      expect(calls[1]).toMatch(/^bootstrap gui\/\d+ .+com\.owlcoda\.daemon\.plist$/)
+      expect(calls[2]).toMatch(/^bootout gui\/\d+\/com\.owlcoda\.daemon$/)
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME
+      else process.env.HOME = previousHome
+      if (previousPath === undefined) delete process.env.PATH
+      else process.env.PATH = previousPath
+      if (previousLog === undefined) delete process.env.OWLCODA_TEST_LAUNCHCTL_LOG
+      else process.env.OWLCODA_TEST_LAUNCHCTL_LOG = previousLog
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })

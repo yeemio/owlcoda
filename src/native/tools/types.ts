@@ -4,9 +4,9 @@
  * Every tool accepts a typed input, executes, and returns a ToolResult.
  */
 
-import type { TaskExecutionState } from '../protocol/types.js'
-import type { RuntimeRecoveryLedger } from '../protocol/types.js'
+import type { EvidencePersistenceFailure, TaskExecutionState, RuntimeRecoveryLedger } from '../protocol/types.js'
 import type { ProjectMapSnapshot } from '../protocol/project-map-types.js'
+import type { RuntimeExecutionAuthorizationGrant } from '../runtime-execution-control/index.js'
 
 export interface ToolResult {
   /** Main text output (shown to the model) */
@@ -55,6 +55,10 @@ export interface ToolExecutionContext {
   conversationId?: string
   /** Conversation-local durable runtime recovery checkpoints. Read-only. */
   runtimeRecoveryLedger?: RuntimeRecoveryLedger
+  /** Called when required RunWorkspace evidence could not be persisted. */
+  onEvidencePersistenceFailure?: (failure: EvidencePersistenceFailure) => void
+  /** Product-issued, one-shot authority for the exact WorkflowRun call. */
+  runtimeExecutionGrant?: RuntimeExecutionAuthorizationGrant
   /**
    * Ask the user a question through the host UI. When provided, tools
    * MUST use this instead of writing prompts to stdout directly —

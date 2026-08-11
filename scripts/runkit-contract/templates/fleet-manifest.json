@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "OwlCodaRunKitFleetManifestV1",
+  "skillName": "owlcoda-runkit",
+  "workspaceRoots": [
+    "/replace/with/absolute/project/root"
+  ],
+  "authorizationGranted": false
+}

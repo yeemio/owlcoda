@@ -13,8 +13,15 @@ import { createServer, type Server, type IncomingMessage, type ServerResponse } 
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { parseArgs, VERSION } from '../dist/cli-core.js'
+import {
+  fetchHealthz,
+  healthzMatchesRuntimeMeta,
+  resolveClientHost,
+  waitForHealthzGone,
+  type RuntimeMetaLike,
+} from '../src/healthz-client.js'
 
 const REPO_ROOT = join(import.meta.dirname, '..')
 const CLI_ENTRY = join(REPO_ROOT, 'src', 'cli.ts')
@@ -208,24 +215,110 @@ function startFakeRouter(port: number, responseOverride?: (req: IncomingMessage,
   })
 }
 
+type ProcessIdentity = {
+  command: string
+  startTime: string
+}
+
+function readProcessIdentity(pid: number): ProcessIdentity | null {
+  try {
+    return {
+      command: execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf-8' }).trim(),
+      startTime: execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf-8' }).trim(),
+    }
+  } catch {
+    return null
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function sameProcessIdentity(a: ProcessIdentity | null, b: ProcessIdentity | null): boolean {
+  return a !== null && b !== null && a.command === b.command && a.startTime === b.startTime
+}
+
+async function waitForProcessExit(pid: number, timeoutMs: number = 5000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() <= deadline) {
+    if (!isPidAlive(pid)) return true
+    await new Promise(resolve => setTimeout(resolve, 100))
+  }
+  return !isPidAlive(pid)
+}
+
+async function cleanupOwnedDaemon(runtimeDir: string): Promise<void> {
+  const pidPath = join(runtimeDir, 'owlcoda.pid')
+  if (!existsSync(pidPath)) return
+
+  const pid = Number(readFileSync(pidPath, 'utf-8').trim())
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error(`invalid daemon PID in ${pidPath}`)
+  const metaPath = join(runtimeDir, 'runtime.json')
+  if (!existsSync(metaPath)) {
+    if (isPidAlive(pid)) throw new Error(`daemon PID ${pid} has no runtime identity`)
+    return
+  }
+
+  const meta = JSON.parse(readFileSync(metaPath, 'utf-8')) as RuntimeMetaLike
+  if (meta.pid !== pid || !Number.isInteger(meta.port) || typeof meta.runtimeToken !== 'string') {
+    throw new Error(`daemon identity mismatch for PID ${pid}`)
+  }
+
+  const processBeforeSignal = readProcessIdentity(pid)
+  if (!processBeforeSignal) return
+  const configPath = join(runtimeDir, 'config.json')
+  if (!processBeforeSignal.command.includes(`${CLI_ENTRY} server --config ${configPath}`)) {
+    throw new Error(`refusing to signal PID ${pid}: command identity mismatch`)
+  }
+
+  const baseUrl = `http://${resolveClientHost(meta.host)}:${meta.port}`
+  const healthz = await fetchHealthz(baseUrl, 1000, meta.runtimeToken)
+  if (!healthz || !healthzMatchesRuntimeMeta(healthz, meta)) {
+    throw new Error(`refusing to signal PID ${pid}: health identity mismatch`)
+  }
+
+  process.kill(pid, 'SIGTERM')
+  let healthzGone = await waitForHealthzGone(baseUrl, 5000)
+  let processGone = await waitForProcessExit(pid, 5000)
+  if (!healthzGone || !processGone) {
+    const processBeforeKill = readProcessIdentity(pid)
+    if (!sameProcessIdentity(processBeforeKill, processBeforeSignal)) {
+      throw new Error(`refusing SIGKILL for PID ${pid}: process identity changed`)
+    }
+    process.kill(pid, 'SIGKILL')
+    healthzGone = await waitForHealthzGone(baseUrl, 2000)
+    processGone = await waitForProcessExit(pid, 2000)
+  }
+  if (!healthzGone || !processGone) {
+    throw new Error(`daemon PID ${pid} did not fully release ${baseUrl}`)
+  }
+}
+
 afterEach(async () => {
   for (const server of heldServers) {
     await new Promise<void>(resolve => server.close(() => resolve()))
   }
   heldServers.clear()
 
+  const cleanupErrors: Error[] = []
   for (const runtimeDir of runtimeDirs) {
-    // Kill any lingering daemon
-    const pidPath = join(runtimeDir, 'owlcoda.pid')
-    if (existsSync(pidPath)) {
-      try {
-        const pid = Number(readFileSync(pidPath, 'utf-8').trim())
-        process.kill(pid, 'SIGTERM')
-      } catch { /* ignore */ }
+    try { await cleanupOwnedDaemon(runtimeDir) } catch (error) {
+      cleanupErrors.push(error instanceof Error ? error : new Error(String(error)))
     }
-    rmSync(runtimeDir, { recursive: true, force: true })
+    try { rmSync(runtimeDir, { recursive: true, force: true }) } catch (error) {
+      cleanupErrors.push(error instanceof Error ? error : new Error(String(error)))
+    }
   }
   runtimeDirs.clear()
+  if (cleanupErrors.length > 0) {
+    throw new AggregateError(cleanupErrors, 'OwlCoda test daemon cleanup failed')
+  }
 })
 
 // ─── parseArgs (retained from v0.5.1 for regression) ───

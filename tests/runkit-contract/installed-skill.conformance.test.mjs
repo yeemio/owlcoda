@@ -16,12 +16,17 @@ function sha256(value) {
 }
 
 test("installed Codex Skill carries the exact authoritative Core and initializes a foreign fixture", { skip: !skillRoot }, async () => {
-  const installed = await import(pathToFileURL(path.join(skillRoot, "scripts/core-contract.mjs")));
+  const installed = await import(pathToFileURL(path.join(skillRoot, "scripts/runkit-contract/core-contract.mjs")));
   assert.deepEqual(installed.currentCoreIdentity(), authoritativeCoreIdentity());
 
   const skillMarkdown = await readFile(path.join(skillRoot, "SKILL.md"), "utf8");
   assert.doesNotMatch(skillMarkdown, /TODO/);
   assert.match(skillMarkdown, /never as authorization|without separate authority/i);
+  assert.match(skillMarkdown, /Choose the smallest assurance lane/);
+  assert.match(skillMarkdown, /ordinary project tools without RunKit/);
+  assert.match(skillMarkdown, /Quick Verification for one low-risk command/);
+  assert.match(skillMarkdown, /Formal Delivery for multi-writer work/);
+  assert.match(skillMarkdown, /never treat a Quick receipt as Formal acceptance/);
 
   const fixture = await mkdtemp(path.join(tmpdir(), "owlcoda-runkit-skill-"));
   try {
@@ -29,7 +34,7 @@ test("installed Codex Skill carries the exact authoritative Core and initializes
     await writeFile(businessPath, "foreign fixture\n");
     const before = sha256(await readFile(businessPath));
     const result = spawnSync(process.execPath, [
-      path.join(skillRoot, "scripts/runkit-cli.mjs"),
+      path.join(skillRoot, "scripts/runkit-contract/runkit-bootstrap.mjs"),
       "init",
       "--workspace",
       fixture,

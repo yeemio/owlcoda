@@ -1,6 +1,6 @@
 import { IncomingMessage, ServerResponse } from 'node:http'
 import type { OwlCodaConfig } from '../config.js'
-import type { AnthropicMessagesRequest } from '../types.js'
+import type { AnthropicMessagesRequest, AnthropicMessagesResponse } from '../types.js'
 import { translateRequest } from '../translate/request.js'
 import { translateResponse } from '../translate/response.js'
 import { StreamTranslator } from '../translate/stream.js'
@@ -63,6 +63,8 @@ import {
   recordAdmissionRateLimit,
   AdmissionBackpressureError,
 } from './admission.js'
+
+const MAX_STREAM_PRECOMMIT_BUFFER_BYTES = 64 * 1024
 
 /**
  * Extract token-usage deltas from a single parsed Anthropic SSE event.
@@ -785,7 +787,16 @@ async function handleMessagesStream(
   let upstream: Response
   let servedByModel = route.backendModel
   let streamFallbackUsed = false
+  let streamAttemptedModels: string[] = []
   let streamFailure: ProviderRequestDiagnostic | null = null
+  let streamCompletedSuccessfully = false
+  let streamFailureRecorded = false
+  const recordStreamFailureOnce = (modelId: string): void => {
+    if (streamFailureRecorded) return
+    recordFailure(modelId)
+    recordOutcome(modelId, false)
+    streamFailureRecorded = true
+  }
   const retryOpts = {
     ...(mwCfg.retryMaxAttempts != null ? { maxRetries: mwCfg.retryMaxAttempts } : {}),
     ...(mwCfg.retryBaseDelayMs != null ? { baseDelayMs: mwCfg.retryBaseDelayMs } : {}),
@@ -799,6 +810,7 @@ async function handleMessagesStream(
   trace.mark('fetch_start')
   try {
     const result = await withFallback(streamFallbackChain, async (modelId) => {
+      streamAttemptedModels.push(modelId)
       const modelRoute = resolveModelRoute(config, modelId)
       let reqBody: any
       if (!modelRoute.translate) {
@@ -860,6 +872,7 @@ async function handleMessagesStream(
     upstream = result.response
     servedByModel = result.servedBy
     streamFallbackUsed = result.fallbackUsed
+    streamAttemptedModels = result.attemptedModels
   } catch (err) {
     trace.mark('fetch_error')
     const failedModelId = typeof (err as { modelId?: unknown })?.modelId === 'string' ? (err as { modelId: string }).modelId : route.backendModel
@@ -889,7 +902,7 @@ async function handleMessagesStream(
       const retryBody = buildNonStreamingRetryBody(body)
       const retryHeaders = { ...failedRoute.headers, accept: 'application/json' }
       trace.mark('stream_fallback_start_fetchcatch')
-      const fallbackJson = await fetchNonStreamingFallback(
+      const fallbackAttempt = await fetchNonStreamingFallback(
         failedRoute.endpointUrl,
         retryHeaders,
         retryBody,
@@ -902,11 +915,16 @@ async function handleMessagesStream(
           config,
         },
       )
+      const fallbackJson = fallbackAttempt.response
       if (fallbackJson) {
         trace.mark('stream_fallback_ok_fetchcatch')
         streamFallbackUsed = true
-        recordSuccess(failedModelId)
-        recordOutcome(failedModelId, true)
+        const earlierFailedModels = [...new Set(streamAttemptedModels)]
+          .filter(modelId => modelId !== failedModelId)
+        for (const modelId of earlierFailedModels) {
+          recordFailure(modelId)
+          recordOutcome(modelId, false)
+        }
         if (fallbackJson.usage) {
           addTokenUsage(
             fallbackJson.usage.input_tokens,
@@ -933,6 +951,8 @@ async function handleMessagesStream(
         })
         synthesizeSseFromResponse(res, fallbackJson)
         res.end()
+        recordSuccess(failedModelId)
+        recordOutcome(failedModelId, true)
         const traceResultOk = trace.end()
         await logAuditEntry({
           timestamp: new Date().toISOString(),
@@ -950,8 +970,13 @@ async function handleMessagesStream(
       }
       trace.mark('stream_fallback_fail_fetchcatch')
     }
-    for (const m of streamFallbackChain) recordFailure(m)
-    recordOutcome(route.backendModel, false)
+    const failedAttemptedModels = streamAttemptedModels.length > 0
+      ? [...new Set(streamAttemptedModels)]
+      : [failedModelId]
+    for (const modelId of failedAttemptedModels) {
+      recordFailure(modelId)
+      recordOutcome(modelId, false)
+    }
     const mapped = diagnosticToAnthropicError(diagnostic)
     const traceResult = trace.end()
     await runErrorHooks({ endpoint: '/v1/messages (stream)', errorType: 'fetch_error', message: mapped.body.error.message })
@@ -963,7 +988,7 @@ async function handleMessagesStream(
       servedBy: failedModelId,
       durationMs: traceResult.totalMs,
       streaming: true,
-      fallbackUsed: streamFallbackChain.length > 1,
+      fallbackUsed: streamAttemptedModels.length > 1,
       failure: diagnostic,
     })
     return
@@ -1024,15 +1049,15 @@ async function handleMessagesStream(
   }
   if (streamFallbackUsed) streamHeaders['x-owlcoda-fallback'] = 'true'
   if (streamIntentHeader) streamHeaders['x-owlcoda-intent'] = streamIntentHeader
-  res.writeHead(200, streamHeaders)
+  for (const [name, value] of Object.entries(streamHeaders)) {
+    res.setHeader(name, value)
+  }
 
   activeStreams.add(res)
   const streamCleanup = (): void => { activeStreams.delete(res) }
   res.on('close', streamCleanup)
   res.on('error', streamCleanup)
   _req.on('error', streamCleanup)
-  recordSuccess(servedByModel)
-  recordOutcome(servedByModel, true)
 
   const servedRoute = resolveModelRoute(config, servedByModel)
   const mwForStream = config.middleware ?? {}
@@ -1089,47 +1114,7 @@ async function handleMessagesStream(
     ? new StreamTranslator(body.model, inputTokenEstimate)
     : null
 
-  // If upstream returned non-streaming JSON despite the streaming request, translate and emit SSE inline
   const upstreamContentType = upstream.headers.get('content-type') ?? ''
-  if (translator && upstreamContentType.includes('application/json')) {
-    try {
-      const jsonBody = await upstream.json() as Record<string, unknown>
-      const anthropicResp = translateResponse(jsonBody as any, body.model, config)
-      // Emit as a minimal SSE stream so the client sees proper events
-      const sseText = anthropicResp.content.find((b: any) => b.type === 'text')
-      const textContent = sseText ? (sseText as any).text as string : ''
-      const toolUseBlocks = anthropicResp.content.filter((b: any) => b.type === 'tool_use')
-      const st = new StreamTranslator(body.model, inputTokenEstimate)
-      if (textContent) {
-        const chunkData = JSON.stringify({ id: 'tr-1', object: 'chat.completion.chunk', model: body.model, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] })
-        for (const ev of st.processLine(chunkData)) res.write(ev)
-        const chunkData2 = JSON.stringify({ id: 'tr-1', object: 'chat.completion.chunk', model: body.model, choices: [{ index: 0, delta: { content: textContent }, finish_reason: null }] })
-        for (const ev of st.processLine(chunkData2)) res.write(ev)
-      }
-      if (toolUseBlocks.length > 0) {
-        const openaiToolCalls = toolUseBlocks.map((b: any, i: number) => ({
-          index: i,
-          id: b.id,
-          type: 'function',
-          function: { name: b.name, arguments: JSON.stringify(b.input) },
-        }))
-        const chunkData = JSON.stringify({ id: 'tr-1', object: 'chat.completion.chunk', model: body.model, choices: [{ index: 0, delta: { role: 'assistant', content: null, tool_calls: openaiToolCalls }, finish_reason: null }] })
-        for (const ev of st.processLine(chunkData)) res.write(ev)
-      }
-      const finishReason = toolUseBlocks.length > 0 ? 'tool_calls' : 'stop'
-      const finalChunk = JSON.stringify({ id: 'tr-1', object: 'chat.completion.chunk', model: body.model, choices: [{ index: 0, delta: {}, finish_reason: finishReason }], usage: { prompt_tokens: anthropicResp.usage.input_tokens, completion_tokens: anthropicResp.usage.output_tokens, total_tokens: anthropicResp.usage.input_tokens + anthropicResp.usage.output_tokens } })
-      for (const ev of st.processLine(finalChunk)) res.write(ev)
-      for (const ev of st.flush()) res.write(ev)
-    } catch (translateErr) {
-      const finalEvents = new StreamTranslator(body.model, inputTokenEstimate).flush()
-      for (const event of finalEvents) res.write(event)
-    }
-    res.end()
-    trace.mark('stream_end')
-    addTokenUsage(0, 0)
-    activeStreams.delete(res)
-    return
-  }
 
   // Hoisted so the `finally` block (recordRequestMetrics + audit log) can
   // see the real usage for both branches. Previously cloudInputTokens /
@@ -1147,14 +1132,117 @@ async function handleMessagesStream(
   // (the common case for local backends like owlmlx).
   let finalCacheReadTokens = 0
   let finalCacheWriteTokens = 0
-  // 0.13.97: function-scope partial-output flag, threaded into the catch
-  // block so the diagnostic can carry partialOutputSeen for the recovery
-  // guidance to branch on. Each path's local `sawVisibleOutput` mirrors
-  // into this flag at every set-site.
+  // Buffer protocol-only frames until the first visible output or a normal
+  // terminal event. Before that commit point a failed upstream can be replaced
+  // without exposing two message lifecycles or stale served-by headers.
   let streamPartialOutputSeen = false
+  let streamProtocolCommitted = false
+  let pendingStreamFrames: string[] = []
+  let pendingStreamFrameBytes = 0
+  const commitPendingStreamFrames = (): void => {
+    streamProtocolCommitted = true
+    for (const frame of pendingStreamFrames) res.write(frame)
+    pendingStreamFrames = []
+    pendingStreamFrameBytes = 0
+  }
+  const writeStreamFrames = (
+    frames: string[],
+    state: { visibleOutput?: boolean; terminal?: boolean } = {},
+  ): void => {
+    if (state.visibleOutput) streamPartialOutputSeen = true
+    if (streamProtocolCommitted) {
+      for (const frame of frames) res.write(frame)
+      return
+    }
+
+    if (state.visibleOutput || state.terminal) {
+      commitPendingStreamFrames()
+      for (const frame of frames) res.write(frame)
+      return
+    }
+
+    for (const frame of frames) {
+      if (streamProtocolCommitted) {
+        res.write(frame)
+        continue
+      }
+      const frameBytes = Buffer.byteLength(frame, 'utf8')
+      if (pendingStreamFrameBytes + frameBytes >= MAX_STREAM_PRECOMMIT_BUFFER_BYTES) {
+        commitPendingStreamFrames()
+        res.write(frame)
+        continue
+      }
+      pendingStreamFrames.push(frame)
+      pendingStreamFrameBytes += frameBytes
+    }
+  }
 
   trace.mark('stream_start')
   try {
+    // Some OpenAI-compatible providers ignore stream=true and return a normal
+    // JSON completion. Keep this path inside the shared outcome finalizer so
+    // success/failure, metrics, audit, cleanup, and watchdog ownership remain
+    // identical to the ordinary streaming body paths.
+    if (translator && upstreamContentType.includes('application/json')) {
+      const jsonStream = upstream.body
+      if (!jsonStream) throw new Error('No response body')
+      const jsonReader = jsonStream.getReader()
+      const jsonDecoder = new TextDecoder()
+      let jsonText = ''
+      try {
+        while (true) {
+          const { done, value } = await readStreamChunkWithDeadline(jsonReader, {
+            timeoutMs: streamBodyTimeoutMs,
+            signal: combinedSignal,
+          })
+          if (done) break
+          markFirstChunkArrived()
+          jsonText += jsonDecoder.decode(value, { stream: true })
+        }
+        jsonText += jsonDecoder.decode()
+      } finally {
+        jsonReader.releaseLock()
+      }
+      const jsonBody = JSON.parse(jsonText) as Record<string, unknown>
+      const anthropicResp = translateResponse(jsonBody as any, body.model, config)
+      const sseText = anthropicResp.content.find((block: any) => block.type === 'text')
+      const textContent = sseText ? (sseText as any).text as string : ''
+      const toolUseBlocks = anthropicResp.content.filter((block: any) => block.type === 'tool_use')
+      const jsonTranslator = new StreamTranslator(body.model, inputTokenEstimate)
+      const translatedEvents: string[] = []
+
+      if (textContent) {
+        const roleChunk = JSON.stringify({ id: 'tr-1', object: 'chat.completion.chunk', model: body.model, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] })
+        translatedEvents.push(...jsonTranslator.processLine(roleChunk))
+        const textChunk = JSON.stringify({ id: 'tr-1', object: 'chat.completion.chunk', model: body.model, choices: [{ index: 0, delta: { content: textContent }, finish_reason: null }] })
+        translatedEvents.push(...jsonTranslator.processLine(textChunk))
+      }
+      if (toolUseBlocks.length > 0) {
+        const openaiToolCalls = toolUseBlocks.map((block: any, index: number) => ({
+          index,
+          id: block.id,
+          type: 'function',
+          function: { name: block.name, arguments: JSON.stringify(block.input) },
+        }))
+        const toolChunk = JSON.stringify({ id: 'tr-1', object: 'chat.completion.chunk', model: body.model, choices: [{ index: 0, delta: { role: 'assistant', content: null, tool_calls: openaiToolCalls }, finish_reason: null }] })
+        translatedEvents.push(...jsonTranslator.processLine(toolChunk))
+      }
+      const finishReason = toolUseBlocks.length > 0 ? 'tool_calls' : 'stop'
+      const finalChunk = JSON.stringify({ id: 'tr-1', object: 'chat.completion.chunk', model: body.model, choices: [{ index: 0, delta: {}, finish_reason: finishReason }], usage: { prompt_tokens: anthropicResp.usage.input_tokens, completion_tokens: anthropicResp.usage.output_tokens, total_tokens: anthropicResp.usage.input_tokens + anthropicResp.usage.output_tokens } })
+      translatedEvents.push(...jsonTranslator.processLine(finalChunk))
+      translatedEvents.push(...jsonTranslator.flush())
+
+      const containsVisibleOutput = translatedEvents.some(event => event.includes('content_block_delta') || event.includes('"tool_use"'))
+      writeStreamFrames(translatedEvents, { visibleOutput: containsVisibleOutput, terminal: true })
+      finalInputTokens = anthropicResp.usage.input_tokens
+      finalOutputTokens = anthropicResp.usage.output_tokens
+      finalCacheReadTokens = anthropicResp.usage.cache_read_input_tokens ?? 0
+      finalCacheWriteTokens = anthropicResp.usage.cache_creation_input_tokens ?? 0
+      addTokenUsage(finalInputTokens, finalOutputTokens, finalCacheReadTokens, finalCacheWriteTokens)
+      streamCompletedSuccessfully = true
+      return
+    }
+
     const stream = upstream.body
     if (!stream) throw new Error('No response body')
 
@@ -1165,24 +1253,25 @@ async function handleMessagesStream(
       for await (const dataContent of parseSSEStream(stream, { timeoutMs: streamBodyTimeoutMs, signal: combinedSignal })) {
         markFirstChunkArrived()
         const events = translator.processLine(dataContent)
-        if (events.some(event => event.includes('content_block_delta') || event.includes('"tool_use"'))) {
+        const eventsContainVisibleOutput = events.some(event => event.includes('content_block_delta') || event.includes('"tool_use"'))
+        if (eventsContainVisibleOutput) {
           sawVisibleOutput = true
           streamPartialOutputSeen = true
         }
-        if (events.some(event => event.includes('message_stop'))) {
+        const eventsContainTerminal = events.some(event => event.includes('message_stop'))
+        if (eventsContainTerminal) {
           sawTerminalEvent = true
         }
-        for (const event of events) {
-          res.write(event)
-        }
+        writeStreamFrames(events, {
+          visibleOutput: eventsContainVisibleOutput,
+          terminal: eventsContainTerminal,
+        })
       }
       if (!sawTerminalEvent) {
         throw createStreamInterruptedError(!sawVisibleOutput)
       }
       const finalEvents = translator.flush()
-      for (const event of finalEvents) {
-        res.write(event)
-      }
+      writeStreamFrames(finalEvents, { terminal: true })
       const usage = translator.getFinalUsage()
       finalInputTokens = usage.inputTokens
       finalOutputTokens = usage.outputTokens
@@ -1190,6 +1279,7 @@ async function handleMessagesStream(
       // OpenAI server-side prompt-cache hits (cached_tokens) → cacheRead so
       // /cost surfaces them on the translated streaming path too.
       addTokenUsage(usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, 0)
+      streamCompletedSuccessfully = true
     } else {
       // Cloud model: normalize response to SSE format
       // Some providers return proper SSE (event: X\ndata: Y\n\n)
@@ -1197,6 +1287,12 @@ async function handleMessagesStream(
       const rawReader = stream.getReader()
       const rawDecoder = new TextDecoder()
       let lineBuffer = ''
+      let lineBufferBytes = 0
+      let sseBuffer = ''
+      let sseBufferBytes = 0
+      let unknownWireBuffer = ''
+      let unknownWireBufferBytes = 0
+      let cloudWireFormat: 'unknown' | 'sse' | 'raw' = 'unknown'
       let cloudInputTokens = 0
       let cloudOutputTokens = 0
       let cloudCacheReadTokens = 0
@@ -1226,25 +1322,157 @@ async function handleMessagesStream(
       // filter dropped it. Result: every usage event from kimi silently
       // lost, audit always reported outputTokens=0. Buffer to `\n\n`
       // event delimiters so we only parse complete frames.
-      let sseBuffer = ''
-      const parseSSEEvent = (block: string): void => {
-        for (const line of block.split('\n')) {
-          if (!line.startsWith('data:')) continue
-          const payload = line.slice(5).trimStart()
-          if (!payload) continue
-          if (payload === '[DONE]') {
-            sawTerminalEvent = true
-            continue
+      const inspectParsedEvent = (parsed: { type?: string; content_block?: { type?: string } }): {
+        visibleOutput: boolean
+        terminal: boolean
+      } => {
+        const terminal = parsed.type === 'message_stop'
+        const visibleOutput = parsed.type === 'content_block_delta' ||
+          (parsed.type === 'content_block_start' && parsed.content_block?.type === 'tool_use')
+        if (visibleOutput) {
+          sawVisibleOutput = true
+          streamPartialOutputSeen = true
+        }
+        if (terminal) sawTerminalEvent = true
+        extractUsage(parsed)
+        return { visibleOutput, terminal }
+      }
+      const inspectSSEEvent = (block: string): { visibleOutput: boolean; terminal: boolean } => {
+        let eventType: string | undefined
+        const dataLines: string[] = []
+        for (const line of block.split(/\r\n|\n|\r/)) {
+          if (!line || line.startsWith(':')) continue
+          const colonIndex = line.indexOf(':')
+          const field = colonIndex === -1 ? line : line.slice(0, colonIndex)
+          const rawValue = colonIndex === -1 ? '' : line.slice(colonIndex + 1)
+          const value = rawValue.startsWith(' ') ? rawValue.slice(1) : rawValue
+          if (field === 'event') eventType = value
+          if (field === 'data') dataLines.push(value)
+        }
+        if (dataLines.length === 0) return { visibleOutput: false, terminal: false }
+
+        const payload = dataLines.join('\n')
+        if (payload === '[DONE]') {
+          sawTerminalEvent = true
+          return { visibleOutput: false, terminal: true }
+        }
+        try {
+          const parsed = JSON.parse(payload) as { type?: string; content_block?: { type?: string } }
+          const normalized = eventType && !parsed.type
+            ? { ...parsed, type: eventType }
+            : parsed
+          return inspectParsedEvent(normalized)
+        } catch {
+          return { visibleOutput: false, terminal: false }
+        }
+      }
+      const failParserBufferLimit = (bufferName: string): never => {
+        commitPendingStreamFrames()
+        throw new Error(
+          `stream ${bufferName} parser buffer limit exceeded at ${MAX_STREAM_PRECOMMIT_BUFFER_BYTES} UTF-8 bytes`,
+        )
+      }
+      const appendParserBuffer = (
+        buffer: string,
+        bufferBytes: number,
+        addition: string,
+        bufferName: string,
+      ): { buffer: string; bytes: number } => {
+        const additionBytes = Buffer.byteLength(addition, 'utf8')
+        if (bufferBytes + additionBytes >= MAX_STREAM_PRECOMMIT_BUFFER_BYTES) {
+          return failParserBufferLimit(bufferName)
+        }
+        return {
+          buffer: buffer + addition,
+          bytes: bufferBytes + additionBytes,
+        }
+      }
+      const detectCloudWireFormat = (input: string): 'unknown' | 'sse' | 'raw' => {
+        const prefix = input.trimStart()
+        if (!prefix) return 'unknown'
+        const sseFieldNames = ['event', 'data', 'id', 'retry']
+        const sseFieldPrefixes = ['event:', 'data:', 'id:', 'retry:']
+        if (sseFieldPrefixes.some(field => prefix.startsWith(field)) || prefix.startsWith(':')) {
+          return 'sse'
+        }
+        const firstLineEnd = prefix.search(/[\r\n]/)
+        if (firstLineEnd >= 0 && sseFieldNames.includes(prefix.slice(0, firstLineEnd))) {
+          return 'sse'
+        }
+        if (sseFieldPrefixes.some(field => field.startsWith(prefix))) {
+          return 'unknown'
+        }
+        return 'raw'
+      }
+      const processRawLine = (line: string): void => {
+        const trimmed = line.trim()
+        if (!trimmed) return
+        try {
+          const parsed = JSON.parse(trimmed) as { type?: string; content_block?: { type?: string } }
+          const eventType = parsed.type ?? 'message'
+          const inspected = inspectParsedEvent(parsed)
+          writeStreamFrames([`event: ${eventType}\ndata: ${trimmed}\n\n`], inspected)
+        } catch {
+          writeStreamFrames([`data: ${trimmed}\n\n`])
+        }
+      }
+      const processSSEChunk = (input: string): void => {
+        // Search the buffered remainder and the newly arrived bytes as one
+        // stream. Each SSE event ends with two legal line endings; the two
+        // endings may be CRLF, LF, CR, or a legal mixture of those forms.
+        const combined = sseBuffer + input
+        const delimiter = /(?:\r\n|\r(?!\n)|\n){2}/g
+        let cursor = 0
+        let match: RegExpExecArray | null
+        while ((match = delimiter.exec(combined)) !== null) {
+          const block = combined.slice(cursor, match.index)
+          const inspected = inspectSSEEvent(block)
+          writeStreamFrames([`${block}${match[0]}`], inspected)
+          cursor = match.index + match[0].length
+        }
+
+        const remaining = combined.slice(cursor)
+        if (remaining) {
+          const appended = appendParserBuffer('', 0, remaining, 'SSE frame')
+          sseBuffer = appended.buffer
+          sseBufferBytes = appended.bytes
+        } else {
+          sseBuffer = ''
+          sseBufferBytes = 0
+        }
+      }
+      const processRawChunk = (input: string): void => {
+        let remaining = input
+        if (lineBuffer) {
+          const delimiterIndex = remaining.indexOf('\n')
+          if (delimiterIndex === -1) {
+            const appended = appendParserBuffer(lineBuffer, lineBufferBytes, remaining, 'raw line')
+            lineBuffer = appended.buffer
+            lineBufferBytes = appended.bytes
+            return
           }
-          try {
-            const parsed = JSON.parse(payload) as { type?: string }
-            if (parsed.type === 'message_stop') sawTerminalEvent = true
-            if (parsed.type === 'content_block_delta' || parsed.type === 'content_block_start') {
-              sawVisibleOutput = true
-              streamPartialOutputSeen = true
-            }
-            extractUsage(parsed)
-          } catch { /* partial/non-JSON data line — ignore */ }
+          const appended = appendParserBuffer(
+            lineBuffer,
+            lineBufferBytes,
+            remaining.slice(0, delimiterIndex),
+            'raw line',
+          )
+          processRawLine(appended.buffer)
+          lineBuffer = ''
+          lineBufferBytes = 0
+          remaining = remaining.slice(delimiterIndex + 1)
+        }
+
+        let delimiterIndex = remaining.indexOf('\n')
+        while (delimiterIndex !== -1) {
+          processRawLine(remaining.slice(0, delimiterIndex))
+          remaining = remaining.slice(delimiterIndex + 1)
+          delimiterIndex = remaining.indexOf('\n')
+        }
+        if (remaining) {
+          const appended = appendParserBuffer('', 0, remaining, 'raw line')
+          lineBuffer = appended.buffer
+          lineBufferBytes = appended.bytes
         }
       }
 
@@ -1255,65 +1483,48 @@ async function handleMessagesStream(
           markFirstChunkArrived()
           const chunk = rawDecoder.decode(value, { stream: true })
 
-          // Check if this looks like proper SSE (has event: or data: prefix)
-          if (chunk.includes('event:') || chunk.includes('data:') || sseBuffer.length > 0) {
-            // Already SSE format — pass through verbatim, but buffer for
-            // cross-chunk event parsing.
-            res.write(chunk)
-            sseBuffer += chunk
-            let delimIdx = sseBuffer.indexOf('\n\n')
-            while (delimIdx !== -1) {
-              const block = sseBuffer.slice(0, delimIdx)
-              sseBuffer = sseBuffer.slice(delimIdx + 2)
-              parseSSEEvent(block)
-              delimIdx = sseBuffer.indexOf('\n\n')
-            }
+          let chunkToProcess = chunk
+          if (cloudWireFormat === 'unknown' && chunk.length > 0) {
+            const appended = appendParserBuffer(
+              unknownWireBuffer,
+              unknownWireBufferBytes,
+              chunk,
+              'wire-format detection',
+            )
+            unknownWireBuffer = appended.buffer
+            unknownWireBufferBytes = appended.bytes
+            cloudWireFormat = detectCloudWireFormat(unknownWireBuffer)
+            if (cloudWireFormat === 'unknown') continue
+            chunkToProcess = unknownWireBuffer
+            unknownWireBuffer = ''
+            unknownWireBufferBytes = 0
+          }
+
+          if (cloudWireFormat === 'sse') {
+            // Already SSE format — buffer to complete event boundaries so
+            // control-only frames do not commit the downstream response before
+            // cross-model recovery is no longer safe.
+            processSSEChunk(chunkToProcess)
           } else {
             // Raw JSON lines — normalize each line to SSE format
-            lineBuffer += chunk
-            const lines = lineBuffer.split('\n')
-            lineBuffer = lines.pop()! // Keep incomplete last line
-            for (const line of lines) {
-              const trimmed = line.trim()
-              if (!trimmed) continue
-              // Extract event type from JSON to create proper SSE event name
-              try {
-                const parsed = JSON.parse(trimmed) as { type?: string }
-                const eventType = parsed.type ?? 'message'
-                if (eventType === 'message_stop') sawTerminalEvent = true
-                if (eventType === 'content_block_delta' || eventType === 'content_block_start') {
-                  sawVisibleOutput = true
-                  streamPartialOutputSeen = true
-                }
-                res.write(`event: ${eventType}\ndata: ${trimmed}\n\n`)
-                extractUsage(parsed)
-              } catch {
-                // Not valid JSON — pass through as data
-                res.write(`data: ${trimmed}\n\n`)
-              }
-            }
+            processRawChunk(chunkToProcess)
           }
+        }
+        if (cloudWireFormat === 'unknown' && unknownWireBuffer) {
+          cloudWireFormat = 'raw'
+          processRawChunk(unknownWireBuffer)
+          unknownWireBuffer = ''
+          unknownWireBufferBytes = 0
         }
         // Flush remaining buffer (raw-JSON branch: treat leftover as one frame).
         if (lineBuffer.trim()) {
-          try {
-            const parsed = JSON.parse(lineBuffer.trim()) as { type?: string }
-            const eventType = parsed.type ?? 'message'
-            if (eventType === 'message_stop') sawTerminalEvent = true
-            if (eventType === 'content_block_delta' || eventType === 'content_block_start') {
-              sawVisibleOutput = true
-              streamPartialOutputSeen = true
-            }
-            res.write(`event: ${eventType}\ndata: ${lineBuffer.trim()}\n\n`)
-            extractUsage(parsed)
-          } catch {
-            res.write(`data: ${lineBuffer.trim()}\n\n`)
-          }
+          processRawLine(lineBuffer)
         }
         // Drain trailing SSE buffer (SSE branch: parse any leftover block that
         // wasn't terminated by \n\n before upstream closed).
         if (sseBuffer.trim()) {
-          parseSSEEvent(sseBuffer)
+          const inspected = inspectSSEEvent(sseBuffer)
+          writeStreamFrames([`${sseBuffer}\n\n`], inspected)
         }
         if (!sawTerminalEvent) {
           throw createStreamInterruptedError(!sawVisibleOutput)
@@ -1327,6 +1538,7 @@ async function handleMessagesStream(
         if (cloudInputTokens > 0 || cloudOutputTokens > 0 || cloudCacheReadTokens > 0 || cloudCacheCreationTokens > 0) {
           addTokenUsage(cloudInputTokens, cloudOutputTokens, cloudCacheReadTokens, cloudCacheCreationTokens)
         }
+        streamCompletedSuccessfully = true
       } finally {
         rawReader.releaseLock()
       }
@@ -1389,16 +1601,14 @@ async function handleMessagesStream(
     if (failure.partialOutputSeen === undefined) {
       failure = { ...failure, partialOutputSeen: streamPartialOutputSeen }
     }
-    // 0.14.2: streaming → non-streaming fallback. When the first-token
-    // watchdog fired (no chunks arrived), try the same body once on the
-    // non-streaming path. If it succeeds, synthesize the response into
-    // Anthropic SSE events and write through the already-open response —
-    // user sees a successful (high-latency) request instead of recovery
-    // wording. The body deadline is the adaptive non-streaming budget,
-    // so this naturally handles long-context inputs that the streaming
-    // route buffered server-side.
+    // Streaming → non-streaming fallback stays eligible until the downstream
+    // protocol commits visible output or a normal terminal event. Control-only
+    // chunks remain buffered, so recovery can replace them without duplicating
+    // the Anthropic message lifecycle. The body deadline is the adaptive
+    // non-streaming budget.
     //
     // Trigger conditions:
+    //   - downstream protocol is still uncommitted, AND
     //   - first-token watchdog fired (`firstTokenWatchdogFired`) OR
     //   - per-chunk idle fired with zero visible output (`!streamPartialOutputSeen`)
     //   - AND fallback is enabled in middleware (default ON)
@@ -1407,7 +1617,7 @@ async function handleMessagesStream(
     // through to the existing wording emission below.
     const preFirstTokenStreamClose =
       failure.kind === 'stream_interrupted_before_first_token' && !streamPartialOutputSeen
-    const fallbackEligible = !totalRuntimeWatchdogFired && isFallbackEnabled(mwForStream) &&
+    const fallbackEligible = !streamProtocolCommitted && !totalRuntimeWatchdogFired && isFallbackEnabled(mwForStream) &&
       (firstTokenWatchdogFired || (isPerChunkIdle && !streamPartialOutputSeen) || preFirstTokenStreamClose)
     let fallbackSucceeded = false
     if (fallbackEligible) {
@@ -1418,23 +1628,51 @@ async function handleMessagesStream(
         middleware: config.middleware,
       })
       const retryBody = buildNonStreamingRetryBody(body)
-      const retryHeaders = { ...servedRoute.headers, accept: 'application/json' }
-      trace.mark('stream_fallback_start')
-      const fallbackJson = await fetchNonStreamingFallback(
-        servedRoute.endpointUrl,
-        retryHeaders,
-        retryBody,
-        fallbackSignal,
-        fallbackBudget.timeoutMs,
-        {
-          translate: Boolean(servedRoute.translate),
-          backendModel: servedRoute.backendModel,
-          requestModel: body.model,
-          config,
-        },
-      )
+      const recoveryModels = [
+        servedByModel,
+        ...streamFallbackChain.filter(modelId => !streamAttemptedModels.includes(modelId)),
+      ]
+      let fallbackJson: AnthropicMessagesResponse | null = null
+      let fallbackServedBy = servedByModel
+      for (const modelId of recoveryModels) {
+        if (modelId !== servedByModel && !streamHealthFilter(modelId)) continue
+        const fallbackRoute = resolveModelRoute(config, modelId)
+        const retryHeaders = { ...fallbackRoute.headers, accept: 'application/json' }
+        trace.mark(modelId === servedByModel ? 'stream_fallback_start' : 'stream_cross_model_fallback_start')
+        const fallbackAttempt = await fetchNonStreamingFallback(
+          fallbackRoute.endpointUrl,
+          retryHeaders,
+          retryBody,
+          fallbackSignal,
+          fallbackBudget.timeoutMs,
+          {
+            translate: Boolean(fallbackRoute.translate),
+            backendModel: fallbackRoute.backendModel,
+            requestModel: body.model,
+            config,
+          },
+        )
+        fallbackJson = fallbackAttempt.response
+        if (fallbackJson) {
+          fallbackServedBy = modelId
+          break
+        }
+        if (fallbackAttempt.status != null && fallbackAttempt.status >= 400 && fallbackAttempt.status < 500) {
+          break
+        }
+      }
       if (fallbackJson) {
         trace.mark('stream_fallback_ok')
+        pendingStreamFrames = []
+        pendingStreamFrameBytes = 0
+        if (fallbackServedBy !== servedByModel) {
+          recordStreamFailureOnce(servedByModel)
+          servedByModel = fallbackServedBy
+        }
+        if (!res.headersSent) {
+          res.setHeader('x-owlcoda-served-by', servedByModel)
+          res.setHeader('x-owlcoda-fallback', 'true')
+        }
         synthesizeSseFromResponse(res, fallbackJson)
         if (fallbackJson.usage) {
           finalInputTokens = fallbackJson.usage.input_tokens
@@ -1450,11 +1688,10 @@ async function handleMessagesStream(
         }
         streamFallbackUsed = true
         fallbackSucceeded = true
-        // Skip recording a failure — from the client's POV this was a
-        // successful (slow-first-token) stream. We can't surface a
-        // response header at this point (writeHead already fired at
-        // stream entry), so the only signal is the trace marker
-        // above; client sees a normal successful SSE sequence.
+        streamCompletedSuccessfully = true
+        // Same-model recovery is a successful (slow-first-token) stream from
+        // the client's perspective. Cross-model recovery records the failed
+        // provider above; deferred headers identify the model that completed.
       } else {
         trace.mark('stream_fallback_fail')
         if (totalRuntimeWatchdogFired) {
@@ -1474,10 +1711,10 @@ async function handleMessagesStream(
     }
     if (!fallbackSucceeded) {
       streamFailure = failure
-      recordFailure(servedByModel)
-      recordOutcome(servedByModel, false)
+      recordStreamFailureOnce(servedByModel)
       await runErrorHooks({ endpoint: '/v1/messages (stream)', errorType: 'stream_error', message: failure.message.slice(0, 200) })
       try {
+        commitPendingStreamFrames()
         const errorEvent = `event: error\ndata: ${JSON.stringify({
           type: 'error',
           error: {
@@ -1500,6 +1737,12 @@ async function handleMessagesStream(
     trace.mark('stream_end')
     const streamTraceResult = trace.end()
     res.end()
+    activeStreams.delete(res)
+
+    if (streamCompletedSuccessfully) {
+      recordSuccess(servedByModel)
+      recordOutcome(servedByModel, true)
+    }
 
     // Performance tracking for streaming. finalInputTokens / finalOutputTokens
     // are populated by both branches above (translator path + cloud path), so

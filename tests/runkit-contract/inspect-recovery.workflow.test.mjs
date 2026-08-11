@@ -226,6 +226,62 @@ test("inspect validates a fresh delivery and accepted verification chain before 
   }
 });
 
+test("byte-identical delivery packet copies remain one logical candidate across inspect, verify, and finish", async () => {
+  const root = await createWorkspace({ runIds: ["duplicate-packet-run"] });
+  try {
+    const runId = "duplicate-packet-run";
+    const acquired = runCli([
+      "lease", "acquire",
+      "--workspace", root,
+      "--run-id", runId,
+      "--work-item", "W1",
+      "--owned-path", "src/example.txt",
+    ]);
+    assert.equal(acquired.status, 0, acquired.stderr);
+    await writeFile(path.join(root, "src/example.txt"), "candidate\n");
+    for (const packetId of ["candidate-a", "candidate-b"]) {
+      const created = runCli([
+        "delivery", "create",
+        "--workspace", root,
+        "--run-id", runId,
+        "--from-lease", "W1",
+        "--packet-id", packetId,
+      ]);
+      assert.equal(created.status, 0, created.stderr);
+    }
+
+    const beforeVerify = inspect(root);
+    const execution = beforeVerify.json.executions.find(item => item.runId === runId);
+    assert.equal(execution.recovery.delivery.status, "fresh", JSON.stringify(execution));
+
+    const verified = runCli([
+      "verify",
+      "--workspace", root,
+      "--run-id", runId,
+      "--from-lease", "W1",
+      "--verification-id", "duplicate-logical-candidate",
+      "--cwd", ".",
+      "--",
+      process.execPath,
+      "-e",
+      "process.exit(0)",
+    ]);
+    assert.equal(verified.status, 0, `${verified.stdout}\n${verified.stderr}`);
+    assert.equal(verified.json.status, "verified");
+
+    const finished = runCli([
+      "finish",
+      "--workspace", root,
+      "--run-id", runId,
+      "--decision", "accepted",
+    ]);
+    assert.equal(finished.status, 0, `${finished.stdout}\n${finished.stderr}`);
+    assert.equal(finished.json.status, "finished");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("inspect fails closed with actionable issues for malformed active artifacts", async () => {
   const root = await createWorkspace({ runIds: ["broken-run"] });
   try {
@@ -292,21 +348,21 @@ test("inspect keeps an unclosed execution with a malformed engine pin visible an
     assert.equal(inspected.status, 2, inspected.stderr);
     assert.equal(inspected.json.executions[0].lifecycle, "unknown");
     assert.deepEqual(inspected.json.recovery, {
-      state: "single_active_execution",
+      state: "invalid_control_truth",
       activeRunIds: ["broken-pin"],
-      selectedRunId: "broken-pin",
+      selectedRunId: null,
       nextAllowedAction: "repair_execution_artifacts",
       authorizationGranted: false,
     });
     assert.equal(inspected.json.summary.currentExecution.openCount, 1);
-    assert.equal(inspected.json.summary.evidence.trustLevel, "invalid");
+    assert.equal(inspected.json.summary.evidence.trustLevel, "none");
     assert.equal(inspected.json.summary.dominantGap.code, "repair_execution_artifacts");
 
     const human = spawnSync(process.execPath, [
       cliPath, "inspect", "--workspace", root,
     ], { encoding: "utf8" });
     assert.equal(human.status, 2, human.stderr);
-    assert.match(human.stdout, /Current execution:\s+broken-pin/i);
+    assert.match(human.stdout, /Current execution:\s+none/i);
     assert.match(human.stdout, /Open executions:\s+1/i);
     assert.match(human.stdout, /Dominant gap:\s+repair_execution_artifacts/i);
   } finally {
@@ -374,7 +430,7 @@ test("inspect exposes a symlinked execution as invalid open truth", async () => 
     assert.equal(inspected.json.executions[0].lifecycle, "unknown");
     assert.equal(inspected.json.executions[0].recovery.evidenceTrustLevel, "invalid");
     assert.match(inspected.json.executions[0].recovery.issues.join("\n"), /execution.*symlink/i);
-    assert.equal(inspected.json.summary.currentExecution.selectedRunId, "redirected-run");
+    assert.equal(inspected.json.summary.currentExecution.selectedRunId, null);
     assert.equal(inspected.json.summary.currentExecution.openCount, 1);
     assert.equal(inspected.json.summary.dominantGap.code, "repair_execution_artifacts");
   } finally {
@@ -490,7 +546,7 @@ test("inspect rejects an engine pin routed through a symlink", async () => {
     assert.equal(inspected.status, 2, inspected.stderr);
     assert.equal(inspected.json.executions[0].lifecycle, "unknown");
     assert.match(inspected.json.executions[0].enginePin.issues.join("\n"), /engine pin.*symlink/i);
-    assert.equal(inspected.json.summary.currentExecution.selectedRunId, "active-run");
+    assert.equal(inspected.json.summary.currentExecution.selectedRunId, null);
     assert.equal(inspected.json.summary.dominantGap.code, "repair_execution_artifacts");
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -512,7 +568,7 @@ test("inspect rejects a closeout receipt routed through a symlink", async () => 
 
     const inspected = inspect(root);
     assert.equal(inspected.status, 2, inspected.stderr);
-    assert.equal(inspected.json.executions[0].lifecycle, "closed");
+    assert.equal(inspected.json.executions[0].lifecycle, "unknown");
     assert.equal(inspected.json.executions[0].closeout.status, "invalid");
     assert.match(inspected.json.executions[0].closeout.issues.join("\n"), /closeout receipt.*symlink/i);
     assert.equal(inspected.json.recovery.state, "invalid_control_truth");
@@ -618,7 +674,8 @@ test("human inspect escapes control characters from malformed project truth", as
     assert.equal(inspected.status, 2, inspected.stderr);
     assert.equal(inspected.stdout.includes("\nRelease authorization: true"), false);
     assert.equal(inspected.stdout.includes("\u001b"), false);
-    assert.match(inspected.stdout, /bad-run\\u000aRelease authorization: true\\u001b\[31m/);
+    assert.equal(inspected.stdout.includes("bad-run"), false);
+    assert.match(inspected.stdout, /Current execution:\s+none/);
     assert.match(inspected.stdout, /Release authorization:\s+false/);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -671,6 +728,15 @@ test("direct inspect is human-first while --json preserves complete machine trut
         openCount: 1,
       },
       latestIndexedCloseout: null,
+      selectedHeadCloseout: null,
+      closedHistory: {
+        status: "empty",
+        runCount: 0,
+        blocking: false,
+        selectedHeadRunId: null,
+        selectionReason: "no_closed_history",
+        decisionCounts: { accepted: 0, blocked: 0, rejected: 0 },
+      },
       source: { status: "missing", sourceFingerprint: null },
       leases: {
         activeCount: 1,
@@ -707,6 +773,9 @@ test("direct inspect is human-first while --json preserves complete machine trut
         code: "continue_feature_work",
         reasons: [],
       },
+      lifecycleNextAction: "continue_feature_work",
+      maintenanceNextAction: null,
+      optionalReviewAction: null,
       nextAllowedAction: "continue_feature_work",
       authorizationGranted: false,
       gitAuthorization: false,

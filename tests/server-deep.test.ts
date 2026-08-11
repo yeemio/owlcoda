@@ -11,8 +11,12 @@
  * request-id header, CORS on all routes, /v1/skill-stats, /v1/insights.
  */
 import { describe, it, expect, afterAll } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
 import * as http from 'node:http'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { startServer } from '../src/server.js'
+import { listSessions } from '../src/native/session.js'
 import type { OwlCodaConfig } from '../src/config.js'
 
 const TEST_CONFIG: OwlCodaConfig = {
@@ -35,6 +39,9 @@ const TEST_CONFIG: OwlCodaConfig = {
 
 let server: http.Server
 let baseUrl: string
+const previousOwlcodaHome = process.env['OWLCODA_HOME']
+const isolatedOwlcodaHome = mkdtempSync(join(tmpdir(), 'owlcoda-server-deep-'))
+process.env['OWLCODA_HOME'] = isolatedOwlcodaHome
 
 const startOnce = (async () => {
   server = startServer(TEST_CONFIG)
@@ -44,8 +51,18 @@ const startOnce = (async () => {
 })()
 
 afterAll(async () => {
-  await startOnce
-  server?.close()
+  try {
+    await startOnce
+    if (server?.listening) {
+      await new Promise<void>((resolve, reject) => {
+        server.close(error => error ? reject(error) : resolve())
+      })
+    }
+  } finally {
+    if (previousOwlcodaHome === undefined) delete process.env['OWLCODA_HOME']
+    else process.env['OWLCODA_HOME'] = previousOwlcodaHome
+    rmSync(isolatedOwlcodaHome, { recursive: true, force: true })
+  }
 })
 
 async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
@@ -311,6 +328,9 @@ describe('server deep — insights endpoint', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(typeof body).toBe('object')
+    expect(body.sessionCount).toBe(0)
+    expect(body.sessions).toEqual([])
+    expect(listSessions()).toHaveLength(0)
   })
 
   it('GET /v1/insights/nonexistent-session returns 404 or empty', async () => {

@@ -8,7 +8,7 @@ import { createAppServer, listenAppServer } from '../../../src/native/app-server
 import { createAppServerClient, AppServerClientError } from '../../../src/native/app-server/client.js'
 import { createConversation } from '../../../src/native/conversation.js'
 import { deleteSession, loadSession, saveSession } from '../../../src/native/session.js'
-import { runCli as runRunKitCore } from '../../../scripts/runkit-contract/runkit-cli.mjs'
+import { runCli as runRunKitCore } from '../../../node_modules/owlrunkit/scripts/runkit-contract/runkit-cli.mjs'
 
 const servers: Server[] = []
 const createdSessions: string[] = []
@@ -50,12 +50,12 @@ describe('app-server client adapter', () => {
     await expect(client.checkCompatibility({
       client: { name: 'owlcoda-desktop', version: '0.1.0' },
       supportedProtocolVersions: ['v1'],
-      expectedRuntimeVersion: '0.15.31',
+      expectedRuntimeVersion: '0.18.0',
       expectedWorkspaceRealpath: realpathSync(projectRoot),
       requestedCapabilities: { review: true },
     })).resolves.toMatchObject({
       compatibility: 'compatible',
-      runtimeVersion: '0.15.31',
+      runtimeVersion: '0.18.0',
       protocolVersion: 'v1',
       workspaceRealpath: realpathSync(projectRoot),
       capabilities: { review: true },
@@ -72,7 +72,7 @@ describe('app-server client adapter', () => {
     const result = await client.checkCompatibility({
       client: { name: 'owlcoda-desktop', version: '0.1.0' },
       supportedProtocolVersions: ['v1'],
-      expectedRuntimeVersion: '0.15.31',
+      expectedRuntimeVersion: '0.18.0',
       expectedWorkspaceRealpath: realpathSync(projectRoot),
       requestedCapabilities: {},
       ...override,
@@ -133,7 +133,7 @@ describe('app-server client adapter', () => {
     await expect(client.checkCompatibility({
       client: { name: 'owlcoda-desktop', version: '0.1.0' },
       supportedProtocolVersions: ['v1'],
-      expectedRuntimeVersion: '0.15.31',
+      expectedRuntimeVersion: '0.18.0',
       expectedWorkspaceRealpath: process.cwd(),
       requestedCapabilities: {},
     })).resolves.toEqual({ compatibility: 'unreachable' })
@@ -161,7 +161,7 @@ describe('app-server client adapter', () => {
     const result = await client.checkCompatibility({
       client: { name: 'owlcoda-desktop', version: '0.1.0' },
       supportedProtocolVersions: ['v1'],
-      expectedRuntimeVersion: '0.15.31',
+      expectedRuntimeVersion: '0.18.0',
       expectedWorkspaceRealpath,
       requestedCapabilities: {},
     })
@@ -1519,7 +1519,7 @@ function jsonRpcResult(id: unknown, result: unknown): Response {
 
 function initializeResult(workspaceRealpath: string, override: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    runtimeVersion: '0.15.31',
+    runtimeVersion: '0.18.0',
     runtimeBuild: 'test-build',
     protocolVersion: 'v1',
     workspaceId: workspaceId(workspaceRealpath),

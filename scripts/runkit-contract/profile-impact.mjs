@@ -122,6 +122,18 @@ export function resolveProfileImpactDetailed(input) {
 	}
 }
 
+export function resolveProfileImpactProjection({ changedPaths, profiles, detailed = false }) {
+	if (!detailed) return resolveProfileImpact({ changedPaths, profiles })
+	const impact = resolveProfileImpactDetailed({ changedPaths, profiles })
+	return {
+		decision: impact.decision,
+		profileIds: impact.selectedProfileIds,
+		uncoveredPaths: impact.uncoveredPaths,
+		directProfileIds: impact.directProfileIds,
+		transitiveProfileIds: impact.transitiveProfileIds,
+	}
+}
+
 function normalizeProfile(value) {
 	if (!isRecord(value) || typeof value.id !== "string" || value.id.length === 0 || !Array.isArray(value.paths)) {
 		throw new Error("Each profile requires a non-empty id and paths array.")

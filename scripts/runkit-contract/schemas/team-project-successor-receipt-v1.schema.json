@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.com/schemas/runkit/team-project-successor-receipt-v1.schema.json",
+  "title": "OwlCoda RunKit Team Project Successor Receipt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "status",
+    "transitionId",
+    "phase",
+    "occurredAt",
+    "reason",
+    "requestSha256",
+    "receiptPath",
+    "from",
+    "to",
+    "archive",
+    "repositoryActions",
+    "authorizationGranted",
+    "receiptSha256"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitTeamProjectSuccessorReceiptV1" },
+    "status": { "const": "team_project_successor" },
+    "transitionId": { "$ref": "#/$defs/id" },
+    "phase": { "enum": ["prepared", "archived", "active_installed", "completed"] },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "reason": { "type": "string", "minLength": 1 },
+    "requestSha256": { "$ref": "#/$defs/hash" },
+    "receiptPath": { "type": "string", "minLength": 1 },
+    "from": { "$ref": "#/$defs/projectFrom" },
+    "to": { "$ref": "#/$defs/projectTo" },
+    "archive": { "$ref": "#/$defs/archive" },
+    "repositoryActions": { "$ref": "#/$defs/actions" },
+    "authorizationGranted": { "const": false },
+    "receiptSha256": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "definition": {
+      "type": "object"
+    },
+    "projectFrom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectId",
+        "definition",
+        "definitionRawSha256",
+        "definitionCanonicalSha256",
+        "projectTruthHash",
+        "eventCount"
+      ],
+      "properties": {
+        "projectId": { "$ref": "#/$defs/id" },
+        "definition": { "$ref": "#/$defs/definition" },
+        "definitionRawSha256": { "$ref": "#/$defs/hash" },
+        "definitionCanonicalSha256": { "$ref": "#/$defs/hash" },
+        "projectTruthHash": { "$ref": "#/$defs/hash" },
+        "eventCount": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "projectTo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectId",
+        "definitionSourcePath",
+        "definitionSourceSha256",
+        "definition",
+        "definitionRawSha256",
+        "definitionCanonicalSha256",
+        "projectTruthHash",
+        "eventCount"
+      ],
+      "properties": {
+        "projectId": { "$ref": "#/$defs/id" },
+        "definitionSourcePath": { "type": "string", "minLength": 1 },
+        "definitionSourceSha256": { "$ref": "#/$defs/hash" },
+        "definition": { "$ref": "#/$defs/definition" },
+        "definitionRawSha256": { "$ref": "#/$defs/hash" },
+        "definitionCanonicalSha256": { "$ref": "#/$defs/hash" },
+        "projectTruthHash": { "$ref": "#/$defs/hash" },
+        "eventCount": { "const": 0 }
+      }
+    },
+    "archiveFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "byteLength", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "byteLength": { "type": "integer", "minimum": 0 },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "archive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "manifestAlgorithm", "manifestSha256", "directories", "files", "sealPolicy"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "manifestAlgorithm": { "const": "sha256-canonical-json-v1" },
+        "manifestSha256": { "$ref": "#/$defs/hash" },
+        "directories": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/archiveFile" }
+        },
+        "sealPolicy": { "$ref": "#/$defs/sealPolicy" }
+      }
+    },
+    "sealPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "regularFileMode", "directoryMode"],
+      "properties": {
+        "policy": { "const": "posix-owner-write-denied-v1" },
+        "regularFileMode": { "const": "0444" },
+        "directoryMode": { "const": "0555" }
+      }
+    },
+    "actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["staged", "committed", "pushed", "tagged", "published", "deployed"],
+      "properties": {
+        "staged": { "const": false },
+        "committed": { "const": false },
+        "pushed": { "const": false },
+        "tagged": { "const": false },
+        "published": { "const": false },
+        "deployed": { "const": false }
+      }
+    }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitTeamProjectSuccessorReceiptV1",
+    "status": "team_project_successor",
+    "transitionId": "transition-001",
+    "phase": "completed",
+    "occurredAt": "2026-08-09T08:00:00.000Z",
+    "reason": "Begin the next bounded project.",
+    "requestSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "receiptPath": ".owlcoda/runkit/project-successor-transitions/transition-001.json",
+    "from": {
+      "projectId": "project-old",
+      "definition": {},
+      "definitionRawSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "definitionCanonicalSha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "projectTruthHash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "eventCount": 3
+    },
+    "to": {
+      "projectId": "project-new",
+      "definitionSourcePath": "/workspace/next-project.json",
+      "definitionSourceSha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "definition": {},
+      "definitionRawSha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "definitionCanonicalSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "projectTruthHash": "2222222222222222222222222222222222222222222222222222222222222222",
+      "eventCount": 0
+    },
+    "archive": {
+      "path": ".owlcoda/runkit/project-archives/project-old-dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd-4444444444444444444444444444444444444444444444444444444444444444",
+      "manifestAlgorithm": "sha256-canonical-json-v1",
+      "manifestSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "directories": ["events"],
+      "files": [{
+        "path": "definition.json",
+        "byteLength": 512,
+        "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }],
+      "sealPolicy": {
+        "policy": "posix-owner-write-denied-v1",
+        "regularFileMode": "0444",
+        "directoryMode": "0555"
+      }
+    },
+    "repositoryActions": {
+      "staged": false,
+      "committed": false,
+      "pushed": false,
+      "tagged": false,
+      "published": false,
+      "deployed": false
+    },
+    "authorizationGranted": false,
+    "receiptSha256": "5555555555555555555555555555555555555555555555555555555555555555"
+  }]
+}

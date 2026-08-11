@@ -93,12 +93,11 @@ describe('stub endpoints', () => {
     expect(body).toEqual({})
   })
 
-  it('GET /healthz returns version and status (may be unhealthy without router)', async () => {
+  it('GET /healthz keeps gateway health independent from the local runtime lifecycle', async () => {
     const pkg = JSON.parse(await import('node:fs').then(fs => fs.readFileSync(new URL('../package.json', import.meta.url), 'utf-8')))
     const { status, body } = await fetchJson('/healthz')
-    // Deep probe returns 503 when router unreachable, 200 when healthy
-    expect([200, 503]).toContain(status)
-    expect(['healthy', 'degraded', 'unhealthy']).toContain(body.status)
+    expect(status).toBe(200)
+    expect(['healthy', 'degraded']).toContain(body.status)
     expect(body.version).toBe(pkg.version)
   })
 

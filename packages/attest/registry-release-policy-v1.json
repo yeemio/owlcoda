@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "OwlCodaRunKitRegistryReleasePolicyV1",
+  "status": "release_candidate_unpublished",
+  "packageName": "owlcoda",
+  "candidateVersion": "0.15.32",
+  "registry": "https://registry.npmjs.org",
+  "registryRequiredBeforeAdoption": true,
+  "exactVersionRequired": true,
+  "requiredRegistryBindings": [
+    "packageName",
+    "version",
+    "shasum",
+    "integrity",
+    "tarballUrl"
+  ],
+  "forbiddenAdoptionSources": [
+    "directory",
+    "file",
+    "git",
+    "local_tarball",
+    "symlink",
+    "workspace"
+  ],
+  "currentPublishedRelease": {
+    "packageName": "owlcoda",
+    "version": "0.15.31",
+    "shasum": "94ecb4c64370df2a36bb451985b793b39b9945e2",
+    "integrity": "sha512-HI+swTFoSJUO4kzcwfKzriAvKqx+WSM/vXPMAh69WBnKgDuew2b4eRWv6uasuq93BPIu1UWOOorNVUeYC33FTA=="
+  },
+  "registryRelease": null,
+  "registryEvidenceMustBeExternal": true,
+  "registryEvidenceSchemaVersion": "OwlCodaRunKitRegistryReleaseEvidenceV1",
+  "standaloneAttestPackage": "@owlcoda/attest",
+  "standaloneAttestPublicationRequired": false,
+  "signatureRequired": false,
+  "githubActionRequired": false,
+  "foreignProjectWriteAuthorized": false,
+  "authorizationGranted": false
+}

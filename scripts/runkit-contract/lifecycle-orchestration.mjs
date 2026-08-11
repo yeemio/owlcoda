@@ -11,6 +11,7 @@ import { arch, type } from "node:os";
 import path from "node:path";
 
 import { createDeliveryFromLeaseWithinControlTransaction } from "./delivery-create.mjs";
+import { collapseByteIdenticalDeliveryCandidates } from "./delivery-selection.mjs";
 import { runFinalize } from "./finalize.mjs";
 import { withControlTransaction } from "./lease-lifecycle.mjs";
 import {
@@ -29,6 +30,7 @@ import {
   verifySnapshotSourceBinding,
 } from "./snapshot.mjs";
 import { verifyDeliveryPacket } from "./source-fingerprint.mjs";
+import { verifySourceCandidateV2 } from "./source-candidate.mjs";
 import { validateVerificationReceiptGate } from "./verification-receipt-gate.mjs";
 
 const LOCKFILES = [
@@ -50,6 +52,12 @@ function entryExists(filePath) {
     if (error?.code === "ENOENT") return false;
     throw error;
   }
+}
+
+function sortedFileMap(value) {
+  return Object.fromEntries(
+    Object.entries(value).sort(([left], [right]) => left.localeCompare(right)),
+  );
 }
 
 function within(root, candidate) {
@@ -86,6 +94,98 @@ function projectTruthDirectory({ workspaceRoot, executionRoot, directoryPath, la
 function ensureRegularDirectory(directoryPath, label) {
   if (!entryExists(directoryPath)) mkdirSync(directoryPath);
   return regularDirectory(directoryPath, label);
+}
+
+function verificationExecutableGate(executable) {
+  if (!path.isAbsolute(executable)) {
+    return {
+      valid: false,
+      issueCode: "verify_executable_absolute_path_required",
+      message: "verify executable after -- must be an absolute path.",
+    };
+  }
+  let stat;
+  try {
+    stat = lstatSync(executable);
+  } catch {
+    return {
+      valid: false,
+      issueCode: "verify_executable_missing",
+      message: "verify executable must be a regular file, not a symlink.",
+    };
+  }
+  if (stat.isSymbolicLink()) {
+    return {
+      valid: false,
+      issueCode: "verify_executable_symlink_rejected",
+      message: "verify executable must be a regular file, not a symlink.",
+    };
+  }
+  if (!stat.isFile()) {
+    return {
+      valid: false,
+      issueCode: "verify_executable_not_regular_file",
+      message: "verify executable must be a regular file, not a symlink.",
+    };
+  }
+  return { valid: true };
+}
+
+function recordRejectedVerificationPreflight({
+  workspaceRoot,
+  executionRoot,
+  runId,
+  verificationId,
+  executable,
+  commandArgv,
+  issueCode,
+}) {
+  const preflightsRoot = path.join(executionRoot, "verification-preflights");
+  const realRoot = ensureRegularDirectory(
+    preflightsRoot,
+    "Verification preflight directory",
+  );
+  if (
+    realRoot !== path.resolve(preflightsRoot)
+    || !within(realpathSync(executionRoot), realRoot)
+    || !within(realpathSync(workspaceRoot), realRoot)
+  ) {
+    throw new Error("Verification preflight directory must remain inside the execution.");
+  }
+  writeJsonExclusiveAtomically(path.join(realRoot, `${verificationId}.json`), {
+    schemaVersion: "OwlCodaRunKitVerificationPreflightV1",
+    runId,
+    verificationId,
+    status: "rejected",
+    issueCode,
+    executable,
+    commandArgvSha256: sha256(JSON.stringify(commandArgv)),
+    authorizationGranted: false,
+  });
+}
+
+function recordRejectedFinalizeAttempt({
+  workspaceRoot,
+  runId,
+  verificationId,
+  outputRoot,
+  finalizeRequestPath,
+  finalized,
+}) {
+  const relativeRequestPath = relativeToWorkspace(workspaceRoot, finalizeRequestPath);
+  const artifactPath = path.join(outputRoot, "finalize-result.json");
+  writeJsonExclusiveAtomically(artifactPath, {
+    schemaVersion: "OwlCodaRunKitVerificationFinalizeAttemptV1",
+    runId,
+    verificationId,
+    status: "rejected",
+    gateStatus: finalized.status,
+    finalizeRequestPath: relativeRequestPath,
+    finalizeRequestSha256: sha256(readFileSync(finalizeRequestPath)),
+    result: finalized,
+    authorizationGranted: false,
+  });
+  return relativeToWorkspace(workspaceRoot, artifactPath);
 }
 
 function gitVersion() {
@@ -149,16 +249,17 @@ function reusableDelivery({ workspaceRoot, executionRoot, runId, workItemId }) {
     const sourceGate = verifyDeliveryPacket({ workspaceRoot, packet });
     if (sourceGate.status === "valid") fresh.push({ packetPath, packet, sourceGate });
   }
-  if (fresh.length > 1) {
+  const distinct = collapseByteIdenticalDeliveryCandidates(fresh);
+  if (distinct.length > 1) {
     throw new Error("Multiple fresh delivery packets require explicit repair before high-level verify.");
   }
-  if (fresh.length === 0) return null;
+  if (distinct.length === 0) return null;
   return {
     status: "delivery_packet_reused",
     exitCode: 0,
     runId,
-    deliveryPacketPath: relativeToWorkspace(workspaceRoot, fresh[0].packetPath),
-    sourceFingerprint: fresh[0].sourceGate.recomputedFingerprint,
+    deliveryPacketPath: relativeToWorkspace(workspaceRoot, distinct[0].packetPath),
+    sourceFingerprint: distinct[0].sourceGate.recomputedFingerprint,
     authorizationGranted: false,
   };
 }
@@ -201,6 +302,20 @@ function runHighLevelVerifyWithinControlTransaction({
   const { executionRoot, pinGate } = loadActiveExecution(workspaceRoot, runId);
   if (pinGate.status !== "valid") return { ...pinGate, authorizationGranted: false };
   regularDirectory(executionRoot, "Execution directory");
+  const [executable] = commandArgv;
+  const executableGate = verificationExecutableGate(executable);
+  if (!executableGate.valid) {
+    recordRejectedVerificationPreflight({
+      workspaceRoot,
+      executionRoot,
+      runId,
+      verificationId,
+      executable,
+      commandArgv,
+      issueCode: executableGate.issueCode,
+    });
+    throw new Error(executableGate.message);
+  }
   for (const [name, label, create] of [
     ["delivery-packets", "Delivery packet directory", false],
     ["snapshots", "Snapshot directory", true],
@@ -211,9 +326,6 @@ function runHighLevelVerifyWithinControlTransaction({
     if (create) ensureRegularDirectory(directoryPath, label);
     else regularDirectory(directoryPath, label);
   }
-  const [executable] = commandArgv;
-  if (!path.isAbsolute(executable)) throw new Error("verify executable after -- must be an absolute path.");
-  regularFile(executable, "verify executable");
   const realCwd = realpathSync(cwd === "." ? workspaceRoot : path.join(workspaceRoot, cwd));
   if (!within(workspaceRoot, realCwd)) throw new Error("verify cwd escapes the workspace through a symlink.");
   for (const outputPath of [
@@ -267,7 +379,19 @@ function runHighLevelVerifyWithinControlTransaction({
   };
   writeJsonExclusiveAtomically(finalizeRequestPath, finalizeRequest);
   const finalized = runFinalize({ workspaceRoot, runId, request: finalizeRequest });
-  if (finalized.status !== "accepted_passed") return finalized;
+  if (finalized.status !== "accepted_passed") {
+    return {
+      ...finalized,
+      finalizeResultPath: recordRejectedFinalizeAttempt({
+        workspaceRoot,
+        runId,
+        verificationId,
+        outputRoot,
+        finalizeRequestPath,
+        finalized,
+      }),
+    };
+  }
   return {
     status: "verified",
     exitCode: 0,
@@ -361,10 +485,90 @@ export function activeAcceptedGate({ workspaceRoot, runId }) {
       matchingPackets.push({ packetPath, packet, sourceGate: verifyDeliveryPacket({ workspaceRoot, packet }) });
     }
   }
-  if (matchingPackets.length !== 1 || matchingPackets[0].sourceGate.status !== "valid") {
-    throw new Error("Accepted finish requires one fresh delivery packet matching the active verification gate; source drift remains unresolved.");
+  const distinctMatchingPackets = collapseByteIdenticalDeliveryCandidates(matchingPackets);
+  const declaredSourceArtifact = validated.active.receipt.sourceArtifact;
+  let matchingCandidate = null;
+  if (distinctMatchingPackets.length === 0) {
+    const candidateRoot = path.join(executionRoot, "source-candidates");
+    projectTruthDirectory({
+      workspaceRoot,
+      executionRoot,
+      directoryPath: candidateRoot,
+      label: "Source candidate directory",
+    });
+    const candidates = [];
+    for (const entry of readdirSync(candidateRoot, { withFileTypes: true })) {
+      if (!entry.name.endsWith(".json")) continue;
+      if (entry.isSymbolicLink() || !entry.isFile()) {
+        throw new Error(`Source candidate must be a regular file: ${entry.name}`);
+      }
+      const candidatePath = path.join(candidateRoot, entry.name);
+      const candidate = readJson(regularFile(
+        candidatePath,
+        `Source candidate ${entry.name}`,
+      ));
+      if (
+        candidate.runId === runId
+        && candidate.sourceFingerprint?.sha256
+          === validated.active.receipt.sourceFingerprint
+      ) {
+        const sourceGate = verifySourceCandidateV2({
+          workspaceRoot,
+          candidatePath: relativeToWorkspace(workspaceRoot, candidatePath),
+        });
+        if (sourceGate.status === "valid") {
+          candidates.push({ candidatePath, candidate, sourceGate });
+        }
+      }
+    }
+    const manifestFingerprints = new Set(
+      candidates.map(({ candidate }) => candidate.sourceManifest.sha256),
+    );
+    if (manifestFingerprints.size === 1) {
+      matchingCandidate = candidates.find(({ candidatePath }) => (
+        declaredSourceArtifact?.kind === "source_candidate_v2"
+        && declaredSourceArtifact.path
+          === relativeToWorkspace(workspaceRoot, candidatePath)
+        && declaredSourceArtifact.sha256 === sha256(readFileSync(candidatePath))
+      )) ?? candidates[0];
+    }
   }
-  const [matchingPacket] = matchingPackets;
+  if (
+    matchingCandidate === null
+    && (
+      distinctMatchingPackets.length !== 1
+      || distinctMatchingPackets[0].sourceGate.status !== "valid"
+    )
+  ) {
+    throw new Error("Accepted finish requires one fresh source binding matching the active verification gate; source drift remains unresolved.");
+  }
+  const [matchingPacket] = distinctMatchingPackets;
+  if (declaredSourceArtifact !== undefined) {
+    const selectedPath = matchingCandidate === null
+      ? matchingPacket.packetPath
+      : matchingCandidate.candidatePath;
+    const expectedSourceArtifact = {
+      kind: matchingCandidate === null
+        ? "delivery_packet_v1"
+        : "source_candidate_v2",
+      runId,
+      path: relativeToWorkspace(workspaceRoot, selectedPath),
+      sha256: sha256(readFileSync(selectedPath)),
+      sourceFingerprint: validated.active.receipt.sourceFingerprint,
+    };
+    if (
+      declaredSourceArtifact.kind !== expectedSourceArtifact.kind
+      || declaredSourceArtifact.runId !== expectedSourceArtifact.runId
+      || declaredSourceArtifact.path !== expectedSourceArtifact.path
+      || declaredSourceArtifact.sha256 !== expectedSourceArtifact.sha256
+      || declaredSourceArtifact.sourceFingerprint
+        !== expectedSourceArtifact.sourceFingerprint
+    ) {
+      throw new Error(
+        "Accepted finish requires the active receipt sourceArtifact to match the selected source bytes.",
+      );
+    }
+  }
   const snapshotsRoot = path.join(executionRoot, "snapshots");
   const evidenceRoot = path.join(executionRoot, "snapshot-evidence");
   projectTruthDirectory({ workspaceRoot, executionRoot, directoryPath: snapshotsRoot, label: "Snapshot directory" });
@@ -373,14 +577,45 @@ export function activeAcceptedGate({ workspaceRoot, runId }) {
     const snapshotId = safeIdentifier(commandReceipt.id, "active snapshot id");
     const snapshotPath = path.join(snapshotsRoot, `${snapshotId}.json`);
     const snapshot = readJson(regularFile(snapshotPath, `Active snapshot ${snapshotId}`));
-    const sourceBinding = verifySnapshotSourceBinding({
-      snapshot,
-      expectedFiles: matchingPacket.packet.changedFiles?.files
-        ?? matchingPacket.packet.changedFiles?.wholeFileSha256,
-      expectedFingerprint: validated.active.receipt.sourceFingerprint,
-    });
-    if (!sourceBinding.valid) {
-      throw new Error(`Accepted finish requires snapshot source bound to the DeliveryPacket: ${snapshotId}; ${sourceBinding.issues.join("; ")}`);
+    if (matchingCandidate !== null) {
+      const expectedFiles = Object.fromEntries(
+        matchingCandidate.candidate.sourceManifest.entries
+          .filter((entry) => entry.operation !== "deleted")
+          .map((entry) => [entry.path, entry.sha256])
+          .sort(([left], [right]) => left.localeCompare(right)),
+      );
+      const beforeFiles = sortedFileMap(
+        snapshot.repositoryBefore?.selectedFiles ?? {},
+      );
+      const afterFiles = sortedFileMap(
+        snapshot.repositoryAfter?.selectedFiles ?? {},
+      );
+      const expectedInputs = Object.entries(expectedFiles)
+        .map(([id, hash]) => ({ id, sha256: hash }));
+      const actualInputs = [
+        ...(snapshot.command?.evidence?.materialInputs ?? []),
+      ].sort((left, right) => String(left?.id).localeCompare(String(right?.id)));
+      if (
+        snapshot.repositoryBefore?.head
+          !== matchingCandidate.candidate.baseline.head
+        || snapshot.repositoryAfter?.head
+          !== matchingCandidate.candidate.baseline.head
+        || JSON.stringify(beforeFiles) !== JSON.stringify(expectedFiles)
+        || JSON.stringify(afterFiles) !== JSON.stringify(expectedFiles)
+        || JSON.stringify(actualInputs) !== JSON.stringify(expectedInputs)
+      ) {
+        throw new Error(`Accepted finish requires snapshot source bound to SourceCandidate V2: ${snapshotId}`);
+      }
+    } else {
+      const sourceBinding = verifySnapshotSourceBinding({
+        snapshot,
+        expectedFiles: matchingPacket.packet.changedFiles?.files
+          ?? matchingPacket.packet.changedFiles?.wholeFileSha256,
+        expectedFingerprint: validated.active.receipt.sourceFingerprint,
+      });
+      if (!sourceBinding.valid) {
+        throw new Error(`Accepted finish requires snapshot source bound to the DeliveryPacket: ${snapshotId}; ${sourceBinding.issues.join("; ")}`);
+      }
     }
     const expectedStdoutPath = relativeToWorkspace(workspaceRoot, path.join(evidenceRoot, `${snapshotId}.stdout`));
     const expectedStderrPath = relativeToWorkspace(workspaceRoot, path.join(evidenceRoot, `${snapshotId}.stderr`));
@@ -404,7 +639,19 @@ export function activeAcceptedGate({ workspaceRoot, runId }) {
     status: "valid",
     gateInputPath,
     gateInputRelativePath: relativeToWorkspace(workspaceRoot, gateInputPath),
-    deliveryPacketPath: relativeToWorkspace(workspaceRoot, matchingPacket.packetPath),
+    ...(matchingCandidate === null
+      ? {
+        deliveryPacketPath: relativeToWorkspace(
+          workspaceRoot,
+          matchingPacket.packetPath,
+        ),
+      }
+      : {
+        sourceCandidatePath: relativeToWorkspace(
+          workspaceRoot,
+          matchingCandidate.candidatePath,
+        ),
+      }),
     activeReceiptSha256: gate.activeReceiptSha256,
     authorizationGranted: false,
   };

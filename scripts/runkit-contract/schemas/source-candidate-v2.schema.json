@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/source-candidate-v2.json",
+  "title": "OwlCoda RunKit Source Candidate V2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "runId", "candidateId", "status", "sourceMode", "baseline", "sourceManifest", "sourceFingerprint", "payload", "discovery", "repositoryActions", "authorizationGranted", "candidateSha256"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitSourceCandidateV2" },
+    "runId": { "$ref": "#/$defs/id" },
+    "candidateId": { "$ref": "#/$defs/id" },
+    "status": { "const": "frozen" },
+    "sourceMode": { "const": "dirty_worktree_exact_manifest_v2" },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["branch", "head"],
+      "properties": {
+        "branch": { "type": "string", "minLength": 1 },
+        "head": { "type": "string", "pattern": "^[a-f0-9]{40}$" }
+      }
+    },
+    "sourceManifest": { "$ref": "#/$defs/manifest" },
+    "sourceFingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256"],
+      "properties": { "sha256": { "$ref": "#/$defs/hash" } }
+    },
+    "payload": { "$ref": "#/$defs/payload" },
+    "discovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fromLease", "leasePath"],
+      "properties": {
+        "fromLease": { "$ref": "#/$defs/id" },
+        "leasePath": { "type": "string", "minLength": 1 }
+      }
+    },
+    "repositoryActions": { "$ref": "#/$defs/actions" },
+    "authorizationGranted": { "const": false },
+    "candidateSha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["worktreeCreated", "branchCreated", "staged", "committed", "pushed", "tagged", "published", "deployed"],
+      "properties": {
+        "worktreeCreated": { "const": false },
+        "branchCreated": { "const": false },
+        "staged": { "const": false },
+        "committed": { "const": false },
+        "pushed": { "const": false },
+        "tagged": { "const": false },
+        "published": { "const": false },
+        "deployed": { "const": false }
+      }
+    },
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "status", "path"],
+      "properties": {
+        "operation": { "enum": ["added", "deleted", "modified", "renamed"] },
+        "status": { "type": "string", "minLength": 2 },
+        "path": { "type": "string", "minLength": 1 },
+        "previousPath": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" }
+      }
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "statusMode", "ownedPaths", "entries", "sha256"],
+      "properties": {
+        "schemaVersion": { "const": "OwlCodaRunKitDirtySourceManifestV2" },
+        "statusMode": { "const": "porcelain-v1-z-untracked-all-runkit-excluded" },
+        "ownedPaths": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "entries": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/entry" } },
+        "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+      }
+    },
+    "payloadEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "payloadPath", "sha256", "sizeBytes", "mode"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "payloadPath": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/hash" },
+        "sizeBytes": { "type": "integer", "minimum": 0 },
+        "mode": { "type": "integer", "minimum": 0, "maximum": 511 }
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "storage", "root", "blobCount", "totalBytes", "entries", "sha256"],
+      "properties": {
+        "schemaVersion": { "const": "OwlCodaRunKitSourcePayloadV1" },
+        "storage": { "const": "create_only_content_addressed_sha256" },
+        "root": { "type": "string", "minLength": 1 },
+        "blobCount": { "type": "integer", "minimum": 0 },
+        "totalBytes": { "type": "integer", "minimum": 0 },
+        "entries": {
+          "type": "array",
+          "minItems": 0,
+          "items": { "$ref": "#/$defs/payloadEntry" }
+        },
+        "sha256": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+      }
+    }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitSourceCandidateV2",
+    "runId": "formal-001",
+    "candidateId": "candidate-001",
+    "status": "frozen",
+    "sourceMode": "dirty_worktree_exact_manifest_v2",
+    "baseline": { "branch": "codex/release", "head": "1111111111111111111111111111111111111111" },
+    "sourceManifest": {
+      "schemaVersion": "OwlCodaRunKitDirtySourceManifestV2",
+      "statusMode": "porcelain-v1-z-untracked-all-runkit-excluded",
+      "ownedPaths": ["src/**"],
+      "entries": [{ "operation": "modified", "status": " M", "path": "src/index.mjs", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }],
+      "sha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    },
+    "sourceFingerprint": { "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+    "payload": {
+      "schemaVersion": "OwlCodaRunKitSourcePayloadV1",
+      "storage": "create_only_content_addressed_sha256",
+      "root": ".owlcoda/runkit/executions/formal-001/source-candidates/candidate-001.payload",
+      "blobCount": 1,
+      "totalBytes": 12,
+      "entries": [{
+        "path": "src/index.mjs",
+        "payloadPath": ".owlcoda/runkit/executions/formal-001/source-candidates/candidate-001.payload/sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sizeBytes": 12,
+        "mode": 420
+      }],
+      "sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+    },
+    "discovery": { "fromLease": "implementation", "leasePath": ".owlcoda/runkit/executions/formal-001/leases/implementation.json" },
+    "repositoryActions": { "worktreeCreated": false, "branchCreated": false, "staged": false, "committed": false, "pushed": false, "tagged": false, "published": false, "deployed": false },
+    "authorizationGranted": false,
+    "candidateSha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }]
+}

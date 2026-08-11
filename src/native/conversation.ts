@@ -18,12 +18,15 @@ import type {
   ConversationModelIdentity,
   AssistantResponse,
   RuntimeRecoveryLedger,
+  EvidencePersistenceFailure,
 } from './protocol/types.js'
 import type { AnthropicMessagesRequest } from './protocol/types.js'
 import { computeAdaptiveTimeoutMs } from '../middleware/adaptive-timeout.js'
 import { getOwlcodaDir } from '../paths.js'
 import { buildAnthropicMessagesUrl } from '../url-normalize.js'
-import type { AskUserQuestionOpts, ToolProgressEvent } from './tools/types.js'
+import type { AskUserQuestionOpts, ToolExecutionContext, ToolProgressEvent } from './tools/types.js'
+import type { WorkflowRunInput } from './workflow-runner.js'
+import { issueToolApprovedWorkflowRuntimeGrant } from './runtime-execution-control/grants.js'
 import { buildRequest, sanitizeConversationTurns } from './protocol/request.js'
 import { reorderToolResultsFirst, stripOrphanToolUseBlocks } from './protocol/tool-pairing.js'
 import { consumeStream } from './protocol/stream.js'
@@ -191,6 +194,7 @@ import {
   recordRuntimeRecoveryReportEvent,
   recordRuntimeRecoveryTextFallbackReportEvent,
   recordRuntimeTruthResumeReportEvent,
+  recordEvidencePersistenceFailureEvent,
   runtimeTruthResumeCheckpointKindForId,
   validateRuntimeTruthResumeReport,
 } from './runtime-events.js'
@@ -849,6 +853,8 @@ export interface ConversationCallbacks {
   onError?: (error: string) => void
   /** Called for non-error notices (e.g. successful compaction) */
   onNotice?: (message: string) => void
+  /** Called when required RunWorkspace evidence could not be persisted. */
+  onEvidencePersistenceFailure?: (failure: EvidencePersistenceFailure) => void
   /** Called with token usage updates during streaming */
   onUsage?: (tokens: { input: number; output: number }) => void
   /**
@@ -8367,6 +8373,23 @@ async function executeTools(
       recordPermissionPhaseEvent(taskState, taskState.run.lifetimeIterations ?? 0, 'permission_granted', block.name)
     }
 
+    const runtimeExecutionGrant = block.name.toLowerCase() === 'workflowrun'
+      && proposedToolCall?.permissionState === 'granted'
+      && proposedToolCall.riskClass === 'external_effect'
+      && proposedToolCall.grantEvent
+      && taskState
+      ? await issueToolApprovedWorkflowRuntimeGrant({
+          workflow: block.input as WorkflowRunInput,
+          workspaceRoot: typeof block.input['cwd'] === 'string' && block.input['cwd'].trim()
+            ? block.input['cwd']
+            : taskState.contract.cwd,
+          toolUseId: block.id,
+          permissionState: 'granted',
+          riskClass: 'external_effect',
+          grantEvent: proposedToolCall.grantEvent,
+        })
+      : undefined
+
     if (conversationForGuard) {
       appendRuntimeEvent(conversationForGuard, {
         kind: 'item_started',
@@ -8388,20 +8411,22 @@ async function executeTools(
     // Build execution context with progress + user-question callbacks
     // bound to this tool's identity. Both are optional: well-behaved
     // tools degrade gracefully when a callback is absent (headless).
-    const context: {
-      onProgress?: (event: ToolProgressEvent) => void
-      signal?: AbortSignal
-      taskState?: ActiveTaskState
-      projectMapSnapshot?: ProjectMapSnapshot
-      conversationId?: string
-      runtimeRecoveryLedger?: RuntimeRecoveryLedger
-      askUserQuestion?: (question: string, opts?: AskUserQuestionOpts) => Promise<string>
-    } = {
+    const context: ToolExecutionContext = {
       signal,
       taskState,
       projectMapSnapshot: conversationForGuard?.options?.projectMapSnapshot,
       conversationId: conversationForGuard?.id,
       runtimeRecoveryLedger: conversationForGuard?.options?.runtimeRecoveryLedger,
+      ...(runtimeExecutionGrant ? { runtimeExecutionGrant } : {}),
+    }
+    if (conversationForGuard) {
+      context.onEvidencePersistenceFailure = (failure: EvidencePersistenceFailure) => {
+        recordEvidencePersistenceFailureEvent(conversationForGuard, failure)
+        callbacks?.onEvidencePersistenceFailure?.(failure)
+        callbacks?.onNotice?.(
+          `Evidence incomplete: ${failure.operation} failed for ${failure.toolName} (${failure.error.message})`,
+        )
+      }
     }
     if (callbacks?.onToolProgress) {
       context.onProgress = (event: ToolProgressEvent) => {

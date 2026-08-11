@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "OwlCodaRunKitVerificationEnvelopeV1",
+  "envelopeId": "quality-v1",
+  "cwd": ".",
+  "lockfiles": ["package-lock.json"],
+  "paths": {
+    "immutableSource": ["src/**", "tests/**", "package-lock.json"],
+    "declaredOutput": ["dist/**", "coverage/**"],
+    "disposableScratch": [".tmp/**"],
+    "forbidden": [".env", ".ssh/**", ".owlcoda/**"]
+  },
+  "environment": { "allowNames": ["PATH"], "values": {} },
+  "network": { "mode": "deny" },
+  "process": {
+    "allowSubprocesses": false,
+    "allowedExecutables": [],
+    "allowBackgroundAfterFinish": false
+  },
+  "phases": {
+    "setup": null,
+    "check": {
+      "executable": "/absolute/path/to/node",
+      "argv": ["tests/run.mjs"],
+      "timeoutMs": 120000
+    },
+    "teardown": null
+  }
+}

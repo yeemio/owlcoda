@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/human-status-v1.json",
+  "title": "OwlCoda RunKit Human Status V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "overall", "headline", "stage", "currentExecutionId", "completedSteps", "remainingGates", "remainingGateCount", "control", "milestones", "nextAllowedAction", "authorizationGranted", "gitAuthorization", "releaseAuthorization", "deployAuthorization"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitHumanStatusV1" },
+    "status": { "const": "projected" },
+    "overall": { "enum": ["blocked", "closed", "idle", "ready_for_closeout", "working"] },
+    "headline": { "type": "string", "minLength": 1 },
+    "stage": { "enum": ["setup", "implementation", "delivery", "verification", "closeout", "external_action"] },
+    "currentExecutionId": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1 }] },
+    "completedSteps": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "remainingGates": { "type": "array", "items": { "$ref": "#/$defs/gate" } },
+    "remainingGateCount": { "type": "integer", "minimum": 0 },
+    "control": { "$ref": "#/$defs/control" },
+    "milestones": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceData", "releasePackage", "remoteVmWrite"],
+      "properties": {
+        "sourceData": { "$ref": "#/$defs/milestone" },
+        "releasePackage": { "$ref": "#/$defs/milestone" },
+        "remoteVmWrite": { "$ref": "#/$defs/milestone" }
+      }
+    },
+    "nextAllowedAction": { "type": "string", "minLength": 1 },
+    "authorizationGranted": { "const": false },
+    "gitAuthorization": { "const": false },
+    "releaseAuthorization": { "const": false },
+    "deployAuthorization": { "const": false }
+  },
+  "$defs": {
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "label", "nextAllowedAction"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 },
+        "nextAllowedAction": { "type": "string", "minLength": 1 }
+      }
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "issueCodes"],
+      "properties": {
+        "status": { "enum": ["healthy", "invalid", "drifted"] },
+        "issueCodes": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "milestone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "evidence", "label"],
+      "properties": {
+        "status": {
+          "enum": ["ready", "not_ready", "performed", "not_performed", "not_evidenced"]
+        },
+        "evidence": { "type": "string", "minLength": 1 },
+        "label": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitHumanStatusV1",
+    "status": "projected",
+    "overall": "idle",
+    "headline": "No RunKit execution is active.",
+    "stage": "setup",
+    "currentExecutionId": null,
+    "completedSteps": [],
+    "remainingGates": [],
+    "remainingGateCount": 0,
+    "control": { "status": "healthy", "issueCodes": [] },
+    "milestones": {
+      "sourceData": {
+        "status": "not_evidenced",
+        "evidence": "none",
+        "label": "Source/data readiness is not evidenced by inspect."
+      },
+      "releasePackage": {
+        "status": "not_evidenced",
+        "evidence": "none",
+        "label": "Release package readiness is not evidenced by inspect."
+      },
+      "remoteVmWrite": {
+        "status": "not_evidenced",
+        "evidence": "none",
+        "label": "Remote/VM write is not evidenced by inspect."
+      }
+    },
+    "nextAllowedAction": "plan_new_execution",
+    "authorizationGranted": false,
+    "gitAuthorization": false,
+    "releaseAuthorization": false,
+    "deployAuthorization": false
+  }]
+}

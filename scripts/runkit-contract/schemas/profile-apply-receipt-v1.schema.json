@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/profile-apply-receipt-v1.json",
+  "title": "OwlCoda RunKit Profiles Apply Receipt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "status", "writesPerformed", "detectionSha256", "issueCodes", "authorizationGranted"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitProfilesApplyReceiptV1" },
+    "status": { "enum": ["profiles_applied", "profiles_apply_blocked"] },
+    "writesPerformed": { "enum": [0, 2] },
+    "detectionSha256": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/hash" }] },
+    "beforeProfilesSha256": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/hash" }] },
+    "appliedProfilesSha256": { "$ref": "#/$defs/hash" },
+    "currentProfilesSha256": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/hash" }] },
+    "receiptPath": { "type": "string", "minLength": 1 },
+    "issueCodes": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "authorizationGranted": { "const": false }
+  },
+  "$defs": { "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" } },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitProfilesApplyReceiptV1",
+    "status": "profiles_applied",
+    "writesPerformed": 2,
+    "detectionSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "beforeProfilesSha256": null,
+    "appliedProfilesSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "receiptPath": ".owlcoda/runkit/profile-apply-receipts/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json",
+    "issueCodes": [],
+    "authorizationGranted": false
+  }]
+}

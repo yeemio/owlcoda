@@ -80,11 +80,21 @@ export interface RuntimeFactRefs {
   threadId?: string
   turnId?: string
   runId?: string
+  workCaseId?: string
+  evidenceContextId?: string
+  executionRunId?: string
+  driverId?: string
+  executionId?: string
+  attemptId?: string
+  driverSessionId?: string
+  workspaceRunId?: string
   taskId?: string
   stepId?: string
   jobId?: string
   artifactId?: string
   artifactPath?: string
+  workflowReceiptRef?: string
+  workflowArtifactRefs?: string[]
   checkpointId?: string
   proofId?: string
   itemId?: string
@@ -192,6 +202,24 @@ export interface RuntimeTruthResumeState {
 export type TaskPathScopeKind = 'file' | 'directory'
 export type TaskPathScopeOrigin = 'explicit' | 'parent_directory' | 'derived_test' | 'touched' | 'user_approved' | 'user-external' | 'external_reference' | 'run_workspace'
 export type TaskRunStatus = 'open' | 'blocked' | 'waiting_user' | 'drifted' | 'completed'
+
+export type EvidencePersistenceOperation = 'todo_mirror' | 'artifact_record'
+
+export interface EvidencePersistenceFailure {
+  operation: EvidencePersistenceOperation
+  runId: string
+  runDir: string
+  outputRoot: string
+  toolUseId: string
+  toolName: string
+  error: {
+    name: string
+    message: string
+  }
+  evidenceCompleteness: 'incomplete'
+  acceptanceImpact: 'blocking'
+  at: string
+}
 
 export interface TaskPathScope {
   path: string
@@ -301,6 +329,7 @@ export interface TaskRunState {
     lastEventAt?: string
     lastCheckpointAt?: string
   } | null
+  evidencePersistenceFailures?: EvidencePersistenceFailure[]
   lastUpdatedAt: number
 }
 

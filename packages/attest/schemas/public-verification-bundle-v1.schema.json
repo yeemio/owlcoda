@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:owlcoda:runkit:public-verification-bundle:v1",
+  "title": "OwlCoda RunKit Public Verification Bundle V1",
+  "type": "object",
+  "required": ["schemaVersion", "source", "verificationContext", "receipts", "closeout"],
+  "properties": {
+    "schemaVersion": {"const": "OwlCodaRunKitPublicVerificationBundleV1"},
+    "source": {"$ref": "#/$defs/source"},
+    "verificationContext": {"$ref": "#/$defs/verificationContext"},
+    "receipts": {"type": "array", "minItems": 1, "maxItems": 1024, "items": {"$ref": "#/$defs/receipt"}},
+    "closeout": {"$ref": "#/$defs/closeout"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "authorityFalse": {"const": false},
+    "source": {
+      "type": "object",
+      "required": ["fingerprintAlgorithm", "fingerprint", "payload"],
+      "properties": {
+        "fingerprintAlgorithm": {"const": "sha256-canonical-json-v1"},
+        "fingerprint": {"$ref": "#/$defs/fingerprint"},
+        "payload": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "verificationContext": {
+      "type": "object",
+      "required": ["fingerprintAlgorithm", "fingerprint", "payload"],
+      "properties": {
+        "fingerprintAlgorithm": {"const": "sha256-canonical-json-v1"},
+        "fingerprint": {"$ref": "#/$defs/fingerprint"},
+        "payload": {"type": "object"}
+      },
+      "additionalProperties": false
+    },
+    "receipt": {
+      "type": "object",
+      "required": ["schemaVersion", "receiptId", "status", "replacesReceiptId", "sourceFingerprint", "verificationContextFingerprint", "authorizationGranted", "gitAuthorization", "releaseAuthorization", "artifactMutationAuthorization", "businessActionAuthorization"],
+      "properties": {
+        "schemaVersion": {"const": "OwlCodaRunKitPublicVerificationReceiptV1"},
+        "receiptId": {"type": "string", "minLength": 1},
+        "status": {"enum": ["passed", "failed", "blocked"]},
+        "replacesReceiptId": {"oneOf": [{"type": "null"}, {"type": "string", "minLength": 1}]},
+        "sourceFingerprint": {"$ref": "#/$defs/fingerprint"},
+        "verificationContextFingerprint": {"$ref": "#/$defs/fingerprint"},
+        "authorizationGranted": {"$ref": "#/$defs/authorityFalse"},
+        "gitAuthorization": {"$ref": "#/$defs/authorityFalse"},
+        "releaseAuthorization": {"$ref": "#/$defs/authorityFalse"},
+        "artifactMutationAuthorization": {"$ref": "#/$defs/authorityFalse"},
+        "businessActionAuthorization": {"$ref": "#/$defs/authorityFalse"}
+      },
+      "additionalProperties": false
+    },
+    "closeout": {
+      "type": "object",
+      "required": ["schemaVersion", "decision", "activeReceiptId", "sourceFingerprint", "verificationContextFingerprint", "authorizationGranted", "gitAuthorization", "releaseAuthorization", "artifactMutationAuthorization", "businessActionAuthorization"],
+      "properties": {
+        "schemaVersion": {"const": "OwlCodaRunKitPublicCloseoutV1"},
+        "decision": {"enum": ["accepted", "blocked", "rejected"]},
+        "activeReceiptId": {"type": "string", "minLength": 1},
+        "sourceFingerprint": {"$ref": "#/$defs/fingerprint"},
+        "verificationContextFingerprint": {"$ref": "#/$defs/fingerprint"},
+        "authorizationGranted": {"$ref": "#/$defs/authorityFalse"},
+        "gitAuthorization": {"$ref": "#/$defs/authorityFalse"},
+        "releaseAuthorization": {"$ref": "#/$defs/authorityFalse"},
+        "artifactMutationAuthorization": {"$ref": "#/$defs/authorityFalse"},
+        "businessActionAuthorization": {"$ref": "#/$defs/authorityFalse"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

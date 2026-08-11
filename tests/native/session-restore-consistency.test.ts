@@ -1,6 +1,10 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, afterAll } from 'vitest'
 import { createConversation, addUserMessage, autoCompact } from '../../src/native/conversation.js'
 import { saveSession, loadSession, deleteSession, restoreConversation } from '../../src/native/session.js'
+import { installIsolatedOwlCodaHome } from './isolated-owlcoda-home.js'
+
+const restoreTestHome = installIsolatedOwlCodaHome('owlcoda-session-restore-tests-')
+afterAll(restoreTestHome)
 
 const testIds: string[] = []
 

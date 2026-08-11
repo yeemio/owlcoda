@@ -1,0 +1,8 @@
+{
+  "schemaVersion": "OwlCodaRunKitFleetRootRegistryV1",
+  "coverageRoots": [
+    "/absolute/path/to/fleet"
+  ],
+  "authorizationGranted": false,
+  "registrySha256": "sha256:270e2fb1accb0e5a891f697c5a483b52881289849cfb75b4cd54a0443bcac8ec"
+}

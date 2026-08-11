@@ -94,6 +94,11 @@ function assertRegularArtifact(filePath, label) {
   if (!stat.isFile()) throw new Error(`${label} must be a regular file.`);
 }
 
+function readRegularJsonArtifact(filePath, label) {
+  assertRegularArtifact(filePath, label);
+  return readJson(filePath);
+}
+
 function acquireResumeLock(workspaceRoot) {
   const runtimeRoot = path.join(workspaceRoot, RUNTIME_ROOT);
   assertSafeDirectory(workspaceRoot, runtimeRoot, "RunKit runtime root");
@@ -299,7 +304,7 @@ function validatedParentCloseout(workspaceRoot, sourceRoot, sourceRunId) {
     throw new Error("Parent closeout payload is invalid.");
   }
   if (payload.decision === "accepted") validateAcceptedParentEvidence(sourceRoot, sourceRunId, payload.verification);
-  const pin = readJson(path.join(sourceRoot, "engine-pin.json"));
+  const pin = readRegularJsonArtifact(path.join(sourceRoot, "engine-pin.json"), "Parent engine pin");
   const pinGate = validateExecutionPin({ expected: pin, actual: closeout.artifact.core });
   if (pinGate.status !== "valid") throw new Error(`Parent closeout does not match its engine pin: ${pinGate.issues.join("; ")}`);
   return {
@@ -392,7 +397,7 @@ function appendSameExecution({ workspaceRoot, sourceRunId, sourceRoot, request, 
     throw new Error("Unclosed execution resume requires continuationRunId=null.");
   }
   assertSoleActiveRun(workspaceRoot, sourceRunId);
-  const pin = readJson(path.join(sourceRoot, "engine-pin.json"));
+  const pin = readRegularJsonArtifact(path.join(sourceRoot, "engine-pin.json"), "Resume engine pin");
   const pinGate = validateExecutionPin({ expected: pin, actual: currentCoreIdentity() });
   if (pinGate.status !== "valid") throw new Error(`Resume engine pin is stale: ${pinGate.issues.join("; ")}`);
   assertNoActiveWriterLease(sourceRoot);
@@ -507,6 +512,7 @@ function createContinuation({ workspaceRoot, sourceRunId, sourceRoot, request, g
       runId: targetRunId,
       state: "planned",
       enginePin,
+      goalContractSha256: sha256(goal.bytes),
       continuation: {
         parentRunId: sourceRunId,
         resumeId: request.resumeId,

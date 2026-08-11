@@ -25,6 +25,7 @@ import {
 import { resolveDefaultMaxOutputTokens } from './native/conversation.js'
 import { parseOperatingMode, resolveInitialMode, type OperatingMode } from './native/modes.js'
 import { getOwlcodaConfigLabel } from './paths.js'
+import { isLaunchdServiceInstalled } from './service-launchd.js'
 
 // Re-export from extracted modules for backward compatibility
 export { VERSION }
@@ -214,6 +215,11 @@ export function parseArgs(argv: string[]): {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!
 
+    if (commandExplicit && (command === 'runkit' || command === 'attest' || command === 'resolve')) {
+      passthroughArgs.push(arg)
+      continue
+    }
+
     if (arg === '--') {
       pastSeparator = true
       continue
@@ -396,6 +402,15 @@ export function parseArgs(argv: string[]): {
       case 'instructions':
         command = 'instructions'
         break
+      case 'runkit':
+        command = 'runkit'
+        break
+      case 'attest':
+        command = 'attest'
+        break
+      case 'resolve':
+        command = 'resolve'
+        break
       case 'resume':
         command = 'resume'
         break
@@ -498,6 +513,11 @@ Setup & diagnostics:
   owlcoda benchmark provider-eval-report [--record-path P] [--json]
                                 Local provider eval leaderboard/case matrix
   owlcoda completions <shell>   Generate shell completion (bash/zsh/fish)
+  owlcoda runkit verify --help  One-screen zero-ceremony verification guide
+  owlcoda runkit repair --run-id <id>  Replay invalid Formal evidence append-only
+  owlcoda runkit store --help   Offline exact-byte receipt export and import
+  owlcoda attest <receipt>      Verify a Quick receipt without changing the project
+  owlcoda resolve <reference>   Resolve one attestation reference from explicit local stores
   owlcoda workflow execute --plan <file> [--receipt <file>] [--artifact-dir <dir>]
   owlcoda workflow execute --contract <harness_task_contract.json> --base-url <url>
   owlcoda workflow resume --run-id <workflow-run-id> [--cwd <dir>]
@@ -577,6 +597,22 @@ Exit Codes:
   1  Preflight / startup failure
   2  Model / proxy error
   3  Tool execution loop limit`)
+}
+
+function reportQuickInputError(error: unknown, args: string[]): number {
+  const message = error instanceof Error ? error.message : String(error)
+  if (args.includes('--json')) {
+    process.stdout.write(`${JSON.stringify({
+      status: 'quick_input_invalid',
+      exitCode: 3,
+      issues: [message],
+      authorizationGranted: false,
+      nextAllowedAction: 'correct_input',
+    })}\n`)
+  } else {
+    console.error(message)
+  }
+  return 3
 }
 
 interface AppServerCliOptions {
@@ -824,6 +860,12 @@ export async function doStart(configPath?: string, port?: number, routerUrl?: st
 }
 
 export async function doStop(force = false): Promise<void> {
+  if (isLaunchdServiceInstalled()) {
+    console.error('Refusing to stop: launchd owns the daemon lifecycle and KeepAlive may restart it.')
+    console.error('Run `owlcoda service uninstall` first, then run `owlcoda stop` if a manual stop is still required.')
+    process.exit(1)
+  }
+
   const pid = readPid()
   if (pid === null) {
     // No PID file. With --force, recover an orphan daemon (lost PID file /
@@ -1278,7 +1320,7 @@ export async function doWorkflow(passthroughArgs: string[], jsonOutput = false):
   }
 
   const { readFile } = await import('node:fs/promises')
-  const { runWorkflow, formatWorkflowRunSummary, WorkflowPlanValidationError } = await import('./native/workflow-runner.js')
+  const { formatWorkflowRunSummary } = await import('./native/workflow-runner.js')
   let plan: Record<string, unknown> | undefined
   if (planPath) {
     try {
@@ -1290,7 +1332,7 @@ export async function doWorkflow(passthroughArgs: string[], jsonOutput = false):
   }
 
   try {
-    const result = await runWorkflow({
+    const workflow = {
       ...(plan ? { plan: plan as never } : {}),
       ...(contractRef ? { contractRef } : {}),
       ...(baseUrl ? { baseUrl } : {}),
@@ -1303,7 +1345,24 @@ export async function doWorkflow(passthroughArgs: string[], jsonOutput = false):
       ...(receiptPath ? { receiptPath } : {}),
       ...(artifactDir ? { artifactDir } : {}),
       ...(cwd ? { cwd } : {}),
+    }
+    const { issueOperatorCliWorkflowRuntimeGrant } = await import('./native/runtime-execution-control/grants.js')
+    const { executeApprovedWorkflowRuntime } = await import('./native/runtime-execution-control/index.js')
+    const authorizationGrant = await issueOperatorCliWorkflowRuntimeGrant({
+      workflow,
+      workspaceRoot: cwd ?? process.cwd(),
+      action: action === 'run-contract'
+        ? 'workflow run-contract'
+        : action === 'resume'
+          ? 'workflow resume'
+          : 'workflow execute',
     })
+    const runtimeResult = await executeApprovedWorkflowRuntime({ workflow, authorizationGrant })
+    const result = runtimeResult.workflowResult
+    if (!result) {
+      console.error(runtimeResult.failure?.message ?? 'Workflow execute failed without a collected result.')
+      process.exit(1)
+    }
     if (cliJson) {
       process.stdout.write(`${JSON.stringify(result.receipt, null, 2)}\n`)
     } else {
@@ -1311,11 +1370,7 @@ export async function doWorkflow(passthroughArgs: string[], jsonOutput = false):
     }
     process.exit(result.receipt.acceptance === 'pass' ? 0 : 1)
   } catch (err) {
-    if (err instanceof WorkflowPlanValidationError) {
-      console.error(err.message)
-    } else {
-      console.error(`Workflow execute failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
+    console.error(`Workflow execute failed: ${err instanceof Error ? err.message : String(err)}`)
     process.exit(1)
   }
 }
@@ -1476,9 +1531,9 @@ export async function doService(
       stdoutPath: logPath,
       stderrPath: logPath,
       // Capture the user's OWLCODA_* env (launchd doesn't inherit the shell)
-      // plus a stable identity token: the daemon serves this token via /healthz
-      // and self-registers runtime-meta with it so clients can verify it
-      // (healthzMatchesRuntimeMeta). Regenerated on each install.
+      // plus an install-scoped identity seed. Each launchd daemon process
+      // rotates it before self-registering, so a recovered PID gets a fresh
+      // runtime identity (healthzMatchesRuntimeMeta). Regenerated on install.
       envVars: svc.buildLaunchdEnv(process.env, randomUUID()),
     })
     console.error(`Installed launchd service → ${res.plistPath}`)
@@ -1796,6 +1851,33 @@ export async function main(): Promise<void> {
     }
     case 'instructions': {
       await doInstructions(passthroughArgs, jsonOutput)
+      break
+    }
+    case 'runkit': {
+      const { runPublicRunKitCommand } = await import('./native/runkit-command-port.js')
+      try {
+        process.exitCode = runPublicRunKitCommand(passthroughArgs)
+      } catch (error) {
+        process.exitCode = reportQuickInputError(error, passthroughArgs)
+      }
+      break
+    }
+    case 'attest': {
+      const { runPublicAttestCommand } = await import('./native/runkit-command-port.js')
+      try {
+        process.exitCode = runPublicAttestCommand(passthroughArgs)
+      } catch (error) {
+        process.exitCode = reportQuickInputError(error, passthroughArgs)
+      }
+      break
+    }
+    case 'resolve': {
+      const { runPublicResolveCommand } = await import('./native/runkit-command-port.js')
+      try {
+        process.exitCode = runPublicResolveCommand(passthroughArgs)
+      } catch (error) {
+        process.exitCode = reportQuickInputError(error, passthroughArgs)
+      }
       break
     }
     case 'resume': {

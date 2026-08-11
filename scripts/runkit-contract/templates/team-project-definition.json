@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "OwlCodaRunKitTeamProjectDefinitionV1",
+  "projectId": "project-id",
+  "objective": "State the durable project outcome",
+  "milestones": [
+    { "id": "m1", "title": "First milestone" }
+  ],
+  "workstreams": [
+    { "id": "runtime", "title": "Runtime", "milestoneId": "m1" }
+  ],
+  "workItems": [
+    {
+      "id": "work-item-1",
+      "title": "Deliver one evidence-backed outcome",
+      "milestoneId": "m1",
+      "workstreamId": "runtime",
+      "dependencies": [],
+      "ownedPaths": ["src/**"],
+      "measurable": { "unit": "acceptance_tests", "total": 1 }
+    }
+  ],
+  "integrationGates": [
+    {
+      "id": "integration-ready",
+      "title": "All required work accepted",
+      "requiredWorkItemIds": ["work-item-1"],
+      "requiredDecisionIds": []
+    }
+  ]
+}

@@ -1,0 +1,102 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.com/schemas/runkit/verification-envelope-v1.schema.json",
+  "title": "OwlCoda RunKit Verification Envelope V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "envelopeId", "cwd", "lockfiles", "paths", "environment", "network", "process", "phases"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitVerificationEnvelopeV1" },
+    "envelopeId": { "$ref": "#/$defs/id" },
+    "cwd": { "type": "string", "minLength": 1 },
+    "lockfiles": { "$ref": "#/$defs/strings" },
+    "paths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["immutableSource", "declaredOutput", "disposableScratch", "forbidden"],
+      "properties": {
+        "immutableSource": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "declaredOutput": { "$ref": "#/$defs/strings" },
+        "disposableScratch": { "$ref": "#/$defs/strings" },
+        "forbidden": { "$ref": "#/$defs/strings" }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowNames", "values"],
+      "properties": {
+        "allowNames": { "$ref": "#/$defs/strings" },
+        "values": { "type": "object" }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": { "mode": { "enum": ["deny", "loopback"] } }
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowSubprocesses", "allowedExecutables", "allowBackgroundAfterFinish"],
+      "properties": {
+        "allowSubprocesses": { "type": "boolean" },
+        "allowedExecutables": { "$ref": "#/$defs/strings" },
+        "allowBackgroundAfterFinish": { "const": false }
+      }
+    },
+    "phases": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["setup", "check", "teardown"],
+      "properties": {
+        "setup": { "oneOf": [{ "$ref": "#/$defs/command" }, { "type": "null" }] },
+        "check": { "$ref": "#/$defs/command" },
+        "teardown": { "oneOf": [{ "$ref": "#/$defs/command" }, { "type": "null" }] }
+      }
+    }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "strings": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["executable", "argv", "timeoutMs"],
+      "properties": {
+        "executable": { "type": "string", "minLength": 1 },
+        "argv": { "type": "array", "items": { "type": "string" } },
+        "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 3600000 }
+      }
+    }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitVerificationEnvelopeV1",
+    "envelopeId": "quality-v1",
+    "cwd": ".",
+    "lockfiles": ["package-lock.json"],
+    "paths": {
+      "immutableSource": ["src/**", "tests/**", "package-lock.json"],
+      "declaredOutput": ["dist/**", "coverage/**"],
+      "disposableScratch": [".tmp/**"],
+      "forbidden": [".env", ".ssh/**", ".owlcoda/**"]
+    },
+    "environment": { "allowNames": ["PATH"], "values": {} },
+    "network": { "mode": "deny" },
+    "process": {
+      "allowSubprocesses": false,
+      "allowedExecutables": [],
+      "allowBackgroundAfterFinish": false
+    },
+    "phases": {
+      "setup": null,
+      "check": {
+        "executable": "/absolute/path/to/node",
+        "argv": ["tests/run.mjs"],
+        "timeoutMs": 120000
+      },
+      "teardown": null
+    }
+  }]
+}

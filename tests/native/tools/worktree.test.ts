@@ -12,7 +12,7 @@ function makeTmpGitRepo(): string {
   mkdirSync(raw, { recursive: true })
   const dir = realpathSync(raw)
   mkdirSync(dir, { recursive: true })
-  execSync('git init && git commit --allow-empty -m "init"', {
+  execSync('git init && git config --local user.name "OwlCoda Test" && git config --local user.email "owlcoda-test@example.invalid" && git commit --allow-empty -m "init"', {
     cwd: dir,
     stdio: 'pipe',
   })

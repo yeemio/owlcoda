@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/remote-target-v1.json",
+  "title": "OwlCoda RunKit Remote Target V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "targetId", "environment", "host", "port", "user", "hostKeySha256", "machineIdentitySha256"],
+  "properties": {
+    "schemaVersion": { "const": "OwlCodaRunKitRemoteTargetV1" },
+    "targetId": { "$ref": "#/$defs/id" },
+    "environment": { "$ref": "#/$defs/id" },
+    "host": { "type": "string", "pattern": "^[^\\s/\\\\]+$" },
+    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+    "user": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9._-]*$" },
+    "hostKeySha256": { "$ref": "#/$defs/hash" },
+    "machineIdentitySha256": { "$ref": "#/$defs/hash" }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  },
+  "examples": [{
+    "schemaVersion": "OwlCodaRunKitRemoteTargetV1",
+    "targetId": "vm-production-01",
+    "environment": "production",
+    "host": "deploy.example.invalid",
+    "port": 22,
+    "user": "deploy",
+    "hostKeySha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "machineIdentitySha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  }]
+}

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://owlcoda.dev/schemas/runkit/verification-finalize-attempt-v1.json",
+  "title": "OwlCoda RunKit Verification Finalize Attempt V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "runId",
+    "verificationId",
+    "status",
+    "gateStatus",
+    "finalizeRequestPath",
+    "finalizeRequestSha256",
+    "result",
+    "authorizationGranted"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "OwlCodaRunKitVerificationFinalizeAttemptV1"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "verificationId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "status": {
+      "const": "rejected"
+    },
+    "gateStatus": {
+      "type": "string",
+      "minLength": 1
+    },
+    "finalizeRequestPath": {
+      "type": "string",
+      "minLength": 1
+    },
+    "finalizeRequestSha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "result": {
+      "type": "object"
+    },
+    "authorizationGranted": {
+      "const": false
+    }
+  }
+}

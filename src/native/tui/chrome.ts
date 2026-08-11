@@ -9,9 +9,220 @@
  * line. Presentation only — no markdown parsing, no repaint involvement.
  */
 
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { dim, sgr, themeColor, visibleWidth } from './colors.js'
 import wrapText from '../../ink/wrap-text.js'
 import { formatTokenCompact } from '../../model-capabilities.js'
+
+export type RenderFaultKind = 'uncaught' | 'caught' | 'recoverable'
+
+export type RenderFaultRecovery =
+  | 'none'
+  | 'repaint_scheduled'
+  | 'repaint_suppressed_limit'
+  | 'repaint_failed'
+  | 'terminal_cleanup'
+  | 'already_isolated'
+
+export type RenderFaultRendererState = 'healthy' | 'isolated'
+
+export type RenderFaultContext = {
+  renderSequence: number
+  frameSequence: number
+  phase?: string
+}
+
+export type SerializedRenderError = {
+  name: string
+  message: string
+  stack: string | null
+}
+
+export type RenderFaultIncident = {
+  schemaVersion: 1
+  at: string
+  faultKind: RenderFaultKind
+  sequence: number
+  frame: RenderFaultContext
+  componentStack: string | null
+  error: SerializedRenderError
+  rendererState: RenderFaultRendererState
+  recovery: RenderFaultRecovery
+  incidentPath: string | null
+}
+
+export type RenderFaultAdapterOptions = {
+  getContext: () => RenderFaultContext
+  writeIncident: (incident: RenderFaultIncident) => string | null
+  isolateFrameProducer: () => void
+  cleanupTerminal: () => void
+  requestRecovery: () => void
+  notify: (message: string) => void
+}
+
+export type RenderFaultAdapter = {
+  onUncaughtError: (error: unknown, errorInfo: unknown) => void
+  onCaughtError: (error: unknown, errorInfo: unknown) => void
+  onRecoverableError: (error: unknown, errorInfo: unknown) => void
+  getState: () => {
+    rendererState: RenderFaultRendererState
+    recoverableRecoveryCount: number
+    uncaughtHandled: boolean
+  }
+}
+
+const UNAVAILABLE = '[unavailable]'
+
+function safeString(value: unknown): string {
+  try {
+    return String(value)
+  } catch {
+    return UNAVAILABLE
+  }
+}
+
+function safeProperty(value: object, key: string): string {
+  try {
+    return safeString((value as Record<string, unknown>)[key])
+  } catch {
+    return UNAVAILABLE
+  }
+}
+
+export function serializeRenderError(error: unknown): SerializedRenderError {
+  try {
+    if (error instanceof Error) {
+      const name = safeProperty(error, 'name')
+      const message = safeProperty(error, 'message')
+      const stack = safeProperty(error, 'stack')
+      return {
+        name: name === UNAVAILABLE ? 'UnknownError' : name,
+        message,
+        stack: stack === UNAVAILABLE ? null : stack,
+      }
+    }
+    const message = safeString(error)
+    return {
+      name: message === UNAVAILABLE ? 'UnknownError' : 'NonError',
+      message,
+      stack: null,
+    }
+  } catch {
+    return {
+      name: 'UnknownError',
+      message: UNAVAILABLE,
+      stack: null,
+    }
+  }
+}
+
+function safeContext(getContext: () => RenderFaultContext): RenderFaultContext {
+  try {
+    const context = getContext()
+    return {
+      renderSequence: Number.isFinite(context.renderSequence) ? context.renderSequence : -1,
+      frameSequence: Number.isFinite(context.frameSequence) ? context.frameSequence : -1,
+      ...(context.phase ? { phase: safeString(context.phase) } : {}),
+    }
+  } catch {
+    return { renderSequence: -1, frameSequence: -1, phase: 'unknown' }
+  }
+}
+
+function safeComponentStack(errorInfo: unknown): string | null {
+  if (!errorInfo || typeof errorInfo !== 'object') return null
+  const stack = safeProperty(errorInfo, 'componentStack')
+  return stack === UNAVAILABLE ? null : stack || null
+}
+
+function safeInvoke(fn: () => void): void {
+  try {
+    fn()
+  } catch {
+    // Fault handling must never recurse into the reconciler or expose the
+    // original error while reporting a secondary handler failure.
+  }
+}
+
+function renderFaultMessage(incident: RenderFaultIncident): string {
+  const path = incident.incidentPath ? `; incident: ${incident.incidentPath}` : ''
+  switch (incident.faultKind) {
+    case 'uncaught':
+      return `OwlCoda TUI render fault isolated the frame writer; terminal cleanup was attempted${path}. restart OwlCoda to restore rendering.`
+    case 'caught':
+      return `OwlCoda TUI render fault was caught by a React boundary; inspect the incident before continuing${path}.`
+    case 'recoverable':
+      return incident.recovery === 'repaint_scheduled'
+        ? `OwlCoda TUI render fault recovered with one controlled repaint${path}.`
+        : `OwlCoda TUI render fault recovery limit reached; no further repaint will be attempted${path}.`
+  }
+}
+
+export function createRenderFaultAdapter(options: RenderFaultAdapterOptions): RenderFaultAdapter {
+  let sequence = 0
+  let rendererState: RenderFaultRendererState = 'healthy'
+  let recoverableRecoveryCount = 0
+  let uncaughtHandled = false
+
+  const handle = (faultKind: RenderFaultKind, error: unknown, errorInfo: unknown): void => {
+    const incident: RenderFaultIncident = {
+      schemaVersion: 1,
+      at: new Date().toISOString(),
+      faultKind,
+      sequence: ++sequence,
+      frame: safeContext(options.getContext),
+      componentStack: safeComponentStack(errorInfo),
+      error: serializeRenderError(error),
+      rendererState,
+      recovery: 'none',
+      incidentPath: null,
+    }
+
+    if (faultKind === 'uncaught') {
+      if (uncaughtHandled) {
+        incident.rendererState = 'isolated'
+        incident.recovery = 'already_isolated'
+      } else {
+        uncaughtHandled = true
+        rendererState = 'isolated'
+        incident.rendererState = rendererState
+        incident.recovery = 'terminal_cleanup'
+        safeInvoke(options.isolateFrameProducer)
+        safeInvoke(options.cleanupTerminal)
+      }
+    } else if (faultKind === 'recoverable') {
+      if (recoverableRecoveryCount === 0 && rendererState === 'healthy') {
+        recoverableRecoveryCount = 1
+        incident.recovery = 'repaint_scheduled'
+        try {
+          options.requestRecovery()
+        } catch {
+          incident.recovery = 'repaint_failed'
+        }
+      } else {
+        incident.recovery = 'repaint_suppressed_limit'
+      }
+    }
+
+    try {
+      const path = options.writeIncident(incident)
+      incident.incidentPath = typeof path === 'string' ? path : null
+    } catch {
+      incident.incidentPath = null
+    }
+
+    safeInvoke(() => options.notify(renderFaultMessage(incident)))
+  }
+
+  return {
+    onUncaughtError: (error, errorInfo) => handle('uncaught', error, errorInfo),
+    onCaughtError: (error, errorInfo) => handle('caught', error, errorInfo),
+    onRecoverableError: (error, errorInfo) => handle('recoverable', error, errorInfo),
+    getState: () => ({ rendererState, recoverableRecoveryCount, uncaughtHandled }),
+  }
+}
 
 // ─── Narration (what the model says) ─────────────────────────────────────
 // S2: narration gets its own gutter so ⎿ can go back to meaning "output of
@@ -231,6 +442,16 @@ const rawMdRing: string[] = []
 let lastIncidentDumpMs = 0
 const INCIDENT_THROTTLE_MS = 60_000
 
+export type RenderIncidentMetadata = {
+  faultKind?: RenderFaultKind
+  sequence?: number
+  frame?: RenderFaultContext
+  componentStack?: string | null
+  rendererState?: RenderFaultRendererState
+  recovery?: RenderFaultRecovery
+  errorDetails?: SerializedRenderError
+}
+
 export function recordRawMdChunk(chunk: string): void {
   rawMdRing.push(chunk)
   if (rawMdRing.length > RAW_MD_RING_LIMIT) rawMdRing.shift()
@@ -246,21 +467,25 @@ export function clearRawMdRing(): void {
  * or null when throttled or unwritable. Never throws — this runs inside the
  * render error path.
  */
-export function dumpRenderIncident(err: unknown): string | null {
+export function dumpRenderIncident(err: unknown, metadata: RenderIncidentMetadata = {}): string | null {
   const now = Date.now()
   if (now - lastIncidentDumpMs < INCIDENT_THROTTLE_MS) return null
   lastIncidentDumpMs = now
   try {
-    // Lazy imports keep chrome.ts presentation-pure on the happy path.
-    const { mkdirSync, writeFileSync } = require('node:fs') as typeof import('node:fs')
-    const { join } = require('node:path') as typeof import('node:path')
-    const { homedir } = require('node:os') as typeof import('node:os')
     const home = process.env['OWLCODA_HOME'] ?? join(homedir(), '.owlcoda')
     const dir = join(home, 'render-incidents')
     mkdirSync(dir, { recursive: true })
     const path = join(dir, `render-incident-${now}.json`)
-    const error = err instanceof Error ? `${err.message}\n${err.stack ?? ''}` : String(err)
-    writeFileSync(path, JSON.stringify({ at: new Date(now).toISOString(), error, chunks: [...rawMdRing] }, null, 2))
+    const errorDetails = metadata.errorDetails ?? serializeRenderError(err)
+    const error = `${errorDetails.message}${errorDetails.stack ? `\n${errorDetails.stack}` : ''}`
+    writeFileSync(path, JSON.stringify({
+      schemaVersion: 1,
+      at: new Date(now).toISOString(),
+      error,
+      errorDetails,
+      ...metadata,
+      chunks: [...rawMdRing],
+    }, null, 2))
     return path
   } catch {
     return null

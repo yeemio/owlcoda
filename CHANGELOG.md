@@ -2,6 +2,82 @@
 
 All notable changes to OwlCoda public releases are documented here.
 
+## [0.18.0] — 2026-08-10
+
+Verified business-outcome provenance release for the native invariant spine.
+
+### Added
+
+- Added durable Human Adjudication receipts for accepted, rejected, and rework
+  judgments with reviewer reasoning and exact WorkCase/runtime correlation.
+- Added VerifiedOutcome records that require accepted adjudication and bind the
+  result to its Evidence, Execution, Artifact, and Receipt provenance.
+
+### Fixed
+
+- Reject VerifiedOutcome creation when required provenance is absent, identity
+  correlation is inconsistent, or a reviewed result artifact has drifted.
+
+## [0.17.0] — 2026-08-10
+
+Vendor CLI execution release for bounded, centrally governed structured-output
+calls through Kimi CLI, Cursor Agent CLI, and Codex CLI.
+
+### Added
+
+- Added bounded Kimi CLI, Cursor Agent CLI, and Codex CLI structured-output
+  drivers behind central Runtime Execution Control, with fixed local-read-only
+  routing, process cancellation, output limits, and durable correlated receipts.
+- Added typed model-registry routes and `/v1/models` availability readback for
+  explicitly configured CLI-backed models without falling through to HTTP.
+
+## [0.16.0] — 2026-08-10
+
+Runtime evidence and execution-control release for authenticated workflow work,
+durable correlation, and independently managed local model runtimes.
+
+### Added
+
+- Added immutable evidence references and contexts, thin WorkCase correlation,
+  and durable Job, workspace, artifact, receipt, and runtime-session linkage.
+- Added a central runtime execution entry with authenticated workspace and
+  resource grants plus an OwlCoda-native WorkflowRun driver.
+- Added bounded runtime facts for success, failure, cancellation, replay, and
+  conversation metadata without moving domain judgment into OwlCoda.
+
+### Fixed
+
+- Prevented forged grants, workspace symlink retargeting, unapproved redirect
+  targets, and unsupported vendor-native drivers from crossing the central
+  execution boundary.
+- Kept local model runtime reachability visible as a separate subsystem fact
+  without marking the live OwlCoda gateway unhealthy when that runtime is
+  intentionally stopped.
+
+## [0.15.32] — 2026-08-02
+
+CLI and TUI reliability release for supervised local service ownership,
+recoverable terminal execution, and streaming fallback correctness.
+
+### Added
+
+- Added macOS launchd service ownership with RunAtLoad startup, KeepAlive crash
+  recovery, exact runtime identity checks, and safe restoration boundaries for
+  the OwlCoda service on `127.0.0.1:8019`.
+- Added durable runtime, render-fault, tool-settlement, and artifact-evidence
+  events so interrupted CLI/TUI work remains inspectable and recoverable.
+- Added streaming compatibility across SSE framing variants and translated JSON
+  responses while preserving partial-output and fallback evidence.
+
+### Fixed
+
+- Prevented concurrent starts, stale runtime metadata, foreign process claims,
+  and service-stop operations from violating the single-owner daemon boundary.
+- Made first-token and total streaming deadlines interrupt in-flight body reads,
+  and corrected failure/success circuit accounting across model fallback.
+- Isolated test and recovery state from operator sessions and cleaned up owned
+  daemon fixtures without changing the operator's canonical session data.
+
 ## [0.15.31] — 2026-07-28
 
 Security and reliability patch for project-controlled inputs, local service

@@ -1,7 +1,19 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { getSessionsDir } from '../../src/native/session.js'
+import { installIsolatedOwlCodaHome } from './isolated-owlcoda-home.js'
+
+const restoreTestHome = installIsolatedOwlCodaHome('owlcoda-headless-tests-')
+const isolatedHome = process.env['OWLCODA_HOME']!
+afterAll(() => {
+  try {
+    expect(process.env['OWLCODA_HOME']).toBe(isolatedHome)
+  } finally {
+    restoreTestHome()
+  }
+})
 
 // Mock the conversation module
 vi.mock('../../src/native/conversation.js', () => ({
@@ -81,6 +93,7 @@ describe('runHeadless', () => {
   })
 
   it('sends prompt to conversation loop and returns result', async () => {
+    expect(getSessionsDir()).toBe(join(isolatedHome, 'sessions'))
     const result = await runHeadless({
       apiBaseUrl: 'http://localhost:8019',
       apiKey: 'test-key',

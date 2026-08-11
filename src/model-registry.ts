@@ -16,6 +16,17 @@ import { normalizeRouterBaseUrl } from './url-normalize.js'
 
 // ─── Types ───
 
+export type ModelExecutorKind = 'kimi-cli' | 'cursor-agent' | 'codex-cli'
+
+export interface ModelExecutorConfig {
+  kind: ModelExecutorKind
+  executable?: string
+  timeoutMs?: number
+  killGraceMs?: number
+  maxStdoutBytes?: number
+  maxStderrBytes?: number
+}
+
 export interface ConfiguredModel {
   id: string
   label: string
@@ -38,6 +49,7 @@ export interface ConfiguredModel {
   supportsStreaming?: boolean
   maxOutputTokens?: number
   timeoutMs?: number
+  executor?: ModelExecutorConfig
 }
 
 export type ResponseModelStyle = 'platform' | 'requested'
@@ -58,6 +70,7 @@ export interface ResolvedModel {
   supportsStreaming?: boolean
   maxOutputTokens?: number
   timeoutMs?: number
+  executor?: ModelExecutorConfig
 }
 
 export interface ModelRoute {
@@ -66,6 +79,10 @@ export interface ModelRoute {
   headers: Record<string, string>
   translate: boolean
   timeoutMs?: number
+  executorKind?: ModelExecutorKind
+  executorConfig?: ModelExecutorConfig
+  configuredModelId?: string
+  requestedModelConfigured?: boolean
 }
 
 export class LocalRuntimeProtocolUnresolvedError extends Error {
@@ -89,6 +106,8 @@ export function normalizeModel(raw: Record<string, unknown>): ConfiguredModel {
   const endpoint = typeof raw.endpoint === 'string' ? raw.endpoint : undefined
   const rawBackendModel = typeof raw.backendModel === 'string' && raw.backendModel ? raw.backendModel : id
   const backendModel = normalizeBackendModelForEndpoint(rawBackendModel, endpoint)
+  const rawProvider = typeof raw.provider === 'string' && raw.provider.trim() ? raw.provider.trim() : undefined
+  const executor = normalizeModelExecutor(raw.executor, rawProvider)
   let customHeaders: Record<string, string> | undefined
   if (raw.headers && typeof raw.headers === 'object' && !Array.isArray(raw.headers)) {
     customHeaders = {}
@@ -103,7 +122,7 @@ export function normalizeModel(raw: Record<string, unknown>): ConfiguredModel {
     backendModel,
     aliases: Array.isArray(raw.aliases) ? raw.aliases.filter((a): a is string => typeof a === 'string') : [],
     tier: typeof raw.tier === 'string' && raw.tier ? raw.tier : 'general',
-    provider: typeof raw.provider === 'string' && raw.provider.trim() ? raw.provider.trim() : undefined,
+    provider: rawProvider ?? executor?.kind,
     default: raw.default === true ? true : undefined,
     channel: typeof raw.channel === 'string' ? raw.channel : undefined,
     role: typeof raw.role === 'string' ? raw.role : undefined,
@@ -113,8 +132,16 @@ export function normalizeModel(raw: Record<string, unknown>): ConfiguredModel {
     apiKeySource,
     headers: customHeaders,
     supportsImages: typeof raw.supportsImages === 'boolean' ? raw.supportsImages : undefined,
-    supportsStructuredOutput: typeof raw.supportsStructuredOutput === 'boolean' ? raw.supportsStructuredOutput : undefined,
-    supportsStreaming: typeof raw.supportsStreaming === 'boolean' ? raw.supportsStreaming : undefined,
+    supportsStructuredOutput: typeof raw.supportsStructuredOutput === 'boolean'
+      ? raw.supportsStructuredOutput
+      : executor
+        ? true
+        : undefined,
+    supportsStreaming: typeof raw.supportsStreaming === 'boolean'
+      ? raw.supportsStreaming
+      : executor
+        ? false
+        : undefined,
     maxOutputTokens: typeof raw.maxOutputTokens === 'number' ? raw.maxOutputTokens : undefined,
     contextWindow: resolveEffectiveContextWindow({
       id,
@@ -125,11 +152,61 @@ export function normalizeModel(raw: Record<string, unknown>): ConfiguredModel {
       endpoint,
       contextWindow: typeof raw.contextWindow === 'number' ? raw.contextWindow : undefined,
       supportsImages: typeof raw.supportsImages === 'boolean' ? raw.supportsImages : undefined,
-      supportsStructuredOutput: typeof raw.supportsStructuredOutput === 'boolean' ? raw.supportsStructuredOutput : undefined,
-      supportsStreaming: typeof raw.supportsStreaming === 'boolean' ? raw.supportsStreaming : undefined,
+      supportsStructuredOutput: typeof raw.supportsStructuredOutput === 'boolean'
+        ? raw.supportsStructuredOutput
+        : executor
+          ? true
+          : undefined,
+      supportsStreaming: typeof raw.supportsStreaming === 'boolean'
+        ? raw.supportsStreaming
+        : executor
+          ? false
+          : undefined,
       maxOutputTokens: typeof raw.maxOutputTokens === 'number' ? raw.maxOutputTokens : undefined,
     }),
     timeoutMs: typeof raw.timeoutMs === 'number' ? raw.timeoutMs : undefined,
+    ...(executor ? { executor } : {}),
+  }
+}
+
+function normalizeModelExecutor(raw: unknown, provider: string | undefined): ModelExecutorConfig | undefined {
+  const value = raw && typeof raw === 'object' && !Array.isArray(raw)
+    ? raw as Record<string, unknown>
+    : undefined
+  const explicit = typeof value?.kind === 'string' ? normalizeExecutorKind(value.kind) : undefined
+  const fromProvider = provider ? normalizeExecutorKind(provider) : undefined
+  const kind = explicit ?? fromProvider
+  if (!kind) return undefined
+  const numeric = (name: string): number | undefined => {
+    const candidate = value?.[name]
+    return typeof candidate === 'number' && Number.isFinite(candidate) ? candidate : undefined
+  }
+  return {
+    kind,
+    ...(typeof value?.executable === 'string' && value.executable.trim()
+      ? { executable: value.executable.trim() }
+      : {}),
+    ...(numeric('timeoutMs') !== undefined ? { timeoutMs: numeric('timeoutMs') } : {}),
+    ...(numeric('killGraceMs') !== undefined ? { killGraceMs: numeric('killGraceMs') } : {}),
+    ...(numeric('maxStdoutBytes') !== undefined ? { maxStdoutBytes: numeric('maxStdoutBytes') } : {}),
+    ...(numeric('maxStderrBytes') !== undefined ? { maxStderrBytes: numeric('maxStderrBytes') } : {}),
+  }
+}
+
+function normalizeExecutorKind(value: string): ModelExecutorKind | undefined {
+  switch (value.trim().toLowerCase()) {
+    case 'kimi-cli':
+    case 'kimi_cli':
+      return 'kimi-cli'
+    case 'cursor-agent':
+    case 'cursor_agent':
+    case 'cursor-cli':
+      return 'cursor-agent'
+    case 'codex-cli':
+    case 'codex_cli':
+      return 'codex-cli'
+    default:
+      return undefined
   }
 }
 
@@ -169,6 +246,7 @@ function toResolved(m: ConfiguredModel): ResolvedModel {
     supportsStreaming: m.supportsStreaming,
     maxOutputTokens: m.maxOutputTokens,
     timeoutMs: m.timeoutMs,
+    executor: m.executor,
   }
 }
 
@@ -343,7 +421,7 @@ export function hasResolvedLocalRuntimeProtocol(config: ModelRegistryConfig): bo
 
 export function requiresResolvedLocalRuntimeProtocol(config: ModelRegistryConfig, requestModel: string): boolean {
   const resolved = resolveConfiguredModel(config, requestModel)
-  return !resolved.endpoint && !hasResolvedLocalRuntimeProtocol(config)
+  return !resolved.endpoint && !resolved.executor && !hasResolvedLocalRuntimeProtocol(config)
 }
 
 // ─── Router Probing ───
@@ -364,6 +442,10 @@ export function overlayAvailability(config: ModelRegistryConfig, routerModelIds:
   const routerIds = Array.from(routerModelIds)
 
   for (const m of config.models) {
+    if (m.executor) {
+      m.availability = 'unknown'
+      continue
+    }
     if (m.endpoint) {
       m.availability = 'available'
       continue
@@ -441,6 +523,20 @@ export function resolveModelRoute(config: ModelRegistryConfig, requestModel: str
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(resolved.headers ?? {}),
+  }
+
+  if (resolved.executor) {
+    return {
+      backendModel: resolved.backendModel,
+      endpointUrl: '',
+      headers,
+      translate: false,
+      timeoutMs: resolved.timeoutMs,
+      executorKind: resolved.executor.kind,
+      executorConfig: resolved.executor,
+      configuredModelId: resolved.id,
+      requestedModelConfigured: isModelExplicitlyConfigured(config, requestModel),
+    }
   }
 
   if (resolved.endpoint) {
