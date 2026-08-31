@@ -1,7 +1,7 @@
 ---
 name: owlcoda-runkit
 description: Run receipt-backed, project-owned work with OwlCoda RunKit. Use when Codex needs to coordinate a large multi-Agent project, show per-Agent progress, manage dependencies or decisions, atomically return failed work for evidence-linked rework, import an external DeliveryPacket from a frozen target worktree, record intentionally deferred verification without repeating covered tests, hand work to another Agent, recover a blank-session next action, initialize or inspect `.owlcoda/runkit/`, plan bounded work with engine pins and leases, capture exact verification evidence, close an execution, produce a ready-for-commit receipt, or perform a read-only foreign-project shadow without widening Git or release authority.
-version: 0.22.1
+version: 0.23.0
 metadata:
   openclaw:
     requires:
@@ -16,16 +16,20 @@ metadata:
 Licensing: this skill package is MIT-0. The `owlrunkit` CLI it invokes is a
 separate work under GPL-3.0-or-later. See the `LICENSE` file in this directory.
 
+Current Core identity: `owlrunkit@0.23.0` (Contract `0.2`). Older version
+numbers appearing in `references/` — including `0.18.3` — are historical
+compatibility notes and do not describe the current Core.
+
 Use the bundled deterministic Core to coordinate work through project artifacts rather than chat memory. Require Node.js 20 or later.
 
-Bundled registry-gated artifact: standalone `owlrunkit@0.22.1`, bundling Contract
-`0.2` and Core `0.22.1` with manifest
-`sha256:41447517f78b74a070802bd67c8b066a833eedde72e2606e3127fa1258c289a4`.
+Bundled registry-gated artifact: standalone `owlrunkit@0.23.0`, bundling Contract
+`0.2` and Core `0.23.0` with manifest
+`sha256:cf9c1c5985cd0e960640f13fba66f92f0135449b6bc5036bc68ee9021053b9e4`.
 Registry adoption remains fail-closed until exact official npm registry
-provenance for `owlrunkit@0.22.1` is independently verified. The published
-rollback baseline for this artifact is `owlrunkit@0.22.0`, with SHA-1
-`23fb305f24b2487a2a1de3c8e407d7e4606a3b86` and canonical npm tarball URL
-`https://registry.npmjs.org/owlrunkit/-/owlrunkit-0.22.0.tgz`.
+provenance for `owlrunkit@0.23.0` is independently verified. The published
+rollback baseline for this artifact is `owlrunkit@0.22.1`, with SHA-1
+`675b417134825e876e6e2b7c2e8d2aea4045e59f` and canonical npm tarball URL
+`https://registry.npmjs.org/owlrunkit/-/owlrunkit-0.22.1.tgz`.
 The root `owlcoda` package has a separate version lifecycle.
 
 The session is an execution interface. Project artifacts are the system of record.
@@ -177,9 +181,14 @@ remains available for existing automation and compatibility.
   entry snapshot, report `candidate_only`; never claim an entry-to-candidate
   overlay proof that was not captured.
 - "Start the next project": only after status derives `overall=completed`,
-  invoke `project successor` with a different V1 definition and explicit
-  transition ID. Preserve the content-addressed archive and journal; never
-  use handoff, takeover, install, or publication as successor authority.
+  first inspect Status V5 completion continuity. If the source workspace has
+  unmodeled drift, use read-only `project successor scaffold --from-workspace
+  <git-root> --dry-run` to review the bounded delta and mechanical historical
+  lanes. A human must still choose the new objective, WorkItems, owners, and
+  acceptance before invoking `project successor` with a different V1
+  definition and explicit transition ID. Preserve the content-addressed
+  archive and journal; never use handoff, takeover, install, or publication as
+  successor authority.
 - "Capture this as data": append a data candidate only. Never call it a dataset
   member without a separate admission decision.
 - "Do not run that check yet": append one deferred verification with stable
@@ -241,6 +250,8 @@ npx --no-install owlrunkit project integrate --workspace "$PROJECT_ROOT" --gate 
   --at "$OCCURRED_AT" --summary "$SUMMARY" --evidence "$EVIDENCE_REF"
 npx --no-install owlrunkit project status --workspace "$PROJECT_ROOT" --json
 npx --no-install owlrunkit project takeover --workspace "$PROJECT_ROOT" --agent "$AGENT_ID" --json
+npx --no-install owlrunkit project successor scaffold --workspace "$PROJECT_ROOT" \
+  --from-workspace "$TARGET_WORKTREE" --dry-run --json
 npx --no-install owlrunkit project successor --workspace "$PROJECT_ROOT" \
   --transition-id "$TRANSITION_ID" --at "$OCCURRED_AT" \
   --definition "$NEXT_PROJECT_JSON" --reason "$SUCCESSOR_REASON" --json
@@ -270,6 +281,21 @@ completed transition archive before changing active truth or writing its own
 journal. Do not infer a historical archive scan from `status` or `takeover`;
 those remain active-truth projections. The receipt never grants Git, release,
 publication, deployment, package-adoption, or writer authority.
+
+Current `project status` emits Project Status V5. For a completed WorkItem
+ledger, `completionContinuity` distinguishes an exactly matching imported
+source-delivery baseline, a missing baseline, an unverifiable modeled target,
+and later unmodeled workspace drift. A matching source baseline means only that
+no unmodeled source continuation was observed; it does not imply integration,
+release, deployment, product acceptance, or business completion.
+
+`project successor scaffold` is strictly read-only and requires `--dry-run`.
+It may use historical `ownedPaths` to group changed paths mechanically, but it
+must leave project identity, objective, titles, owners, and acceptance unset
+for human confirmation. Never treat its lane suggestions as a successor
+decision or invoke the mutating successor automatically. It writes no project
+truth, execution, lease, receipt, archive, or Git state and keeps every
+authority field false.
 
 ## Batch verification around a small explainable closure
 
@@ -326,9 +352,9 @@ below has no CLI entry.
 
 ```bash
 npx --no-install owlrunkit bootstrap --workspace "$PROJECT_ROOT" \
-  --exact owlrunkit@0.22.1 --dry-run
+  --exact owlrunkit@0.23.0 --dry-run
 npx --no-install owlrunkit bootstrap --workspace "$PROJECT_ROOT" \
-  --exact owlrunkit@0.22.1 --apply
+  --exact owlrunkit@0.23.0 --apply
 npx --no-install owlrunkit init --workspace "$PROJECT_ROOT"
 npx --no-install owlrunkit inspect --json --workspace "$PROJECT_ROOT"
 npx --no-install owlrunkit inspect --json --compact --workspace "$PROJECT_ROOT"
