@@ -2,17 +2,47 @@
 
 **English** · [中文](README.zh.md)
 
-> **Your models. Your tools. Your data. Runs locally — no login, no cloud.**
+> **From evidence to an admitted business result — with replaceable AI
+> executors and explicit authority boundaries.**
 
-OwlCoda is an independent, local-first AI coding workbench: a native terminal
-REPL with 42+ tools and 69+ slash commands, session persistence, learned
-skills, and production-grade middleware — all on your own machine. **Every model
-you use — a cloud brand or a model on your own hardware — is wired up and
-governed from one place: the browser Admin.**
+OwlCoda is being built as a local-first **AI Business Execution System**. It
+owns the business semantics and causal transaction boundaries that turn
+point-in-time evidence into a reviewable result. Models and coding agents are
+replaceable executors; an executor session is not the product identity.
+
+The current public release, `owlcoda@0.18.0`, is the runtime and harness
+foundation of that direction. Today it is a useful local AI coding workbench:
+a native terminal REPL with 42+ tools, 69+ slash commands, session persistence,
+learned skills, model routing, and production-grade middleware. It does **not**
+claim that the full business-execution product, production connectors, or
+BusinessAction authority are publicly shipped.
 
 **Privacy by default.** Sessions stay in `~/.owlcoda/`. There is no OwlCoda
 account and no OwlCoda server. Training-data collection is opt-in (off by
 default), PII-sanitized before it touches disk, and never uploaded.
+
+## Product direction
+
+OwlCoda keeps each promotion explicit:
+
+```text
+Evidence
+  -> WorkCase
+  -> Execution Admission
+  -> Execution / Attempt
+  -> replaceable Executor
+  -> Result Candidate
+  -> Result Admission
+  -> WorkResult
+  -> Qualification
+  -> Human Review
+  -/-> BusinessAction (separate authority required)
+```
+
+Passing one stage never silently grants the next. [OwlRunKit](https://github.com/yeemio/owlrunkit)
+makes delivery progression verifiable, transferable, and recoverable across
+agents and sessions, but it never becomes OwlCoda's Business Truth or grants
+Git, release, deployment, production, money, automation, or business authority.
 
 ## One control plane for every model
 
@@ -78,11 +108,11 @@ cd your-project
 owlcoda -p "Read this project and tell me the entry point, test command, and main directories. Do not modify files."
 ```
 
-## What it is
+## What the current public runtime provides
 
-OwlCoda sits between your models and your real project. The model can act, but
-every action passes through a boundary, leaves an artifact, and is recorded — so
-a long-running agent isn't trusted on its word alone.
+The 0.18 runtime sits between your models and your real project. The model can
+act, but every action passes through a boundary, leaves an artifact, and is
+recorded — so a long-running agent is not trusted on its word alone.
 
 - **Bring your own models.** Local runtimes and cloud providers collapse into
   one model registry with routing, fallback, retry, circuit-breaking, and
@@ -230,6 +260,7 @@ published versions keep the license they were published under.
 ## Links
 
 - Website: [owlcoda.com](https://owlcoda.com)
+- Delivery continuity: [OwlRunKit](https://github.com/yeemio/owlrunkit)
 - Issues & PRs: [github.com/yeemio/owlcoda/issues](https://github.com/yeemio/owlcoda/issues)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md) · Security: [SECURITY.md](SECURITY.md)
 - Demo: [World Cup predictor](demo/worldcup-predictor/README.md) — a five-role model debate (recon, vision, pro, anti, judge) orchestrated through OwlCoda

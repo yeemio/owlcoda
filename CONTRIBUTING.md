@@ -1,26 +1,56 @@
 # Contributing to OwlCoda
 
-Thanks for taking the time. OwlCoda is a Developer Preview and the
-codebase moves fast, so before you sink real time into a change please
-file an issue first or run the idea past the maintainer. This saves both
-sides from wasted work on something that is already being rewritten.
+Thanks for helping build trustworthy, local-first AI business execution.
+
+This public repository is OwlCoda's corresponding-source, documentation,
+Issue, Release, and public trust surface. Day-to-day product development happens
+in a private source repository. Public issues, reproducible product feedback,
+documentation fixes, security reports, and architecture questions are welcome;
+larger source proposals should begin with an issue so product scope and license
+rights are agreed before implementation starts.
+
+## Good public reports
+
+A useful report states:
+
+- exact `owlcoda --version`, Node.js version, and operating system;
+- expected behavior and observed behavior;
+- the smallest safe reproduction;
+- whether the issue affects the current 0.18 runtime or a future product idea;
+- relevant logs or screenshots with credentials, private source, and business
+  data removed.
+
+For OwlRunKit-specific continuity, receipt, Project Driver, or delivery issues,
+use the [OwlRunKit repository](https://github.com/yeemio/owlrunkit).
+
+## Product boundary
+
+Proposals should preserve these boundaries:
+
+- OwlCoda owns Business Truth and the causal business-execution envelope;
+- models and coding agents are replaceable executors;
+- evidence, execution, admitted result, qualification, human review, and
+  BusinessAction remain separate states;
+- current public capabilities must not be confused with future architecture;
+- telemetry and external data collection remain opt-in and disable-able;
+- no accepted candidate or green test silently grants Git, release, deployment,
+  production, money, automation, or business authority.
 
 ## License and contribution rights
 
-Starting with the `0.15.0` license boundary, OwlCoda core is distributed under
-`GPL-3.0-or-later`. Commercial, OEM, or embedded distribution uses a separate
-maintainer license path.
+OwlCoda core is distributed under `GPL-3.0-or-later` from the 0.15.0 boundary.
+Commercial, OEM, or embedded distribution uses a separate maintainer license
+path.
 
-Until a CLA or copyright-assignment process is published, source-code
-contributions from external contributors are accepted only after maintainer
-approval. Small documentation fixes and issue reports are welcome; for anything
-larger, open an issue first so the license path is explicit before code is
-written.
+Until a CLA or copyright-assignment process is published, external source-code
+contributions are accepted only after maintainer approval. Small documentation
+fixes are welcome; for code, contracts, or substantial docs, open an issue before
+writing a large patch so the contribution and dual-license path is explicit.
 
-A DCO-style sign-off may be used for provenance, but it is not a substitute for
-the relicensing rights needed for a commercial dual-license path.
+## Working with the public source
 
-## Development setup
+The tagged public source is sufficient to inspect and rebuild the corresponding
+release. For the current branch:
 
 ```bash
 git clone https://github.com/yeemio/owlcoda.git
@@ -30,75 +60,23 @@ npm run build
 npm test
 ```
 
-On Windows, the default Git setting is often `core.symlinks=false`.
-Do not add build-critical symlink-only TypeScript entrypoints: use real
-bridge files with ESM re-exports so `npm install && npm run build`
-continues to work in PowerShell, cmd, Git Bash, and WSL.
+On Windows, keep build-critical entrypoints as real files rather than relying on
+symlinks. Use a user-owned test backend and never commit API keys or local
+configuration.
 
-You'll want a local OpenAI-compatible backend running for end-to-end
-work. `ollama serve` with `qwen2.5-coder:7b` pulled is the cheapest path;
-LM Studio and vLLM both work too. See the README for quickstart commands.
+If a source proposal has maintainer approval:
 
-## Useful scripts
+- keep commits single-purpose;
+- explain why the change is needed;
+- add focused verification for changed behavior;
+- run the build and relevant tests;
+- disclose skipped checks and known limits honestly;
+- do not change product claims merely to make a test pass.
 
-| Command | What it does |
-|---|---|
-| `npm run build` | TypeScript compile to `dist/` |
-| `npm run dev` | Run `src/cli.ts` directly via `tsx` (no rebuild) |
-| `npm test` | Vitest suite — 6000+ tests; use `npm run test:serial` for a deterministic release gate |
-| `npm run smoke:fast` | Build + proxy health check |
-| `npm run smoke` | Full smoke (spins up a real backend) |
+## Code of conduct
 
-## Coding conventions
+Be respectful. Critique ideas, not people. Harassment, personal attacks, and
+discriminatory language are not accepted.
 
-- **TypeScript strict**, no implicit `any`. `npm run build` must be clean.
-- **Tests live next to the surface they cover**, not globally. New code
-  gets tests; bug fixes get regression tests.
-- **Default to no comments**. Explain *why*, not *what*. Commit messages
-  are for context; identifiers for meaning.
-- **No third-party vendor paths hardcoded in product code.** OwlCoda
-  positions as an independent platform — please don't re-introduce
-  probes for competing products' vendored binaries.
-- **Privacy defaults OFF.** Any new collection / telemetry / network
-  egress must be opt-in, documented, and disable-able via env var.
-
-## Commit / PR style
-
-- Single-purpose commits. Prefer many small commits over one giant one.
-- First-line style: `fix(area): short description` or `feat(area): …`
-  matching the convention used in `git log --oneline`.
-- PR description must say *why* the change is needed, not just *what*.
-  Screenshots or asciinemas help for UX changes.
-- Open PRs against `main`. There is no release branch yet.
-
-## Testing a change end-to-end
-
-Before requesting review:
-
-1. `npm run build` — must pass clean.
-2. `npm test` — must pass (or you must explain the failure).
-3. For UX/TUI changes: run `owlcoda` locally against a real backend and
-   verify the feature manually. Type-checking and unit tests verify
-   code correctness, not user experience.
-4. Update `CHANGELOG.md` with a short entry in the current top release
-   section.
-
-## Areas where help is welcome
-
-- **TUI polish** — scrollback watermark (see `docs/ROADMAP.md`), theme
-  variants, accessibility modes.
-- **Backend adapters** — more local OpenAI-compatible backends under
-  `src/backends/`.
-- **Skills** — domain packs under `skills/` for workflows you use daily.
-- **Documentation** — screenshots, gifs, concrete use-case walkthroughs.
-
-Anything larger than a docs fix: please open an issue first.
-
-## Code of Conduct
-
-Be respectful. Critique ideas, not people. Assume good faith.
-Harassment, personal attacks, or discriminatory language are
-grounds for removal from issues, PRs, and discussions.
-
-For private reports of conduct problems, email the maintainer
-(see `package.json` `author`).
+For private conduct or security reports, use the contact in
+[SECURITY.md](SECURITY.md).

@@ -22,4 +22,15 @@ body:
     attributes:
       label: Context
       description: OS, terminal, model provider, or other relevant setup.
-
+  - type: dropdown
+    id: product_boundary
+    attributes:
+      label: Product boundary
+      options:
+        - Current public Runtime/Harness
+        - Business execution semantics or product surface
+        - Replaceable executor integration
+        - OwlRunKit delivery continuity (please use the OwlRunKit repository)
+        - Unsure
+    validations:
+      required: true

@@ -1,175 +1,150 @@
 # OwlCoda Product Truth
 
-> Last updated: 2026-05-12
-> Scope: product identity, distribution posture, mode hierarchy, and documentation authority
-
----
+> Last updated: 2026-09-02
+> Scope: public product identity, current release truth, architecture boundaries,
+> and distribution authority
 
 ## Identity
 
-OwlCoda is an **independent local AI coding platform**.
+OwlCoda is being built as a local-first **AI Business Execution System**.
 
-It is not:
+Its durable product identity is not a particular model, coding agent, CLI, or
+executor session. OwlCoda owns the business semantics and bounded causal
+transaction envelope that turns admitted evidence into a reviewable business
+result while keeping external action behind a separate authority gate.
 
-- a proxy wrapper for some other product
-- a temporary compatibility shell pretending to be the end state
-- a future training product waiting for downstream infrastructure
+The compact product statement is:
 
-It already combines:
+> **OwlCoda binds evidence, replaceable execution, admitted results, human
+> review, and explicit authority boundaries without surrendering Business
+> Truth to an executor.**
 
-- local-model execution and routing
-- production middleware
-- session intelligence
-- skill learning
-- training-data asset collection
-- an increasingly complete native frontend
+## Business execution spine
 
-The most accurate short description is:
+The intended architecture keeps every promotion explicit:
 
-**OwlCoda is a local-first AI coding platform with a native frontend as its only product path.**
+```text
+point-in-time Evidence
+  -> Evidence Admission
+  -> WorkCase
+  -> Execution Admission
+  -> Execution
+  -> Attempt
+  -> replaceable Executor
+  -> Result Candidate
+  -> Result Admission
+  -> WorkResult
+  -> Qualification
+  -> Human Adjudication
+  -/-> BusinessAction (separate authority required)
+```
 
----
+Evidence intake, execution, result commitment, qualification, human review,
+and BusinessAction are different states. Passing one state never silently
+promotes another.
 
-## Product Path
+## Current public release truth
 
-OwlCoda has one product path:
+The current public npm and source release is **`owlcoda@0.18.0`**.
 
-### Native
+That release is the local runtime and harness foundation of the broader product
+direction. It publicly provides the native terminal workbench, local and cloud
+model routing, tools, session persistence, learned skills, opt-in local training
+data collection, browser administration, diagnostics, structured-output routes,
+and execution artifacts described by the release code and capability registry.
 
-Role:
+It does **not** claim that the full Business Execution System is present in the
+0.18.0 public package. In particular, this repository does not claim public
+production connectors, multi-tenant business storage, autonomous
+BusinessAction, commercial readiness, or deployment to a customer environment.
 
-- owned frontend path
-- primary mode
-- convergence target for new work
+Product direction is not release truth. A future architecture document or a
+private implementation candidate cannot be presented as a shipped public
+capability until it has its own source, package, runtime, and acceptance
+evidence.
 
-What it is for:
+## Product-family boundaries
 
-- exposing OwlCoda-specific strengths directly in the product
-- serving as the default and only supported interactive experience
-- standing on its own against competing products
+### OwlCoda
 
----
+Owns the governed business-execution architecture, Business Truth, business
+semantic versions, admission and qualification boundaries, human review, and
+the separation between an accepted result and an authorized action.
 
-## Product Posture
+The current public 0.18.0 package owns the local Runtime/Harness foundation. It
+does not pretend that foundation alone is the complete business product.
 
-The current product posture is:
+### OwlRunKit
 
-- **default today**: native
-- **competitive context**: external coding assistants are comparison targets, not runtime dependencies
-- **owned delivery**: OwlCoda does not depend on a third-party branded frontend or CLI to define its product surface
+[OwlRunKit](https://github.com/yeemio/owlrunkit) owns delivery continuity:
+Project/WorkItem/Assignment state, candidate identity, verification receipts,
+handoff, rework, recovery, and explicit delivery lifecycle projections.
 
-## Distribution Posture
+OwlRunKit does not own WorkCase, Business Truth, Attempt or Session identity,
+domain judgment, or BusinessAction. Its authority boundary remains false for
+Git, release, deployment, production, automation, money, and business actions.
 
-The current distribution posture is:
+### Executors
 
-- **public distribution**: npm package + GPL public source tags
-- **development source of truth**: private repo
-- **public GitHub role**: corresponding source, docs/issues/releases, and public trust surface
-- **release discipline**: every GPL-covered npm release must have a matching public source tag
+Models, local runtimes, coding agents, and executor adapters are replaceable.
+They may produce a Result Candidate, but they do not define the product, admit
+their own result into Business Truth, or authorize the downstream business
+action.
 
-Starting with the `0.15.0` license boundary, OwlCoda source is publicly
-available under `GPL-3.0-or-later`. The private repo remains the day-to-day
-development workspace, but it cannot substitute for the public corresponding
-source required by a GPL-covered npm package.
+## Local-first and privacy posture
 
-Global install rule:
+The public runtime is local-first:
 
-- Global `owlcoda` should mean the npm release installed from the registry.
-- Local development builds should be run with `node dist/cli.js` or an isolated
-  temporary prefix, not kept as the default global command.
-- `owlcoda --version` is the first check for runtime identity; build metadata
-  distinguishes a registry release from a local build.
+- sessions and project artifacts remain on the user's machine by default;
+- OwlCoda requires no OwlCoda account or hosted OwlCoda service;
+- users choose and configure their own local or cloud model endpoints;
+- training-data collection is opt-in, local, and PII-sanitized before storage;
+- new telemetry, external collection, or privacy-sensitive egress must be
+  opt-in, documented, and disable-able.
 
----
+Local-first does not mean that a user-selected cloud model receives no data. A
+configured provider receives the prompts and inputs the user sends to that
+provider under its own terms.
 
-## Native Promotion Rule
+## Distribution posture
 
-Native becomes the primary mode only when the following are true:
+- **public npm package:** executable release surface;
+- **public GitHub repository:** corresponding source, documentation, Issues,
+  Releases, and public trust surface;
+- **private source repository:** day-to-day development source of truth;
+- **public source tag:** required for every GPL-covered npm release;
+- **website and marketplaces:** discovery surfaces, not source or release
+  authority.
 
-1. high-frequency coding workflow is stable end-to-end
-2. must-have tool coverage is in place
-3. session continuity and recovery are reliable
-4. core differentiators are visible in native UX, not hidden behind proxy headers
-5. remaining gaps are secondary surfaces rather than core daily workflow blockers
+Starting with the 0.15.0 license boundary, OwlCoda source is distributed under
+`GPL-3.0-or-later`. The private development repository cannot substitute for
+public corresponding source.
 
-Native promotion is complete (R139):
+Global `owlcoda` should mean an official npm release. Local development builds
+must remain explicit and must not masquerade as registry release truth.
 
-- native is the default mode
-- native is the only supported interactive path in the current product line
+## What OwlCoda must not claim
 
----
+Do not describe OwlCoda as:
 
-## L2 and L3 Truth
+- only a proxy, wrapper, or front door;
+- already shipping every capability in the long-term business architecture;
+- a product defined by one model, vendor, CLI, or executor session;
+- a system where a green test or accepted candidate grants deployment or
+  business authority;
+- already production-deployed, commercially ready, or business-accepted
+  without direct evidence for that state.
 
-### L2 Skills
+## Documentation authority
 
-L2 is not future planning. It is a live product differentiator.
+When public documents disagree, use this order:
 
-Its product value is:
+1. fresh runtime and registry truth for the installed release;
+2. tagged source and machine-readable capability identity;
+3. this product-truth document;
+4. README for user-facing positioning and onboarding;
+5. architecture and roadmap documents for staged direction.
 
-- repeated work becomes more structured over time
-- OwlCoda gets better through use
-- the user gains visible local leverage unavailable in closed hosted tools
-
-### L3 Training Data
-
-L3 is also not just planning. The data pipeline exists today.
-
-But the current product value of L3 is:
-
-- data asset accumulation
-- quality visibility
-- future model leverage
-
-It is **not** currently the main product loop.
-
-Training and deployment closure depend on downstream platform readiness.
-That downstream path should not distort OwlCoda's primary product priorities today.
-
----
-
-## What OwlCoda Is Not
-
-OwlCoda should not be described as:
-
-- "just a front door"
-- "just a proxy"
-- "already fully independent from upstream"
-- "primarily a model training product"
-
-All four descriptions are incomplete or misleading.
-
----
-
-## Documentation Authority
-
-When documents disagree, use this order:
-
-1. runtime truth from code and CLI behavior
-2. this product truth document
-3. README for user-facing positioning and onboarding
-4. EVOLUTION for staged architectural direction
-5. ROADMAP for historical delivery ledger and future sequencing
-
-Version truth follows the same rule:
-
-- runtime-reported version comes from [`package.json`](../package.json) via [`src/version.ts`](../src/version.ts)
-- narrative release labels in docs or changelogs must not contradict runtime truth without explicitly saying so
-- public user-facing install version follows the npm package version, and each
-  GPL-covered package version must have a matching public source tag
-
----
-
-## Immediate Documentation Consequences
-
-The docs should consistently say:
-
-- OwlCoda is an independent local AI coding platform
-- native is the default mode (R139 切主完成)
-- native is the only supported interactive path
-- L2 is live differentiation
-- L3 is live data accumulation, not current mainline training closure
-- public distribution is npm package plus GPL public source tags
-- the public repo is corresponding source, docs/issues/releases, and trust
-  surface, not the day-to-day development source of truth
-- global `owlcoda` should be the npm release; local builds stay explicit
+Version truth comes from `package.json` and the runtime version surface. Public
+release truth additionally requires the matching npm provenance and public
+source tag. Narrative labels never override those identities.

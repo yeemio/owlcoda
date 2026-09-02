@@ -2,13 +2,13 @@
 
 ## Supported Versions
 
-OwlCoda is pre-1.0 (current stream: `0.15.x`). Only the latest minor tag
+OwlCoda is pre-1.0 (current public stream: `0.18.x`). Only the latest minor tag
 on `main` receives security fixes. If you run an older build, upgrade first.
 
 | Version | Supported |
 |---------|-----------|
-| `0.15.x` | ✅ |
-| `< 0.15` | ❌ |
+| `0.18.x` | ✅ |
+| `< 0.18` | ❌ |
 
 ## Reporting a Vulnerability
 

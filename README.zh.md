@@ -2,16 +2,42 @@
 
 [English](README.md) · **中文**
 
-> **你的模型、你的工具、你的数据 —— 本地运行，不登录，不上云。**
+> **从证据到被准入的业务结果：AI 执行器可以替换，权限边界不能含糊。**
 
-OwlCoda 是一个独立的、本地优先的 AI 编码工作台：原生终端 REPL，42+ 工具、
-69+ slash 命令、会话持久化、技能学习，以及一层生产级中间件，全部跑在你自己
-的机器上。**你用的每一个模型 —— 云端品牌也好，自己机器上的模型也好 —— 都在
-同一个地方接入、统一治理：浏览器 Admin。**
+OwlCoda 正在建设为一个本地优先的 **AI Business Execution System（AI 业务执行
+系统）**。它负责业务语义和因果事务边界，把某一时点的证据转成可复核的结果。
+模型和 Coding Agent 都是可替换执行器；一次执行器会话不是产品身份。
+
+当前公开版本 `owlcoda@0.18.0` 是这条产品路线的 Runtime/Harness 基础。它今天
+已经是一套可用的本地 AI 编码工作台：原生终端 REPL、42+ 工具、69+ slash 命令、
+会话持久化、技能学习、模型路由和生产级中间件。它**不声称**完整业务执行产品、
+生产连接器或 BusinessAction 权限已经公开交付。
 
 **隐私默认。** 会话只落在本地 `~/.owlcoda/`。没有 OwlCoda 账号，也没有
 OwlCoda 服务器。训练数据收集默认关闭（opt-in），落盘前先做 PII 脱敏，且永远
 不上传。
+
+## 产品方向
+
+OwlCoda 把每一次状态晋级都明确分开：
+
+```text
+Evidence
+  -> WorkCase
+  -> Execution Admission
+  -> Execution / Attempt
+  -> 可替换 Executor
+  -> Result Candidate
+  -> Result Admission
+  -> WorkResult
+  -> Qualification
+  -> Human Review
+  -/-> BusinessAction（需要独立授权）
+```
+
+通过一层绝不自动授予下一层。[OwlRunKit](https://github.com/yeemio/owlrunkit) 让
+Agent 和会话之间的交付进度可验证、可移交、可恢复，但它不会成为 OwlCoda 的
+Business Truth，也不会授予 Git、发布、部署、生产、资金、自动化或业务权限。
 
 ## 一个控制面，管所有模型
 
@@ -75,9 +101,12 @@ cd your-project
 owlcoda -p "读一下这个项目，告诉我入口文件、测试命令和主要目录，不要修改文件"
 ```
 
-## 它是什么
+## 当前公开 Runtime 提供什么
 
-OwlCoda 站在你的模型和真实工程现场之间。模型可以动手，但每个动作都先过边界、
+留下产物、被记录下来 —— 一个长期跑的 agent，不能只凭它一句"我做完了"就信。
+0.18 Runtime 站在你的模型和真实工程现场之间。模型可以动手，但每个动作都先过
+边界、留下产物、被记录下来 —— 一个长期运行的 Agent，不能只凭一句“我做完了”
+就被信任。
 留下产物、被记录下来 —— 一个长期跑的 agent，不能只凭它一句"我做完了"就信。
 
 - **自带模型。** 本地 runtime 和云端 provider 收进同一套模型 registry，
@@ -171,6 +200,7 @@ owlcoda --help                   # 完整命令列表
 ## 链接
 
 - 官网：[owlcoda.com](https://owlcoda.com)
+- 交付连续性：[OwlRunKit](https://github.com/yeemio/owlrunkit)
 - Issues 与 PR：[github.com/yeemio/owlcoda/issues](https://github.com/yeemio/owlcoda/issues)
 - 贡献指南：[CONTRIBUTING.md](CONTRIBUTING.md) · 安全：[SECURITY.md](SECURITY.md)
 - 示例项目：[世界杯预测器](demo/worldcup-predictor/README.md) —— 由 OwlCoda 编排的五角色模型辩论（侦查、视觉、正方、反方、裁判）

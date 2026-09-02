@@ -12,7 +12,7 @@ body:
     attributes:
       label: OwlCoda version
       description: Output of `owlcoda --version`.
-      placeholder: "owlcoda 0.14.14"
+      placeholder: "owlcoda 0.18.0"
     validations:
       required: true
   - type: input
@@ -41,4 +41,14 @@ body:
       label: Actual behavior
     validations:
       required: true
-
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      options:
+        - Current public Runtime/Harness
+        - Documentation or release identity
+        - Future business-execution product direction
+        - Unsure
+    validations:
+      required: true

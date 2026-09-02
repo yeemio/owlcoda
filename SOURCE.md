@@ -21,3 +21,7 @@ Release requirement:
 
 Historical published versions remain under the license terms that accompanied
 those versions when they were published.
+
+OwlRunKit has an independent version lifecycle and corresponding-source
+repository at https://github.com/yeemio/owlrunkit. An OwlCoda source tag does
+not substitute for an OwlRunKit tag, and vice versa.
